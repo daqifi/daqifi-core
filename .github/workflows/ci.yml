@@ -22,10 +22,10 @@ jobs:
         dotnet-version: 9.0.x
         
     - name: Restore dependencies
-      run: dotnet restore DAQiFi.Core.sln
+      run: dotnet restore Daqifi.Core.sln
       
     - name: Build
-      run: dotnet build --no-restore DAQiFi.Core.sln
+      run: dotnet build --no-restore Daqifi.Core.sln
       
     - name: Test
-      run: dotnet test DAQiFi.Core.sln
+      run: dotnet test Daqifi.Core.sln
