@@ -11,16 +11,21 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Debug - List Contents
+      run: |
+        pwd
+        ls -la
+        
     - name: Setup .NET
       uses: actions/setup-dotnet@v3
       with:
         dotnet-version: 9.0.x
         
     - name: Restore dependencies
-      run: dotnet restore Daqifi.Core.sln
+      run: dotnet restore DAQiFi.Core.sln
       
     - name: Build
-      run: dotnet build --no-restore Daqifi.Core.sln
+      run: dotnet build --no-restore DAQiFi.Core.sln
       
     - name: Test
-      run: dotnet test Daqifi.Core.sln
+      run: dotnet test DAQiFi.Core.sln
