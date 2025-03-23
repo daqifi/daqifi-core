@@ -41,12 +41,11 @@ jobs:
       working-directory: ./DAQiFi.Core
       run: dotnet test --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=./coverage/ /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType="line,branch,method"
 
-    - name: Generate coverage report
-      working-directory: ./DAQiFi.Core
-      uses: danielpalme/ReportGenerator-GitHub-Action@5.2.0
+    - uses: danielpalme/ReportGenerator-GitHub-Action@5.2.0
+      name: Generate coverage report
       with:
-        reports: '**/coverage.cobertura.xml'
-        targetdir: 'coveragereport'
+        reports: './DAQiFi.Core/**/coverage.cobertura.xml'
+        targetdir: './DAQiFi.Core/coveragereport'
         reporttypes: 'HtmlInline;TextSummary'
         verbosity: 'Info'
         title: 'DAQiFi.Core Coverage Report'
