@@ -1,4 +1,4 @@
-namespace DAQiFi.Core.Communication.Messages;
+namespace Daqifi.Core.Communication.Messages;
 
 public interface IMessage
 {

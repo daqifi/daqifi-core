@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace DAQiFi.Core.Communication.Messages;
+namespace Daqifi.Core.Communication.Messages;
 
 public class ScpiMessage(string command) : IMessage
 {

@@ -27,7 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\DAQiFi.Core\DAQiFi.Core.csproj" />
+    <ProjectReference Include="..\Daqifi.Core\Daqifi.Core.csproj" />
   </ItemGroup>
 
 </Project>

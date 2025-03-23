@@ -11,11 +11,11 @@
     <FileVersion>0.1.0.0</FileVersion>
     
     <!-- NuGet package info -->
-    <PackageId>DAQiFi.Core</PackageId>
+    <PackageId>Daqifi.Core</PackageId>
     <Authors>DAQiFi</Authors>
     <Description>Core library for interacting with DAQiFi devices</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/DAQiFi/DAQiFi-core</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/daqifi/daqifi-core</PackageProjectUrl>
   </PropertyGroup>
 
 </Project>

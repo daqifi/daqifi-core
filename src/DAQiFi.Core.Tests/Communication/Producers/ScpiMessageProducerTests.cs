@@ -1,8 +1,8 @@
 using System.Text;
-using DAQiFi.Core.Communication.Messages;
-using DAQiFi.Core.Communication.Producers;
+using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 
-namespace DAQiFi.Core.Tests.Communication.Producers;
+namespace Daqifi.Core.Tests.Communication.Producers;
 
 public class ScpiMessageProducerTests
 {

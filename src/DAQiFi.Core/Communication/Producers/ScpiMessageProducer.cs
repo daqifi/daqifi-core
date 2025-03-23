@@ -1,6 +1,6 @@
-using DAQiFi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Messages;
 
-namespace DAQiFi.Core.Communication.Producers;
+namespace Daqifi.Core.Communication.Producers;
 
 public class ScpiMessageProducer
 {
