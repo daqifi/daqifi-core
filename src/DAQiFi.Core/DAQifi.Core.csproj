@@ -15,7 +15,7 @@
     <Authors>DAQiFi</Authors>
     <Description>Core library for interacting with DAQiFi devices</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/daqifi/daqifi-core</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/DAQiFi/DAQiFi-core</PackageProjectUrl>
   </PropertyGroup>
 
 </Project>
