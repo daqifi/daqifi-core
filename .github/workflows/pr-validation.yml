@@ -3,6 +3,8 @@ name: PR Validation
 on:
   pull_request:
     branches: [ main ]
+  push:
+    branches: [ main ]
 
 env:
   COVERAGE_THRESHOLD: 80
@@ -44,7 +46,7 @@ jobs:
       run: cat coveragereport/Summary.txt
 
     - name: Upload coverage report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@8f40f347e1c5d488b1a8b56f51afe02661a8c66d # v4
       with:
         name: coverage-report
         path: coveragereport 
