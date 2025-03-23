@@ -18,44 +18,35 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        path: DAQiFi.Core
     
     - name: Setup .NET ${{ matrix.dotnet-version }}
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ matrix.dotnet-version }}
-    
-    - name: Set working directory
-      run: cd DAQiFi.Core
         
     - name: Restore dependencies
-      working-directory: ./DAQiFi.Core
       run: dotnet restore
       
     - name: Build
-      working-directory: ./DAQiFi.Core
       run: dotnet build --no-restore
       
     - name: Test with coverage
-      working-directory: ./DAQiFi.Core
       run: dotnet test --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=./coverage/ /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType="line,branch,method"
 
     - uses: danielpalme/ReportGenerator-GitHub-Action@5.2.0
       name: Generate coverage report
       with:
-        reports: './DAQiFi.Core/**/coverage.cobertura.xml'
-        targetdir: './DAQiFi.Core/coveragereport'
+        reports: '**/coverage.cobertura.xml'
+        targetdir: 'coveragereport'
         reporttypes: 'HtmlInline;TextSummary'
         verbosity: 'Info'
         title: 'DAQiFi.Core Coverage Report'
 
     - name: Display coverage summary
-      working-directory: ./DAQiFi.Core
       run: cat coveragereport/Summary.txt
 
     - name: Upload coverage report
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
-        path: DAQiFi.Core/coveragereport 
+        path: coveragereport 
