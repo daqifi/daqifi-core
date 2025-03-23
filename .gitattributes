@@ -1,0 +1,9 @@
+* text=auto
+
+*.sln text eol=crlf
+*.csproj text eol=crlf
+*.cs text eol=crlf
+*.md text
+*.json text
+*.yml text
+*.yaml text 

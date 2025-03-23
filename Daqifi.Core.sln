@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{5412868F-5B63-486D-8EA6-ED8C83418517}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core", "src\Daqifi.Core\Daqifi.Core.csproj", "{F30FE70B-E858-46F1-8BDA-16859680FE56}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core.Tests", "src\Daqifi.Core.Tests\Daqifi.Core.Tests.csproj", "{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F30FE70B-E858-46F1-8BDA-16859680FE56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F30FE70B-E858-46F1-8BDA-16859680FE56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F30FE70B-E858-46F1-8BDA-16859680FE56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F30FE70B-E858-46F1-8BDA-16859680FE56}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{F30FE70B-E858-46F1-8BDA-16859680FE56} = {5412868F-5B63-486D-8EA6-ED8C83418517}
+		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128} = {5412868F-5B63-486D-8EA6-ED8C83418517}
+	EndGlobalSection
+EndGlobal
