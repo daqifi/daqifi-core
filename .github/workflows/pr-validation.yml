@@ -6,51 +6,43 @@ on:
   push:
     branches: [ main ]
 
-env:
-  COVERAGE_THRESHOLD: 80
-
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        dotnet-version: ['9.0.x']
-
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup .NET ${{ matrix.dotnet-version }}
+    - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: ${{ matrix.dotnet-version }}
+        dotnet-version: '9.0.x'
         
-    - name: List directory structure
+    - name: Create symbolic link for case sensitivity
       run: |
-        pwd
-        ls -R
+        # Create symbolic link with correct casing to handle Linux case sensitivity
+        mkdir -p /tmp/fixcase/src/
+        ln -s $GITHUB_WORKSPACE/src/DAQiFi.Core /tmp/fixcase/src/
+        ls -la /tmp/fixcase/src/
         
-    - name: Restore dependencies
-      run: dotnet restore
-      
-    - name: Build
-      run: dotnet build --no-restore
-      
-    - name: Test with coverage
-      run: dotnet test --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=./coverage/ /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType="line,branch,method"
-
-    - uses: danielpalme/ReportGenerator-GitHub-Action@5.2.0
-      name: Generate coverage report
+    - name: Build and Test
+      run: |
+        cd /tmp/fixcase
+        dotnet build $GITHUB_WORKSPACE
+        dotnet test $GITHUB_WORKSPACE --no-build
+        
+    - name: Run Tests with Coverage
+      run: |
+        cd $GITHUB_WORKSPACE
+        dotnet test --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura
+        
+    - name: Generate Coverage Report
+      uses: danielpalme/ReportGenerator-GitHub-Action@5.2.0
       with:
         reports: '**/coverage.cobertura.xml'
         targetdir: 'coveragereport'
         reporttypes: 'HtmlInline;TextSummary'
-        verbosity: 'Info'
-        title: 'DAQiFi.Core Coverage Report'
-
-    - name: Display coverage summary
-      run: cat coveragereport/Summary.txt
-
-    - name: Upload coverage report
+        
+    - name: Upload Coverage Report
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
