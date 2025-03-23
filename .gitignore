@@ -81,6 +81,9 @@ coverage/
 coverage.*
 *.coverage
 *.coveragexml
+coveragereport/
+*.cobertura.xml
+Summary.txt
 
 # Local History
 .localhistory/
