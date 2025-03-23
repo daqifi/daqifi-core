@@ -24,17 +24,19 @@ jobs:
       with:
         dotnet-version: ${{ matrix.dotnet-version }}
         
-    - name: List files
-      run: ls -la src/DAQiFi.Core/
+    - name: List directory structure
+      run: |
+        pwd
+        ls -R
         
     - name: Restore dependencies
-      run: dotnet restore src/DAQiFi.Core/DAQiFi.Core.csproj
+      run: dotnet restore
       
     - name: Build
-      run: dotnet build --no-restore src/DAQiFi.Core/DAQiFi.Core.csproj
+      run: dotnet build --no-restore
       
     - name: Test with coverage
-      run: dotnet test src/DAQiFi.Core.Tests/DAQiFi.Core.Tests.csproj --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=./coverage/ /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType="line,branch,method"
+      run: dotnet test --no-build --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=./coverage/ /p:Threshold=${{ env.COVERAGE_THRESHOLD }} /p:ThresholdType="line,branch,method"
 
     - uses: danielpalme/ReportGenerator-GitHub-Action@5.2.0
       name: Generate coverage report
