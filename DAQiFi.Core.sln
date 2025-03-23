@@ -4,9 +4,9 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{F23864F7-F627-4B1E-92C0-C0AFA15B603D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DAQiFi.Core", "src\DAQiFi.Core\DAQiFi.Core.csproj", "{50EB2118-F14B-484C-BA1B-ECB5EDD3A834}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core", "src\Daqifi.Core\Daqifi.Core.csproj", "{50EB2118-F14B-484C-BA1B-ECB5EDD3A834}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DAQiFi.Core.Tests", "src\DAQiFi.Core.Tests\DAQiFi.Core.Tests.csproj", "{CD8EC8C4-73C4-46ED-B9EB-4E43D0C4A30E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core.Tests", "src\Daqifi.Core.Tests\Daqifi.Core.Tests.csproj", "{CD8EC8C4-73C4-46ED-B9EB-4E43D0C4A30E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
