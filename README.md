@@ -13,4 +13,20 @@ The DAQiFi Core Library is a .NET library designed to simplify interaction with 
 
 ### Installation
 
-The DAQiFi Core Library will be available on NuGet.
+```shell
+dotnet add package Daqifi.Core
+```
+
+## Publishing
+
+This library follows semantic versioning (MAJOR.MINOR.PATCH):
+- MAJOR: Breaking changes
+- MINOR: New features (backwards compatible)
+- PATCH: Bug fixes
+
+Releases are automated via GitHub Actions:
+1. Create a new GitHub Release
+2. Tag it with `vX.Y.Z` (e.g. `v1.0.0`)
+3. For pre-releases, use `-alpha.1`, `-beta.1`, `-rc.1` suffixes
+4. Publishing to NuGet happens automatically on release
+
