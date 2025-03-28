@@ -344,6 +344,14 @@ public class ScpiMessageProducer
     /// Command: SYSTem:COMMunicate:LAN:APPLY
     /// </remarks>
     public static IMessage ApplyNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:APPLY");
+    
+    /// <summary>
+    /// Creates a command message to save the LAN configuration. This will persist settings upon restart
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:SAVE
+    /// </remarks>
+    public static IMessage SaveNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:SAVE");
 
     /// <summary>
     /// Creates a command message to set the LAN firmware update mode.

@@ -257,6 +257,14 @@ public class ScpiMessageProducerTests
         Assert.Equal("SYSTem:COMMunicate:LAN:APPLY", message.Data);
         AssertMessageFormat(message);
     }
+    
+    [Fact]
+    public void SaveNetworkLan_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SaveNetworkLan;
+        Assert.Equal("SYSTem:COMMunicate:LAN:SAVE", message.Data);
+        AssertMessageFormat(message);
+    }
 
     [Fact]
     public void SetLanFirmwareUpdateMode_ReturnsCorrectCommand()
