@@ -38,6 +38,14 @@ public class ScpiMessageProducer
     public static IMessage GetDeviceInfo => new ScpiMessage("SYSTem:SYSInfoPB?");
 
     /// <summary>
+    /// Creates a command message to force the device into bootloader mode.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:FORceBoot
+    /// Example: messageProducer.Send(ScpiMessageProducer.ForceBootloader);
+    public static IMessage ForceBootloader => new ScpiMessage("SYSTem:FORceBoot");
+
+    /// <summary>
     /// Creates a command message to turn the device on.
     /// </summary>
     /// <remarks>

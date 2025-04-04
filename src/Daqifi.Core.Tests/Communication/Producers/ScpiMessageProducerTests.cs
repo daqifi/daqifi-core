@@ -282,6 +282,13 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    [Fact]
+    public void ForceBootloader_ReturnsCorrectMessage()
+    {
+        var message = ScpiMessageProducer.ForceBootloader;
+        Assert.Equal("SYSTem:FORceBoot", message.Data);
+    }
+
     private static void AssertMessageFormat(IMessage message)
     {
         var bytes = message.GetBytes();
