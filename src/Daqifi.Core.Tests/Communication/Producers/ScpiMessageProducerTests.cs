@@ -289,7 +289,7 @@ public class ScpiMessageProducerTests
         Assert.Equal("SYSTem:FORceBoot", message.Data);
     }
 
-    private static void AssertMessageFormat(IMessage message)
+    private static void AssertMessageFormat(IOutboundMessage<string> message)
     {
         var bytes = message.GetBytes();
         var expectedBytes = Encoding.ASCII.GetBytes($"{message.Data}\r\n");

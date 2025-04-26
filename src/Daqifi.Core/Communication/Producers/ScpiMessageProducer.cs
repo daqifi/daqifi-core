@@ -25,7 +25,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:REboot
     /// Example: messageProducer.Send(ScpiMessageProducer.Reboot);
     /// </remarks>
-    public static IMessage RebootDevice => new ScpiMessage("SYSTem:REboot");
+    public static IOutboundMessage<string> RebootDevice => new ScpiMessage("SYSTem:REboot");
 
     /// <summary>
     /// Creates a query message to request system information in protocol buffer format.
@@ -35,7 +35,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:SYSInfoPB?
     /// Example: messageProducer.Send(ScpiMessageProducer.SystemInfo);
     /// </remarks>
-    public static IMessage GetDeviceInfo => new ScpiMessage("SYSTem:SYSInfoPB?");
+    public static IOutboundMessage<string> GetDeviceInfo => new ScpiMessage("SYSTem:SYSInfoPB?");
 
     /// <summary>
     /// Creates a command message to force the device into bootloader mode.
@@ -43,7 +43,8 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:FORceBoot
     /// Example: messageProducer.Send(ScpiMessageProducer.ForceBootloader);
-    public static IMessage ForceBootloader => new ScpiMessage("SYSTem:FORceBoot");
+    /// </remarks>
+    public static IOutboundMessage<string> ForceBootloader => new ScpiMessage("SYSTem:FORceBoot");
 
     /// <summary>
     /// Creates a command message to turn the device on.
@@ -52,7 +53,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:POWer:STATe 1
     /// Example: messageProducer.Send(ScpiMessageProducer.DeviceOn);
     /// </remarks>
-    public static IMessage TurnDeviceOn => new ScpiMessage("SYSTem:POWer:STATe 1");
+    public static IOutboundMessage<string> TurnDeviceOn => new ScpiMessage("SYSTem:POWer:STATe 1");
 
     /// <summary>
     /// Creates a command message to disable echo functionality.
@@ -62,7 +63,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:ECHO -1
     /// Example: messageProducer.Send(ScpiMessageProducer.TurnOffEcho);
     /// </remarks>
-    public static IMessage DisableDeviceEcho => new ScpiMessage("SYSTem:ECHO -1");
+    public static IOutboundMessage<string> DisableDeviceEcho => new ScpiMessage("SYSTem:ECHO -1");
 
     /// <summary>
     /// Creates a command message to enable echo functionality.
@@ -72,7 +73,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:ECHO 1
     /// Example: messageProducer.Send(ScpiMessageProducer.TurnOnEcho);
     /// </remarks>
-    public static IMessage EnableDeviceEcho => new ScpiMessage("SYSTem:ECHO 1");
+    public static IOutboundMessage<string> EnableDeviceEcho => new ScpiMessage("SYSTem:ECHO 1");
     
     /// <summary>
     /// Creates a command message to enable SD card logging.
@@ -82,7 +83,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:ENAble 1
     /// Example: messageProducer.Send(ScpiMessageProducer.EnableSdCard);
     /// </remarks>
-    public static IMessage EnableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 1");
+    public static IOutboundMessage<string> EnableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 1");
 
     /// <summary>
     /// Creates a command message to disable SD card logging.
@@ -91,7 +92,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:ENAble 0
     /// Example: messageProducer.Send(ScpiMessageProducer.DisableSdCard);
     /// </remarks>
-    public static IMessage DisableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 0");
+    public static IOutboundMessage<string> DisableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 0");
 
     /// <summary>
     /// Creates a query message to get the current SD card logging state.
@@ -100,7 +101,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:LOGging?
     /// Example: messageProducer.Send(ScpiMessageProducer.GetSdLoggingState);
     /// </remarks>
-    public static IMessage GetSdLoggingState => new ScpiMessage("SYSTem:STORage:SD:LOGging?");
+    public static IOutboundMessage<string> GetSdLoggingState => new ScpiMessage("SYSTem:STORage:SD:LOGging?");
 
     /// <summary>
     /// Creates a query message to get the list of files on the SD card.
@@ -109,7 +110,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:LIST?
     /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFileList);
     /// </remarks>
-    public static IMessage GetSdFileList => new ScpiMessage("SYSTem:STORage:SD:LIST?");
+    public static IOutboundMessage<string> GetSdFileList => new ScpiMessage("SYSTem:STORage:SD:LIST?");
 
     /// <summary>
     /// Creates a query message to retrieve a specific file from the SD card.
@@ -119,7 +120,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:GET "filename.bin"
     /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFile("data.bin"));
     /// </remarks>
-    public static IMessage GetSdFile(string fileName)
+    public static IOutboundMessage<string> GetSdFile(string fileName)
     {
         return new ScpiMessage($"SYSTem:STORage:SD:GET \"{fileName}\"");
     }
@@ -133,7 +134,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:LOGging "filename.bin"
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
-    public static IMessage SetSdLoggingFileName(string fileName)
+    public static IOutboundMessage<string> SetSdLoggingFileName(string fileName)
     {
         return new ScpiMessage($"SYSTem:STORage:SD:LOGging \"{fileName}\"");
     }
@@ -147,7 +148,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:StartStreamData frequency
     /// Example: messageProducer.Send(ScpiMessageProducer.StartStreaming(100)); // Stream at 100Hz
     /// </remarks>
-    public static IMessage StartStreaming(int frequency)
+    public static IOutboundMessage<string> StartStreaming(int frequency)
     {
         return new ScpiMessage($"SYSTem:StartStreamData {frequency}");
     }
@@ -159,7 +160,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:StopStreamData
     /// Example: messageProducer.Send(ScpiMessageProducer.StopStreaming);
     /// </remarks>
-    public static IMessage StopStreaming => new ScpiMessage("SYSTem:StopStreamData");
+    public static IOutboundMessage<string> StopStreaming => new ScpiMessage("SYSTem:StopStreamData");
 
     /// <summary>
     /// Creates a command message to set the stream format to Protocol Buffer.
@@ -169,7 +170,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STReam:FORmat 0
     /// Example: messageProducer.Send(ScpiMessageProducer.SetProtobufStreamFormat);
     /// </remarks>
-    public static IMessage SetProtobufStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 0");
+    public static IOutboundMessage<string> SetProtobufStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 0");
 
     /// <summary>
     /// Creates a command message to set the stream format to JSON.
@@ -179,7 +180,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STReam:FORmat 1
     /// Example: messageProducer.Send(ScpiMessageProducer.SetJsonStreamFormat);
     /// </remarks>
-    public static IMessage SetJsonStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 1");
+    public static IOutboundMessage<string> SetJsonStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 1");
 
     /// <summary>
     /// Creates a query message to get the current stream format.
@@ -192,7 +193,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STReam:FORmat?
     /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamFormat);
     /// </remarks>
-    public static IMessage GetStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat?");
+    public static IOutboundMessage<string> GetStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat?");
 
     /// <summary>
     /// Creates a command message to enable ADC channels using a binary string.
@@ -215,7 +216,7 @@ public class ScpiMessageProducer
     /// messageProducer.Send(ScpiMessageProducer.EnableAdcChannels("0000000011"));
     /// </code>
     /// </remarks>
-    public static IMessage EnableAdcChannels(string channelSetString)
+    public static IOutboundMessage<string> EnableAdcChannels(string channelSetString)
     {
         return new ScpiMessage($"ENAble:VOLTage:DC {channelSetString}");
     }
@@ -229,7 +230,7 @@ public class ScpiMessageProducer
     /// Command: DIO:PORt:DIRection channel,direction
     /// Example: messageProducer.Send(ScpiMessageProducer.SetDioPortDirection(1, 1)); // Set channel 1 as output
     /// </remarks>
-    public static IMessage SetDioPortDirection(int channel, int direction)
+    public static IOutboundMessage<string> SetDioPortDirection(int channel, int direction)
     {
         return new ScpiMessage($"DIO:PORt:DIRection {channel},{direction}");
     }
@@ -243,7 +244,7 @@ public class ScpiMessageProducer
     /// Command: DIO:PORt:STATe channel,value
     /// Example: messageProducer.Send(ScpiMessageProducer.SetDioPortState(1, 1)); // Set channel 1 to high
     /// </remarks>
-    public static IMessage SetDioPortState(int channel, double value)
+    public static IOutboundMessage<string> SetDioPortState(int channel, double value)
     {
         return new ScpiMessage($"DIO:PORt:STATe {channel},{value}");
     }
@@ -255,7 +256,7 @@ public class ScpiMessageProducer
     /// Command: DIO:PORt:ENAble 1
     /// Example: messageProducer.Send(ScpiMessageProducer.EnableDioPorts());
     /// </remarks>
-    public static IMessage EnableDioPorts()
+    public static IOutboundMessage<string> EnableDioPorts()
     {
         return new ScpiMessage("DIO:PORt:ENAble 1");
     }
@@ -267,7 +268,7 @@ public class ScpiMessageProducer
     /// Command: DIO:PORt:ENAble 0
     /// Example: messageProducer.Send(ScpiMessageProducer.DisableDioPorts());   
     /// </remarks>
-    public static IMessage DisableDioPorts()
+    public static IOutboundMessage<string> DisableDioPorts()
     {
         return new ScpiMessage("DIO:PORt:ENAble 0");
     }
@@ -278,7 +279,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:NETType 4
     /// </remarks>
-    public static IMessage SetNetworkWifiModeSelfHosted => new ScpiMessage("SYSTem:COMMunicate:LAN:NETType 4");
+    public static IOutboundMessage<string> SetNetworkWifiModeSelfHosted => new ScpiMessage("SYSTem:COMMunicate:LAN:NETType 4");
 
     /// <summary>
     /// Creates a command message to set the device to connect to an existing WiFi network.
@@ -286,7 +287,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:NETType 1
     /// </remarks>
-    public static IMessage SetNetworkWifiModeExisting => new ScpiMessage("SYSTem:COMMunicate:LAN:NETType 1");
+    public static IOutboundMessage<string> SetNetworkWifiModeExisting => new ScpiMessage("SYSTem:COMMunicate:LAN:NETType 1");
 
     /// <summary>
     /// Creates a command message to set the SSID for the WiFi network.
@@ -296,7 +297,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:COMMunicate:LAN:SSID "ssid" 
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSsid("MyNetwork"));
     /// </remarks>
-    public static IMessage SetNetworkWifiSsid(string ssid)
+    public static IOutboundMessage<string> SetNetworkWifiSsid(string ssid)
     {
         return new ScpiMessage($"SYSTem:COMMunicate:LAN:SSID \"{ssid}\"");
     }
@@ -307,7 +308,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:SECurity 0
     /// </remarks>
-    public static IMessage SetNetworkWifiSecurityOpen => new ScpiMessage("SYSTem:COMMunicate:LAN:SECurity 0");
+    public static IOutboundMessage<string> SetNetworkWifiSecurityOpen => new ScpiMessage("SYSTem:COMMunicate:LAN:SECurity 0");
 
     /// <summary>
     /// Creates a command message to set WiFi security to WPA with passphrase.
@@ -315,7 +316,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:SECurity 3
     /// </remarks>
-    public static IMessage SetNetworkWifiSecurityWpa => new ScpiMessage("SYSTem:COMMunicate:LAN:SECurity 3");
+    public static IOutboundMessage<string> SetNetworkWifiSecurityWpa => new ScpiMessage("SYSTem:COMMunicate:LAN:SECurity 3");
 
     /// <summary>
     /// Creates a command message to set the password for the WiFi network.
@@ -324,7 +325,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:PASs "password"
     /// </remarks>
-    public static IMessage SetNetworkWifiPassword(string password)
+    public static IOutboundMessage<string> SetNetworkWifiPassword(string password)
     {
         return new ScpiMessage($"SYSTem:COMMunicate:LAN:PASs \"{password}\"");
     }
@@ -335,7 +336,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:ENAbled 0
     /// </remarks>
-    public static IMessage DisableNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:ENAbled 0");
+    public static IOutboundMessage<string> DisableNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:ENAbled 0");
         
     /// <summary>
     /// Creates a command message to enable LAN communication.
@@ -343,7 +344,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:ENAbled 1
     /// </remarks>
-    public static IMessage EnableNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:ENAbled 1");
+    public static IOutboundMessage<string> EnableNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:ENAbled 1");
         
     /// <summary>
     /// Creates a command message to apply the LAN configuration.
@@ -351,7 +352,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:APPLY
     /// </remarks>
-    public static IMessage ApplyNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:APPLY");
+    public static IOutboundMessage<string> ApplyNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:APPLY");
     
     /// <summary>
     /// Creates a command message to save the LAN configuration. This will persist settings upon restart
@@ -359,7 +360,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:SAVE
     /// </remarks>
-    public static IMessage SaveNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:SAVE");
+    public static IOutboundMessage<string> SaveNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:SAVE");
 
     /// <summary>
     /// Creates a command message to set the LAN firmware update mode.
@@ -367,7 +368,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:COMMUnicate:LAN:FWUpdate
     /// </remarks>
-    public static IMessage SetLanFirmwareUpdateMode => new ScpiMessage("SYSTem:COMMUnicate:LAN:FWUpdate");
+    public static IOutboundMessage<string> SetLanFirmwareUpdateMode => new ScpiMessage("SYSTem:COMMUnicate:LAN:FWUpdate");
 
     /// <summary>
     /// Creates a command message to set the USB transparency mode (bypassing the SCPI consle layer).
@@ -376,7 +377,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Command: SYSTem:USB:SetTransparentMode mode
     /// </remarks>
-    public static IMessage SetUsbTransparencyMode(int mode)
+    public static IOutboundMessage<string> SetUsbTransparencyMode(int mode)
     {
         return new ScpiMessage($"SYSTem:USB:SetTransparentMode {mode}");
     }
