@@ -1,0 +1,184 @@
+# DAQiFi Core - Cursor AI Rules
+
+## Project Context
+You are working on the DAQiFi Core library - a .NET library that provides foundational interfaces and implementations for interacting with DAQiFi hardware devices. This library serves as the core foundation that will be used by desktop applications, web services, and other DAQiFi software.
+
+## Architecture & Patterns
+
+### Device Interface Pattern
+- All device classes should implement `IDevice` or `IStreamingDevice` interfaces
+- Use event-driven architecture with `StatusChanged` and `MessageReceived` events
+- Implement virtual methods that can be overridden for testing and customization
+- Use generic `Send<T>(IOutboundMessage<T>)` methods for type safety
+
+### Message System
+- All outbound messages implement `IOutboundMessage<T>` with strongly-typed data payloads
+- All inbound messages implement `IInboundMessage<T>` 
+- Use `ScpiMessageProducer` for creating SCPI command messages
+- Support multiple message formats: SCPI strings, Protocol Buffers, JSON
+
+### Connection Management
+- Use `ConnectionStatus` enum for device states: Disconnected, Connecting, Connected, Lost
+- Implement connection state transitions with proper event notifications
+- Always check `IsConnected` before sending messages
+- Throw `InvalidOperationException` for operations on disconnected devices
+
+## Code Style & Standards
+
+### C# Conventions
+- Use nullable reference types (`#nullable enable`)
+- Prefer `var` only when type is obvious from right-hand side
+- Use expression-bodied members for simple properties and methods
+- Follow Microsoft C# naming conventions (PascalCase for public members, camelCase for private)
+
+### Documentation
+- ALL public classes, interfaces, and members MUST have XML documentation
+- Use `<summary>`, `<param>`, `<returns>`, `<exception>` tags appropriately
+- Include code examples in documentation for complex APIs
+- Document thread safety characteristics
+- Use `<see cref=""/>` for cross-references
+
+### Error Handling
+- Use specific exception types (`InvalidOperationException`, `ArgumentException`, etc.)
+- Include clear, actionable error messages
+- Document all exceptions that public methods can throw
+- Validate parameters and throw appropriate exceptions early
+
+### Testing Patterns
+- Create testable versions of classes using inheritance and virtual methods
+- Use `TestableDaqifiDevice` pattern for mocking device behavior
+- Test all public methods, properties, and events
+- Include tests for error conditions and edge cases
+- Use meaningful test method names: `MethodName_Scenario_ExpectedResult`
+
+## Naming Conventions
+
+### Classes & Interfaces
+- Device interfaces: `IDevice`, `IStreamingDevice`, `IDiscoveryService`
+- Device implementations: `DaqifiDevice`, `DaqifiStreamingDevice` 
+- Event args: `DeviceStatusEventArgs`, `MessageReceivedEventArgs`
+- Message types: `ScpiMessage`, `ProtobufMessage`
+- Producers: `ScpiMessageProducer`, `DeviceDiscoveryService`
+
+### Methods & Properties
+- Connection methods: `Connect()`, `Disconnect()`, `IsConnected`
+- Messaging: `Send<T>()`, `OnMessageReceived()`
+- Events: `StatusChanged`, `MessageReceived`, `DeviceDiscovered`
+- Status: `Status`, `ConnectionStatus`, `IsStreaming`
+
+## File Organization
+```
+src/Daqifi.Core/
+├── Device/                 # Device interfaces and implementations
+├── Communication/          # Message types and producers
+│   ├── Messages/          # IOutboundMessage, IInboundMessage implementations
+│   └── Producers/         # Message factory classes
+├── Discovery/             # Device discovery services (future)
+└── Connection/            # Connection management (future)
+```
+
+## Multi-Targeting
+- Target both .NET 8.0 and .NET 9.0
+- Use `#if` directives sparingly and only for platform-specific code
+- Prefer feature detection over version detection
+- Test on both target frameworks
+
+## Hardware Domain Knowledge
+
+### DAQiFi Device Types
+- Basic devices: Connection, messaging, status monitoring
+- Streaming devices: Add real-time data acquisition capabilities
+- Discovery: Network scanning, mDNS, USB enumeration
+
+### Communication Protocols
+- SCPI (Standard Commands for Programmable Instruments)
+- Protocol Buffers for binary data
+- TCP/UDP for network communication
+- USB for direct connection
+
+### Device Operations
+- Connection lifecycle: Discover → Connect → Configure → Stream → Disconnect
+- Status monitoring: Connection health, error states, device capabilities
+- Message flow: Commands (outbound) → Responses (inbound)
+- Streaming: Start/stop, frequency control, data consumption
+
+## Best Practices
+
+### Performance
+- Use async/await for I/O operations
+- Implement proper disposal patterns for connections
+- Consider connection pooling for multiple devices
+- Buffer streaming data appropriately
+
+### Threading
+- Document thread safety of all public APIs
+- Use locks judiciously and avoid deadlocks
+- Consider using `ConcurrentCollections` for shared state
+- Event handlers should be thread-safe
+
+### Extensibility
+- Use interfaces for dependency injection
+- Make methods virtual when inheritance is expected
+- Provide clear extension points for custom implementations
+- Support plugin architectures where appropriate
+
+## Code Examples
+
+### Device Implementation Template
+```csharp
+/// <summary>
+/// Represents a [specific device type] that [brief description].
+/// </summary>
+public class CustomDevice : DaqifiDevice, ICustomInterface
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CustomDevice"/> class.
+    /// </summary>
+    /// <param name="name">The device name.</param>
+    /// <param name="ipAddress">The device IP address.</param>
+    public CustomDevice(string name, IPAddress? ipAddress = null) 
+        : base(name, ipAddress)
+    {
+    }
+
+    /// <summary>
+    /// Custom operation specific to this device type.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when device is not connected.</exception>
+    public void CustomOperation()
+    {
+        if (!IsConnected)
+            throw new InvalidOperationException("Device is not connected.");
+        
+        // Implementation
+    }
+}
+```
+
+### Test Method Template
+```csharp
+[Fact]
+public void MethodName_WhenCondition_ShouldExpectedBehavior()
+{
+    // Arrange
+    var device = new TestableDevice("TestDevice");
+    
+    // Act
+    var result = device.MethodName();
+    
+    // Assert
+    Assert.Equal(expectedValue, result);
+}
+```
+
+## Integration Guidelines
+- This library will be consumed by `daqifi-desktop` and other applications
+- Maintain backward compatibility within major versions
+- Consider migration paths when making breaking changes
+- Provide clear upgrade documentation
+
+## Git Conventions
+- Feature branches: `feature/descriptive-name`
+- Commit messages: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`
+- Include issue numbers: `feat: implement device discovery (#123)`
+- Keep commits focused and atomic 
