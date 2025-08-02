@@ -5,24 +5,33 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dotnet-version: ['8.0.x', '9.0.x']
     
     steps:
     - uses: actions/checkout@v4
+    
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
         
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: |
-          8.0.x
-          9.0.x
+        dotnet-version: ${{ matrix.dotnet-version }}
         
     - name: Restore dependencies
       run: dotnet restore Daqifi.Core.sln
       
     - name: Build
-      run: dotnet build --no-restore Daqifi.Core.sln
+      run: dotnet build --no-restore --configuration Release Daqifi.Core.sln
       
     - name: Test
-      run: dotnet test Daqifi.Core.sln
+      run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" Daqifi.Core.sln
