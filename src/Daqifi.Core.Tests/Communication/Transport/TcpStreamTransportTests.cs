@@ -40,22 +40,22 @@ public class TcpStreamTransportTests
         Assert.Throws<InvalidOperationException>(() => transport.Stream);
     }
 
-    [Fact(Skip = "Network test - can be slow and unreliable in CI")]
-    public void TcpStreamTransport_Connect_WithInvalidAddress_ShouldThrowException()
+    [Fact]
+    public void TcpStreamTransport_Connect_WithClosedPort_ShouldThrowException()
     {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 12345); // TEST-NET-1
+        // Arrange - Use localhost port 1 (reserved, never listening)
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
         
         // Act & Assert
         Assert.Throws<SocketException>(() => transport.Connect());
         Assert.False(transport.IsConnected);
     }
 
-    [Fact(Skip = "Network test - can be slow and unreliable in CI")]
-    public async Task TcpStreamTransport_ConnectAsync_WithInvalidAddress_ShouldThrowException()
+    [Fact]
+    public async Task TcpStreamTransport_ConnectAsync_WithClosedPort_ShouldThrowException()
     {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 12345); // TEST-NET-1
+        // Arrange - Use localhost port 1 (reserved, never listening)
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
         
         // Act & Assert
         await Assert.ThrowsAsync<SocketException>(() => transport.ConnectAsync());
@@ -84,11 +84,11 @@ public class TcpStreamTransportTests
         Assert.False(transport.IsConnected);
     }
 
-    [Fact(Skip = "Network test - can be slow and unreliable in CI")]
+    [Fact]
     public void TcpStreamTransport_StatusChanged_ShouldFireOnConnectionFailure()
     {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 12345);
+        // Arrange - Use localhost port 1 (reserved, never listening)
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
         TransportStatusEventArgs? capturedArgs = null;
         
         transport.StatusChanged += (sender, args) => capturedArgs = args;

@@ -23,23 +23,23 @@ public class DaqifiDeviceWithTransportTests
         Assert.False(device.IsConnected);
     }
 
-    [Fact(Skip = "Network test - can be slow and unreliable in CI")]
+    [Fact]
     public void DaqifiDevice_Connect_WithTransport_ShouldAttemptConnection()
     {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 12345); // Invalid address
+        // Arrange - Use localhost port 1 (reserved, never listening)
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
         using var device = new DaqifiDevice("Test Device", transport);
         
-        // Act & Assert - Should throw due to invalid address
+        // Act & Assert - Should throw due to connection refused
         Assert.Throws<SocketException>(() => device.Connect());
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
     }
 
-    [Fact(Skip = "Network test - can be slow and unreliable in CI")]
+    [Fact]
     public void DaqifiDevice_StatusChanged_ShouldFireOnTransportEvents()
     {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 12345);
+        // Arrange - Use localhost port 1 (reserved, never listening)
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1);
         using var device = new DaqifiDevice("Test Device", transport);
         
         var statusChanges = new List<ConnectionStatus>();
