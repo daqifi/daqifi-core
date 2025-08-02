@@ -25,7 +25,9 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: ${{ matrix.dotnet-version }}
+        dotnet-version: |
+          8.0.x
+          9.0.x
         
     - name: Restore dependencies
       run: dotnet restore Daqifi.Core.sln
@@ -34,4 +36,4 @@ jobs:
       run: dotnet build --no-restore --configuration Release Daqifi.Core.sln
       
     - name: Test
-      run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" Daqifi.Core.sln
+      run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --framework net${{ matrix.dotnet-version == '8.0.x' && '8.0' || '9.0' }} Daqifi.Core.sln
