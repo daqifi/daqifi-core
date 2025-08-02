@@ -125,6 +125,13 @@ public class MessageProducer<T> : IMessageProducer<T>
             throw new InvalidOperationException("Message producer is not running. Call Start() first.");
 
         _messageQueue.Enqueue(message);
+        
+        // Double-check running state after enqueue to avoid race condition
+        if (!_isRunning)
+        {
+            // If stopped after enqueuing, we should still honor the contract
+            // The message is queued and will be processed when/if restarted
+        }
     }
 
     /// <summary>

@@ -12,7 +12,7 @@ public class MessageConsumerErrorEventArgs : EventArgs
     /// <param name="rawData">The raw data being processed when the error occurred, if available.</param>
     public MessageConsumerErrorEventArgs(Exception error, byte[]? rawData = null)
     {
-        Error = error;
+        Error = error ?? throw new ArgumentNullException(nameof(error));
         RawData = rawData;
         Timestamp = DateTime.UtcNow;
     }

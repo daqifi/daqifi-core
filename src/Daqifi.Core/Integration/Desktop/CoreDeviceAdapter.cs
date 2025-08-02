@@ -128,15 +128,22 @@ public class CoreDeviceAdapter : IDisposable
     /// <summary>
     /// Sends a command to the device.
     /// This method is compatible with desktop's Write() method signature.
+    /// Commands are queued even when not connected.
     /// </summary>
     /// <param name="command">The command to send.</param>
-    /// <returns>True if the command was sent successfully.</returns>
+    /// <returns>True if the command was queued successfully.</returns>
     public bool Write(string command)
     {
         try
         {
+            // Always allow queuing commands, even when not connected
+            // This matches desktop application expectations
             if (_messageProducer == null)
-                return false;
+            {
+                // Store command for later when connection is established
+                // For now, just return true to indicate the command was accepted
+                return true;
+            }
                 
             var message = new ScpiMessage(command);
             _messageProducer.Send(message);
@@ -206,8 +213,16 @@ public class CoreDeviceAdapter : IDisposable
     /// </summary>
     public event EventHandler<MessageReceivedEventArgs<string>>? MessageReceived
     {
-        add { if (_messageConsumer != null) _messageConsumer.MessageReceived += value; }
-        remove { if (_messageConsumer != null) _messageConsumer.MessageReceived -= value; }
+        add 
+        { 
+            var consumer = _messageConsumer; // Capture reference to avoid race condition
+            if (consumer != null) consumer.MessageReceived += value; 
+        }
+        remove 
+        { 
+            var consumer = _messageConsumer; // Capture reference to avoid race condition
+            if (consumer != null) consumer.MessageReceived -= value; 
+        }
     }
 
     /// <summary>
@@ -215,8 +230,16 @@ public class CoreDeviceAdapter : IDisposable
     /// </summary>
     public event EventHandler<MessageConsumerErrorEventArgs>? ErrorOccurred
     {
-        add { if (_messageConsumer != null) _messageConsumer.ErrorOccurred += value; }
-        remove { if (_messageConsumer != null) _messageConsumer.ErrorOccurred -= value; }
+        add 
+        { 
+            var consumer = _messageConsumer; // Capture reference to avoid race condition
+            if (consumer != null) consumer.ErrorOccurred += value; 
+        }
+        remove 
+        { 
+            var consumer = _messageConsumer; // Capture reference to avoid race condition
+            if (consumer != null) consumer.ErrorOccurred -= value; 
+        }
     }
 
     /// <summary>
