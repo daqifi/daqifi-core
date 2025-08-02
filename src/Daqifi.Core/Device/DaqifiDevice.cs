@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 using System;
 using System.Net;
 
@@ -10,7 +11,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that can be connected to and communicated with.
     /// This is the base implementation of the IDevice interface.
     /// </summary>
-    public class DaqifiDevice : IDevice
+    public class DaqifiDevice : IDevice, IDisposable
     {
         /// <summary>
         /// Gets the name of the device.
@@ -28,6 +29,8 @@ namespace Daqifi.Core.Device
         public bool IsConnected => Status == ConnectionStatus.Connected;
 
         private ConnectionStatus _status;
+        private readonly IMessageProducer<string>? _messageProducer;
+        private bool _disposed;
         
         /// <summary>
         /// Gets the current connection status of the device.
@@ -66,12 +69,29 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="DaqifiDevice"/> class with a message producer.
+        /// </summary>
+        /// <param name="name">The name of the device.</param>
+        /// <param name="stream">The stream for device communication.</param>
+        /// <param name="ipAddress">The IP address of the device, if known.</param>
+        public DaqifiDevice(string name, Stream stream, IPAddress? ipAddress = null)
+        {
+            Name = name;
+            IpAddress = ipAddress;
+            _status = ConnectionStatus.Disconnected;
+            _messageProducer = new MessageProducer<string>(stream);
+        }
+
+        /// <summary>
         /// Connects to the device.
         /// </summary>
         public void Connect()
         {
-            // TODO: Add implementation
             Status = ConnectionStatus.Connecting;
+            
+            // Start message producer if available
+            _messageProducer?.Start();
+            
             Status = ConnectionStatus.Connected;
         }
 
@@ -80,7 +100,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         public void Disconnect()
         {
-            // TODO: Add implementation
+            // Stop message producer safely if available
+            _messageProducer?.StopSafely();
+            
             Status = ConnectionStatus.Disconnected;
         }
 
@@ -92,10 +114,21 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
         {
-            // TODO: Add implementation
             if (!IsConnected)
             {
                 throw new InvalidOperationException("Device is not connected.");
+            }
+
+            // Use message producer if available and message is string-based
+            if (_messageProducer != null && message is IOutboundMessage<string> stringMessage)
+            {
+                _messageProducer.Send(stringMessage);
+            }
+            else
+            {
+                // Fallback for backward compatibility - no implementation yet
+                // This will be enhanced in later steps when we add transport abstraction
+                throw new NotImplementedException("Direct message sending without message producer is not yet implemented. Use constructor with Stream parameter.");
             }
         }
 
@@ -106,6 +139,19 @@ namespace Daqifi.Core.Device
         protected virtual void OnMessageReceived(IInboundMessage<object> message)
         {
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(message));
+        }
+
+        /// <summary>
+        /// Disposes the device and releases resources.
+        /// </summary>
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                Disconnect();
+                _messageProducer?.Dispose();
+                _disposed = true;
+            }
         }
     }
 } 
