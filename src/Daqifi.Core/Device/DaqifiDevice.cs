@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Communication.Transport;
 using System;
 using System.Net;
 
@@ -29,7 +30,8 @@ namespace Daqifi.Core.Device
         public bool IsConnected => Status == ConnectionStatus.Connected;
 
         private ConnectionStatus _status;
-        private readonly IMessageProducer<string>? _messageProducer;
+        private IMessageProducer<string>? _messageProducer;
+        private readonly IStreamTransport? _transport;
         private bool _disposed;
         
         /// <summary>
@@ -83,16 +85,48 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="DaqifiDevice"/> class with a transport.
+        /// </summary>
+        /// <param name="name">The name of the device.</param>
+        /// <param name="transport">The transport for device communication.</param>
+        public DaqifiDevice(string name, IStreamTransport transport)
+        {
+            Name = name;
+            _status = ConnectionStatus.Disconnected;
+            _transport = transport;
+            
+            // Subscribe to transport status changes
+            _transport.StatusChanged += OnTransportStatusChanged;
+        }
+
+        /// <summary>
         /// Connects to the device.
         /// </summary>
         public void Connect()
         {
             Status = ConnectionStatus.Connecting;
             
-            // Start message producer if available
-            _messageProducer?.Start();
-            
-            Status = ConnectionStatus.Connected;
+            try
+            {
+                // Connect transport if available
+                _transport?.Connect();
+                
+                // Create message producer from transport if needed
+                if (_transport != null && _messageProducer == null)
+                {
+                    _messageProducer = new MessageProducer<string>(_transport.Stream);
+                }
+                
+                // Start message producer if available
+                _messageProducer?.Start();
+                
+                Status = ConnectionStatus.Connected;
+            }
+            catch
+            {
+                Status = ConnectionStatus.Disconnected;
+                throw;
+            }
         }
 
         /// <summary>
@@ -100,10 +134,18 @@ namespace Daqifi.Core.Device
         /// </summary>
         public void Disconnect()
         {
-            // Stop message producer safely if available
-            _messageProducer?.StopSafely();
-            
-            Status = ConnectionStatus.Disconnected;
+            try
+            {
+                // Stop message producer safely if available
+                _messageProducer?.StopSafely();
+                
+                // Disconnect transport if available
+                _transport?.Disconnect();
+            }
+            finally
+            {
+                Status = ConnectionStatus.Disconnected;
+            }
         }
 
         /// <summary>
@@ -142,6 +184,27 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Handles transport status changes and updates device connection status accordingly.
+        /// </summary>
+        /// <param name="sender">The transport that raised the event.</param>
+        /// <param name="e">The transport status event arguments.</param>
+        private void OnTransportStatusChanged(object? sender, TransportStatusEventArgs e)
+        {
+            if (e.IsConnected)
+            {
+                // Transport connected, but device status is managed by Connect() method
+            }
+            else
+            {
+                // Transport disconnected, update device status
+                if (Status == ConnectionStatus.Connected)
+                {
+                    Status = ConnectionStatus.Lost;
+                }
+            }
+        }
+
+        /// <summary>
         /// Disposes the device and releases resources.
         /// </summary>
         public void Dispose()
@@ -150,6 +213,7 @@ namespace Daqifi.Core.Device
             {
                 Disconnect();
                 _messageProducer?.Dispose();
+                _transport?.Dispose();
                 _disposed = true;
             }
         }
