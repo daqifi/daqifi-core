@@ -48,6 +48,9 @@ public class DaqifiDeviceWithMessageProducerTests
         // Act
         device.Send(ScpiMessageProducer.GetDeviceInfo);
         
+        // Wait for background thread to process the message
+        Thread.Sleep(200);
+        
         // Assert
         var written = Encoding.UTF8.GetString(stream.ToArray());
         Assert.Contains("SYSTem:SYSInfoPB?", written);

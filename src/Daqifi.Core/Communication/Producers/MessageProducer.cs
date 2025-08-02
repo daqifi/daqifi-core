@@ -4,8 +4,8 @@ using System.Collections.Concurrent;
 namespace Daqifi.Core.Communication.Producers;
 
 /// <summary>
-/// Basic implementation of IMessageProducer that handles queuing and sending messages.
-/// This version provides the foundation for thread-safe message production.
+/// Thread-safe implementation of IMessageProducer that handles queuing and sending messages.
+/// Uses a background thread to process messages from a concurrent queue.
 /// </summary>
 /// <typeparam name="T">The type of message data to produce.</typeparam>
 public class MessageProducer<T> : IMessageProducer<T>
@@ -14,6 +14,7 @@ public class MessageProducer<T> : IMessageProducer<T>
     private readonly ConcurrentQueue<IOutboundMessage<T>> _messageQueue;
     private volatile bool _isRunning;
     private bool _disposed;
+    private Thread? _producerThread;
 
     /// <summary>
     /// Initializes a new instance of the MessageProducer class.
@@ -37,12 +38,22 @@ public class MessageProducer<T> : IMessageProducer<T>
     public bool IsRunning => _isRunning;
 
     /// <summary>
-    /// Starts the message producer. In this basic version, messages are sent immediately.
+    /// Starts the message producer, beginning background message processing.
     /// </summary>
     public void Start()
     {
         ThrowIfDisposed();
+        
+        if (_isRunning)
+            return; // Already running
+            
         _isRunning = true;
+        _producerThread = new Thread(ProcessMessages)
+        {
+            IsBackground = true,
+            Name = $"MessageProducer-{typeof(T).Name}"
+        };
+        _producerThread.Start();
     }
 
     /// <summary>
@@ -57,48 +68,48 @@ public class MessageProducer<T> : IMessageProducer<T>
         {
             // Empty the queue
         }
+        
+        // Wait for thread to finish
+        _producerThread?.Join(1000);
+        _producerThread = null;
     }
 
     /// <summary>
-    /// Stops the message producer safely, processing remaining messages first.
+    /// Stops the message producer safely, waiting for pending messages to be processed.
     /// </summary>
     /// <param name="timeoutMs">Maximum time to wait for pending messages in milliseconds.</param>
     /// <returns>True if all messages were processed, false if timeout occurred.</returns>
     public bool StopSafely(int timeoutMs = 1000)
     {
+        if (!_isRunning)
+            return true;
+            
         var startTime = DateTime.UtcNow;
         
-        // Process remaining messages with timeout
+        // Wait for queue to empty with timeout
         while (!_messageQueue.IsEmpty)
         {
             if ((DateTime.UtcNow - startTime).TotalMilliseconds > timeoutMs)
             {
-                Stop(); // Force stop if timeout
+                // Timeout - force stop
+                Stop();
                 return false;
             }
             
-            // Try to process one more message
-            if (_messageQueue.TryDequeue(out var message))
-            {
-                try
-                {
-                    WriteMessageToStream(message);
-                }
-                catch
-                {
-                    // Ignore errors during shutdown
-                }
-            }
-            
+            // Give the background thread time to process
             Thread.Sleep(10);
         }
         
-        Stop();
+        // Queue is empty, now stop normally
+        _isRunning = false;
+        _producerThread?.Join(1000);
+        _producerThread = null;
+        
         return true;
     }
 
     /// <summary>
-    /// Queues a message for sending. In this basic version, sends immediately if running.
+    /// Queues a message for sending. The background thread will process it asynchronously.
     /// </summary>
     /// <param name="message">The message to send.</param>
     /// <exception cref="ArgumentNullException">Thrown when message is null.</exception>
@@ -114,27 +125,39 @@ public class MessageProducer<T> : IMessageProducer<T>
             throw new InvalidOperationException("Message producer is not running. Call Start() first.");
 
         _messageQueue.Enqueue(message);
-        
-        // For now, process immediately (Step 2 will add background threading)
-        ProcessQueuedMessages();
     }
 
     /// <summary>
-    /// Processes all currently queued messages.
+    /// Background thread method that continuously processes queued messages.
     /// </summary>
-    private void ProcessQueuedMessages()
+    private void ProcessMessages()
     {
-        while (_messageQueue.TryDequeue(out var message))
+        while (_isRunning)
         {
             try
             {
-                WriteMessageToStream(message);
+                // Sleep first to avoid busy waiting
+                Thread.Sleep(100);
+                
+                // Process all available messages
+                while (_messageQueue.TryDequeue(out var message))
+                {
+                    try
+                    {
+                        WriteMessageToStream(message);
+                    }
+                    catch (Exception)
+                    {
+                        // Log error but continue processing other messages
+                        // TODO: Add proper logging system in future step
+                        // For now, silently continue to match desktop behavior during shutdown
+                    }
+                }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // TODO: Add proper logging in Step 2  
-                // For now, re-throw to maintain error visibility
-                throw new InvalidOperationException($"Failed to send message: {ex.Message}", ex);
+                // Protect the background thread from unexpected exceptions
+                // TODO: Add proper logging system in future step
             }
         }
     }
