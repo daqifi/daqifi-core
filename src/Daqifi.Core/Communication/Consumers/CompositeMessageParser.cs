@@ -124,16 +124,17 @@ public class CompositeMessageParser : IMessageParser<object>
         if (data.Length == 0)
             return MessageTypeHint.Uncertain;
 
-        // Heuristic 1: Check for common text patterns (SCPI commands)
-        if (data.Length > 3 && IsLikelyTextCommand(data))
+        // Heuristic 1: Check for printable ASCII (common in SCPI) - prioritize this
+        var printableRatio = data.Count(b => b >= 32 && b <= 126) / (double)data.Length;
+        if (printableRatio > 0.8) // More than 80% printable ASCII
         {
             return MessageTypeHint.LikelyText;
         }
 
-        // Heuristic 2: Check for protobuf-like patterns
-        if (IsLikelyProtobufData(data))
+        // Heuristic 2: Check for common text patterns (SCPI commands)
+        if (data.Length > 3 && IsLikelyTextCommand(data))
         {
-            return MessageTypeHint.LikelyProtobuf;
+            return MessageTypeHint.LikelyText;
         }
 
         // Heuristic 3: High ratio of null bytes suggests binary
@@ -143,11 +144,10 @@ public class CompositeMessageParser : IMessageParser<object>
             return MessageTypeHint.LikelyProtobuf;
         }
 
-        // Heuristic 4: Check for printable ASCII (common in SCPI)
-        var printableRatio = data.Count(b => b >= 32 && b <= 126) / (double)data.Length;
-        if (printableRatio > 0.8) // More than 80% printable ASCII
+        // Heuristic 4: Check for protobuf-like patterns (be more conservative)
+        if (nullByteRatio > 0.05 && IsLikelyProtobufData(data)) // Only if some null bytes present
         {
-            return MessageTypeHint.LikelyText;
+            return MessageTypeHint.LikelyProtobuf;
         }
 
         return MessageTypeHint.Uncertain;
@@ -162,9 +162,11 @@ public class CompositeMessageParser : IMessageParser<object>
     {
         // Check for common SCPI patterns
         var text = System.Text.Encoding.ASCII.GetString(data, 0, Math.Min(data.Length, 10));
+        var fullText = System.Text.Encoding.ASCII.GetString(data);
+        
         return text.StartsWith("*") || text.StartsWith("SYST") || text.StartsWith("CONF") || 
                text.StartsWith("READ", StringComparison.OrdinalIgnoreCase) ||
-               text.EndsWith("\r\n") || text.EndsWith("\n");
+               fullText.EndsWith("\r\n") || fullText.EndsWith("\n");
     }
 
     /// <summary>
