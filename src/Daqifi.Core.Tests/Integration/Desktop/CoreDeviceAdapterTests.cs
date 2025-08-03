@@ -192,7 +192,7 @@ public class CoreDeviceAdapterTests
         var eventHandlerAdded = false;
         
         // Act - Just verify we can add/remove event handlers without exceptions
-        EventHandler<MessageReceivedEventArgs<string>> handler = (sender, args) => { };
+        EventHandler<MessageReceivedEventArgs<object>> handler = (sender, args) => { };
         adapter.MessageReceived += handler;
         eventHandlerAdded = true;
         adapter.MessageReceived -= handler;

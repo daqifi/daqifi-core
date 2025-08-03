@@ -23,7 +23,7 @@ public class DesktopIntegrationExample
         
         // Subscribe to events before connecting
         device.MessageReceived += (sender, args) => {
-            var response = args.Message.Data.Trim();
+            var response = args.Message.Data?.ToString()?.Trim() ?? "";
             Console.WriteLine($"Device: {response}");
             
             // Handle specific responses as your existing code does
@@ -78,7 +78,7 @@ public class DesktopIntegrationExample
         using var device = CoreDeviceAdapter.CreateSerialAdapter(availablePorts[0], 115200);
         
         device.MessageReceived += (sender, args) => {
-            var response = args.Message.Data.Trim();
+            var response = args.Message.Data?.ToString()?.Trim() ?? "";
             Console.WriteLine($"USB Device: {response}");
         };
         
@@ -114,7 +114,7 @@ public class DesktopIntegrationExample
         
         // Adapter provides these interfaces that desktop code expects
         public IMessageProducer<string>? MessageProducer => _coreAdapter?.MessageProducer;  
-        public IMessageConsumer<string>? MessageConsumer => _coreAdapter?.MessageConsumer;
+        public IMessageConsumer<object>? MessageConsumer => _coreAdapter?.MessageConsumer;
         
         /// <summary>
         /// Replace existing Connect() method with this implementation.
@@ -185,20 +185,27 @@ public class DesktopIntegrationExample
         }
         
         // Event handlers that translate Core events to desktop patterns
-        private void OnMessageReceived(object? sender, MessageReceivedEventArgs<string> e)
+        private void OnMessageReceived(object? sender, MessageReceivedEventArgs<object> e)
         {
             var message = e.Message.Data;
             
-            // Handle protobuf messages as existing desktop code does
-            if (message.StartsWith("protobuf:"))
+            // Handle different message types
+            if (message is DaqifiOutMessage protobufMsg)
             {
-                // Process binary protobuf data
-                ProcessProtobufMessage(e.RawData);
+                // Process binary protobuf data - existing desktop code patterns
+                Console.WriteLine($"Received protobuf message: {protobufMsg}");
+                // Call existing protobuf processing methods here
+            }
+            else if (message is string textMsg)
+            {
+                // Handle text responses - existing desktop code patterns
+                Console.WriteLine($"Received text: {textMsg}");
+                // Call existing text processing methods here
             }
             else
             {
-                // Handle text responses
-                ProcessTextResponse(message);
+                // Handle other message types
+                Console.WriteLine($"Received message: {message}");
             }
         }
         
@@ -354,7 +361,7 @@ public class DesktopIntegrationExample
                     _device = CoreDeviceAdapter.CreateTcpAdapter(_host, _port);
                     
                     _device.MessageReceived += (sender, args) => {
-                        DeviceMessageReceived?.Invoke(args.Message.Data);
+                        DeviceMessageReceived?.Invoke(args.Message.Data?.ToString() ?? "");
                     };
                     
                     _device.ConnectionStatusChanged += (sender, args) => {

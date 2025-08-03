@@ -14,17 +14,20 @@ namespace Daqifi.Core.Integration.Desktop;
 public class CoreDeviceAdapter : IDisposable
 {
     private readonly IStreamTransport _transport;
+    private readonly IMessageParser<object>? _messageParser;
     private IMessageProducer<string>? _messageProducer;
-    private IMessageConsumer<string>? _messageConsumer;
+    private IMessageConsumer<object>? _messageConsumer;
     private bool _disposed;
 
     /// <summary>
     /// Initializes a new CoreDeviceAdapter with the specified transport.
     /// </summary>
     /// <param name="transport">The transport to use for device communication.</param>
-    public CoreDeviceAdapter(IStreamTransport transport)
+    /// <param name="messageParser">Optional message parser. If not provided, uses CompositeMessageParser for both text and protobuf messages.</param>
+    public CoreDeviceAdapter(IStreamTransport transport, IMessageParser<object>? messageParser = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _messageParser = messageParser ?? new CompositeMessageParser();
     }
 
     /// <summary>
@@ -43,7 +46,7 @@ public class CoreDeviceAdapter : IDisposable
     /// Gets the message consumer for receiving responses from the device.
     /// Desktop applications can subscribe to MessageReceived events.
     /// </summary>
-    public IMessageConsumer<string>? MessageConsumer => _messageConsumer;
+    public IMessageConsumer<object>? MessageConsumer => _messageConsumer;
 
     /// <summary>
     /// Gets the connection status from the underlying transport.
@@ -68,7 +71,7 @@ public class CoreDeviceAdapter : IDisposable
             {
                 // Create message producer and consumer after connection is established
                 _messageProducer = new MessageProducer<string>(_transport.Stream);
-                _messageConsumer = new StreamMessageConsumer<string>(_transport.Stream, new LineBasedMessageParser());
+                _messageConsumer = new StreamMessageConsumer<object>(_transport.Stream, _messageParser!);
                 
                 _messageProducer.Start();
                 _messageConsumer.Start();
@@ -161,11 +164,12 @@ public class CoreDeviceAdapter : IDisposable
     /// </summary>
     /// <param name="host">The hostname or IP address.</param>
     /// <param name="port">The port number.</param>
+    /// <param name="messageParser">Optional message parser. If not provided, uses CompositeMessageParser for both text and protobuf messages.</param>
     /// <returns>A new CoreDeviceAdapter configured for TCP communication.</returns>
-    public static CoreDeviceAdapter CreateTcpAdapter(string host, int port)
+    public static CoreDeviceAdapter CreateTcpAdapter(string host, int port, IMessageParser<object>? messageParser = null)
     {
         var transport = new TcpStreamTransport(host, port);
-        return new CoreDeviceAdapter(transport);
+        return new CoreDeviceAdapter(transport, messageParser);
     }
 
     /// <summary>
@@ -174,11 +178,12 @@ public class CoreDeviceAdapter : IDisposable
     /// </summary>
     /// <param name="portName">The serial port name (e.g., "COM3", "/dev/ttyUSB0").</param>
     /// <param name="baudRate">The baud rate (default: 115200).</param>
+    /// <param name="messageParser">Optional message parser. If not provided, uses CompositeMessageParser for both text and protobuf messages.</param>
     /// <returns>A new CoreDeviceAdapter configured for Serial communication.</returns>
-    public static CoreDeviceAdapter CreateSerialAdapter(string portName, int baudRate = 115200)
+    public static CoreDeviceAdapter CreateSerialAdapter(string portName, int baudRate = 115200, IMessageParser<object>? messageParser = null)
     {
         var transport = new SerialStreamTransport(portName, baudRate);
-        return new CoreDeviceAdapter(transport);
+        return new CoreDeviceAdapter(transport, messageParser);
     }
 
     /// <summary>
@@ -189,6 +194,32 @@ public class CoreDeviceAdapter : IDisposable
     public static string[] GetAvailableSerialPorts()
     {
         return SerialStreamTransport.GetAvailablePortNames();
+    }
+
+    /// <summary>
+    /// Creates a TCP adapter configured specifically for text-based SCPI communication.
+    /// </summary>
+    /// <param name="host">The hostname or IP address.</param>
+    /// <param name="port">The port number.</param>
+    /// <returns>A new CoreDeviceAdapter configured for text-only communication.</returns>
+    public static CoreDeviceAdapter CreateTextOnlyTcpAdapter(string host, int port)
+    {
+        var transport = new TcpStreamTransport(host, port);
+        var textParser = new CompositeMessageParser(new LineBasedMessageParser(), null);
+        return new CoreDeviceAdapter(transport, textParser);
+    }
+
+    /// <summary>
+    /// Creates a TCP adapter configured specifically for binary protobuf communication.
+    /// </summary>
+    /// <param name="host">The hostname or IP address.</param>
+    /// <param name="port">The port number.</param>
+    /// <returns>A new CoreDeviceAdapter configured for protobuf-only communication.</returns>
+    public static CoreDeviceAdapter CreateProtobufOnlyTcpAdapter(string host, int port)
+    {
+        var transport = new TcpStreamTransport(host, port);
+        var protobufParser = new CompositeMessageParser(null, new ProtobufMessageParser());
+        return new CoreDeviceAdapter(transport, protobufParser);
     }
 
     /// <summary>
@@ -211,7 +242,7 @@ public class CoreDeviceAdapter : IDisposable
     /// Event that fires when a message is received from the device.
     /// Desktop applications can subscribe to this instead of creating their own consumers.
     /// </summary>
-    public event EventHandler<MessageReceivedEventArgs<string>>? MessageReceived
+    public event EventHandler<MessageReceivedEventArgs<object>>? MessageReceived
     {
         add 
         { 
