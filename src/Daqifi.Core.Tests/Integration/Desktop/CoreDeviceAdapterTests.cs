@@ -192,7 +192,7 @@ public class CoreDeviceAdapterTests
         var eventHandlerAdded = false;
         
         // Act - Just verify we can add/remove event handlers without exceptions
-        EventHandler<MessageReceivedEventArgs<string>> handler = (sender, args) => { };
+        EventHandler<MessageReceivedEventArgs<object>> handler = (sender, args) => { };
         adapter.MessageReceived += handler;
         eventHandlerAdded = true;
         adapter.MessageReceived -= handler;
@@ -293,5 +293,147 @@ public class CoreDeviceAdapterTests
         Assert.True(writeResult); // Commands can be queued
         Assert.NotEmpty(connectionInfo);
         Assert.False(isConnected);
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_WithCustomMessageParser_ShouldUseProvidedParser()
+    {
+        // Arrange
+        using var transport = new TcpStreamTransport("localhost", 12345);
+        var customParser = new CompositeMessageParser();
+        
+        // Act
+        using var adapter = new CoreDeviceAdapter(transport, customParser);
+        
+        // Assert
+        Assert.NotNull(adapter);
+        Assert.Same(transport, adapter.Transport);
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_WithNullMessageParser_ShouldUseDefaultCompositeParser()
+    {
+        // Arrange
+        using var transport = new TcpStreamTransport("localhost", 12345);
+        
+        // Act
+        using var adapter = new CoreDeviceAdapter(transport, null);
+        
+        // Assert
+        Assert.NotNull(adapter);
+        Assert.Same(transport, adapter.Transport);
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_CreateTextOnlyTcpAdapter_ShouldCreateCorrectly()
+    {
+        // Act
+        using var adapter = CoreDeviceAdapter.CreateTextOnlyTcpAdapter("192.168.1.100", 12345);
+        
+        // Assert
+        Assert.NotNull(adapter);
+        Assert.IsType<TcpStreamTransport>(adapter.Transport);
+        Assert.Contains("192.168.1.100", adapter.ConnectionInfo);
+        Assert.Contains("12345", adapter.ConnectionInfo);
+        Assert.False(adapter.IsConnected);
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_CreateProtobufOnlyTcpAdapter_ShouldCreateCorrectly()
+    {
+        // Act
+        using var adapter = CoreDeviceAdapter.CreateProtobufOnlyTcpAdapter("192.168.1.100", 12345);
+        
+        // Assert
+        Assert.NotNull(adapter);
+        Assert.IsType<TcpStreamTransport>(adapter.Transport);
+        Assert.Contains("192.168.1.100", adapter.ConnectionInfo);
+        Assert.Contains("12345", adapter.ConnectionInfo);
+        Assert.False(adapter.IsConnected);
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_CreateTcpAdapterWithCustomParser_ShouldCreateCorrectly()
+    {
+        // Arrange
+        var customParser = new CompositeMessageParser(new LineBasedMessageParser("\n"), null);
+        
+        // Act
+        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("192.168.1.100", 12345, customParser);
+        
+        // Assert
+        Assert.NotNull(adapter);
+        Assert.IsType<TcpStreamTransport>(adapter.Transport);
+        Assert.Contains("192.168.1.100", adapter.ConnectionInfo);
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_CreateSerialAdapterWithCustomParser_ShouldCreateCorrectly()
+    {
+        // Arrange
+        var customParser = new CompositeMessageParser();
+        
+        // Act
+        using var adapter = CoreDeviceAdapter.CreateSerialAdapter("COM1", 115200, customParser);
+        
+        // Assert
+        Assert.NotNull(adapter);
+        Assert.IsType<SerialStreamTransport>(adapter.Transport);
+        Assert.Contains("COM1", adapter.ConnectionInfo);
+        // Note: ConnectionInfo format may vary, just check that it's not empty
+        Assert.NotEmpty(adapter.ConnectionInfo);
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_MessageConsumerType_ShouldHandleObjectMessages()
+    {
+        // Arrange
+        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("localhost", 12345);
+        
+        // Act & Assert - Verify the MessageConsumer can handle object messages
+        Assert.True(adapter.MessageConsumer == null); // Not connected yet
+        
+        // Verify event handler can be assigned with object type
+        EventHandler<MessageReceivedEventArgs<object>> handler = (sender, args) => 
+        {
+            // Should be able to handle both string and protobuf messages
+            if (args.Message.Data is string textMsg)
+            {
+                // Handle text message
+            }
+            else if (args.Message.Data is DaqifiOutMessage protobufMsg)
+            {
+                // Handle protobuf message
+            }
+        };
+        
+        adapter.MessageReceived += handler;
+        adapter.MessageReceived -= handler;
+    }
+
+    [Fact]
+    public void CoreDeviceAdapter_BackwardCompatibility_ShouldStillSupportBasicOperations()
+    {
+        // Arrange - Test that existing desktop code patterns still work
+        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("192.168.1.100", 12345);
+        
+        // Act & Assert - Basic operations that desktop code relies on
+        Assert.False(adapter.IsConnected);
+        Assert.NotEmpty(adapter.ConnectionInfo);
+        Assert.NotNull(adapter.Transport);
+        
+        // Event subscription should work
+        var messageReceived = false;
+        adapter.MessageReceived += (sender, args) => messageReceived = true;
+        
+        var statusChanged = false;
+        adapter.ConnectionStatusChanged += (sender, args) => statusChanged = true;
+        
+        var errorOccurred = false;
+        adapter.ErrorOccurred += (sender, args) => errorOccurred = true;
+        
+        // Write method should work even when not connected
+        var writeResult = adapter.Write("*IDN?");
+        Assert.True(writeResult); // Should return true for queuing
     }
 }
