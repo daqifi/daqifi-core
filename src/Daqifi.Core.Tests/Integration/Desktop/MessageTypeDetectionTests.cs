@@ -106,8 +106,8 @@ public class MessageTypeDetectionTests
         Assert.Empty(receivedTextMessages);
         Assert.Empty(receivedProtobufMessages);
         
-        // Verify the adapter has the composite parser capability
-        Assert.NotNull(adapter.MessageConsumer); // Will be null until connected, but type should be correct
+        // Verify the adapter works correctly (MessageConsumer will be null until connected)
+        Assert.Null(adapter.MessageConsumer); // Should be null until connected
     }
 
     [Fact]
