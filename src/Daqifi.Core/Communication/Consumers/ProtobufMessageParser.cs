@@ -5,10 +5,12 @@ namespace Daqifi.Core.Communication.Consumers;
 
 /// <summary>
 /// Message parser for binary protobuf messages.
-/// Handles variable-length protobuf messages by detecting message boundaries.
+/// Uses CodedInputStream to properly track consumed bytes and handle variable-length messages.
 /// </summary>
 public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 {
+    private const int MaxRetryAttempts = 3;
+    
     /// <summary>
     /// Parses raw data into protobuf messages.
     /// </summary>
@@ -24,33 +26,52 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             return messages;
 
         var currentIndex = 0;
-        while (currentIndex < data.Length)
+        var retryCount = 0;
+        
+        while (currentIndex < data.Length && retryCount < MaxRetryAttempts)
         {
             try
             {
-                // Try to parse a protobuf message from the current position
-                var remainingData = new byte[data.Length - currentIndex];
-                Array.Copy(data, currentIndex, remainingData, 0, remainingData.Length);
-
-                var message = DaqifiOutMessage.Parser.ParseFrom(remainingData);
+                // Use CodedInputStream for proper byte tracking
+                var remainingData = new ReadOnlySpan<byte>(data, currentIndex, data.Length - currentIndex);
+                var codedInput = new CodedInputStream(remainingData.ToArray());
                 
-                // Calculate how many bytes were consumed for this message
-                var messageBytes = message.CalculateSize();
-                currentIndex += messageBytes;
-                consumedBytes = currentIndex;
-
-                messages.Add(new ProtobufMessage(message));
+                // Record the position before parsing
+                var startPosition = codedInput.Position;
+                
+                // Try to parse a protobuf message
+                var message = DaqifiOutMessage.Parser.ParseFrom(codedInput);
+                
+                // Calculate actual bytes consumed by the parser
+                var bytesConsumed = codedInput.Position - startPosition;
+                
+                if (bytesConsumed > 0)
+                {
+                    currentIndex += (int)bytesConsumed;
+                    consumedBytes = currentIndex;
+                    messages.Add(new ProtobufMessage(message));
+                    retryCount = 0; // Reset retry count on successful parse
+                }
+                else
+                {
+                    // If no bytes were consumed, we might be stuck - advance by 1
+                    currentIndex++;
+                    consumedBytes = currentIndex;
+                    retryCount++;
+                }
             }
             catch (InvalidProtocolBufferException)
             {
-                // If we can't parse a complete message, we need more data
+                // If we can't parse a complete message, stop parsing
+                // This is expected when we don't have a complete message
                 break;
             }
             catch (Exception)
             {
-                // For other exceptions, skip one byte and try again
+                // For other exceptions, advance by one byte and retry
                 currentIndex++;
                 consumedBytes = currentIndex;
+                retryCount++;
             }
         }
 

@@ -25,7 +25,8 @@ public class CompositeMessageParser : IMessageParser<object>
     }
 
     /// <summary>
-    /// Parses raw data by trying both text and protobuf parsers.
+    /// Parses raw data by intelligently trying both text and protobuf parsers.
+    /// Uses heuristics beyond simple null byte detection to determine message type.
     /// </summary>
     /// <param name="data">The raw data to parse.</param>
     /// <param name="consumedBytes">The number of bytes consumed from the data during parsing.</param>
@@ -38,10 +39,10 @@ public class CompositeMessageParser : IMessageParser<object>
         if (data.Length == 0)
             return messages;
 
-        // First, try to detect if this looks like protobuf data (contains null bytes)
-        bool likelyProtobuf = ContainsNullBytes(data);
+        // Use improved heuristics to detect message type
+        var messageTypeHint = DetectMessageType(data);
 
-        if (likelyProtobuf)
+        if (messageTypeHint == MessageTypeHint.LikelyProtobuf)
         {
             // Try protobuf parser first
             var protobufMessages = _protobufParser.ParseMessages(data, out int protobufConsumed);
@@ -56,20 +57,37 @@ public class CompositeMessageParser : IMessageParser<object>
             }
         }
 
-        // Try text parser
-        var textMessages = _textParser.ParseMessages(data, out int textConsumed);
-        if (textMessages.Any())
+        if (messageTypeHint == MessageTypeHint.LikelyText)
         {
-            foreach (var msg in textMessages)
+            // Try text parser first
+            var textMessages = _textParser.ParseMessages(data, out int textConsumed);
+            if (textMessages.Any())
             {
-                messages.Add(new ObjectInboundMessage(msg.Data));
+                foreach (var msg in textMessages)
+                {
+                    messages.Add(new ObjectInboundMessage(msg.Data));
+                }
+                consumedBytes = textConsumed;
+                return messages;
             }
-            consumedBytes = textConsumed;
-            return messages;
         }
 
-        // If text parser didn't work and we haven't tried protobuf yet, try it
-        if (!likelyProtobuf)
+        // If heuristics are uncertain or first attempt failed, try the other parser
+        if (messageTypeHint != MessageTypeHint.LikelyText)
+        {
+            var textMessages = _textParser.ParseMessages(data, out int textConsumed);
+            if (textMessages.Any())
+            {
+                foreach (var msg in textMessages)
+                {
+                    messages.Add(new ObjectInboundMessage(msg.Data));
+                }
+                consumedBytes = textConsumed;
+                return messages;
+            }
+        }
+
+        if (messageTypeHint != MessageTypeHint.LikelyProtobuf)
         {
             var protobufMessages = _protobufParser.ParseMessages(data, out int protobufConsumed);
             if (protobufMessages.Any())
@@ -86,13 +104,95 @@ public class CompositeMessageParser : IMessageParser<object>
     }
 
     /// <summary>
-    /// Checks if the data contains null bytes, which indicates binary protobuf data.
+    /// Message type hints for improved detection.
+    /// </summary>
+    private enum MessageTypeHint
+    {
+        Uncertain,
+        LikelyText,
+        LikelyProtobuf
+    }
+
+    /// <summary>
+    /// Uses multiple heuristics to detect the likely message type.
+    /// Goes beyond simple null byte detection to avoid false positives.
+    /// </summary>
+    /// <param name="data">The data to analyze.</param>
+    /// <returns>A hint about the likely message type.</returns>
+    private static MessageTypeHint DetectMessageType(byte[] data)
+    {
+        if (data.Length == 0)
+            return MessageTypeHint.Uncertain;
+
+        // Heuristic 1: Check for common text patterns (SCPI commands)
+        if (data.Length > 3 && IsLikelyTextCommand(data))
+        {
+            return MessageTypeHint.LikelyText;
+        }
+
+        // Heuristic 2: Check for protobuf-like patterns
+        if (IsLikelyProtobufData(data))
+        {
+            return MessageTypeHint.LikelyProtobuf;
+        }
+
+        // Heuristic 3: High ratio of null bytes suggests binary
+        var nullByteRatio = data.Count(b => b == 0) / (double)data.Length;
+        if (nullByteRatio > 0.1) // More than 10% null bytes
+        {
+            return MessageTypeHint.LikelyProtobuf;
+        }
+
+        // Heuristic 4: Check for printable ASCII (common in SCPI)
+        var printableRatio = data.Count(b => b >= 32 && b <= 126) / (double)data.Length;
+        if (printableRatio > 0.8) // More than 80% printable ASCII
+        {
+            return MessageTypeHint.LikelyText;
+        }
+
+        return MessageTypeHint.Uncertain;
+    }
+
+    /// <summary>
+    /// Checks if the data looks like a text command (SCPI-style).
     /// </summary>
     /// <param name="data">The data to check.</param>
-    /// <returns>True if the data contains null bytes, false otherwise.</returns>
-    private static bool ContainsNullBytes(byte[] data)
+    /// <returns>True if it looks like a text command.</returns>
+    private static bool IsLikelyTextCommand(byte[] data)
     {
-        return data.Contains((byte)0);
+        // Check for common SCPI patterns
+        var text = System.Text.Encoding.ASCII.GetString(data, 0, Math.Min(data.Length, 10));
+        return text.StartsWith("*") || text.StartsWith("SYST") || text.StartsWith("CONF") || 
+               text.StartsWith("READ", StringComparison.OrdinalIgnoreCase) ||
+               text.EndsWith("\r\n") || text.EndsWith("\n");
+    }
+
+    /// <summary>
+    /// Checks if the data has protobuf-like characteristics.
+    /// </summary>
+    /// <param name="data">The data to check.</param>
+    /// <returns>True if it looks like protobuf data.</returns>
+    private static bool IsLikelyProtobufData(byte[] data)
+    {
+        if (data.Length < 2)
+            return false;
+
+        // Protobuf messages often start with field tags (varint encoded)
+        // Check for patterns that suggest protobuf field encoding
+        for (int i = 0; i < Math.Min(data.Length - 1, 5); i++)
+        {
+            var byte1 = data[i];
+            var byte2 = data[i + 1];
+            
+            // Look for varint patterns (field number + wire type)
+            if ((byte1 & 0x07) <= 5 && // Valid wire type (0-5)
+                (byte1 >> 3) > 0)      // Non-zero field number
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
