@@ -191,8 +191,8 @@ public class BackwardCompatibilityTests
     {
         // This test simulates the exact pattern used in existing desktop applications
         
-        // Arrange - Typical desktop application usage
-        using var device = CoreDeviceAdapter.CreateTcpAdapter("192.168.1.100", 12345);
+        // Arrange - Use localhost with unopened port for fast failure
+        using var device = CoreDeviceAdapter.CreateTcpAdapter("127.0.0.1", 1); // localhost:1 should fail immediately
         
         // Subscribe to events (this is how desktop apps get device responses)
         device.MessageReceived += (sender, args) =>

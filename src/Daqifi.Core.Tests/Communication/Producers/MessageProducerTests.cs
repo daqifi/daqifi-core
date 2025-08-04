@@ -62,14 +62,12 @@ public class MessageProducerTests
         // Act
         producer.Send(message);
         
-        // Wait for background thread to process the message
-        Thread.Sleep(200);
+        // Stop safely to ensure all messages are processed
+        producer.StopSafely();
         
         // Assert
         var written = Encoding.UTF8.GetString(stream.ToArray());
         Assert.Contains("TEST:COMMAND", written);
-        
-        producer.StopSafely();
     }
 
     [Fact]
@@ -132,14 +130,12 @@ public class MessageProducerTests
         // Act
         producer.Send(message);
         
-        // Give the background thread time to process
-        Thread.Sleep(200);
+        // Stop safely to ensure all messages are processed
+        producer.StopSafely();
         
         // Assert
         var written = Encoding.UTF8.GetString(stream.ToArray());
         Assert.Contains("ASYNC:TEST", written);
-        
-        producer.StopSafely();
     }
 
     [Fact]
@@ -158,7 +154,7 @@ public class MessageProducerTests
         }
         
         // Wait for processing
-        Thread.Sleep(300);
+        Thread.Sleep(50);
         producer.StopSafely();
         
         // Assert - All messages should be written
@@ -185,7 +181,7 @@ public class MessageProducerTests
         
         // Should work normally
         producer.Send(new ScpiMessage("TEST"));
-        Thread.Sleep(100);
+        Thread.Sleep(20);
         
         producer.StopSafely();
         
