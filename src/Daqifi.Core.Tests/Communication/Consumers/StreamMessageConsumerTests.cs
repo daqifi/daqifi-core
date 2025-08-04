@@ -67,7 +67,7 @@ public class StreamMessageConsumerTests
         
         // Act
         consumer.Start();
-        Thread.Sleep(200); // Give time for processing
+        Thread.Sleep(20); // Give time for processing
         consumer.Stop();
         
         // Assert
@@ -88,7 +88,7 @@ public class StreamMessageConsumerTests
         
         // Act
         consumer.Start();
-        Thread.Sleep(300); // Give time for processing
+        Thread.Sleep(30); // Give time for processing
         consumer.Stop();
         
         // Assert

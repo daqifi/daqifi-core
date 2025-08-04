@@ -100,8 +100,8 @@ public class CoreDeviceAdapterTests
     [Fact] 
     public void CoreDeviceAdapter_Connect_WithInvalidAddress_ShouldReturnFalse()
     {
-        // Arrange
-        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("192.0.2.1", 1); // TEST-NET-1 address that should fail fast
+        // Arrange - Use localhost with unopened port for fast failure
+        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("127.0.0.1", 1); // localhost:1 should fail immediately
         
         // Act
         var result = adapter.Connect();
@@ -114,8 +114,8 @@ public class CoreDeviceAdapterTests
     [Fact]
     public async Task CoreDeviceAdapter_ConnectAsync_WithInvalidAddress_ShouldReturnFalse()
     {
-        // Arrange
-        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("192.0.2.1", 1); // TEST-NET-1 address that should fail fast
+        // Arrange - Use localhost with unopened port for fast failure
+        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("127.0.0.1", 1); // localhost:1 should fail immediately
         
         // Act
         var result = await adapter.ConnectAsync();
@@ -169,8 +169,8 @@ public class CoreDeviceAdapterTests
     [Fact]
     public void CoreDeviceAdapter_ConnectionStatusChanged_ShouldFireOnConnectionAttempt()
     {
-        // Arrange
-        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("192.0.2.1", 1); // TEST-NET-1 address that should fail fast
+        // Arrange - Use localhost with unopened port for fast failure
+        using var adapter = CoreDeviceAdapter.CreateTcpAdapter("127.0.0.1", 1); // localhost:1 should fail immediately
         TransportStatusEventArgs? capturedArgs = null;
         
         adapter.ConnectionStatusChanged += (sender, args) => capturedArgs = args;

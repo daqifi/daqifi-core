@@ -106,14 +106,13 @@ public class TcpStreamTransport : IStreamTransport
             _tcpClient.ReceiveTimeout = 5000;
             _tcpClient.SendTimeout = 5000;
 
-            if (Hostname != null)
-            {
-                await _tcpClient.ConnectAsync(Hostname, _endPoint.Port);
-            }
-            else
-            {
-                await _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
-            }
+            // Add connection timeout to prevent long waits in tests and real usage
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var connectTask = Hostname != null
+                ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
+                : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
+
+            await connectTask.WaitAsync(cts.Token);
 
             _networkStream = _tcpClient.GetStream();
             OnStatusChanged(true, null);
