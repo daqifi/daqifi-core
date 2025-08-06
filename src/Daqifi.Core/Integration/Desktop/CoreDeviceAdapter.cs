@@ -18,6 +18,7 @@ public class CoreDeviceAdapter : IDisposable
     private IMessageProducer<string>? _messageProducer;
     private IMessageConsumer<object>? _messageConsumer;
     private bool _disposed;
+    private bool _isWifiDevice;
 
     /// <summary>
     /// Initializes a new CoreDeviceAdapter with the specified transport.
@@ -49,6 +50,24 @@ public class CoreDeviceAdapter : IDisposable
     public IMessageConsumer<object>? MessageConsumer => _messageConsumer;
 
     /// <summary>
+    /// Gets or sets whether this device is a WiFi-connected device.
+    /// WiFi devices may need special buffer clearing and initialization logic.
+    /// </summary>
+    public bool IsWifiDevice 
+    { 
+        get => _isWifiDevice; 
+        set 
+        { 
+            _isWifiDevice = value;
+            // Apply WiFi-specific settings to the consumer if it exists
+            if (_messageConsumer is DesktopCompatibleMessageConsumer desktopConsumer)
+            {
+                desktopConsumer.IsWifiDevice = value;
+            }
+        } 
+    }
+
+    /// <summary>
     /// Gets the connection status from the underlying transport.
     /// </summary>
     public bool IsConnected => _transport.IsConnected;
@@ -71,10 +90,20 @@ public class CoreDeviceAdapter : IDisposable
             {
                 // Create message producer and consumer after connection is established
                 _messageProducer = new MessageProducer<string>(_transport.Stream);
-                _messageConsumer = new StreamMessageConsumer<object>(_transport.Stream, _messageParser!);
+                
+                // Use desktop-compatible consumer for better integration
+                var desktopConsumer = new DesktopCompatibleMessageConsumer(_transport.Stream, _messageParser!);
+                desktopConsumer.IsWifiDevice = _isWifiDevice;
+                _messageConsumer = desktopConsumer;
                 
                 _messageProducer.Start();
                 _messageConsumer.Start();
+                
+                // Clear buffer for WiFi devices after connection
+                if (_isWifiDevice)
+                {
+                    ClearBuffer();
+                }
             }
             return _transport.IsConnected;
         }
@@ -101,8 +130,7 @@ public class CoreDeviceAdapter : IDisposable
     {
         try
         {
-            _messageConsumer?.StopSafely();
-            _messageProducer?.StopSafely();
+            StopSafely();
             await _transport.DisconnectAsync();
             
             // Clean up message producer and consumer
@@ -169,7 +197,9 @@ public class CoreDeviceAdapter : IDisposable
     public static CoreDeviceAdapter CreateTcpAdapter(string host, int port, IMessageParser<object>? messageParser = null)
     {
         var transport = new TcpStreamTransport(host, port);
-        return new CoreDeviceAdapter(transport, messageParser);
+        var adapter = new CoreDeviceAdapter(transport, messageParser);
+        adapter.IsWifiDevice = true; // TCP connections are typically WiFi devices
+        return adapter;
     }
 
     /// <summary>
@@ -293,6 +323,70 @@ public class CoreDeviceAdapter : IDisposable
             _messageProducer?.Dispose();
             _transport?.Dispose();
             _disposed = true;
+        }
+    }
+
+    /// <summary>
+    /// Clears any buffered data from WiFi devices.
+    /// This is particularly important for WiFi devices that may have stale data in buffers.
+    /// </summary>
+    /// <returns>True if buffer was cleared successfully, false if not applicable or failed.</returns>
+    public bool ClearBuffer()
+    {
+        try
+        {
+            if (_transport.IsConnected && _transport.Stream != null)
+            {
+                // Clear any buffered data from the stream
+                var buffer = new byte[1024];
+                var stream = _transport.Stream;
+                
+                // For network streams, we can check DataAvailable
+                if (stream is System.Net.Sockets.NetworkStream networkStream)
+                {
+                    while (networkStream.DataAvailable)
+                    {
+                        var bytesRead = stream.Read(buffer, 0, buffer.Length);
+                        if (bytesRead == 0) break;
+                    }
+                }
+                // For other streams, try reading with timeout
+                else
+                {
+                    stream.ReadTimeout = 100; // 100ms timeout
+                    try
+                    {
+                        while (stream.Read(buffer, 0, buffer.Length) > 0) { }
+                    }
+                    catch (TimeoutException) 
+                    {
+                        // Expected when no more data - buffer is cleared
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Safely stops the message producer and consumer.
+    /// This method ensures proper shutdown sequence for desktop applications.
+    /// </summary>
+    public void StopSafely()
+    {
+        try
+        {
+            _messageConsumer?.StopSafely();
+            _messageProducer?.StopSafely();
+        }
+        catch
+        {
+            // Ignore errors during safe stop
         }
     }
 }

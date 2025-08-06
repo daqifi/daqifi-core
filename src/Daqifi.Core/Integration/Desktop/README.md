@@ -2,6 +2,55 @@
 
 This guide helps DAQiFi Desktop applications integrate with the new Core library infrastructure while maintaining compatibility with existing code.
 
+## Recent Improvements (v0.4.1)
+
+### Enhanced Drop-In Replacement Capability
+The `CoreDeviceAdapter` has been significantly improved to address GitHub issue #39 and provide true drop-in replacement capability for desktop applications:
+
+#### ✅ **WiFi Device Auto-Detection**
+- TCP adapters automatically set `IsWifiDevice = true`
+- Serial adapters remain `IsWifiDevice = false`
+- Can be manually overridden if needed
+
+#### ✅ **Desktop-Compatible Message Events**
+- Message events now provide the exact types desktop applications expect
+- Direct casting to `DaqifiOutMessage` and other types works seamlessly
+- No more complex wrapper code required
+
+#### ✅ **WiFi-Specific Features**
+- `ClearBuffer()` method for clearing stale data from WiFi connections
+- `StopSafely()` method for proper shutdown sequences
+- Automatic buffer clearing after WiFi device connection
+
+#### ✅ **Minimal Code Changes Required**
+Desktop applications can now use CoreDeviceAdapter with minimal changes:
+
+```csharp
+// Before: Complex adapter pattern with 143+ lines of code
+using var legacyWrapper = new LegacyDeviceWrapper(device);
+// ... extensive setup code ...
+
+// After: Direct drop-in replacement
+using var device = CoreDeviceAdapter.CreateTcpAdapter("192.168.1.100", 12345);
+
+// WiFi features work automatically
+if (device.IsWifiDevice) 
+{
+    device.ClearBuffer(); // Clear any stale data
+}
+
+// Message handling works exactly as before
+device.MessageReceived += (sender, args) => 
+{
+    if (args.Message.Data is DaqifiOutMessage protobuf)
+    {
+        // Direct casting works - no wrapper needed!
+        var deviceSerial = protobuf.DeviceSn;
+        var channelCount = protobuf.AnalogInPortNum;
+    }
+};
+```
+
 ## Overview
 
 The `CoreDeviceAdapter` provides a compatibility layer that allows desktop applications to:
