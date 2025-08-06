@@ -18,10 +18,12 @@ public class DesktopCompatibleMessageConsumer : IMessageConsumer<object>
     /// Initializes a new instance of the DesktopCompatibleMessageConsumer.
     /// </summary>
     /// <param name="stream">The stream to consume messages from.</param>
-    /// <param name="messageParser">The message parser to use.</param>
+    /// <param name="messageParser">The message parser to use (ignored - uses DesktopCompatibleMessageParser).</param>
     public DesktopCompatibleMessageConsumer(Stream stream, IMessageParser<object> messageParser)
     {
-        _coreConsumer = new StreamMessageConsumer<object>(stream, messageParser);
+        // Always use the desktop-compatible parser to ensure proper DaqifiOutMessage casting
+        var desktopParser = new DesktopCompatibleMessageParser();
+        _coreConsumer = new StreamMessageConsumer<object>(stream, desktopParser);
         
         // Forward events from core consumer to desktop-compatible events
         _coreConsumer.MessageReceived += OnCoreMessageReceived;

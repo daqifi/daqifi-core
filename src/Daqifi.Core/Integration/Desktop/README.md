@@ -7,6 +7,12 @@ This guide helps DAQiFi Desktop applications integrate with the new Core library
 ### Enhanced Drop-In Replacement Capability
 The `CoreDeviceAdapter` has been significantly improved to address GitHub issue #39 and provide true drop-in replacement capability for desktop applications:
 
+#### ✅ **CRITICAL FIX: Message Format Compatibility**
+- **Problem**: Desktop applications were failing when casting `e.Message.Data as DaqifiOutMessage` because CoreDeviceAdapter was providing raw strings instead of parsed protobuf objects
+- **Solution**: Created `DesktopCompatibleMessageParser` that exactly replicates legacy MessageConsumer parsing logic
+- **Result**: Desktop applications can now successfully cast messages and populate device channels
+- **Testing**: Verified with real DAQiFi Nyquist1 device (S/N: 9090539562006014104)
+
 #### ✅ **WiFi Device Auto-Detection**
 - TCP adapters automatically set `IsWifiDevice = true`
 - Serial adapters remain `IsWifiDevice = false`
