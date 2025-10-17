@@ -32,6 +32,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
 
     private readonly int _discoveryPort;
     private readonly byte[] _queryCommandBytes;
+    private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private bool _disposed;
 
     #endregion
@@ -80,7 +81,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     /// <returns>A task containing the collection of discovered devices.</returns>
     public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
     {
-        return await DiscoverAsync(TimeSpan.FromSeconds(DefaultTimeoutSeconds), cancellationToken);
+        return await DiscoverAsync(Timeout.InfiniteTimeSpan, cancellationToken);
     }
 
     /// <summary>
@@ -104,20 +105,27 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     {
         ThrowIfDisposed();
 
-        var discoveredDevices = new List<IDeviceInfo>();
-        var broadcastEndpoints = GetAllBroadcastEndpoints(_discoveryPort);
-
-        if (broadcastEndpoints.Count == 0)
+        // Prevent concurrent discovery operations
+        await _discoverySemaphore.WaitAsync(cancellationToken);
+        try
         {
-            OnDiscoveryCompleted();
-            return discoveredDevices;
-        }
+            var discoveredDevices = new List<IDeviceInfo>();
+            var broadcastEndpoints = GetAllBroadcastEndpoints(_discoveryPort);
 
-        using var udpTransport = new UdpTransport(_discoveryPort);
-        await udpTransport.OpenAsync();
+            if (broadcastEndpoints.Count == 0)
+            {
+                OnDiscoveryCompleted();
+                return discoveredDevices;
+            }
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(timeout);
+            using var udpTransport = new UdpTransport(_discoveryPort);
+            await udpTransport.OpenAsync();
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (timeout != Timeout.InfiniteTimeSpan)
+            {
+                cts.CancelAfter(timeout);
+            }
 
         try
         {
@@ -167,13 +175,18 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 }
             }
         }
+            finally
+            {
+                await udpTransport.CloseAsync();
+            }
+
+            OnDiscoveryCompleted();
+            return discoveredDevices;
+        }
         finally
         {
-            await udpTransport.CloseAsync();
+            _discoverySemaphore.Release();
         }
-
-        OnDiscoveryCompleted();
-        return discoveredDevices;
     }
 
     /// <summary>
@@ -351,6 +364,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     {
         if (!_disposed)
         {
+            _discoverySemaphore.Dispose();
             _disposed = true;
         }
     }

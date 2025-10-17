@@ -22,6 +22,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     #region Private Fields
 
     private readonly int _baudRate;
+    private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private bool _disposed;
 
     #endregion
@@ -71,8 +72,12 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     {
         ThrowIfDisposed();
 
-        var discoveredDevices = new List<IDeviceInfo>();
-        var availablePorts = SerialStreamTransport.GetAvailablePortNames();
+        // Prevent concurrent discovery operations
+        await _discoverySemaphore.WaitAsync(cancellationToken);
+        try
+        {
+            var discoveredDevices = new List<IDeviceInfo>();
+            var availablePorts = SerialStreamTransport.GetAvailablePortNames();
 
         foreach (var portName in availablePorts)
         {
@@ -99,8 +104,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             }
         }
 
-        OnDiscoveryCompleted();
-        return discoveredDevices;
+            OnDiscoveryCompleted();
+            return discoveredDevices;
+        }
+        finally
+        {
+            _discoverySemaphore.Release();
+        }
     }
 
     /// <summary>
@@ -181,6 +191,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     {
         if (!_disposed)
         {
+            _discoverySemaphore.Dispose();
             _disposed = true;
         }
     }

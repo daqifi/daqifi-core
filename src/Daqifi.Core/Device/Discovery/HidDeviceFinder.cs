@@ -21,6 +21,7 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
 
     #region Private Fields
 
+    private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private bool _disposed;
 
     #endregion
@@ -50,20 +51,29 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
     {
         ThrowIfDisposed();
 
-        var discoveredDevices = new List<IDeviceInfo>();
+        // Prevent concurrent discovery operations
+        await _discoverySemaphore.WaitAsync(cancellationToken);
+        try
+        {
+            var discoveredDevices = new List<IDeviceInfo>();
 
-        // TODO: Implement HID enumeration when HID library is added
-        // This would enumerate HID devices matching VendorId 0x4D8 and ProductId 0x03C
-        // For now, return empty list as HID library dependency is not yet added to core
+            // TODO: Implement HID enumeration when HID library is added
+            // This would enumerate HID devices matching VendorId 0x4D8 and ProductId 0x03C
+            // For now, return empty list as HID library dependency is not yet added to core
 
-        // Sample implementation would be:
-        // 1. Use platform-specific HID API (HidApi, LibUsbDotNet, or HidSharp)
-        // 2. Enumerate devices with matching VendorId/ProductId
-        // 3. Create DeviceInfo for each found device
-        // 4. Raise DeviceDiscovered events
+            // Sample implementation would be:
+            // 1. Use platform-specific HID API (HidApi, LibUsbDotNet, or HidSharp)
+            // 2. Enumerate devices with matching VendorId/ProductId
+            // 3. Create DeviceInfo for each found device
+            // 4. Raise DeviceDiscovered events
 
-        OnDiscoveryCompleted();
-        return await Task.FromResult(discoveredDevices);
+            OnDiscoveryCompleted();
+            return await Task.FromResult(discoveredDevices);
+        }
+        finally
+        {
+            _discoverySemaphore.Release();
+        }
     }
 
     /// <summary>
@@ -117,6 +127,7 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
     {
         if (!_disposed)
         {
+            _discoverySemaphore.Dispose();
             _disposed = true;
         }
     }
