@@ -23,6 +23,16 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// The device connection has been lost.
         /// </summary>
-        Lost
+        Lost,
+
+        /// <summary>
+        /// The device is retrying connection after a failure.
+        /// </summary>
+        Retrying,
+
+        /// <summary>
+        /// The device connection failed after all retry attempts.
+        /// </summary>
+        Failed
     }
 } 

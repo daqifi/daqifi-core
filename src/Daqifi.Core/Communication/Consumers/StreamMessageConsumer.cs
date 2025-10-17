@@ -33,6 +33,12 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     }
 
     /// <summary>
+    /// Gets or sets whether this consumer is connected to a WiFi device.
+    /// WiFi devices may require buffer clearing due to residual data on connection.
+    /// </summary>
+    public bool IsWifiDevice { get; set; }
+
+    /// <summary>
     /// Gets a value indicating whether the consumer is currently running.
     /// </summary>
     public bool IsRunning => _isRunning;
@@ -97,6 +103,35 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         _consumerThread = null;
 
         return stopped;
+    }
+
+    /// <summary>
+    /// Clears any buffered data from the stream and internal buffers.
+    /// Useful for WiFi devices that may have residual data on connection.
+    /// </summary>
+    public void ClearBuffer()
+    {
+        ThrowIfDisposed();
+
+        // Clear internal message buffer
+        _messageBuffer.Clear();
+
+        // Drain any available data from the stream (if it's a NetworkStream)
+        try
+        {
+            if (_stream.CanRead && _stream is System.Net.Sockets.NetworkStream networkStream)
+            {
+                var tempBuffer = new byte[_buffer.Length];
+                while (networkStream.DataAvailable)
+                {
+                    _stream.Read(tempBuffer, 0, tempBuffer.Length);
+                }
+            }
+        }
+        catch
+        {
+            // Ignore errors during buffer clearing
+        }
     }
 
     /// <summary>

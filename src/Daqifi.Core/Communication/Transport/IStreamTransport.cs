@@ -34,6 +34,13 @@ public interface IStreamTransport : IDisposable
     Task ConnectAsync();
 
     /// <summary>
+    /// Establishes the transport connection with retry support.
+    /// </summary>
+    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
+    /// <returns>A task representing the asynchronous connect operation.</returns>
+    Task ConnectAsync(ConnectionRetryOptions? retryOptions);
+
+    /// <summary>
     /// Closes the transport connection.
     /// </summary>
     /// <returns>A task representing the asynchronous disconnect operation.</returns>

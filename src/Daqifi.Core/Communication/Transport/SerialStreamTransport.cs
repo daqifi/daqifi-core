@@ -14,6 +14,8 @@ public class SerialStreamTransport : IStreamTransport
     private readonly Parity _parity;
     private readonly int _dataBits;
     private readonly StopBits _stopBits;
+    private readonly bool _enableDtr;
+    private readonly bool _enableRts;
     private SerialPort? _serialPort;
     private bool _disposed;
 
@@ -25,14 +27,18 @@ public class SerialStreamTransport : IStreamTransport
     /// <param name="parity">The parity setting.</param>
     /// <param name="dataBits">The number of data bits.</param>
     /// <param name="stopBits">The stop bits setting.</param>
-    public SerialStreamTransport(string portName, int baudRate = 115200, Parity parity = Parity.None, 
-        int dataBits = 8, StopBits stopBits = StopBits.One)
+    /// <param name="enableDtr">Whether to enable Data Terminal Ready (DTR) signal. Default is true.</param>
+    /// <param name="enableRts">Whether to enable Request To Send (RTS) signal. Default is false.</param>
+    public SerialStreamTransport(string portName, int baudRate = 115200, Parity parity = Parity.None,
+        int dataBits = 8, StopBits stopBits = StopBits.One, bool enableDtr = true, bool enableRts = false)
     {
         _portName = portName ?? throw new ArgumentNullException(nameof(portName));
         _baudRate = baudRate;
         _parity = parity;
         _dataBits = dataBits;
         _stopBits = stopBits;
+        _enableDtr = enableDtr;
+        _enableRts = enableRts;
     }
 
     /// <summary>
@@ -78,33 +84,74 @@ public class SerialStreamTransport : IStreamTransport
     /// <returns>A task representing the asynchronous connect operation.</returns>
     public async Task ConnectAsync()
     {
+        await ConnectAsync(null);
+    }
+
+    /// <summary>
+    /// Establishes the serial connection asynchronously with retry support.
+    /// </summary>
+    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
+    /// <returns>A task representing the asynchronous connect operation.</returns>
+    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+    {
         ThrowIfDisposed();
 
         if (IsConnected)
             return;
 
-        try
+        var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
+        var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            _serialPort = new SerialPort(_portName, _baudRate, _parity, _dataBits, _stopBits)
+            try
             {
-                ReadTimeout = 5000,
-                WriteTimeout = 5000,
-                DtrEnable = true,  // Enable DTR as desktop does
-                RtsEnable = false
-            };
+                // Calculate delay for this attempt
+                if (attempt > 1)
+                {
+                    var delay = options.CalculateDelay(attempt);
+                    if (delay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(delay);
+                    }
+                }
 
-            _serialPort.Open();
-            OnStatusChanged(true, null);
-        }
-        catch (Exception ex)
-        {
-            _serialPort?.Dispose();
-            _serialPort = null;
-            OnStatusChanged(false, ex);
-            throw;
+                var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
+                _serialPort = new SerialPort(_portName, _baudRate, _parity, _dataBits, _stopBits)
+                {
+                    ReadTimeout = timeout,
+                    WriteTimeout = timeout,
+                    DtrEnable = _enableDtr,
+                    RtsEnable = _enableRts
+                };
+
+                _serialPort.Open();
+                OnStatusChanged(true, null);
+                return; // Success!
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                _serialPort?.Dispose();
+                _serialPort = null;
+
+                // If this is not the last attempt and retry is enabled, continue
+                if (attempt < maxAttempts && options.Enabled)
+                {
+                    OnStatusChanged(false, new Exception($"Connection attempt {attempt}/{maxAttempts} failed, retrying...", ex));
+                    continue;
+                }
+
+                // Last attempt failed or retry disabled
+                OnStatusChanged(false, ex);
+                throw;
+            }
         }
 
-        await Task.CompletedTask;
+        // Should not reach here, but just in case
+        OnStatusChanged(false, lastException);
+        throw lastException ?? new InvalidOperationException("Connection failed after all retry attempts.");
     }
 
     /// <summary>

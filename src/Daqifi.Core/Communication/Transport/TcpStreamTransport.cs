@@ -93,38 +93,81 @@ public class TcpStreamTransport : IStreamTransport
     /// <returns>A task representing the asynchronous connect operation.</returns>
     public async Task ConnectAsync()
     {
+        await ConnectAsync(null);
+    }
+
+    /// <summary>
+    /// Establishes the TCP connection asynchronously with retry support.
+    /// </summary>
+    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
+    /// <returns>A task representing the asynchronous connect operation.</returns>
+    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+    {
         ThrowIfDisposed();
 
         if (IsConnected)
             return;
 
-        try
+        var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
+        var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            _tcpClient = new TcpClient();
-            
-            // Set a reasonable timeout for connection attempts
-            _tcpClient.ReceiveTimeout = 5000;
-            _tcpClient.SendTimeout = 5000;
+            try
+            {
+                // Calculate delay for this attempt
+                if (attempt > 1)
+                {
+                    var delay = options.CalculateDelay(attempt);
+                    if (delay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(delay);
+                    }
+                }
 
-            // Add connection timeout to prevent long waits in tests and real usage
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var connectTask = Hostname != null
-                ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
-                : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
+                _tcpClient = new TcpClient();
 
-            await connectTask.WaitAsync(cts.Token);
+                // Set timeouts from retry options or use defaults
+                var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
+                _tcpClient.ReceiveTimeout = timeout;
+                _tcpClient.SendTimeout = timeout;
 
-            _networkStream = _tcpClient.GetStream();
-            OnStatusChanged(true, null);
+                // Add connection timeout to prevent long waits
+                using var cts = new CancellationTokenSource(options.ConnectionTimeout);
+                var connectTask = Hostname != null
+                    ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
+                    : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
+
+                await connectTask.WaitAsync(cts.Token);
+
+                _networkStream = _tcpClient.GetStream();
+                OnStatusChanged(true, null);
+                return; // Success!
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                _tcpClient?.Dispose();
+                _tcpClient = null;
+                _networkStream = null;
+
+                // If this is not the last attempt and retry is enabled, continue
+                if (attempt < maxAttempts && options.Enabled)
+                {
+                    OnStatusChanged(false, new Exception($"Connection attempt {attempt}/{maxAttempts} failed, retrying...", ex));
+                    continue;
+                }
+
+                // Last attempt failed or retry disabled
+                OnStatusChanged(false, ex);
+                throw;
+            }
         }
-        catch (Exception ex)
-        {
-            _tcpClient?.Dispose();
-            _tcpClient = null;
-            _networkStream = null;
-            OnStatusChanged(false, ex);
-            throw;
-        }
+
+        // Should not reach here, but just in case
+        OnStatusChanged(false, lastException);
+        throw lastException ?? new InvalidOperationException("Connection failed after all retry attempts.");
     }
 
     /// <summary>

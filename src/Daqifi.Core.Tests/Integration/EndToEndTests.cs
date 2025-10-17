@@ -144,6 +144,11 @@ public class EndToEndTests
 
         public Task ConnectAsync()
         {
+            return ConnectAsync(null);
+        }
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
             if (_disposed) throw new ObjectDisposedException(nameof(MockMemoryStreamTransport));
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
