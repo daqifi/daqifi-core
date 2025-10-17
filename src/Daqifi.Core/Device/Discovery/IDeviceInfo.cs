@@ -76,14 +76,14 @@ public enum DeviceType
     Unknown,
 
     /// <summary>
-    /// DAQiFi device.
+    /// Nyquist 1 device.
     /// </summary>
-    Daqifi,
+    Nyquist1,
 
     /// <summary>
-    /// Nyquist device.
+    /// Nyquist 3 device.
     /// </summary>
-    Nyquist
+    Nyquist3
 }
 
 /// <summary>

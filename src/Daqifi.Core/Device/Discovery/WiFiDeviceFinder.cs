@@ -246,16 +246,15 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     /// </summary>
     private static DeviceType GetDeviceType(string partNumber)
     {
-        if (string.IsNullOrEmpty(partNumber))
+        if (string.IsNullOrWhiteSpace(partNumber))
             return DeviceType.Unknown;
 
-        if (partNumber.StartsWith("Nq", StringComparison.OrdinalIgnoreCase))
-            return DeviceType.Nyquist;
-
-        if (partNumber.StartsWith("Daq", StringComparison.OrdinalIgnoreCase))
-            return DeviceType.Daqifi;
-
-        return DeviceType.Unknown;
+        return partNumber.ToLowerInvariant() switch
+        {
+            "nq1" => DeviceType.Nyquist1,
+            "nq3" => DeviceType.Nyquist3,
+            _ => DeviceType.Unknown
+        };
     }
 
     /// <summary>
