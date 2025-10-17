@@ -73,12 +73,13 @@ using var customFinder = new WiFiDeviceFinder(port: 12345);
 var customDevices = await customFinder.DiscoverAsync();
 ```
 
-### Supported Device Types
+### Supported Devices
 
-The library automatically detects device types:
-- **Nyquist**: High-performance data acquisition devices
-- **DAQiFi**: Standard DAQiFi hardware
-- **Unknown**: Devices that respond but don't match known types
+The library automatically detects DAQiFi hardware:
+- **Nyquist 1**: DAQiFi's data acquisition device
+- **Nyquist 3**: DAQiFi's advanced data acquisition device
+
+Both devices are identified by their part number in the discovery response.
 
 ### Connection Types
 
