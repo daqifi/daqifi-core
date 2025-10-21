@@ -7,6 +7,9 @@ public class DigitalChannel : IDigitalChannel
 {
     private readonly object _lock = new();
     private IDataSample? _activeSample;
+    private string _name;
+    private bool _isEnabled;
+    private ChannelDirection _direction;
     private bool _outputValue;
 
     /// <summary>
@@ -17,12 +20,20 @@ public class DigitalChannel : IDigitalChannel
     /// <summary>
     /// Gets or sets the channel name.
     /// </summary>
-    public string Name { get; set; }
+    public string Name
+    {
+        get { lock (_lock) { return _name; } }
+        set { lock (_lock) { _name = value; } }
+    }
 
     /// <summary>
     /// Gets or sets whether the channel is enabled.
     /// </summary>
-    public bool IsEnabled { get; set; }
+    public bool IsEnabled
+    {
+        get { lock (_lock) { return _isEnabled; } }
+        set { lock (_lock) { _isEnabled = value; } }
+    }
 
     /// <summary>
     /// Gets the channel type (always Digital for this class).
@@ -32,7 +43,11 @@ public class DigitalChannel : IDigitalChannel
     /// <summary>
     /// Gets or sets the channel direction (Input or Output).
     /// </summary>
-    public ChannelDirection Direction { get; set; }
+    public ChannelDirection Direction
+    {
+        get { lock (_lock) { return _direction; } }
+        set { lock (_lock) { _direction = value; } }
+    }
 
     /// <summary>
     /// Gets the most recent data sample received on this channel.
@@ -53,12 +68,15 @@ public class DigitalChannel : IDigitalChannel
     /// </summary>
     public bool OutputValue
     {
-        get => _outputValue;
+        get { lock (_lock) { return _outputValue; } }
         set
         {
-            _outputValue = value;
-            // When output value changes, we could trigger an event or callback
-            // to notify the device to update the physical output
+            lock (_lock)
+            {
+                _outputValue = value;
+                // When output value changes, we could trigger an event or callback
+                // to notify the device to update the physical output
+            }
         }
     }
 
@@ -91,10 +109,10 @@ public class DigitalChannel : IDigitalChannel
             throw new ArgumentOutOfRangeException(nameof(channelNumber), "Channel number must be non-negative.");
 
         ChannelNumber = channelNumber;
-        Name = $"Digital Channel {channelNumber}";
-        IsEnabled = false;
-        Direction = ChannelDirection.Input;
-        OutputValue = false;
+        _name = $"Digital Channel {channelNumber}";
+        _isEnabled = false;
+        _direction = ChannelDirection.Input;
+        _outputValue = false;
     }
 
     /// <summary>

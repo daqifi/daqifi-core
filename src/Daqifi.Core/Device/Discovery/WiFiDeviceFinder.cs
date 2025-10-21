@@ -319,8 +319,6 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 var broadcastAddress = new IPAddress(broadcastBytes);
                 var endpoint = new IPEndPoint(broadcastAddress, port);
                 endpoints.Add(endpoint);
-
-                break; // Only use first valid IP per interface
             }
         }
 

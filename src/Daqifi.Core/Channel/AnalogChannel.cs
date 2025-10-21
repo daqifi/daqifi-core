@@ -7,6 +7,15 @@ public class AnalogChannel : IAnalogChannel
 {
     private readonly object _lock = new();
     private IDataSample? _activeSample;
+    private string _name;
+    private bool _isEnabled;
+    private ChannelDirection _direction;
+    private double _minValue;
+    private double _maxValue;
+    private double _calibrationM;
+    private double _calibrationB;
+    private double _internalScaleM;
+    private double _portRange;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -16,12 +25,20 @@ public class AnalogChannel : IAnalogChannel
     /// <summary>
     /// Gets or sets the channel name.
     /// </summary>
-    public string Name { get; set; }
+    public string Name
+    {
+        get { lock (_lock) { return _name; } }
+        set { lock (_lock) { _name = value; } }
+    }
 
     /// <summary>
     /// Gets or sets whether the channel is enabled.
     /// </summary>
-    public bool IsEnabled { get; set; }
+    public bool IsEnabled
+    {
+        get { lock (_lock) { return _isEnabled; } }
+        set { lock (_lock) { _isEnabled = value; } }
+    }
 
     /// <summary>
     /// Gets the channel type (always Analog for this class).
@@ -31,7 +48,11 @@ public class AnalogChannel : IAnalogChannel
     /// <summary>
     /// Gets or sets the channel direction (Input or Output).
     /// </summary>
-    public ChannelDirection Direction { get; set; }
+    public ChannelDirection Direction
+    {
+        get { lock (_lock) { return _direction; } }
+        set { lock (_lock) { _direction = value; } }
+    }
 
     /// <summary>
     /// Gets the most recent data sample received on this channel.
@@ -50,12 +71,20 @@ public class AnalogChannel : IAnalogChannel
     /// <summary>
     /// Gets or sets the minimum value for the channel range.
     /// </summary>
-    public double MinValue { get; set; }
+    public double MinValue
+    {
+        get { lock (_lock) { return _minValue; } }
+        set { lock (_lock) { _minValue = value; } }
+    }
 
     /// <summary>
     /// Gets or sets the maximum value for the channel range.
     /// </summary>
-    public double MaxValue { get; set; }
+    public double MaxValue
+    {
+        get { lock (_lock) { return _maxValue; } }
+        set { lock (_lock) { _maxValue = value; } }
+    }
 
     /// <summary>
     /// Gets the resolution of the ADC (e.g., 65535 for 16-bit).
@@ -65,22 +94,38 @@ public class AnalogChannel : IAnalogChannel
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
     /// </summary>
-    public double CalibrationM { get; set; }
+    public double CalibrationM
+    {
+        get { lock (_lock) { return _calibrationM; } }
+        set { lock (_lock) { _calibrationM = value; } }
+    }
 
     /// <summary>
     /// Gets or sets the calibration offset (B in the scaling formula).
     /// </summary>
-    public double CalibrationB { get; set; }
+    public double CalibrationB
+    {
+        get { lock (_lock) { return _calibrationB; } }
+        set { lock (_lock) { _calibrationB = value; } }
+    }
 
     /// <summary>
     /// Gets or sets the internal scale factor.
     /// </summary>
-    public double InternalScaleM { get; set; }
+    public double InternalScaleM
+    {
+        get { lock (_lock) { return _internalScaleM; } }
+        set { lock (_lock) { _internalScaleM = value; } }
+    }
 
     /// <summary>
     /// Gets or sets the port range (voltage range).
     /// </summary>
-    public double PortRange { get; set; }
+    public double PortRange
+    {
+        get { lock (_lock) { return _portRange; } }
+        set { lock (_lock) { _portRange = value; } }
+    }
 
     /// <summary>
     /// Event raised when a new sample is received on this channel.
@@ -102,15 +147,15 @@ public class AnalogChannel : IAnalogChannel
 
         ChannelNumber = channelNumber;
         Resolution = resolution;
-        Name = $"Analog Channel {channelNumber}";
-        IsEnabled = false;
-        Direction = ChannelDirection.Input;
-        MinValue = -10.0;
-        MaxValue = 10.0;
-        CalibrationM = 1.0;
-        CalibrationB = 0.0;
-        InternalScaleM = 1.0;
-        PortRange = 1.0;
+        _name = $"Analog Channel {channelNumber}";
+        _isEnabled = false;
+        _direction = ChannelDirection.Input;
+        _minValue = -10.0;
+        _maxValue = 10.0;
+        _calibrationM = 1.0;
+        _calibrationB = 0.0;
+        _internalScaleM = 1.0;
+        _portRange = 1.0;
     }
 
     /// <summary>
@@ -121,9 +166,12 @@ public class AnalogChannel : IAnalogChannel
     /// <returns>The scaled value.</returns>
     public double GetScaledValue(int rawValue)
     {
-        double normalized = (double)rawValue / Resolution;
-        double scaled = (normalized * PortRange * CalibrationM + CalibrationB) * InternalScaleM;
-        return scaled;
+        lock (_lock)
+        {
+            double normalized = (double)rawValue / Resolution;
+            double scaled = (normalized * _portRange * _calibrationM + _calibrationB) * _internalScaleM;
+            return scaled;
+        }
     }
 
     /// <summary>
