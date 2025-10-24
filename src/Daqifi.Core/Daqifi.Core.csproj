@@ -4,7 +4,7 @@
     <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    
+
     <!-- Package Metadata -->
     <PackageId>Daqifi.Core</PackageId>
     <Authors>DAQiFi</Authors>
@@ -15,7 +15,7 @@
     <PackageTags>daqifi;daq;data-acquisition;measurement;instrumentation</PackageTags>
     <RepositoryUrl>https://github.com/daqifi/daqifi-core</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    
+
     <!-- Build Configuration -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IncludeSymbols>true</IncludeSymbols>
@@ -27,7 +27,7 @@
 
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
-    <PackageReference Include="Google.Protobuf" Version="3.32.1" />
+    <PackageReference Include="Google.Protobuf" Version="3.33.0" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All"/>
     <PackageReference Include="System.IO.Ports" Version="9.0.10" />
   </ItemGroup>
