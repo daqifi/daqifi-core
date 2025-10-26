@@ -1,8 +1,10 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Protocol;
 using System;
 using System.Net;
+using System.Threading.Tasks;
 
 #nullable enable
 
@@ -18,21 +20,33 @@ namespace Daqifi.Core.Device
         /// Gets the name of the device.
         /// </summary>
         public string Name { get; }
-        
+
         /// <summary>
         /// Gets the IP address of the device, if known.
         /// </summary>
         public IPAddress? IpAddress { get; }
-        
+
         /// <summary>
         /// Gets a value indicating whether the device is currently connected.
         /// </summary>
         public bool IsConnected => Status == ConnectionStatus.Connected;
 
+        /// <summary>
+        /// Gets the device metadata containing part number, firmware version, etc.
+        /// </summary>
+        public DeviceMetadata Metadata { get; } = new DeviceMetadata();
+
+        /// <summary>
+        /// Gets or sets the current operational state of the device.
+        /// </summary>
+        public DeviceState State { get; private set; } = DeviceState.Disconnected;
+
         private ConnectionStatus _status;
         private IMessageProducer<string>? _messageProducer;
         private readonly IStreamTransport? _transport;
+        private IProtocolHandler? _protocolHandler;
         private bool _disposed;
+        private bool _isInitialized;
         
         /// <summary>
         /// Gets the current connection status of the device.
@@ -105,26 +119,29 @@ namespace Daqifi.Core.Device
         public void Connect()
         {
             Status = ConnectionStatus.Connecting;
-            
+            State = DeviceState.Connecting;
+
             try
             {
                 // Connect transport if available
                 _transport?.Connect();
-                
+
                 // Create message producer from transport if needed
                 if (_transport != null && _messageProducer == null)
                 {
                     _messageProducer = new MessageProducer<string>(_transport.Stream);
                 }
-                
+
                 // Start message producer if available
                 _messageProducer?.Start();
-                
+
                 Status = ConnectionStatus.Connected;
+                State = DeviceState.Connected;
             }
             catch
             {
                 Status = ConnectionStatus.Disconnected;
+                State = DeviceState.Disconnected;
                 throw;
             }
         }
@@ -138,13 +155,15 @@ namespace Daqifi.Core.Device
             {
                 // Stop message producer safely if available
                 _messageProducer?.StopSafely();
-                
+
                 // Disconnect transport if available
                 _transport?.Disconnect();
             }
             finally
             {
                 Status = ConnectionStatus.Disconnected;
+                State = DeviceState.Disconnected;
+                _isInitialized = false;
             }
         }
 
@@ -216,6 +235,132 @@ namespace Daqifi.Core.Device
                 _transport?.Dispose();
                 _disposed = true;
             }
+        }
+
+        /// <summary>
+        /// Initializes the device by running the standard initialization sequence.
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <remarks>
+        /// The initialization sequence includes:
+        /// 1. Disable device echo
+        /// 2. Stop any running streaming
+        /// 3. Turn device on (if needed)
+        /// 4. Set protobuf message format
+        /// 5. Query device info and capabilities
+        /// </remarks>
+        public virtual async Task InitializeAsync()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected before initialization.");
+            }
+
+            if (_isInitialized)
+            {
+                return; // Already initialized
+            }
+
+            State = DeviceState.Initializing;
+
+            try
+            {
+                // Set up protocol handler for status messages
+                _protocolHandler = new ProtobufProtocolHandler(
+                    statusMessageHandler: OnStatusMessageReceived,
+                    streamMessageHandler: OnStreamMessageReceived
+                );
+
+                // Standard initialization sequence
+                await DisableDeviceEchoAsync();
+                await StopStreamingAsync();
+                await TurnDeviceOnAsync();
+                await SetProtobufMessageFormatAsync();
+                await QueryDeviceInfoAsync();
+
+                _isInitialized = true;
+                State = DeviceState.Ready;
+            }
+            catch (Exception)
+            {
+                State = DeviceState.Error;
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Disables the device echo functionality.
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected virtual Task DisableDeviceEchoAsync()
+        {
+            Send(ScpiMessageProducer.DisableDeviceEcho);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Stops any active data streaming on the device.
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected virtual Task StopStreamingAsync()
+        {
+            Send(ScpiMessageProducer.StopStreaming);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Turns the device on.
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected virtual Task TurnDeviceOnAsync()
+        {
+            Send(ScpiMessageProducer.TurnDeviceOn);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Sets the message format to Protocol Buffer.
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected virtual Task SetProtobufMessageFormatAsync()
+        {
+            Send(ScpiMessageProducer.SetProtobufStreamFormat);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Queries the device for its information and capabilities.
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected virtual Task QueryDeviceInfoAsync()
+        {
+            Send(ScpiMessageProducer.GetDeviceInfo);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Handles status messages received from the device during initialization.
+        /// </summary>
+        /// <param name="message">The status message from the device.</param>
+        protected virtual void OnStatusMessageReceived(DaqifiOutMessage message)
+        {
+            // Update device metadata
+            Metadata.UpdateFromProtobuf(message);
+
+            // Raise event for external consumers
+            var inboundMessage = new ProtobufMessage(message);
+            OnMessageReceived(inboundMessage);
+        }
+
+        /// <summary>
+        /// Handles streaming data messages received from the device.
+        /// </summary>
+        /// <param name="message">The streaming message from the device.</param>
+        protected virtual void OnStreamMessageReceived(DaqifiOutMessage message)
+        {
+            // Raise event for external consumers
+            var inboundMessage = new ProtobufMessage(message);
+            OnMessageReceived(inboundMessage);
         }
     }
 } 
