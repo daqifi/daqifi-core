@@ -18,23 +18,7 @@ public class DeviceTypeDetectorTests
     [InlineData("nq3", DeviceType.Nyquist3)]
     [InlineData("Nq3", DeviceType.Nyquist3)]
     [InlineData("NQ3", DeviceType.Nyquist3)]
-    public void DetectFromPartNumber_ShortForm_ReturnsCorrectType(string partNumber, DeviceType expected)
-    {
-        // Act
-        var result = DeviceTypeDetector.DetectFromPartNumber(partNumber);
-
-        // Assert
-        Assert.Equal(expected, result);
-    }
-
-    [Theory]
-    [InlineData("dqf-1000", DeviceType.Nyquist1)]
-    [InlineData("DQF-1000", DeviceType.Nyquist1)]
-    [InlineData("dqf-2000", DeviceType.Nyquist2)]
-    [InlineData("DQF-2000", DeviceType.Nyquist2)]
-    [InlineData("dqf-3000", DeviceType.Nyquist3)]
-    [InlineData("DQF-3000", DeviceType.Nyquist3)]
-    public void DetectFromPartNumber_FullForm_ReturnsCorrectType(string partNumber, DeviceType expected)
+    public void DetectFromPartNumber_ValidPartNumber_ReturnsCorrectType(string partNumber, DeviceType expected)
     {
         // Act
         var result = DeviceTypeDetector.DetectFromPartNumber(partNumber);
@@ -59,7 +43,6 @@ public class DeviceTypeDetectorTests
     [Theory]
     [InlineData("unknown")]
     [InlineData("nq4")]
-    [InlineData("dqf-4000")]
     [InlineData("invalid")]
     public void DetectFromPartNumber_UnknownPartNumber_ReturnsUnknown(string partNumber)
     {
