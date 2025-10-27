@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
@@ -43,6 +44,7 @@ namespace Daqifi.Core.Device
 
         private ConnectionStatus _status;
         private IMessageProducer<string>? _messageProducer;
+        private IMessageConsumer<DaqifiOutMessage>? _messageConsumer;
         private readonly IStreamTransport? _transport;
         private IProtocolHandler? _protocolHandler;
         private bool _disposed;
@@ -126,14 +128,25 @@ namespace Daqifi.Core.Device
                 // Connect transport if available
                 _transport?.Connect();
 
-                // Create message producer from transport if needed
-                if (_transport != null && _messageProducer == null)
+                // Create message producer and consumer from transport if needed
+                if (_transport != null)
                 {
-                    _messageProducer = new MessageProducer<string>(_transport.Stream);
+                    if (_messageProducer == null)
+                    {
+                        _messageProducer = new MessageProducer<string>(_transport.Stream);
+                    }
+
+                    if (_messageConsumer == null)
+                    {
+                        _messageConsumer = new StreamMessageConsumer<DaqifiOutMessage>(
+                            _transport.Stream,
+                            new ProtobufMessageParser());
+                    }
                 }
 
-                // Start message producer if available
+                // Start message producer and consumer if available
                 _messageProducer?.Start();
+                _messageConsumer?.Start();
 
                 Status = ConnectionStatus.Connected;
                 State = DeviceState.Connected;
@@ -153,7 +166,14 @@ namespace Daqifi.Core.Device
         {
             try
             {
-                // Stop message producer safely if available
+                // Unsubscribe from message consumer events
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                }
+
+                // Stop message consumer and producer safely if available
+                _messageConsumer?.StopSafely();
                 _messageProducer?.StopSafely();
 
                 // Disconnect transport if available
@@ -231,6 +251,7 @@ namespace Daqifi.Core.Device
             if (!_disposed)
             {
                 Disconnect();
+                _messageConsumer?.Dispose();
                 _messageProducer?.Dispose();
                 _transport?.Dispose();
                 _disposed = true;
@@ -248,6 +269,8 @@ namespace Daqifi.Core.Device
         /// 3. Turn device on (if needed)
         /// 4. Set protobuf message format
         /// 5. Query device info and capabilities
+        ///
+        /// Delays are added between commands to give the device time to process each request.
         /// </remarks>
         public virtual async Task InitializeAsync()
         {
@@ -271,12 +294,27 @@ namespace Daqifi.Core.Device
                     streamMessageHandler: OnStreamMessageReceived
                 );
 
-                // Standard initialization sequence
-                await DisableDeviceEchoAsync();
-                await StopStreamingAsync();
-                await TurnDeviceOnAsync();
-                await SetProtobufMessageFormatAsync();
-                await QueryDeviceInfoAsync();
+                // Wire up message consumer to route messages through protocol handler
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                }
+
+                // Standard initialization sequence with delays between commands
+                Send(ScpiMessageProducer.DisableDeviceEcho);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.StopStreaming);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.TurnDeviceOn);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.SetProtobufStreamFormat);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.GetDeviceInfo);
+                await Task.Delay(500); // Longer delay to allow device info response
 
                 _isInitialized = true;
                 State = DeviceState.Ready;
@@ -286,56 +324,6 @@ namespace Daqifi.Core.Device
                 State = DeviceState.Error;
                 throw;
             }
-        }
-
-        /// <summary>
-        /// Disables the device echo functionality.
-        /// </summary>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task DisableDeviceEchoAsync()
-        {
-            Send(ScpiMessageProducer.DisableDeviceEcho);
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Stops any active data streaming on the device.
-        /// </summary>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task StopStreamingAsync()
-        {
-            Send(ScpiMessageProducer.StopStreaming);
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Turns the device on.
-        /// </summary>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task TurnDeviceOnAsync()
-        {
-            Send(ScpiMessageProducer.TurnDeviceOn);
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Sets the message format to Protocol Buffer.
-        /// </summary>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task SetProtobufMessageFormatAsync()
-        {
-            Send(ScpiMessageProducer.SetProtobufStreamFormat);
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Queries the device for its information and capabilities.
-        /// </summary>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task QueryDeviceInfoAsync()
-        {
-            Send(ScpiMessageProducer.GetDeviceInfo);
-            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -361,6 +349,24 @@ namespace Daqifi.Core.Device
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
             OnMessageReceived(inboundMessage);
+        }
+
+        /// <summary>
+        /// Handles inbound messages from the message consumer and routes them through the protocol handler.
+        /// </summary>
+        /// <param name="sender">The message consumer that raised the event.</param>
+        /// <param name="e">The message received event arguments.</param>
+        private void OnInboundMessageReceived(object? sender, MessageReceivedEventArgs<DaqifiOutMessage> e)
+        {
+            // Convert to generic inbound message and route through protocol handler
+            var genericMessage = new GenericInboundMessage<object>(e.Message.Data);
+
+            // Route through protocol handler if available
+            if (_protocolHandler != null && _protocolHandler.CanHandle(genericMessage))
+            {
+                // Fire and forget - we don't need to wait for the handler to complete
+                _ = _protocolHandler.HandleAsync(genericMessage);
+            }
         }
     }
 } 
