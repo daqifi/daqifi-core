@@ -26,11 +26,6 @@ public class DeviceCapabilities
     public bool HasUsb { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the device supports Ethernet connectivity.
-    /// </summary>
-    public bool HasEthernet { get; set; }
-
-    /// <summary>
     /// Gets or sets the number of analog input channels available.
     /// </summary>
     public int AnalogInputChannels { get; set; }
@@ -59,7 +54,6 @@ public class DeviceCapabilities
         HasSdCard = false;
         HasWiFi = false;
         HasUsb = false;
-        HasEthernet = false;
         AnalogInputChannels = 0;
         AnalogOutputChannels = 0;
         DigitalChannels = 0;
@@ -81,7 +75,6 @@ public class DeviceCapabilities
                 HasSdCard = true,
                 HasWiFi = true,
                 HasUsb = true,
-                HasEthernet = false,
                 MaxSamplingRate = 1000
             },
             DeviceType.Nyquist2 => new DeviceCapabilities
@@ -90,7 +83,6 @@ public class DeviceCapabilities
                 HasSdCard = true,
                 HasWiFi = true,
                 HasUsb = true,
-                HasEthernet = false,
                 MaxSamplingRate = 1000
             },
             DeviceType.Nyquist3 => new DeviceCapabilities
@@ -99,7 +91,6 @@ public class DeviceCapabilities
                 HasSdCard = true,
                 HasWiFi = true,
                 HasUsb = true,
-                HasEthernet = false,
                 MaxSamplingRate = 1000
             },
             _ => new DeviceCapabilities()

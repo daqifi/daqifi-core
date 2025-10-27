@@ -19,7 +19,6 @@ public class DeviceCapabilitiesTests
         Assert.False(capabilities.HasSdCard);
         Assert.False(capabilities.HasWiFi);
         Assert.False(capabilities.HasUsb);
-        Assert.False(capabilities.HasEthernet);
         Assert.Equal(0, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(0, capabilities.DigitalChannels);
@@ -40,7 +39,6 @@ public class DeviceCapabilitiesTests
         Assert.True(capabilities.HasSdCard);
         Assert.True(capabilities.HasWiFi);
         Assert.True(capabilities.HasUsb);
-        Assert.False(capabilities.HasEthernet);
         Assert.Equal(1000, capabilities.MaxSamplingRate);
     }
 
@@ -55,7 +53,6 @@ public class DeviceCapabilitiesTests
         Assert.False(capabilities.HasSdCard);
         Assert.False(capabilities.HasWiFi);
         Assert.False(capabilities.HasUsb);
-        Assert.False(capabilities.HasEthernet);
         Assert.Equal(0, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(0, capabilities.DigitalChannels);
@@ -72,14 +69,12 @@ public class DeviceCapabilitiesTests
         capabilities.AnalogInputChannels = 8;
         capabilities.AnalogOutputChannels = 2;
         capabilities.DigitalChannels = 16;
-        capabilities.HasEthernet = true;
         capabilities.MaxSamplingRate = 2000;
 
         // Assert
         Assert.Equal(8, capabilities.AnalogInputChannels);
         Assert.Equal(2, capabilities.AnalogOutputChannels);
         Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.True(capabilities.HasEthernet);
         Assert.Equal(2000, capabilities.MaxSamplingRate);
     }
 }
