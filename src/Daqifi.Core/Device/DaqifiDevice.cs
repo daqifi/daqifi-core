@@ -1,8 +1,11 @@
+using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Protocol;
 using System;
 using System.Net;
+using System.Threading.Tasks;
 
 #nullable enable
 
@@ -18,21 +21,34 @@ namespace Daqifi.Core.Device
         /// Gets the name of the device.
         /// </summary>
         public string Name { get; }
-        
+
         /// <summary>
         /// Gets the IP address of the device, if known.
         /// </summary>
         public IPAddress? IpAddress { get; }
-        
+
         /// <summary>
         /// Gets a value indicating whether the device is currently connected.
         /// </summary>
         public bool IsConnected => Status == ConnectionStatus.Connected;
 
+        /// <summary>
+        /// Gets the device metadata containing part number, firmware version, etc.
+        /// </summary>
+        public DeviceMetadata Metadata { get; } = new DeviceMetadata();
+
+        /// <summary>
+        /// Gets or sets the current operational state of the device.
+        /// </summary>
+        public DeviceState State { get; private set; } = DeviceState.Disconnected;
+
         private ConnectionStatus _status;
         private IMessageProducer<string>? _messageProducer;
+        private IMessageConsumer<DaqifiOutMessage>? _messageConsumer;
         private readonly IStreamTransport? _transport;
+        private IProtocolHandler? _protocolHandler;
         private bool _disposed;
+        private bool _isInitialized;
         
         /// <summary>
         /// Gets the current connection status of the device.
@@ -105,26 +121,40 @@ namespace Daqifi.Core.Device
         public void Connect()
         {
             Status = ConnectionStatus.Connecting;
-            
+            State = DeviceState.Connecting;
+
             try
             {
                 // Connect transport if available
                 _transport?.Connect();
-                
-                // Create message producer from transport if needed
-                if (_transport != null && _messageProducer == null)
+
+                // Create message producer and consumer from transport if needed
+                if (_transport != null)
                 {
-                    _messageProducer = new MessageProducer<string>(_transport.Stream);
+                    if (_messageProducer == null)
+                    {
+                        _messageProducer = new MessageProducer<string>(_transport.Stream);
+                    }
+
+                    if (_messageConsumer == null)
+                    {
+                        _messageConsumer = new StreamMessageConsumer<DaqifiOutMessage>(
+                            _transport.Stream,
+                            new ProtobufMessageParser());
+                    }
                 }
-                
-                // Start message producer if available
+
+                // Start message producer and consumer if available
                 _messageProducer?.Start();
-                
+                _messageConsumer?.Start();
+
                 Status = ConnectionStatus.Connected;
+                State = DeviceState.Connected;
             }
             catch
             {
                 Status = ConnectionStatus.Disconnected;
+                State = DeviceState.Disconnected;
                 throw;
             }
         }
@@ -136,15 +166,24 @@ namespace Daqifi.Core.Device
         {
             try
             {
-                // Stop message producer safely if available
+                // Unsubscribe from message consumer events
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                }
+
+                // Stop message consumer and producer safely if available
+                _messageConsumer?.StopSafely();
                 _messageProducer?.StopSafely();
-                
+
                 // Disconnect transport if available
                 _transport?.Disconnect();
             }
             finally
             {
                 Status = ConnectionStatus.Disconnected;
+                State = DeviceState.Disconnected;
+                _isInitialized = false;
             }
         }
 
@@ -212,9 +251,121 @@ namespace Daqifi.Core.Device
             if (!_disposed)
             {
                 Disconnect();
+                _messageConsumer?.Dispose();
                 _messageProducer?.Dispose();
                 _transport?.Dispose();
                 _disposed = true;
+            }
+        }
+
+        /// <summary>
+        /// Initializes the device by running the standard initialization sequence.
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <remarks>
+        /// The initialization sequence includes:
+        /// 1. Disable device echo
+        /// 2. Stop any running streaming
+        /// 3. Turn device on (if needed)
+        /// 4. Set protobuf message format
+        /// 5. Query device info and capabilities
+        ///
+        /// Delays are added between commands to give the device time to process each request.
+        /// </remarks>
+        public virtual async Task InitializeAsync()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected before initialization.");
+            }
+
+            if (_isInitialized)
+            {
+                return; // Already initialized
+            }
+
+            State = DeviceState.Initializing;
+
+            try
+            {
+                // Set up protocol handler for status messages
+                _protocolHandler = new ProtobufProtocolHandler(
+                    statusMessageHandler: OnStatusMessageReceived,
+                    streamMessageHandler: OnStreamMessageReceived
+                );
+
+                // Wire up message consumer to route messages through protocol handler
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                }
+
+                // Standard initialization sequence with delays between commands
+                Send(ScpiMessageProducer.DisableDeviceEcho);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.StopStreaming);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.TurnDeviceOn);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.SetProtobufStreamFormat);
+                await Task.Delay(100);
+
+                Send(ScpiMessageProducer.GetDeviceInfo);
+                await Task.Delay(500); // Longer delay to allow device info response
+
+                _isInitialized = true;
+                State = DeviceState.Ready;
+            }
+            catch (Exception)
+            {
+                State = DeviceState.Error;
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Handles status messages received from the device during initialization.
+        /// </summary>
+        /// <param name="message">The status message from the device.</param>
+        protected virtual void OnStatusMessageReceived(DaqifiOutMessage message)
+        {
+            // Update device metadata
+            Metadata.UpdateFromProtobuf(message);
+
+            // Raise event for external consumers
+            var inboundMessage = new ProtobufMessage(message);
+            OnMessageReceived(inboundMessage);
+        }
+
+        /// <summary>
+        /// Handles streaming data messages received from the device.
+        /// </summary>
+        /// <param name="message">The streaming message from the device.</param>
+        protected virtual void OnStreamMessageReceived(DaqifiOutMessage message)
+        {
+            // Raise event for external consumers
+            var inboundMessage = new ProtobufMessage(message);
+            OnMessageReceived(inboundMessage);
+        }
+
+        /// <summary>
+        /// Handles inbound messages from the message consumer and routes them through the protocol handler.
+        /// </summary>
+        /// <param name="sender">The message consumer that raised the event.</param>
+        /// <param name="e">The message received event arguments.</param>
+        private void OnInboundMessageReceived(object? sender, MessageReceivedEventArgs<DaqifiOutMessage> e)
+        {
+            // Convert to generic inbound message and route through protocol handler
+            var genericMessage = new GenericInboundMessage<object>(e.Message.Data);
+
+            // Route through protocol handler if available
+            if (_protocolHandler != null && _protocolHandler.CanHandle(genericMessage))
+            {
+                // Fire and forget - we don't need to wait for the handler to complete
+                _ = _protocolHandler.HandleAsync(genericMessage);
             }
         }
     }
