@@ -71,6 +71,11 @@ public class DeviceMetadata
     public uint WifiInfrastructureMode { get; set; }
 
     /// <summary>
+    /// Gets or sets the WiFi signal strength (RSSI) in dBm.
+    /// </summary>
+    public int? SignalStrength { get; set; }
+
+    /// <summary>
     /// Updates the device metadata from a protobuf message.
     /// </summary>
     /// <param name="message">The protobuf message containing device information.</param>
@@ -148,6 +153,11 @@ public class DeviceMetadata
         if (message.DigitalPortNum > 0)
         {
             Capabilities.DigitalChannels = (int)message.DigitalPortNum;
+        }
+
+        if (message.SsidStrength > 0)
+        {
+            SignalStrength = (int)message.SsidStrength;
         }
     }
 }

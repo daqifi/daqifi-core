@@ -2,9 +2,11 @@ using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Configuration;
 using Daqifi.Core.Device.Protocol;
 using System;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 
 #nullable enable
@@ -15,7 +17,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that can be connected to and communicated with.
     /// This is the base implementation of the IDevice interface.
     /// </summary>
-    public class DaqifiDevice : IDevice, IDisposable
+    public class DaqifiDevice : IDevice, INetworkConfigurable, IDisposable
     {
         /// <summary>
         /// Gets the name of the device.
@@ -41,6 +43,11 @@ namespace Daqifi.Core.Device
         /// Gets or sets the current operational state of the device.
         /// </summary>
         public DeviceState State { get; private set; } = DeviceState.Disconnected;
+
+        /// <summary>
+        /// Gets the current network configuration of the device.
+        /// </summary>
+        public NetworkConfiguration NetworkConfiguration { get; } = new NetworkConfiguration();
 
         private ConnectionStatus _status;
         private IMessageProducer<string>? _messageProducer;
@@ -368,5 +375,220 @@ namespace Daqifi.Core.Device
                 _ = _protocolHandler.HandleAsync(genericMessage);
             }
         }
+
+        #region Network Configuration Implementation
+
+        /// <summary>
+        /// Retrieves the current network configuration from the device.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>The current network configuration.</returns>
+        public virtual async Task<NetworkConfiguration> GetNetworkConfigAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected to get network configuration.");
+            }
+
+            // Request device info which contains network configuration
+            Send(ScpiMessageProducer.GetDeviceInfo);
+
+            // Wait for device to respond and update metadata
+            await Task.Delay(500, cancellationToken);
+
+            // Update network configuration from metadata
+            UpdateNetworkConfigurationFromMetadata();
+
+            return NetworkConfiguration;
+        }
+
+        /// <summary>
+        /// Sets the network configuration on the device without applying it.
+        /// Configuration must be applied using <see cref="ApplyNetworkConfigAsync"/> to take effect.
+        /// </summary>
+        /// <param name="config">The network configuration to set.</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        public virtual async Task SetNetworkConfigAsync(NetworkConfiguration config, CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected to set network configuration.");
+            }
+
+            if (config == null)
+            {
+                throw new ArgumentNullException(nameof(config));
+            }
+
+            // Validate configuration
+            ValidateNetworkConfiguration(config);
+
+            // Send SCPI command sequence
+            // 1. Set WiFi mode (Existing Network or Self-Hosted)
+            if (config.Mode == WifiMode.ExistingNetwork)
+            {
+                Send(ScpiMessageProducer.SetNetworkWifiModeExisting);
+            }
+            else if (config.Mode == WifiMode.SelfHosted)
+            {
+                Send(ScpiMessageProducer.SetNetworkWifiModeSelfHosted);
+            }
+            await Task.Delay(100, cancellationToken);
+
+            // 2. Set SSID
+            if (!string.IsNullOrEmpty(config.Ssid))
+            {
+                Send(ScpiMessageProducer.SetNetworkWifiSsid(config.Ssid));
+                await Task.Delay(100, cancellationToken);
+            }
+
+            // 3. Set security type
+            if (config.SecurityType == WifiSecurityType.None)
+            {
+                Send(ScpiMessageProducer.SetNetworkWifiSecurityOpen);
+            }
+            else if (config.SecurityType == WifiSecurityType.WpaPskPhrase)
+            {
+                Send(ScpiMessageProducer.SetNetworkWifiSecurityWpa);
+            }
+            await Task.Delay(100, cancellationToken);
+
+            // 4. Set password (if security is WPA)
+            if (config.SecurityType == WifiSecurityType.WpaPskPhrase && !string.IsNullOrEmpty(config.Password))
+            {
+                Send(ScpiMessageProducer.SetNetworkWifiPassword(config.Password));
+                await Task.Delay(100, cancellationToken);
+            }
+
+            // Update local configuration
+            NetworkConfiguration.Mode = config.Mode;
+            NetworkConfiguration.Ssid = config.Ssid;
+            NetworkConfiguration.SecurityType = config.SecurityType;
+            NetworkConfiguration.Password = config.Password;
+        }
+
+        /// <summary>
+        /// Applies the network configuration to the device.
+        /// This will restart the WiFi module, which may take up to 2 seconds.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        public virtual async Task ApplyNetworkConfigAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected to apply network configuration.");
+            }
+
+            // Apply the configuration
+            Send(ScpiMessageProducer.ApplyNetworkLan);
+
+            // Wait for WiFi module to restart (2 seconds as per plan)
+            await Task.Delay(2000, cancellationToken);
+
+            // Re-enable LAN if needed (SPI bus conflict with SD card)
+            Send(ScpiMessageProducer.EnableNetworkLan);
+            await Task.Delay(100, cancellationToken);
+        }
+
+        /// <summary>
+        /// Saves the network configuration to non-volatile memory on the device.
+        /// Configuration will persist across device reboots.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        public virtual async Task SaveNetworkConfigAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected to save network configuration.");
+            }
+
+            // Save configuration to NVM
+            Send(ScpiMessageProducer.SaveNetworkLan);
+            await Task.Delay(100, cancellationToken);
+        }
+
+        /// <summary>
+        /// Validates the network configuration before applying it.
+        /// </summary>
+        /// <param name="config">The configuration to validate.</param>
+        /// <exception cref="ArgumentException">Thrown when configuration is invalid.</exception>
+        private void ValidateNetworkConfiguration(NetworkConfiguration config)
+        {
+            if (string.IsNullOrWhiteSpace(config.Ssid))
+            {
+                throw new ArgumentException("SSID cannot be empty.", nameof(config));
+            }
+
+            if (config.SecurityType == WifiSecurityType.WpaPskPhrase && string.IsNullOrWhiteSpace(config.Password))
+            {
+                throw new ArgumentException("Password is required when using WPA security.", nameof(config));
+            }
+        }
+
+        /// <summary>
+        /// Updates the network configuration from device metadata.
+        /// </summary>
+        private void UpdateNetworkConfigurationFromMetadata()
+        {
+            // Update read-only fields from device metadata
+            NetworkConfiguration.IpAddress = Metadata.IpAddress;
+            NetworkConfiguration.MacAddress = Metadata.MacAddress;
+            NetworkConfiguration.Ssid = Metadata.Ssid;
+            // Gateway and SubnetMask would be updated here if available in metadata
+        }
+
+        /// <summary>
+        /// Gets the current WiFi signal strength from the device.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>The WiFi signal strength (RSSI) in dBm, or null if not available.</returns>
+        public virtual async Task<int?> GetWifiSignalStrengthAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected to get WiFi signal strength.");
+            }
+
+            // Request device info which contains signal strength
+            Send(ScpiMessageProducer.GetDeviceInfo);
+
+            // Wait for device to respond and update metadata
+            await Task.Delay(500, cancellationToken);
+
+            return Metadata.SignalStrength;
+        }
+
+        /// <summary>
+        /// Gets the comprehensive network status from the device.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>The network status including IP, MAC, signal strength, etc.</returns>
+        public virtual async Task<NetworkStatus> GetNetworkStatusAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device must be connected to get network status.");
+            }
+
+            // Request device info which contains network status
+            Send(ScpiMessageProducer.GetDeviceInfo);
+
+            // Wait for device to respond and update metadata
+            await Task.Delay(500, cancellationToken);
+
+            // Build comprehensive status from metadata
+            return new NetworkStatus
+            {
+                IsConnected = IsConnected,
+                IpAddress = Metadata.IpAddress,
+                MacAddress = Metadata.MacAddress,
+                Ssid = Metadata.Ssid,
+                SignalStrength = Metadata.SignalStrength,
+                Gateway = null, // Not available in current metadata
+                SubnetMask = null // Not available in current metadata
+            };
+        }
+
+        #endregion
     }
 } 
