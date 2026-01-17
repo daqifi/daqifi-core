@@ -1,9 +1,11 @@
+using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Protocol;
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading.Tasks;
 
@@ -38,6 +40,15 @@ namespace Daqifi.Core.Device
         public DeviceMetadata Metadata { get; } = new DeviceMetadata();
 
         /// <summary>
+        /// Gets the collection of channels populated from device status messages.
+        /// </summary>
+        /// <remarks>
+        /// This collection is populated when <see cref="PopulateChannelsFromStatus"/> is called
+        /// with a valid protobuf status message from the device.
+        /// </remarks>
+        public IReadOnlyList<IChannel> Channels => _channels.AsReadOnly();
+
+        /// <summary>
         /// Gets or sets the current operational state of the device.
         /// </summary>
         public DeviceState State { get; private set; } = DeviceState.Disconnected;
@@ -49,6 +60,7 @@ namespace Daqifi.Core.Device
         private IProtocolHandler? _protocolHandler;
         private bool _disposed;
         private bool _isInitialized;
+        private readonly List<IChannel> _channels = new();
         
         /// <summary>
         /// Gets the current connection status of the device.
@@ -73,6 +85,11 @@ namespace Daqifi.Core.Device
         /// Occurs when a message is received from the device.
         /// </summary>
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
+
+        /// <summary>
+        /// Occurs when channels have been populated from a device status message.
+        /// </summary>
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiDevice"/> class.
@@ -335,9 +352,134 @@ namespace Daqifi.Core.Device
             // Update device metadata
             Metadata.UpdateFromProtobuf(message);
 
+            // Populate channels from the status message
+            PopulateChannelsFromStatus(message);
+
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
             OnMessageReceived(inboundMessage);
+        }
+
+        /// <summary>
+        /// Populates the device channels from a protobuf status message.
+        /// </summary>
+        /// <param name="message">The protobuf status message containing channel configuration.</param>
+        /// <remarks>
+        /// This method creates channel instances based on the channel counts and calibration
+        /// parameters in the status message. Existing channels are cleared before repopulating
+        /// to handle device reconnection scenarios.
+        ///
+        /// For analog channels, calibration parameters (CalM, CalB, InternalScaleM, PortRange)
+        /// are extracted from the message. If there's a mismatch between the declared channel
+        /// count and the available calibration data, default values are used for missing parameters.
+        ///
+        /// For digital channels, only the channel count is used to create instances.
+        /// </remarks>
+        public virtual void PopulateChannelsFromStatus(DaqifiOutMessage message)
+        {
+            if (message == null)
+            {
+                throw new ArgumentNullException(nameof(message));
+            }
+
+            // Clear existing channels before repopulating
+            _channels.Clear();
+
+            var analogCount = 0;
+            var digitalCount = 0;
+
+            // Populate analog input channels
+            if (message.AnalogInPortNum > 0)
+            {
+                analogCount = PopulateAnalogChannels(message);
+            }
+
+            // Populate digital channels
+            if (message.DigitalPortNum > 0)
+            {
+                digitalCount = PopulateDigitalChannels(message);
+            }
+
+            // Raise the ChannelsPopulated event with a snapshot to prevent mutations affecting handlers
+            var channelsSnapshot = _channels.ToArray();
+            ChannelsPopulated?.Invoke(this, new ChannelsPopulatedEventArgs(
+                Array.AsReadOnly(channelsSnapshot),
+                analogCount,
+                digitalCount));
+        }
+
+        /// <summary>
+        /// Populates analog channels from the protobuf message.
+        /// </summary>
+        /// <param name="message">The protobuf message containing analog channel data.</param>
+        /// <returns>The number of analog channels created.</returns>
+        private int PopulateAnalogChannels(DaqifiOutMessage message)
+        {
+            var analogInPortRanges = message.AnalogInPortRange;
+            var analogInCalibrationBValues = message.AnalogInCalB;
+            var analogInCalibrationMValues = message.AnalogInCalM;
+            var analogInInternalScaleMValues = message.AnalogInIntScaleM;
+            var analogInResolution = message.AnalogInRes;
+
+            var count = (int)message.AnalogInPortNum;
+
+            for (var i = 0; i < count; i++)
+            {
+                var channel = new AnalogChannel(i, analogInResolution > 0 ? analogInResolution : 65535)
+                {
+                    Name = $"AI{i}",
+                    Direction = ChannelDirection.Input,
+                    IsEnabled = false,
+                    CalibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f),
+                    CalibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f),
+                    InternalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f),
+                    PortRange = GetWithDefault(analogInPortRanges, i, 1.0f)
+                };
+
+                _channels.Add(channel);
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Populates digital channels from the protobuf message.
+        /// </summary>
+        /// <param name="message">The protobuf message containing digital channel data.</param>
+        /// <returns>The number of digital channels created.</returns>
+        private int PopulateDigitalChannels(DaqifiOutMessage message)
+        {
+            var count = (int)message.DigitalPortNum;
+
+            for (var i = 0; i < count; i++)
+            {
+                var channel = new DigitalChannel(i)
+                {
+                    Name = $"DIO{i}",
+                    Direction = ChannelDirection.Input,
+                    IsEnabled = true
+                };
+
+                _channels.Add(channel);
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Gets a value from a list with a default fallback if the index is out of range.
+        /// </summary>
+        /// <param name="list">The list to get the value from.</param>
+        /// <param name="index">The index to retrieve.</param>
+        /// <param name="defaultValue">The default value if the index is out of range.</param>
+        /// <returns>The value at the index or the default value.</returns>
+        private static T GetWithDefault<T>(IList<T> list, int index, T defaultValue)
+        {
+            if (list.Count > index)
+            {
+                return list[index];
+            }
+            return defaultValue;
         }
 
         /// <summary>

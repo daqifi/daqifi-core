@@ -35,6 +35,23 @@ public class UdpTransport : IUdpTransport
     public bool IsOpen => _udpClient != null && !_disposed;
 
     /// <summary>
+    /// Gets the actual local port the transport is bound to.
+    /// Returns the configured port if not yet open, or the actual bound port after opening.
+    /// This is useful when port 0 is specified to get the OS-assigned port.
+    /// </summary>
+    public int LocalPort
+    {
+        get
+        {
+            if (IsOpen && _udpClient?.Client?.LocalEndPoint is IPEndPoint endPoint)
+            {
+                return endPoint.Port;
+            }
+            return _localPort;
+        }
+    }
+
+    /// <summary>
     /// Gets information about the transport configuration.
     /// </summary>
     public string ConnectionInfo

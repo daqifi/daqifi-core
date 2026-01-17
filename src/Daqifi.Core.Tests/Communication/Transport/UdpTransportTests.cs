@@ -109,16 +109,18 @@ public class UdpTransportTests
     [Fact]
     public async Task SendAndReceive_Loopback_ShouldWork()
     {
-        // Arrange
-        const int testPort = 30304;
-        using var receiver = new UdpTransport(testPort);
+        // Arrange - use dynamic port allocation to avoid conflicts in parallel test runs
+        using var receiver = new UdpTransport(0);
         using var sender = new UdpTransport(0);
 
         await receiver.OpenAsync();
         await sender.OpenAsync();
 
+        // Get the dynamically assigned port after opening
+        var receiverPort = receiver.LocalPort;
+
         var testData = Encoding.ASCII.GetBytes("Hello UDP!");
-        var endpoint = new IPEndPoint(IPAddress.Loopback, testPort);
+        var endpoint = new IPEndPoint(IPAddress.Loopback, receiverPort);
 
         // Act
         await sender.SendUnicastAsync(testData, endpoint);
@@ -171,8 +173,8 @@ public class UdpTransportTests
     [Fact]
     public void ConnectionInfo_ShouldReflectStatus()
     {
-        // Arrange
-        using var transport = new UdpTransport(30303);
+        // Arrange - use dynamic port to avoid conflicts in parallel test runs
+        using var transport = new UdpTransport(0);
 
         // Act & Assert
         Assert.Contains("Closed", transport.ConnectionInfo);
