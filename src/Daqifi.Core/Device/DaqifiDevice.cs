@@ -400,9 +400,10 @@ namespace Daqifi.Core.Device
                 digitalCount = PopulateDigitalChannels(message);
             }
 
-            // Raise the ChannelsPopulated event
+            // Raise the ChannelsPopulated event with a snapshot to prevent mutations affecting handlers
+            var channelsSnapshot = _channels.ToArray();
             ChannelsPopulated?.Invoke(this, new ChannelsPopulatedEventArgs(
-                _channels.AsReadOnly(),
+                Array.AsReadOnly(channelsSnapshot),
                 analogCount,
                 digitalCount));
         }
