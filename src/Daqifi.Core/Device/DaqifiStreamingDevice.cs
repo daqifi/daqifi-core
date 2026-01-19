@@ -31,10 +31,16 @@ namespace Daqifi.Core.Device
         /// </summary>
         public int StreamingFrequency { get; set; }
 
+        private readonly NetworkConfiguration _networkConfiguration = new NetworkConfiguration();
+
         /// <summary>
-        /// Gets the current network configuration.
+        /// Gets a copy of the current network configuration.
         /// </summary>
-        public NetworkConfiguration NetworkConfiguration { get; } = new NetworkConfiguration();
+        /// <remarks>
+        /// Returns a clone to prevent external modification. Use <see cref="UpdateNetworkConfigurationAsync"/>
+        /// to change the device's network configuration.
+        /// </remarks>
+        public NetworkConfiguration NetworkConfiguration => _networkConfiguration.Clone();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiStreamingDevice"/> class.
@@ -88,12 +94,16 @@ namespace Daqifi.Core.Device
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when an unsupported WiFi mode or security type is specified.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
         {
             if (configuration == null)
             {
                 throw new ArgumentNullException(nameof(configuration));
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (!IsConnected)
             {
@@ -115,12 +125,14 @@ namespace Daqifi.Core.Device
                 case WifiMode.SelfHosted:
                     Send(ScpiMessageProducer.SetNetworkWifiModeSelfHosted);
                     break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(configuration), configuration.Mode, "Unsupported WiFi mode.");
             }
 
             // Set SSID
             Send(ScpiMessageProducer.SetNetworkWifiSsid(configuration.Ssid));
 
-            // Set security type
+            // Set security type and password
             switch (configuration.SecurityType)
             {
                 case WifiSecurityType.None:
@@ -128,11 +140,11 @@ namespace Daqifi.Core.Device
                     break;
                 case WifiSecurityType.WpaPskPhrase:
                     Send(ScpiMessageProducer.SetNetworkWifiSecurityWpa);
+                    Send(ScpiMessageProducer.SetNetworkWifiPassword(configuration.Password));
                     break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(configuration), configuration.SecurityType, "Unsupported WiFi security type.");
             }
-
-            // Set password
-            Send(ScpiMessageProducer.SetNetworkWifiPassword(configuration.Password));
 
             // Apply configuration
             Send(ScpiMessageProducer.ApplyNetworkLan);
@@ -147,10 +159,10 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.SaveNetworkLan);
 
             // Update local configuration
-            NetworkConfiguration.Mode = configuration.Mode;
-            NetworkConfiguration.SecurityType = configuration.SecurityType;
-            NetworkConfiguration.Ssid = configuration.Ssid;
-            NetworkConfiguration.Password = configuration.Password;
+            _networkConfiguration.Mode = configuration.Mode;
+            _networkConfiguration.SecurityType = configuration.SecurityType;
+            _networkConfiguration.Ssid = configuration.Ssid;
+            _networkConfiguration.Password = configuration.Password;
         }
 
         /// <summary>

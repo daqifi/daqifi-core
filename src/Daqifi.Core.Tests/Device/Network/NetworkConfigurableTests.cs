@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -101,6 +102,8 @@ namespace Daqifi.Core.Tests.Device.Network
             Assert.Contains("SYSTem:COMMunicate:LAN:NETType 4", sentCommands); // SelfHosted mode
             Assert.Contains("SYSTem:COMMunicate:LAN:SSID \"DAQiFi_Device\"", sentCommands);
             Assert.Contains("SYSTem:COMMunicate:LAN:SECurity 0", sentCommands); // Open network
+            // Password should NOT be sent for open networks
+            Assert.DoesNotContain(sentCommands, cmd => cmd.StartsWith("SYSTem:COMMunicate:LAN:PASs"));
         }
 
         [Fact]
@@ -228,6 +231,81 @@ namespace Daqifi.Core.Tests.Device.Network
             Assert.Equal(2, sentCommands.Count);
             Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[0]); // Disable SD
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[1]); // Enable LAN
+        }
+
+        [Fact]
+        public void NetworkConfiguration_ReturnsClone_PreventingExternalModification()
+        {
+            // Arrange
+            var device = new DaqifiStreamingDevice("TestDevice");
+            var config1 = device.NetworkConfiguration;
+            var config2 = device.NetworkConfiguration;
+
+            // Act - modify the returned configuration
+            config1.Ssid = "ModifiedSSID";
+
+            // Assert - device's internal state should be unchanged
+            Assert.NotSame(config1, config2); // Different instances
+            Assert.NotEqual("ModifiedSSID", config2.Ssid); // Original unchanged
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_WhenCanceled_ThrowsOperationCanceledException()
+        {
+            // Arrange
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+            var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            // Act & Assert
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => device.UpdateNetworkConfigurationAsync(config, cts.Token));
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_WithUnsupportedWifiMode_ThrowsArgumentOutOfRangeException()
+        {
+            // Arrange
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration
+            {
+                Mode = (WifiMode)999, // Invalid enum value
+                SecurityType = WifiSecurityType.None,
+                Ssid = "Test",
+                Password = ""
+            };
+
+            // Act & Assert
+            var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+                () => device.UpdateNetworkConfigurationAsync(config));
+            Assert.Contains("Unsupported WiFi mode", exception.Message);
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_WithUnsupportedSecurityType_ThrowsArgumentOutOfRangeException()
+        {
+            // Arrange
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration
+            {
+                Mode = WifiMode.SelfHosted,
+                SecurityType = (WifiSecurityType)999, // Invalid enum value
+                Ssid = "Test",
+                Password = ""
+            };
+
+            // Act & Assert
+            var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+                () => device.UpdateNetworkConfigurationAsync(config));
+            Assert.Contains("Unsupported WiFi security type", exception.Message);
         }
 
         /// <summary>
