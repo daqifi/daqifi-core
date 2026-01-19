@@ -40,6 +40,12 @@ public class DeviceInfo : IDeviceInfo
     public int? Port { get; set; }
 
     /// <summary>
+    /// Gets or sets the local interface address that discovered this device (for network devices).
+    /// Used for binding TCP connections in multi-NIC scenarios.
+    /// </summary>
+    public IPAddress? LocalInterfaceAddress { get; set; }
+
+    /// <summary>
     /// Gets or sets the device type.
     /// </summary>
     public DeviceType Type { get; set; } = DeviceType.Unknown;

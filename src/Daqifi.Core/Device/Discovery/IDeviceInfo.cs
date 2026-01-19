@@ -40,6 +40,12 @@ public interface IDeviceInfo
     int? Port { get; }
 
     /// <summary>
+    /// Gets the local interface address that discovered this device (for network devices).
+    /// Used for binding TCP connections in multi-NIC scenarios.
+    /// </summary>
+    IPAddress? LocalInterfaceAddress { get; }
+
+    /// <summary>
     /// Gets the device type.
     /// </summary>
     DeviceType Type { get; }

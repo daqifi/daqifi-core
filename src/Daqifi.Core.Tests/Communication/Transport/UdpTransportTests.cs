@@ -80,6 +80,19 @@ public class UdpTransportTests
     }
 
     [Fact]
+    public async Task SendBroadcastAsync_WithEndpoint_ShouldSendData()
+    {
+        // Arrange
+        using var transport = new UdpTransport(0);
+        await transport.OpenAsync();
+        var testData = Encoding.ASCII.GetBytes("DAQiFi?\r\n");
+        var endPoint = new IPEndPoint(IPAddress.Broadcast, 30303);
+
+        // Act & Assert (should not throw)
+        await transport.SendBroadcastAsync(testData, endPoint);
+    }
+
+    [Fact]
     public async Task SendUnicastAsync_ShouldSendData()
     {
         // Arrange
