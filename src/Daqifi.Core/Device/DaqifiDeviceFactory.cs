@@ -22,6 +22,7 @@ public static class DaqifiDeviceFactory
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when host is null or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when port is not between 1 and 65535.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
     public static async Task<DaqifiDevice> ConnectTcpAsync(
         string host,
@@ -34,12 +35,15 @@ public static class DaqifiDeviceFactory
             throw new ArgumentNullException(nameof(host), "Host cannot be null or empty.");
         }
 
+        ValidatePort(port);
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var effectiveOptions = options ?? DeviceConnectionOptions.Default;
         var transport = new TcpStreamTransport(host, port);
 
-        return await ConnectWithTransportAsync(transport, effectiveOptions, cancellationToken);
+        return await ConnectWithTransportAsync(transport, effectiveOptions, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -51,6 +55,7 @@ public static class DaqifiDeviceFactory
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
     /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when ipAddress is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when port is not between 1 and 65535.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
     public static async Task<DaqifiDevice> ConnectTcpAsync(
         IPAddress ipAddress,
@@ -63,12 +68,15 @@ public static class DaqifiDeviceFactory
             throw new ArgumentNullException(nameof(ipAddress));
         }
 
+        ValidatePort(port);
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var effectiveOptions = options ?? DeviceConnectionOptions.Default;
         var transport = new TcpStreamTransport(ipAddress, port);
 
-        return await ConnectWithTransportAsync(transport, effectiveOptions, cancellationToken);
+        return await ConnectWithTransportAsync(transport, effectiveOptions, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -130,7 +138,8 @@ public static class DaqifiDeviceFactory
         switch (deviceInfo.ConnectionType)
         {
             case ConnectionType.WiFi:
-                return await ConnectWiFiDeviceAsync(deviceInfo, options, cancellationToken);
+                return await ConnectWiFiDeviceAsync(deviceInfo, options, cancellationToken)
+                    .ConfigureAwait(false);
 
             case ConnectionType.Serial:
                 throw new NotSupportedException(
@@ -205,7 +214,20 @@ public static class DaqifiDeviceFactory
             deviceInfo.IPAddress,
             deviceInfo.Port.Value,
             modifiedOptions,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Validates that a port number is within the valid TCP port range.
+    /// </summary>
+    /// <param name="port">The port number to validate.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when port is not between 1 and 65535.</exception>
+    private static void ValidatePort(int port)
+    {
+        if (port < 1 || port > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be between 1 and 65535.");
+        }
     }
 
     /// <summary>
@@ -217,18 +239,18 @@ public static class DaqifiDeviceFactory
         CancellationToken cancellationToken)
     {
         DaqifiDevice? device = null;
-        var success = false;
 
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             // Step 1: Connect the transport
-            await transport.ConnectAsync(options.ConnectionRetry);
+            await transport.ConnectAsync(options.ConnectionRetry).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
             // Step 2: Create the device with the transport
+            // Note: Once created, the device owns the transport and will dispose it
             device = new DaqifiDevice(options.DeviceName, transport);
 
             // Step 3: Connect the device (starts message producers/consumers)
@@ -239,25 +261,22 @@ public static class DaqifiDeviceFactory
             // Step 4: Initialize the device if requested
             if (options.InitializeDevice)
             {
-                await device.InitializeAsync();
+                await device.InitializeAsync().ConfigureAwait(false);
             }
 
-            success = true;
             return device;
-        }
-        catch (OperationCanceledException)
-        {
-            // Clean up on cancellation
-            device?.Dispose();
-            transport.Dispose();
-            throw;
         }
         catch
         {
             // Clean up on failure
-            if (!success)
+            // If device was created, it owns the transport and will dispose it
+            if (device != null)
             {
-                device?.Dispose();
+                device.Dispose();
+            }
+            else
+            {
+                // Device was not created, so we must dispose the transport
                 transport.Dispose();
             }
             throw;

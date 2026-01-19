@@ -123,6 +123,36 @@ public class DaqifiDeviceFactoryTests
         Assert.Equal("ipAddress", exception.ParamName);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(65536)]
+    [InlineData(100000)]
+    public async Task ConnectTcpAsync_InvalidPort_ThrowsArgumentOutOfRangeException(int invalidPort)
+    {
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", invalidPort));
+
+        Assert.Equal("port", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(80)]
+    [InlineData(9760)]
+    [InlineData(65535)]
+    public async Task ConnectTcpAsync_ValidPort_DoesNotThrowArgumentOutOfRangeException(int validPort)
+    {
+        // Arrange - Use a cancelled token so we don't actually try to connect
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // Act & Assert - Should throw OperationCanceledException, not ArgumentOutOfRangeException
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", validPort, null, cts.Token));
+    }
+
     [Fact]
     public async Task ConnectTcpAsync_WithCancellation_ThrowsOperationCanceledException()
     {
