@@ -13,6 +13,11 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"
@@ -27,3 +32,8 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
