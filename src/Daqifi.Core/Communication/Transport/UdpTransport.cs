@@ -156,6 +156,22 @@ public class UdpTransport : IUdpTransport
     }
 
     /// <summary>
+    /// Sends a UDP broadcast message to a specific endpoint.
+    /// </summary>
+    /// <param name="data">The data to broadcast.</param>
+    /// <param name="endPoint">The destination broadcast endpoint.</param>
+    /// <returns>A task representing the asynchronous send operation.</returns>
+    public async Task SendBroadcastAsync(byte[] data, IPEndPoint endPoint)
+    {
+        ThrowIfDisposed();
+
+        if (!IsOpen)
+            throw new InvalidOperationException("UDP transport is not open.");
+
+        await _udpClient!.SendAsync(data, data.Length, endPoint);
+    }
+
+    /// <summary>
     /// Sends a UDP unicast message to a specific endpoint.
     /// </summary>
     /// <param name="data">The data to send.</param>

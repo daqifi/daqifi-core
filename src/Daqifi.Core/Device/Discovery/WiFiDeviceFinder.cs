@@ -28,6 +28,31 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
 
     #endregion
 
+    #region Private Types
+
+    /// <summary>
+    /// Represents network interface information for discovery broadcasts.
+    /// </summary>
+    private readonly struct NetworkInterfaceInfo
+    {
+        /// <summary>
+        /// The broadcast endpoint to send discovery queries to.
+        /// </summary>
+        public IPEndPoint BroadcastEndpoint { get; init; }
+
+        /// <summary>
+        /// The local interface address.
+        /// </summary>
+        public IPAddress LocalAddress { get; init; }
+
+        /// <summary>
+        /// The subnet mask for this interface.
+        /// </summary>
+        public IPAddress SubnetMask { get; init; }
+    }
+
+    #endregion
+
     #region Private Fields
 
     private readonly int _discoveryPort;
@@ -110,9 +135,9 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         try
         {
             var discoveredDevices = new List<IDeviceInfo>();
-            var broadcastEndpoints = GetAllBroadcastEndpoints(_discoveryPort);
+            var networkInterfaces = GetAllNetworkInterfaces(_discoveryPort);
 
-            if (broadcastEndpoints.Count == 0)
+            if (networkInterfaces.Count == 0)
             {
                 OnDiscoveryCompleted();
                 return discoveredDevices;
@@ -127,54 +152,56 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 cts.CancelAfter(timeout);
             }
 
-        try
-        {
-            // Send broadcast query to all network interfaces
-            foreach (var endpoint in broadcastEndpoints)
+            try
             {
-                try
+                // Send broadcast query to all network interfaces
+                foreach (var interfaceInfo in networkInterfaces)
                 {
-                    await udpTransport.SendBroadcastAsync(_queryCommandBytes, endpoint.Port);
-                }
-                catch (SocketException)
-                {
-                    // Continue with other endpoints if one fails
-                }
-            }
-
-            // Listen for responses until timeout or cancellation
-            while (!cts.Token.IsCancellationRequested)
-            {
-                try
-                {
-                    var result = await udpTransport.ReceiveAsync(TimeSpan.FromMilliseconds(100), cts.Token);
-
-                    if (result.HasValue)
+                    try
                     {
-                        var (data, remoteEndPoint) = result.Value;
-                        var receivedText = Encoding.ASCII.GetString(data);
+                        await udpTransport.SendBroadcastAsync(_queryCommandBytes, interfaceInfo.BroadcastEndpoint);
+                    }
+                    catch (SocketException)
+                    {
+                        // Continue with other endpoints if one fails
+                    }
+                }
 
-                        if (IsValidDiscoveryMessage(receivedText))
+                // Listen for responses until timeout or cancellation
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var result = await udpTransport.ReceiveAsync(TimeSpan.FromMilliseconds(100), cts.Token);
+
+                        if (result.HasValue)
                         {
-                            var deviceInfo = ParseDeviceInfo(data, remoteEndPoint);
-                            if (deviceInfo != null)
+                            var (data, remoteEndPoint) = result.Value;
+                            var receivedText = Encoding.ASCII.GetString(data);
+
+                            if (IsValidDiscoveryMessage(receivedText))
                             {
-                                // Check for duplicates based on MAC address or serial number
-                                if (!discoveredDevices.Any(d => IsDuplicateDevice(d, deviceInfo)))
+                                // Determine which local interface discovered this device
+                                var localInterfaceAddress = FindLocalInterfaceForRemoteAddress(remoteEndPoint.Address, networkInterfaces);
+                                var deviceInfo = ParseDeviceInfo(data, remoteEndPoint, localInterfaceAddress);
+                                if (deviceInfo != null)
                                 {
-                                    discoveredDevices.Add(deviceInfo);
-                                    OnDeviceDiscovered(deviceInfo);
+                                    // Check for duplicates based on MAC address or serial number
+                                    if (!discoveredDevices.Any(d => IsDuplicateDevice(d, deviceInfo)))
+                                    {
+                                        discoveredDevices.Add(deviceInfo);
+                                        OnDeviceDiscovered(deviceInfo);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
                 }
             }
-        }
             finally
             {
                 await udpTransport.CloseAsync();
@@ -202,7 +229,10 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     /// <summary>
     /// Parses device information from protobuf message.
     /// </summary>
-    private static IDeviceInfo? ParseDeviceInfo(byte[] data, IPEndPoint remoteEndPoint)
+    /// <param name="data">The raw protobuf data.</param>
+    /// <param name="remoteEndPoint">The remote endpoint that sent the response.</param>
+    /// <param name="localInterfaceAddress">The local interface address that discovered this device.</param>
+    private static IDeviceInfo? ParseDeviceInfo(byte[] data, IPEndPoint remoteEndPoint, IPAddress? localInterfaceAddress)
     {
         try
         {
@@ -217,6 +247,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 IPAddress = remoteEndPoint.Address,
                 MacAddress = GetMacAddressString(message),
                 Port = (int)message.DevicePort,
+                LocalInterfaceAddress = localInterfaceAddress,
                 Type = GetDeviceType(message.DevicePn),
                 IsPowerOn = message.PwrStatus == 1,
                 ConnectionType = ConnectionType.WiFi
@@ -272,11 +303,11 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     }
 
     /// <summary>
-    /// Gets all broadcast endpoints for active network interfaces.
+    /// Gets all network interface information for active interfaces.
     /// </summary>
-    private static List<IPEndPoint> GetAllBroadcastEndpoints(int port)
+    private static List<NetworkInterfaceInfo> GetAllNetworkInterfaces(int port)
     {
-        var endpoints = new List<IPEndPoint>();
+        var interfaces = new List<NetworkInterfaceInfo>();
 
         foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
         {
@@ -318,11 +349,66 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
 
                 var broadcastAddress = new IPAddress(broadcastBytes);
                 var endpoint = new IPEndPoint(broadcastAddress, port);
-                endpoints.Add(endpoint);
+
+                interfaces.Add(new NetworkInterfaceInfo
+                {
+                    BroadcastEndpoint = endpoint,
+                    LocalAddress = ipAddress,
+                    SubnetMask = subnetMask
+                });
             }
         }
 
-        return endpoints;
+        return interfaces;
+    }
+
+    /// <summary>
+    /// Finds the local interface address that is on the same subnet as the remote address.
+    /// </summary>
+    /// <param name="remoteAddress">The remote device's IP address.</param>
+    /// <param name="networkInterfaces">The list of available network interfaces.</param>
+    /// <returns>The local interface address, or null if no matching interface is found.</returns>
+    private static IPAddress? FindLocalInterfaceForRemoteAddress(IPAddress remoteAddress, List<NetworkInterfaceInfo> networkInterfaces)
+    {
+        if (remoteAddress.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return null;
+        }
+
+        var remoteBytes = remoteAddress.GetAddressBytes();
+        if (remoteBytes.Length != 4)
+        {
+            return null;
+        }
+
+        foreach (var interfaceInfo in networkInterfaces)
+        {
+            var localBytes = interfaceInfo.LocalAddress.GetAddressBytes();
+            var maskBytes = interfaceInfo.SubnetMask.GetAddressBytes();
+
+            if (localBytes.Length != 4 || maskBytes.Length != 4)
+            {
+                continue;
+            }
+
+            // Check if remote address is on the same subnet as this interface
+            var isOnSameSubnet = true;
+            for (var i = 0; i < 4; i++)
+            {
+                if ((remoteBytes[i] & maskBytes[i]) != (localBytes[i] & maskBytes[i]))
+                {
+                    isOnSameSubnet = false;
+                    break;
+                }
+            }
+
+            if (isOnSameSubnet)
+            {
+                return interfaceInfo.LocalAddress;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

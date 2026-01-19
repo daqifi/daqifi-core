@@ -44,6 +44,14 @@ public interface IUdpTransport : IDisposable
     Task SendBroadcastAsync(byte[] data, int port);
 
     /// <summary>
+    /// Sends a UDP broadcast message to a specific endpoint.
+    /// </summary>
+    /// <param name="data">The data to broadcast.</param>
+    /// <param name="endPoint">The destination broadcast endpoint.</param>
+    /// <returns>A task representing the asynchronous send operation.</returns>
+    Task SendBroadcastAsync(byte[] data, IPEndPoint endPoint);
+
+    /// <summary>
     /// Sends a UDP unicast message to a specific endpoint.
     /// </summary>
     /// <param name="data">The data to send.</param>
