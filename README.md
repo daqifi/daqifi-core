@@ -6,14 +6,14 @@ The DAQiFi Core Library is a .NET library designed to simplify interaction with 
 
 ### ✅ Available Now
 - **Device Discovery**: Find DAQiFi devices connected via WiFi, USB/Serial, or HID bootloader mode
-- **Transport Layer**: UDP and Serial communication support with async/await patterns
+- **Easy Connection**: Single-call device connection with `DaqifiDeviceFactory`
+- **Data Streaming**: Stream data from devices in real-time with event-driven API
+- **Transport Layer**: TCP, UDP, and Serial communication with async/await patterns
 - **Protocol Buffers**: Efficient binary message serialization for device communication
 - **Cross-Platform**: Compatible with .NET 8.0 and .NET 9.0
 
 ### 🚧 In Development
-- **Connection Management**: Establish and manage connections with minimal effort
-- **Channel Configuration**: Support for both analog and digital channels
-- **Data Streaming**: Stream data from devices in real-time
+- **Channel Configuration**: Advanced channel setup and calibration
 - **Firmware Updates**: Manage firmware updates seamlessly
 
 ## Getting Started
@@ -22,6 +22,63 @@ The DAQiFi Core Library is a .NET library designed to simplify interaction with 
 
 ```shell
 dotnet add package Daqifi.Core
+```
+
+### Quick Start: Connect and Stream
+
+```csharp
+using Daqifi.Core.Device;
+using Daqifi.Core.Communication.Producers;
+
+// Connect to a device (handles transport, connection, and initialization)
+using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+
+// Subscribe to incoming data
+device.MessageReceived += (sender, e) =>
+{
+    if (e.Message.Data is DaqifiOutMessage message)
+    {
+        Console.WriteLine($"Timestamp: {message.MsgTimeStamp}");
+        Console.WriteLine($"Analog values: {string.Join(", ", message.AnalogInData)}");
+    }
+};
+
+// Configure channels and start streaming
+device.Send(ScpiMessageProducer.EnableAdcChannels("0000000011")); // Enable first 2 channels
+device.Send(ScpiMessageProducer.StartStreaming(100)); // 100 Hz sample rate
+
+await Task.Delay(TimeSpan.FromSeconds(10)); // Stream for 10 seconds
+
+device.Send(ScpiMessageProducer.StopStreaming);
+```
+
+### Connection Options
+
+```csharp
+// With retry options for unreliable networks
+using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
+    "192.168.1.100",
+    9760,
+    DeviceConnectionOptions.Resilient); // 5 retries, longer timeouts
+
+// Connect from discovery result
+var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
+using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
+
+// Custom options
+using Daqifi.Core.Communication.Transport; // For ConnectionRetryOptions
+
+var options = new DeviceConnectionOptions
+{
+    DeviceName = "My DAQiFi",
+    ConnectionRetry = new ConnectionRetryOptions
+    {
+        MaxAttempts = 3,
+        ConnectionTimeout = TimeSpan.FromSeconds(10)
+    },
+    InitializeDevice = true // Sends standard init commands
+};
+using var device = await DaqifiDeviceFactory.ConnectTcpAsync(ip, port, options);
 ```
 
 ### Quick Start: Device Discovery
