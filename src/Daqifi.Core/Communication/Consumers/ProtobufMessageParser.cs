@@ -11,6 +11,7 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 {
     private const int MaxRetryAttempts = 3;
     private const int MaxVarint32Bytes = 5;
+    private const int MaxMessageSizeBytes = 1024 * 1024;
     
     /// <summary>
     /// Parses raw data into protobuf messages.
@@ -33,12 +34,28 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         {
             var remainingData = new ReadOnlySpan<byte>(data, currentIndex, data.Length - currentIndex);
 
-            if (!TryReadLengthPrefix(remainingData, out var messageLength, out var prefixBytes))
+            if (!TryReadLengthPrefix(remainingData, out var messageLength, out var prefixBytes, out var prefixIsMalformed))
             {
+                if (prefixIsMalformed)
+                {
+                    currentIndex += Math.Max(prefixBytes, 1);
+                    consumedBytes = currentIndex;
+                    retryCount++;
+                    continue;
+                }
+
                 break; // Not enough data for length prefix yet.
             }
 
             if (messageLength <= 0)
+            {
+                currentIndex += Math.Max(prefixBytes, 1);
+                consumedBytes = currentIndex;
+                retryCount++;
+                continue;
+            }
+
+            if (messageLength > MaxMessageSizeBytes)
             {
                 currentIndex += Math.Max(prefixBytes, 1);
                 consumedBytes = currentIndex;
@@ -60,12 +77,6 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
                 messages.Add(new ProtobufMessage(message));
                 retryCount = 0;
             }
-            catch (InvalidProtocolBufferException)
-            {
-                currentIndex++;
-                consumedBytes = currentIndex;
-                retryCount++;
-            }
             catch (Exception)
             {
                 currentIndex++;
@@ -77,10 +88,15 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         return messages;
     }
 
-    private static bool TryReadLengthPrefix(ReadOnlySpan<byte> data, out int length, out int bytesRead)
+    private static bool TryReadLengthPrefix(
+        ReadOnlySpan<byte> data,
+        out int length,
+        out int bytesRead,
+        out bool isMalformed)
     {
         length = 0;
         bytesRead = 0;
+        isMalformed = false;
         var shift = 0;
 
         for (var i = 0; i < MaxVarint32Bytes; i++)
@@ -102,6 +118,7 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             shift += 7;
         }
 
+        isMalformed = true;
         return false;
     }
 }
