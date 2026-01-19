@@ -159,7 +159,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 {
                     try
                     {
-                        await udpTransport.SendBroadcastAsync(_queryCommandBytes, interfaceInfo.BroadcastEndpoint.Port);
+                        await udpTransport.SendBroadcastAsync(_queryCommandBytes, interfaceInfo.BroadcastEndpoint);
                     }
                     catch (SocketException)
                     {
