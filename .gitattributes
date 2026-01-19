@@ -1,9 +1,8 @@
-* text=auto
+# Default: text files use LF
+* text=auto eol=lf
 
-*.sln text eol=crlf
-*.csproj text eol=crlf
-*.cs text eol=crlf
-*.md text
-*.json text
-*.yml text
-*.yaml text 
+# .NET / build artifacts
+*.csproj   text eol=lf
+*.props    text eol=lf
+*.targets  text eol=lf
+*.sln      text eol=lf
