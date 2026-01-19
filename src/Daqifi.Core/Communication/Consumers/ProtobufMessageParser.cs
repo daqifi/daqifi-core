@@ -10,6 +10,8 @@ namespace Daqifi.Core.Communication.Consumers;
 public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 {
     private const int MaxRetryAttempts = 3;
+    private const int MaxVarint32Bytes = 5;
+    private const int MaxMessageSizeBytes = 1024 * 1024;
     
     /// <summary>
     /// Parses raw data into protobuf messages.
@@ -27,48 +29,56 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 
         var currentIndex = 0;
         var retryCount = 0;
-        
+
         while (currentIndex < data.Length && retryCount < MaxRetryAttempts)
         {
-            try
+            var remainingData = new ReadOnlySpan<byte>(data, currentIndex, data.Length - currentIndex);
+
+            if (!TryReadLengthPrefix(remainingData, out var messageLength, out var prefixBytes, out var prefixIsMalformed))
             {
-                // Use CodedInputStream for proper byte tracking
-                var remainingData = new ReadOnlySpan<byte>(data, currentIndex, data.Length - currentIndex);
-                var codedInput = new CodedInputStream(remainingData.ToArray());
-                
-                // Record the position before parsing
-                var startPosition = codedInput.Position;
-                
-                // Try to parse a protobuf message
-                var message = DaqifiOutMessage.Parser.ParseFrom(codedInput);
-                
-                // Calculate actual bytes consumed by the parser
-                var bytesConsumed = codedInput.Position - startPosition;
-                
-                if (bytesConsumed > 0)
+                if (prefixIsMalformed)
                 {
-                    currentIndex += (int)bytesConsumed;
-                    consumedBytes = currentIndex;
-                    messages.Add(new ProtobufMessage(message));
-                    retryCount = 0; // Reset retry count on successful parse
-                }
-                else
-                {
-                    // If no bytes were consumed, we might be stuck - advance by 1
-                    currentIndex++;
+                    currentIndex += Math.Max(prefixBytes, 1);
                     consumedBytes = currentIndex;
                     retryCount++;
+                    continue;
                 }
+
+                break; // Not enough data for length prefix yet.
             }
-            catch (InvalidProtocolBufferException)
+
+            if (messageLength <= 0)
             {
-                // If we can't parse a complete message, stop parsing
-                // This is expected when we don't have a complete message
-                break;
+                currentIndex += Math.Max(prefixBytes, 1);
+                consumedBytes = currentIndex;
+                retryCount++;
+                continue;
+            }
+
+            if (messageLength > MaxMessageSizeBytes)
+            {
+                currentIndex += Math.Max(prefixBytes, 1);
+                consumedBytes = currentIndex;
+                retryCount++;
+                continue;
+            }
+
+            if (remainingData.Length < prefixBytes + messageLength)
+            {
+                break; // Wait for more data.
+            }
+
+            try
+            {
+                var payload = remainingData.Slice(prefixBytes, messageLength).ToArray();
+                var message = DaqifiOutMessage.Parser.ParseFrom(payload);
+                currentIndex += prefixBytes + messageLength;
+                consumedBytes = currentIndex;
+                messages.Add(new ProtobufMessage(message));
+                retryCount = 0;
             }
             catch (Exception)
             {
-                // For other exceptions, advance by one byte and retry
                 currentIndex++;
                 consumedBytes = currentIndex;
                 retryCount++;
@@ -76,5 +86,39 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         }
 
         return messages;
+    }
+
+    private static bool TryReadLengthPrefix(
+        ReadOnlySpan<byte> data,
+        out int length,
+        out int bytesRead,
+        out bool isMalformed)
+    {
+        length = 0;
+        bytesRead = 0;
+        isMalformed = false;
+        var shift = 0;
+
+        for (var i = 0; i < MaxVarint32Bytes; i++)
+        {
+            if (i >= data.Length)
+            {
+                return false;
+            }
+
+            var value = data[i];
+            length |= (value & 0x7F) << shift;
+            bytesRead++;
+
+            if ((value & 0x80) == 0)
+            {
+                return true;
+            }
+
+            shift += 7;
+        }
+
+        isMalformed = true;
+        return false;
     }
 }
