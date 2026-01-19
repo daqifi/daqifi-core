@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace Daqifi.Core.Device.Network
 {
     /// <summary>
@@ -8,11 +10,13 @@ namespace Daqifi.Core.Device.Network
         /// <summary>
         /// Device connects to an existing WiFi network as a client.
         /// </summary>
+        [Description("Existing Network")]
         ExistingNetwork = 1,
 
         /// <summary>
         /// Device creates its own WiFi network as an access point.
         /// </summary>
+        [Description("Self Hosted")]
         SelfHosted = 4
     }
 }
