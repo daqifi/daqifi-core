@@ -222,6 +222,128 @@ public class DaqifiDeviceFactoryTests
 
     #endregion
 
+    #region ConnectSerialAsync Tests
+
+    [Fact]
+    public async Task ConnectSerialAsync_NullPortName_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => DaqifiDeviceFactory.ConnectSerialAsync(null!));
+
+        Assert.Equal("portName", exception.ParamName);
+    }
+
+    [Fact]
+    public async Task ConnectSerialAsync_EmptyPortName_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => DaqifiDeviceFactory.ConnectSerialAsync(""));
+
+        Assert.Equal("portName", exception.ParamName);
+    }
+
+    [Fact]
+    public async Task ConnectSerialAsync_WhitespacePortName_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => DaqifiDeviceFactory.ConnectSerialAsync("   "));
+
+        Assert.Equal("portName", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public async Task ConnectSerialAsync_InvalidBaudRate_ThrowsArgumentOutOfRangeException(int invalidBaudRate)
+    {
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", invalidBaudRate));
+
+        Assert.Equal("baudRate", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(9600)]
+    [InlineData(115200)]
+    [InlineData(1000000)]
+    public async Task ConnectSerialAsync_ValidBaudRate_DoesNotThrowArgumentOutOfRangeException(int validBaudRate)
+    {
+        // Arrange - Use a cancelled token so we don't actually try to connect
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // Act & Assert - Should throw OperationCanceledException, not ArgumentOutOfRangeException
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", validBaudRate, null, cts.Token));
+    }
+
+    [Fact]
+    public async Task ConnectSerialAsync_WithCancellation_ThrowsOperationCanceledException()
+    {
+        // Arrange
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // Act & Assert
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", null, cts.Token));
+    }
+
+    [Fact]
+    public async Task ConnectSerialAsync_WithBaudRate_WithCancellation_ThrowsOperationCanceledException()
+    {
+        // Arrange
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // Act & Assert
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", 115200, null, cts.Token));
+    }
+
+    #endregion
+
+    #region ConnectSerial Sync Tests
+
+    [Fact]
+    public void ConnectSerial_NullPortName_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        var exception = Assert.Throws<ArgumentNullException>(
+            () => DaqifiDeviceFactory.ConnectSerial(null!));
+
+        Assert.Equal("portName", exception.ParamName);
+    }
+
+    [Fact]
+    public void ConnectSerial_EmptyPortName_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        var exception = Assert.Throws<ArgumentNullException>(
+            () => DaqifiDeviceFactory.ConnectSerial(""));
+
+        Assert.Equal("portName", exception.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ConnectSerial_InvalidBaudRate_ThrowsArgumentOutOfRangeException(int invalidBaudRate)
+    {
+        // Act & Assert
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => DaqifiDeviceFactory.ConnectSerial("COM3", invalidBaudRate));
+
+        Assert.Equal("baudRate", exception.ParamName);
+    }
+
+    #endregion
+
     #region ConnectFromDeviceInfoAsync Tests
 
     [Fact]
@@ -235,9 +357,29 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public async Task ConnectFromDeviceInfoAsync_SerialDevice_ThrowsNotSupportedException()
+    public async Task ConnectFromDeviceInfoAsync_SerialDeviceMissingPortName_ThrowsArgumentException()
     {
         // Arrange
+        var deviceInfo = new TestDeviceInfo
+        {
+            ConnectionType = ConnectionType.Serial,
+            PortName = null
+        };
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
+            () => DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo));
+
+        Assert.Contains("PortName", exception.Message);
+    }
+
+    [Fact]
+    public async Task ConnectFromDeviceInfoAsync_SerialDevice_WithCancellation_ThrowsOperationCanceledException()
+    {
+        // Arrange
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
         var deviceInfo = new TestDeviceInfo
         {
             ConnectionType = ConnectionType.Serial,
@@ -245,10 +387,8 @@ public class DaqifiDeviceFactoryTests
         };
 
         // Act & Assert
-        var exception = await Assert.ThrowsAsync<NotSupportedException>(
-            () => DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo));
-
-        Assert.Contains("Serial", exception.Message);
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo, null, cts.Token));
     }
 
     [Fact]
@@ -354,20 +494,20 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public void ConnectFromDeviceInfo_SerialDevice_ThrowsNotSupportedException()
+    public void ConnectFromDeviceInfo_SerialDeviceMissingPortName_ThrowsArgumentException()
     {
         // Arrange
         var deviceInfo = new TestDeviceInfo
         {
             ConnectionType = ConnectionType.Serial,
-            PortName = "COM3"
+            PortName = null
         };
 
         // Act & Assert
-        var exception = Assert.Throws<NotSupportedException>(
+        var exception = Assert.Throws<ArgumentException>(
             () => DaqifiDeviceFactory.ConnectFromDeviceInfo(deviceInfo));
 
-        Assert.Contains("Serial", exception.Message);
+        Assert.Contains("PortName", exception.Message);
     }
 
     #endregion

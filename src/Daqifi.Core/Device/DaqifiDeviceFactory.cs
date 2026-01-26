@@ -7,6 +7,14 @@ using Daqifi.Core.Device.Discovery;
 namespace Daqifi.Core.Device;
 
 /// <summary>
+/// Default baud rate for serial connections.
+/// </summary>
+internal static class SerialDefaults
+{
+    public const int BaudRate = 9600;
+}
+
+/// <summary>
 /// Factory class for creating and connecting to DAQiFi devices with a simplified API.
 /// Provides a single-call connection interface that handles transport creation, connection,
 /// and device initialization.
@@ -112,6 +120,90 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
+    /// Connects to a DAQiFi device over a serial port asynchronously using the default baud rate (115200).
+    /// </summary>
+    /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
+    /// <param name="options">Optional connection options. If null, uses default options.</param>
+    /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    public static Task<DaqifiDevice> ConnectSerialAsync(
+        string portName,
+        DeviceConnectionOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        return ConnectSerialAsync(portName, SerialDefaults.BaudRate, options, cancellationToken);
+    }
+
+    /// <summary>
+    /// Connects to a DAQiFi device over a serial port asynchronously with a specified baud rate.
+    /// </summary>
+    /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
+    /// <param name="baudRate">The baud rate for the serial connection.</param>
+    /// <param name="options">Optional connection options. If null, uses default options.</param>
+    /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when baudRate is less than or equal to zero.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    public static async Task<DaqifiDevice> ConnectSerialAsync(
+        string portName,
+        int baudRate,
+        DeviceConnectionOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(portName))
+        {
+            throw new ArgumentNullException(nameof(portName), "Port name cannot be null or empty.");
+        }
+
+        if (baudRate <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(baudRate), baudRate, "Baud rate must be greater than zero.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var effectiveOptions = options ?? DeviceConnectionOptions.Default;
+        var transport = new SerialStreamTransport(portName, baudRate);
+
+        return await ConnectWithTransportAsync(transport, effectiveOptions, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Connects to a DAQiFi device over a serial port synchronously using the default baud rate (115200).
+    /// </summary>
+    /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
+    /// <param name="options">Optional connection options. If null, uses default options.</param>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
+    public static DaqifiDevice ConnectSerial(
+        string portName,
+        DeviceConnectionOptions? options = null)
+    {
+        return ConnectSerialAsync(portName, SerialDefaults.BaudRate, options, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Connects to a DAQiFi device over a serial port synchronously with a specified baud rate.
+    /// </summary>
+    /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
+    /// <param name="baudRate">The baud rate for the serial connection.</param>
+    /// <param name="options">Optional connection options. If null, uses default options.</param>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when baudRate is less than or equal to zero.</exception>
+    public static DaqifiDevice ConnectSerial(
+        string portName,
+        int baudRate,
+        DeviceConnectionOptions? options = null)
+    {
+        return ConnectSerialAsync(portName, baudRate, options, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
     /// Connects to a DAQiFi device asynchronously using device discovery information.
     /// </summary>
     /// <param name="deviceInfo">The device information from discovery.</param>
@@ -142,9 +234,8 @@ public static class DaqifiDeviceFactory
                     .ConfigureAwait(false);
 
             case ConnectionType.Serial:
-                throw new NotSupportedException(
-                    "Serial device connections are not yet supported by the factory. " +
-                    "Please use SerialStreamTransport directly.");
+                return await ConnectSerialDeviceAsync(deviceInfo, options, cancellationToken)
+                    .ConfigureAwait(false);
 
             case ConnectionType.Hid:
                 throw new NotSupportedException(
@@ -218,6 +309,42 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
+    /// Connects to a serial device using the provided device info.
+    /// </summary>
+    private static async Task<DaqifiDevice> ConnectSerialDeviceAsync(
+        IDeviceInfo deviceInfo,
+        DeviceConnectionOptions? options,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(deviceInfo.PortName))
+        {
+            throw new ArgumentException(
+                "DeviceInfo must have a PortName for Serial connections.",
+                nameof(deviceInfo));
+        }
+
+        var effectiveOptions = options ?? DeviceConnectionOptions.Default;
+
+        // Use the device name from the discovery info if not overridden in options
+        var deviceName = effectiveOptions.DeviceName == DeviceConnectionOptions.Default.DeviceName
+            && !string.IsNullOrWhiteSpace(deviceInfo.Name)
+            ? deviceInfo.Name
+            : effectiveOptions.DeviceName;
+
+        var modifiedOptions = new DeviceConnectionOptions
+        {
+            DeviceName = deviceName,
+            ConnectionRetry = effectiveOptions.ConnectionRetry,
+            InitializeDevice = effectiveOptions.InitializeDevice
+        };
+
+        return await ConnectSerialAsync(
+            deviceInfo.PortName,
+            modifiedOptions,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Validates that a port number is within the valid TCP port range.
     /// </summary>
     /// <param name="port">The port number to validate.</param>
@@ -234,7 +361,7 @@ public static class DaqifiDeviceFactory
     /// Internal method that handles the actual connection logic with a transport.
     /// </summary>
     private static async Task<DaqifiDevice> ConnectWithTransportAsync(
-        TcpStreamTransport transport,
+        IStreamTransport transport,
         DeviceConnectionOptions options,
         CancellationToken cancellationToken)
     {

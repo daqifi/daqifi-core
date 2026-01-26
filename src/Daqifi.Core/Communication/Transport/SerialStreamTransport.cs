@@ -29,7 +29,7 @@ public class SerialStreamTransport : IStreamTransport
     /// <param name="stopBits">The stop bits setting.</param>
     /// <param name="enableDtr">Whether to enable Data Terminal Ready (DTR) signal. Default is true.</param>
     /// <param name="enableRts">Whether to enable Request To Send (RTS) signal. Default is false.</param>
-    public SerialStreamTransport(string portName, int baudRate = 115200, Parity parity = Parity.None,
+    public SerialStreamTransport(string portName, int baudRate = 9600, Parity parity = Parity.None,
         int dataBits = 8, StopBits stopBits = StopBits.One, bool enableDtr = true, bool enableRts = false)
     {
         _portName = portName ?? throw new ArgumentNullException(nameof(portName));

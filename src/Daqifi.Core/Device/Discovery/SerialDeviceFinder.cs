@@ -14,7 +14,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 {
     #region Constants
 
-    private const int DefaultBaudRate = 115200;
+    private const int DefaultBaudRate = 9600;
     private static readonly TimeSpan QuickProbeTimeout = TimeSpan.FromMilliseconds(500);
 
     #endregion
