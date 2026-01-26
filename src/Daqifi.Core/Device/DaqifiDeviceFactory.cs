@@ -11,7 +11,7 @@ namespace Daqifi.Core.Device;
 /// </summary>
 internal static class SerialDefaults
 {
-    public const int BaudRate = 115200;
+    public const int BaudRate = 9600;
 }
 
 /// <summary>
