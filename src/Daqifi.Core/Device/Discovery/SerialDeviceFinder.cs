@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO.Ports;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Consumers;
@@ -327,10 +328,10 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             .Where(port => !excludePatterns.Any(pattern =>
                 port.Contains(pattern, StringComparison.OrdinalIgnoreCase)));
 
-        // On macOS, prefer /dev/cu.* ports (for outgoing connections) over /dev/tty.* ports
+        // On macOS/Linux, prefer /dev/cu.* ports (for outgoing connections) over /dev/tty.* ports
         // If we have both cu and tty versions of the same port, only use cu
-        if (Environment.OSVersion.Platform == PlatformID.Unix ||
-            Environment.OSVersion.Platform == PlatformID.MacOSX)
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
+            RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
             var cuPorts = filteredPorts.Where(p => p.StartsWith("/dev/cu.")).ToList();
             var ttyPorts = filteredPorts.Where(p => p.StartsWith("/dev/tty.")).ToList();
