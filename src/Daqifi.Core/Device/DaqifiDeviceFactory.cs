@@ -120,7 +120,7 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
-    /// Connects to a DAQiFi device over a serial port asynchronously using the default baud rate (115200).
+    /// Connects to a DAQiFi device over a serial port asynchronously using the default baud rate (9600).
     /// </summary>
     /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
@@ -153,9 +153,14 @@ public static class DaqifiDeviceFactory
         DeviceConnectionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        if (portName == null)
+        {
+            throw new ArgumentNullException(nameof(portName));
+        }
+
         if (string.IsNullOrWhiteSpace(portName))
         {
-            throw new ArgumentNullException(nameof(portName), "Port name cannot be null or empty.");
+            throw new ArgumentException("Port name cannot be empty or whitespace.", nameof(portName));
         }
 
         if (baudRate <= 0)
@@ -173,7 +178,7 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
-    /// Connects to a DAQiFi device over a serial port synchronously using the default baud rate (115200).
+    /// Connects to a DAQiFi device over a serial port synchronously using the default baud rate (9600).
     /// </summary>
     /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>

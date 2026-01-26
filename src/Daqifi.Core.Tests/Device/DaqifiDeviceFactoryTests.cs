@@ -235,20 +235,20 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public async Task ConnectSerialAsync_EmptyPortName_ThrowsArgumentNullException()
+    public async Task ConnectSerialAsync_EmptyPortName_ThrowsArgumentException()
     {
         // Act & Assert
-        var exception = await Assert.ThrowsAsync<ArgumentNullException>(
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
             () => DaqifiDeviceFactory.ConnectSerialAsync(""));
 
         Assert.Equal("portName", exception.ParamName);
     }
 
     [Fact]
-    public async Task ConnectSerialAsync_WhitespacePortName_ThrowsArgumentNullException()
+    public async Task ConnectSerialAsync_WhitespacePortName_ThrowsArgumentException()
     {
         // Act & Assert
-        var exception = await Assert.ThrowsAsync<ArgumentNullException>(
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
             () => DaqifiDeviceFactory.ConnectSerialAsync("   "));
 
         Assert.Equal("portName", exception.ParamName);
@@ -321,10 +321,10 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public void ConnectSerial_EmptyPortName_ThrowsArgumentNullException()
+    public void ConnectSerial_EmptyPortName_ThrowsArgumentException()
     {
         // Act & Assert
-        var exception = Assert.Throws<ArgumentNullException>(
+        var exception = Assert.Throws<ArgumentException>(
             () => DaqifiDeviceFactory.ConnectSerial(""));
 
         Assert.Equal("portName", exception.ParamName);

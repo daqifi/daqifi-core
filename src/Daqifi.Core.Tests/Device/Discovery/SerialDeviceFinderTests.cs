@@ -76,7 +76,7 @@ public class SerialDeviceFinderTests
     }
 
     [Fact]
-    public void SerialDeviceFinder_DefaultConstructor_Uses115200Baud()
+    public void SerialDeviceFinder_DefaultConstructor_Uses9600Baud()
     {
         // Arrange & Act
         using var finder = new SerialDeviceFinder();
