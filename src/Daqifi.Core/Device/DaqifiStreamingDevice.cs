@@ -1,7 +1,9 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device.Network;
+using Daqifi.Core.Device.SdCard;
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,12 +16,15 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations
     {
         /// <summary>
         /// The delay in milliseconds to wait for the WiFi module to restart after applying configuration.
         /// </summary>
         private const int WIFI_MODULE_RESTART_DELAY_MS = 2000;
+
+        private bool _isLoggingToSdCard;
+        private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
 
         /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
@@ -30,6 +35,16 @@ namespace Daqifi.Core.Device
         /// Gets or sets the streaming frequency in Hz (samples per second).
         /// </summary>
         public int StreamingFrequency { get; set; }
+
+        /// <summary>
+        /// Gets a value indicating whether the device is currently logging data to the SD card.
+        /// </summary>
+        public bool IsLoggingToSdCard => _isLoggingToSdCard;
+
+        /// <summary>
+        /// Gets the most recently retrieved list of files on the SD card.
+        /// </summary>
+        public IReadOnlyList<SdCardFileInfo> SdCardFiles => _sdCardFiles;
 
         private readonly NetworkConfiguration _networkConfiguration = new NetworkConfiguration();
 
@@ -193,6 +208,109 @@ namespace Daqifi.Core.Device
 
             Send(ScpiMessageProducer.DisableStorageSd);
             Send(ScpiMessageProducer.EnableNetworkLan);
+        }
+
+        /// <summary>
+        /// Retrieves the list of files stored on the device's SD card.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Stop streaming if active
+            if (IsStreaming)
+            {
+                StopStreaming();
+            }
+
+            IReadOnlyList<string> lines;
+            try
+            {
+                lines = await ExecuteTextCommandAsync(() =>
+                {
+                    PrepareSdInterface();
+                    Send(ScpiMessageProducer.GetSdFileList);
+                }, responseTimeoutMs: 2000, cancellationToken: cancellationToken);
+            }
+            finally
+            {
+                // Restore LAN interface regardless of outcome
+                if (IsConnected)
+                {
+                    PrepareLanInterface();
+                }
+            }
+
+            var files = SdCardFileListParser.ParseFileList(lines);
+            _sdCardFiles = files;
+            return files;
+        }
+
+        /// <summary>
+        /// Starts logging data to the SD card.
+        /// </summary>
+        /// <param name="fileName">
+        /// The name of the log file. If null, a timestamped name is generated automatically
+        /// using the pattern "log_YYYYMMDD_HHMMSS.bin".
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task StartSdCardLoggingAsync(string? fileName = null, CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var logFileName = fileName ?? $"log_{DateTime.Now:yyyyMMdd_HHmmss}.bin";
+
+            Send(ScpiMessageProducer.EnableStorageSd);
+            Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
+            Send(ScpiMessageProducer.SetProtobufStreamFormat);
+            Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
+
+            _isLoggingToSdCard = true;
+            IsStreaming = true;
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Stops logging data to the SD card.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Send(ScpiMessageProducer.StopStreaming);
+            Send(ScpiMessageProducer.DisableStorageSd);
+
+            _isLoggingToSdCard = false;
+            IsStreaming = false;
+
+            return Task.CompletedTask;
         }
     }
 }
