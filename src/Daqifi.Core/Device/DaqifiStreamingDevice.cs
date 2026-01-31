@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Network;
 using Daqifi.Core.Device.SdCard;
 using System;
@@ -63,6 +64,16 @@ namespace Daqifi.Core.Device
         /// <param name="name">The name of the device.</param>
         /// <param name="ipAddress">The IP address of the device, if known.</param>
         public DaqifiStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        {
+            StreamingFrequency = 100;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DaqifiStreamingDevice"/> class with a transport.
+        /// </summary>
+        /// <param name="name">The name of the device.</param>
+        /// <param name="transport">The transport for device communication.</param>
+        public DaqifiStreamingDevice(string name, IStreamTransport transport) : base(name, transport)
         {
             StreamingFrequency = 100;
         }
