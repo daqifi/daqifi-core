@@ -285,8 +285,24 @@ namespace Daqifi.Core.Device
                 // Execute the setup action (sends SCPI commands)
                 setupAction();
 
-                // Wait for responses
-                await Task.Delay(responseTimeoutMs, cancellationToken);
+                // Wait for responses using an inactivity-based timeout.
+                // Instead of a fixed delay, poll for new messages and stop when
+                // no new messages arrive within the timeout window.
+                var lastMessageTime = DateTime.UtcNow;
+                var inactivityTimeout = TimeSpan.FromMilliseconds(responseTimeoutMs);
+                var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
+                var startTime = DateTime.UtcNow;
+
+                while (DateTime.UtcNow - lastMessageTime < inactivityTimeout &&
+                       DateTime.UtcNow - startTime < maxWait)
+                {
+                    var previousCount = collectedLines.Count;
+                    await Task.Delay(50, cancellationToken);
+                    if (collectedLines.Count > previousCount)
+                    {
+                        lastMessageTime = DateTime.UtcNow;
+                    }
+                }
 
                 // Stop the text consumer
                 textConsumer.StopSafely();

@@ -24,6 +24,11 @@ namespace Daqifi.Core.Device.SdCard
         /// <returns>A list of parsed file information objects.</returns>
         public static IReadOnlyList<SdCardFileInfo> ParseFileList(IEnumerable<string> lines)
         {
+            if (lines == null)
+            {
+                throw new ArgumentNullException(nameof(lines));
+            }
+
             var files = new List<SdCardFileInfo>();
 
             foreach (var line in lines)

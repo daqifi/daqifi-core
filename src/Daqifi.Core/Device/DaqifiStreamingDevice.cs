@@ -275,7 +275,11 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var logFileName = fileName ?? $"log_{DateTime.Now:yyyyMMdd_HHmmss}.bin";
+            var logFileName = !string.IsNullOrWhiteSpace(fileName)
+                ? fileName!
+                : $"log_{DateTime.Now:yyyyMMdd_HHmmss}.bin";
+
+            ValidateSdCardFileName(logFileName);
 
             Send(ScpiMessageProducer.EnableStorageSd);
             Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
@@ -304,13 +308,27 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            Send(ScpiMessageProducer.StopStreaming);
+            StopStreaming();
             Send(ScpiMessageProducer.DisableStorageSd);
 
             _isLoggingToSdCard = false;
-            IsStreaming = false;
 
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Validates an SD card filename to prevent SCPI command injection.
+        /// </summary>
+        /// <param name="fileName">The filename to validate.</param>
+        /// <exception cref="ArgumentException">Thrown when the filename contains invalid characters.</exception>
+        private static void ValidateSdCardFileName(string fileName)
+        {
+            if (fileName.IndexOfAny(new[] { '"', '\n', '\r', ';' }) >= 0)
+            {
+                throw new ArgumentException(
+                    "Filename contains invalid characters. Quotes, newlines, and semicolons are not allowed.",
+                    nameof(fileName));
+            }
         }
     }
 }

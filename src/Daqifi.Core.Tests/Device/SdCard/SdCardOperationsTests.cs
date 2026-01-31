@@ -222,6 +222,56 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task StartSdCardLoggingAsync_WithEmptyFileName_GeneratesTimestampedName()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync("");
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            Assert.NotNull(loggingCommand);
+            Assert.Contains("log_", loggingCommand);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithWhitespaceFileName_GeneratesTimestampedName()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync("   ");
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            Assert.NotNull(loggingCommand);
+            Assert.Contains("log_", loggingCommand);
+        }
+
+        [Theory]
+        [InlineData("file\".bin")]
+        [InlineData("file\n.bin")]
+        [InlineData("file\r.bin")]
+        [InlineData("file;.bin")]
+        public async Task StartSdCardLoggingAsync_WithInvalidCharacters_ThrowsArgumentException(string fileName)
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act & Assert
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => device.StartSdCardLoggingAsync(fileName));
+        }
+
+        [Fact]
         public async Task StartSdCardLoggingAsync_WhenDisconnected_Throws()
         {
             // Arrange

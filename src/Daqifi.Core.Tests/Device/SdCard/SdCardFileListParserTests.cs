@@ -106,6 +106,13 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public void ParseFileList_WithNullInput_ThrowsArgumentNullException()
+        {
+            // Act & Assert
+            Assert.Throws<ArgumentNullException>(() => SdCardFileListParser.ParseFileList(null!));
+        }
+
+        [Fact]
         public void ParseFileList_WithInvalidDateFormat_SetsNullDate()
         {
             // Arrange
