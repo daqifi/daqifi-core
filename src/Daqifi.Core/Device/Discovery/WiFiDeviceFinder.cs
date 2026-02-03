@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Network;
 
 namespace Daqifi.Core.Device.Discovery;
 
@@ -245,7 +246,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 SerialNumber = message.DeviceSn.ToString(CultureInfo.InvariantCulture),
                 FirmwareVersion = message.DeviceFwRev ?? string.Empty,
                 IPAddress = remoteEndPoint.Address,
-                MacAddress = GetMacAddressString(message),
+                MacAddress = NetworkAddressHelper.GetMacAddressString(message),
                 Port = (int)message.DevicePort,
                 LocalInterfaceAddress = localInterfaceAddress,
                 Type = GetDeviceType(message.DevicePn),
@@ -260,16 +261,6 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
             // Invalid protobuf message, return null
             return null;
         }
-    }
-
-    /// <summary>
-    /// Extracts MAC address string from protobuf message.
-    /// </summary>
-    private static string GetMacAddressString(DaqifiOutMessage message)
-    {
-        return message.MacAddr.Length > 0
-            ? BitConverter.ToString(message.MacAddr.ToByteArray())
-            : string.Empty;
     }
 
     /// <summary>

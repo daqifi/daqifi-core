@@ -1,3 +1,5 @@
+using Daqifi.Core.Device.Network;
+
 namespace Daqifi.Core.Device;
 
 /// <summary>
@@ -123,15 +125,16 @@ public class DeviceMetadata
             WifiInfrastructureMode = message.WifiInfMode;
         }
 
-        if (message.IpAddr != null && message.IpAddr.Length > 0)
+        var ip = NetworkAddressHelper.GetIpAddressString(message);
+        if (ip.Length > 0)
         {
-            var ipBytes = message.IpAddr.ToByteArray();
-            IpAddress = string.Join(".", ipBytes);
+            IpAddress = ip;
         }
 
-        if (message.MacAddr != null && message.MacAddr.Length > 0)
+        var mac = NetworkAddressHelper.GetMacAddressString(message);
+        if (mac.Length > 0)
         {
-            MacAddress = BitConverter.ToString(message.MacAddr.ToByteArray());
+            MacAddress = mac;
         }
 
         // Update channel counts from message
