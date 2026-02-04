@@ -44,4 +44,10 @@ public interface IMessageConsumer<T> : IDisposable
     /// <param name="timeoutMs">Maximum time to wait for processing to complete in milliseconds.</param>
     /// <returns>True if stopped cleanly, false if timeout occurred.</returns>
     bool StopSafely(int timeoutMs = 1000);
+
+    /// <summary>
+    /// Clears any buffered data from the stream and internal buffers.
+    /// Useful for WiFi devices that may have residual data on connection or during reconnection.
+    /// </summary>
+    void ClearBuffer();
 }
