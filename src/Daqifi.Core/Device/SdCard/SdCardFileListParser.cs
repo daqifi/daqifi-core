@@ -40,6 +40,13 @@ namespace Daqifi.Core.Device.SdCard
 
                 var path = line.Trim();
 
+                // If a file size is present after the path, keep only the first token.
+                var tokenEnd = path.IndexOfAny(new[] { ' ', '\t' });
+                if (tokenEnd > 0)
+                {
+                    path = path.Substring(0, tokenEnd);
+                }
+
                 // Strip "Daqifi/" directory prefix if present
                 if (path.StartsWith(DaqifiDirectoryPrefix, StringComparison.OrdinalIgnoreCase))
                 {

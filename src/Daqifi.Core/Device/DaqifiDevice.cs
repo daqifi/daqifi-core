@@ -259,14 +259,34 @@ namespace Daqifi.Core.Device
             cancellationToken.ThrowIfCancellationRequested();
 
             var collectedLines = new List<string>();
+            var stream = _transport.Stream;
+            int? originalReadTimeout = null;
 
             try
             {
+                if (stream.CanTimeout)
+                {
+                    try
+                    {
+                        originalReadTimeout = stream.ReadTimeout;
+                        stream.ReadTimeout = Math.Min(500, Math.Max(100, responseTimeoutMs / 4));
+                    }
+                    catch
+                    {
+                        // Some streams may not allow setting read timeout; ignore.
+                        originalReadTimeout = null;
+                    }
+                }
+
                 // Stop the protobuf consumer
                 if (_messageConsumer != null)
                 {
                     _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    _messageConsumer.StopSafely();
+                    var stopped = _messageConsumer.StopSafely(timeoutMs: 6000);
+                    if (!stopped)
+                    {
+                        _messageConsumer.Stop();
+                    }
                 }
 
                 // Create a temporary text consumer on the same stream
@@ -292,15 +312,21 @@ namespace Daqifi.Core.Device
                 var inactivityTimeout = TimeSpan.FromMilliseconds(responseTimeoutMs);
                 var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
                 var startTime = DateTime.UtcNow;
+                var hasReceivedAny = false;
 
-                while (DateTime.UtcNow - lastMessageTime < inactivityTimeout &&
-                       DateTime.UtcNow - startTime < maxWait)
+                while (DateTime.UtcNow - startTime < maxWait)
                 {
                     var previousCount = collectedLines.Count;
                     await Task.Delay(50, cancellationToken);
                     if (collectedLines.Count > previousCount)
                     {
                         lastMessageTime = DateTime.UtcNow;
+                        hasReceivedAny = true;
+                    }
+
+                    if (hasReceivedAny && DateTime.UtcNow - lastMessageTime >= inactivityTimeout)
+                    {
+                        break;
                     }
                 }
 
@@ -309,6 +335,18 @@ namespace Daqifi.Core.Device
             }
             finally
             {
+                if (originalReadTimeout.HasValue && stream.CanTimeout)
+                {
+                    try
+                    {
+                        stream.ReadTimeout = originalReadTimeout.Value;
+                    }
+                    catch
+                    {
+                        // Ignore failures when restoring timeout.
+                    }
+                }
+
                 // Restart the protobuf consumer
                 if (_messageConsumer != null)
                 {

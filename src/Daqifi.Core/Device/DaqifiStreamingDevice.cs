@@ -250,7 +250,7 @@ namespace Daqifi.Core.Device
                 {
                     PrepareSdInterface();
                     Send(ScpiMessageProducer.GetSdFileList);
-                }, responseTimeoutMs: 2000, cancellationToken: cancellationToken);
+                }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
             }
             finally
             {
