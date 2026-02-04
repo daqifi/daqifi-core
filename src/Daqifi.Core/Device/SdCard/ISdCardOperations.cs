@@ -1,0 +1,52 @@
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+
+#nullable enable
+
+namespace Daqifi.Core.Device.SdCard
+{
+    /// <summary>
+    /// Defines operations for interacting with a device's SD card for data logging and file management.
+    /// </summary>
+    public interface ISdCardOperations
+    {
+        /// <summary>
+        /// Gets a value indicating whether the device is currently logging data to the SD card.
+        /// </summary>
+        bool IsLoggingToSdCard { get; }
+
+        /// <summary>
+        /// Gets the most recently retrieved list of files on the SD card.
+        /// </summary>
+        IReadOnlyList<SdCardFileInfo> SdCardFiles { get; }
+
+        /// <summary>
+        /// Retrieves the list of files stored on the device's SD card.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Starts logging data to the SD card.
+        /// </summary>
+        /// <param name="fileName">
+        /// The name of the log file. If null, a timestamped name is generated automatically
+        /// using the pattern "log_YYYYMMDD_HHMMSS.bin".
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        Task StartSdCardLoggingAsync(string? fileName = null, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Stops logging data to the SD card.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default);
+    }
+}

@@ -383,7 +383,7 @@ public static class DaqifiDeviceFactory
 
             // Step 2: Create the device with the transport
             // Note: Once created, the device owns the transport and will dispose it
-            device = new DaqifiDevice(options.DeviceName, transport);
+            device = new DaqifiStreamingDevice(options.DeviceName, transport);
 
             // Step 3: Connect the device (starts message producers/consumers)
             device.Connect();

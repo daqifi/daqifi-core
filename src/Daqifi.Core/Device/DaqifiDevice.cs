@@ -7,6 +7,7 @@ using Daqifi.Core.Device.Protocol;
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 
 #nullable enable
@@ -228,6 +229,133 @@ namespace Daqifi.Core.Device
                 // This will be enhanced in later steps when we add transport abstraction
                 throw new NotImplementedException("Direct message sending without message producer is not yet implemented. Use constructor with Stream parameter.");
             }
+        }
+
+        /// <summary>
+        /// Executes a text-based command by temporarily switching from the protobuf consumer to a
+        /// line-based text consumer, collecting text responses, then restoring the protobuf consumer.
+        /// </summary>
+        /// <param name="setupAction">An action that sends SCPI commands to the device while the text consumer is active.</param>
+        /// <param name="responseTimeoutMs">The time in milliseconds to wait for text responses after sending commands.</param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A list of text lines received from the device.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        protected virtual async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            Action setupAction,
+            int responseTimeoutMs = 1000,
+            CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            if (_transport == null)
+            {
+                throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var collectedLines = new List<string>();
+            var stream = _transport.Stream;
+            int? originalReadTimeout = null;
+
+            try
+            {
+                if (stream.CanTimeout)
+                {
+                    try
+                    {
+                        originalReadTimeout = stream.ReadTimeout;
+                        stream.ReadTimeout = Math.Min(500, Math.Max(100, responseTimeoutMs / 4));
+                    }
+                    catch
+                    {
+                        // Some streams may not allow setting read timeout; ignore.
+                        originalReadTimeout = null;
+                    }
+                }
+
+                // Stop the protobuf consumer
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                    var stopped = _messageConsumer.StopSafely(timeoutMs: 6000);
+                    if (!stopped)
+                    {
+                        _messageConsumer.Stop();
+                    }
+                }
+
+                // Create a temporary text consumer on the same stream
+                using var textConsumer = new StreamMessageConsumer<string>(
+                    _transport.Stream,
+                    new LineBasedMessageParser());
+
+                textConsumer.MessageReceived += (_, e) =>
+                {
+                    collectedLines.Add(e.Message.Data);
+                };
+
+                textConsumer.Start();
+                await Task.Delay(50, cancellationToken);
+
+                // Execute the setup action (sends SCPI commands)
+                setupAction();
+
+                // Wait for responses using an inactivity-based timeout.
+                // Instead of a fixed delay, poll for new messages and stop when
+                // no new messages arrive within the timeout window.
+                var lastMessageTime = DateTime.UtcNow;
+                var inactivityTimeout = TimeSpan.FromMilliseconds(responseTimeoutMs);
+                var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
+                var startTime = DateTime.UtcNow;
+                var hasReceivedAny = false;
+
+                while (DateTime.UtcNow - startTime < maxWait)
+                {
+                    var previousCount = collectedLines.Count;
+                    await Task.Delay(50, cancellationToken);
+                    if (collectedLines.Count > previousCount)
+                    {
+                        lastMessageTime = DateTime.UtcNow;
+                        hasReceivedAny = true;
+                    }
+
+                    if (hasReceivedAny && DateTime.UtcNow - lastMessageTime >= inactivityTimeout)
+                    {
+                        break;
+                    }
+                }
+
+                // Stop the text consumer
+                textConsumer.StopSafely();
+            }
+            finally
+            {
+                if (originalReadTimeout.HasValue && stream.CanTimeout)
+                {
+                    try
+                    {
+                        stream.ReadTimeout = originalReadTimeout.Value;
+                    }
+                    catch
+                    {
+                        // Ignore failures when restoring timeout.
+                    }
+                }
+
+                // Restart the protobuf consumer
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.Start();
+                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                }
+            }
+
+            return collectedLines;
         }
 
         /// <summary>
