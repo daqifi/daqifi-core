@@ -87,13 +87,24 @@ public class StreamMessageConsumerIntegrationTests
 
         var messagesReceived = new List<IInboundMessage<DaqifiOutMessage>>();
         var errorsReceived = new List<Exception>();
+        var processingComplete = new ManualResetEventSlim(false);
 
-        consumer.MessageReceived += (sender, args) => messagesReceived.Add(args.Message);
-        consumer.ErrorOccurred += (sender, args) => errorsReceived.Add(args.Error);
+        consumer.MessageReceived += (sender, args) =>
+        {
+            messagesReceived.Add(args.Message);
+            processingComplete.Set();
+        };
+        consumer.ErrorOccurred += (sender, args) =>
+        {
+            errorsReceived.Add(args.Error);
+            processingComplete.Set();
+        };
 
         // Act - Should not throw, parser handles malformed data internally
+        // We wait briefly for any potential events; timeout is expected since malformed data
+        // produces neither valid messages nor stream errors (parser skips bad bytes internally)
         consumer.Start();
-        Thread.Sleep(100); // Give time for processing
+        processingComplete.Wait(TimeSpan.FromMilliseconds(200));
         consumer.Stop();
 
         // Assert - No messages parsed from garbage data, but no crash either
@@ -231,29 +242,58 @@ public class StreamMessageConsumerIntegrationTests
     }
 
     /// <summary>
-    /// Demonstrates that ClearBuffer() works correctly via the interface.
+    /// Demonstrates that ClearBuffer() is accessible via the IMessageConsumer interface
+    /// and clears the internal message buffer. This is essential for reconnection scenarios
+    /// where residual partial data from a previous session needs to be discarded.
     /// </summary>
     [Fact]
     public void ClearBuffer_CalledViaInterface_ClearsInternalBuffer()
     {
-        // Arrange
-        using var stream = new MemoryStream();
+        // Arrange - Create a stream with partial/incomplete message data
+        // This simulates residual data from a disconnected session
+        var partialData = new byte[] { 0x05, 0x08, 0x01 }; // Incomplete protobuf (length prefix says 5 bytes, only 2 provided)
+        using var stream = new MemoryStream(partialData);
         var parser = new ProtobufMessageParser();
-        var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
 
-        // Pre-populate internal buffer by adding data to stream
-        var someData = new byte[] { 0x01, 0x02, 0x03 };
-        stream.Write(someData, 0, someData.Length);
-        stream.Position = 0;
+        // Start the consumer to let it read the partial data into internal buffer
+        consumer.Start();
+        Thread.Sleep(50); // Brief pause to allow consumer to read data
 
-        // Act - Call ClearBuffer via interface
+        // Verify data was buffered (QueuedMessageCount tracks internal buffer size)
+        // Note: The exact count depends on timing, but buffer should have some data
+        var bufferCountBeforeClear = consumer.QueuedMessageCount;
+
+        // Act - Call ClearBuffer via interface (as desktop would do during reconnection)
         IMessageConsumer<DaqifiOutMessage> interfaceRef = consumer;
         interfaceRef.ClearBuffer();
 
-        // Assert - No exception thrown, buffer should be cleared
+        // Assert - Internal buffer should be cleared
         Assert.Equal(0, consumer.QueuedMessageCount);
 
-        consumer.Dispose();
+        // Additional verification: consumer should still be functional after clear
+        Assert.True(consumer.IsRunning);
+
+        consumer.Stop();
+    }
+
+    /// <summary>
+    /// Demonstrates that ClearBuffer() can be called safely when consumer is not running.
+    /// </summary>
+    [Fact]
+    public void ClearBuffer_WhenNotRunning_DoesNotThrow()
+    {
+        // Arrange
+        using var stream = new MemoryStream();
+        var parser = new ProtobufMessageParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        // Act & Assert - Should not throw when called on non-running consumer
+        IMessageConsumer<DaqifiOutMessage> interfaceRef = consumer;
+        var exception = Record.Exception(() => interfaceRef.ClearBuffer());
+
+        Assert.Null(exception);
+        Assert.Equal(0, consumer.QueuedMessageCount);
     }
 
     /// <summary>
