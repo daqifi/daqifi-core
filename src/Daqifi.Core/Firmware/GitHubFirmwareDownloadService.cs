@@ -111,7 +111,10 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         FirmwareReleaseInfo? release = null;
         foreach (var element in releases)
         {
-            var tag = element.GetProperty("tag_name").GetString()?.Trim();
+            if (element.TryGetProperty("draft", out var draftProp) && draftProp.GetBoolean())
+                continue;
+
+            var tag = element.TryGetProperty("tag_name", out var tagProp) ? tagProp.GetString()?.Trim() : null;
             if (!string.Equals(tag, tagName, StringComparison.OrdinalIgnoreCase)) continue;
 
             release = ParseReleaseElement(element, ".hex");
@@ -133,10 +136,9 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     {
         var releases = await GetWifiReleasesAsync(cancellationToken);
         var release = FindLatestRelease(releases, includePreRelease: false, assetExtension: null);
-        if (release == null) return null;
+        if (release?.ZipballUrl == null) return null;
 
-        var zipballUrl = GetZipballUrl(releases, release.TagName);
-        if (zipballUrl == null) return null;
+        var zipballUrl = release.ZipballUrl;
 
         progress?.Report(0);
 
@@ -176,6 +178,21 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         }
 
         ZipFile.ExtractToDirectory(zipFilePath, extractPath);
+
+        // Validate extracted entries don't escape the target directory (Zip Slip protection)
+        var fullExtractPath = Path.GetFullPath(extractPath);
+        foreach (var entry in Directory.GetFileSystemEntries(extractPath, "*", SearchOption.AllDirectories))
+        {
+            if (!Path.GetFullPath(entry).StartsWith(fullExtractPath, StringComparison.Ordinal))
+            {
+                Directory.Delete(extractPath, true);
+                throw new InvalidOperationException(
+                    $"Zip archive contains path traversal entry: {entry}");
+            }
+        }
+
+        // Clean up the downloaded zip file
+        File.Delete(zipFilePath);
         progress?.Report(100);
 
         return (extractPath, release.TagName);
@@ -262,6 +279,9 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
             var release = ParseReleaseElement(element, assetExtension);
             if (release == null) continue;
 
+            // Only consider releases that have a downloadable asset when an extension is specified
+            if (assetExtension != null && release.DownloadUrl == null) continue;
+
             if (best == null || release.Version > best.Version)
             {
                 best = release;
@@ -273,7 +293,8 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
 
     private static FirmwareReleaseInfo? ParseReleaseElement(JsonElement element, string? assetExtension)
     {
-        var tagName = element.GetProperty("tag_name").GetString()?.Trim();
+        if (!element.TryGetProperty("tag_name", out var tagProp)) return null;
+        var tagName = tagProp.GetString()?.Trim();
         if (string.IsNullOrEmpty(tagName)) return null;
 
         if (!FirmwareVersion.TryParse(tagName, out var version)) return null;
@@ -300,16 +321,19 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         {
             foreach (var asset in assetsProp.EnumerateArray())
             {
-                var name = asset.GetProperty("name").GetString();
+                if (!asset.TryGetProperty("name", out var nameProp)) continue;
+                var name = nameProp.GetString();
                 if (name != null && name.EndsWith(assetExtension, StringComparison.OrdinalIgnoreCase))
                 {
-                    downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                    downloadUrl = asset.TryGetProperty("browser_download_url", out var urlProp) ? urlProp.GetString() : null;
                     assetFileName = name;
                     assetSize = asset.TryGetProperty("size", out var sizeProp) ? sizeProp.GetInt64() : null;
                     break;
                 }
             }
         }
+
+        var zipballUrl = element.TryGetProperty("zipball_url", out var zipProp) ? zipProp.GetString() : null;
 
         return new FirmwareReleaseInfo
         {
@@ -320,22 +344,9 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
             DownloadUrl = downloadUrl,
             AssetFileName = assetFileName,
             AssetSize = assetSize,
-            PublishedAt = publishedAt
+            PublishedAt = publishedAt,
+            ZipballUrl = zipballUrl
         };
-    }
-
-    private static string? GetZipballUrl(List<JsonElement> releases, string tagName)
-    {
-        foreach (var element in releases)
-        {
-            var tag = element.GetProperty("tag_name").GetString()?.Trim();
-            if (string.Equals(tag, tagName, StringComparison.OrdinalIgnoreCase))
-            {
-                return element.TryGetProperty("zipball_url", out var zipProp) ? zipProp.GetString() : null;
-            }
-        }
-
-        return null;
     }
 
     private async Task<string> DownloadFileAsync(
@@ -346,8 +357,15 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         IProgress<int>? progress,
         CancellationToken cancellationToken)
     {
+        // Sanitize fileName to prevent path traversal
+        var safeName = Path.GetFileName(fileName);
+        if (string.IsNullOrEmpty(safeName))
+        {
+            throw new ArgumentException("Invalid file name.", nameof(fileName));
+        }
+
         Directory.CreateDirectory(destinationDirectory);
-        var filePath = Path.Combine(destinationDirectory, fileName);
+        var filePath = Path.Combine(destinationDirectory, safeName);
 
         using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();

@@ -44,4 +44,9 @@ public sealed class FirmwareReleaseInfo
     /// The release publication date.
     /// </summary>
     public DateTimeOffset? PublishedAt { get; init; }
+
+    /// <summary>
+    /// URL to download the release source as a zip archive.
+    /// </summary>
+    public string? ZipballUrl { get; init; }
 }
