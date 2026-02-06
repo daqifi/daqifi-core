@@ -60,7 +60,7 @@ namespace Daqifi.Core.Device.SdCard
                     continue;
                 }
 
-                var createdDate = TryParseDateFromFileName(fileName);
+                var createdDate = TryParseDateFromLogFileName(fileName);
                 files.Add(new SdCardFileInfo(fileName, createdDate));
             }
 
@@ -72,7 +72,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <param name="fileName">The filename to parse.</param>
         /// <returns>The parsed date, or null if the filename does not match the expected pattern.</returns>
-        private static DateTime? TryParseDateFromFileName(string fileName)
+        internal static DateTime? TryParseDateFromLogFileName(string fileName)
         {
             var nameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
 
