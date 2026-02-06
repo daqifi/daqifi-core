@@ -293,6 +293,154 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 () => device.StopSdCardLoggingAsync());
         }
 
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WhenConnected_SendsCorrectCommands()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
+            device.Connect();
+
+            // Act
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            // Assert - verify SD interface prep, delete, and file list refresh via setup action
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // DisableNetworkLan (PrepareSdInterface)
+            Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands); // EnableStorageSd (PrepareSdInterface)
+            Assert.Contains("SYSTem:STORage:SD:DELete \"data.bin\"", sentCommands); // Delete
+            Assert.Contains("SYSTem:STORage:SD:LIST?", sentCommands); // File list refresh
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_UpdatesSdCardFilesProperty()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/remaining.bin" };
+            device.Connect();
+
+            // Act
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            // Assert
+            Assert.Single(device.SdCardFiles);
+            Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_RestoresLanInterface()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>();
+            device.Connect();
+
+            // Act
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands); // DisableStorageSd (PrepareLanInterface)
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (PrepareLanInterface)
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WhenDisconnected_Throws()
+        {
+            // Arrange
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            // Act & Assert
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WhenLogging_Throws()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            await device.StartSdCardLoggingAsync("test.bin");
+
+            // Act & Assert
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public async Task DeleteSdCardFileAsync_WithNullOrEmptyFileName_ThrowsArgumentException(string? fileName)
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act & Assert
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => device.DeleteSdCardFileAsync(fileName!));
+        }
+
+        [Theory]
+        [InlineData("file\".bin")]
+        [InlineData("file\n.bin")]
+        [InlineData("file\r.bin")]
+        [InlineData("file;.bin")]
+        public async Task DeleteSdCardFileAsync_WithInvalidCharacters_ThrowsArgumentException(string fileName)
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act & Assert
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => device.DeleteSdCardFileAsync(fileName));
+        }
+
+        [Fact]
+        public async Task FormatSdCardAsync_WhenConnected_SendsCorrectCommands()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.FormatSdCardAsync();
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(2, sentCommands.Count);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[1]);
+        }
+
+        [Fact]
+        public async Task FormatSdCardAsync_WhenDisconnected_Throws()
+        {
+            // Arrange
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            // Act & Assert
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.FormatSdCardAsync());
+        }
+
+        [Fact]
+        public async Task FormatSdCardAsync_WhenLogging_Throws()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            await device.StartSdCardLoggingAsync("test.bin");
+
+            // Act & Assert
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.FormatSdCardAsync());
+        }
+
         /// <summary>
         /// A testable version of DaqifiStreamingDevice that captures sent messages
         /// and returns canned text responses for ExecuteTextCommandAsync.

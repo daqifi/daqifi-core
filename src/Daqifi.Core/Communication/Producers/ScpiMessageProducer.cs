@@ -1,3 +1,4 @@
+using System;
 using Daqifi.Core.Communication.Messages;
 
 namespace Daqifi.Core.Communication.Producers;
@@ -138,6 +139,115 @@ public class ScpiMessageProducer
     {
         return new ScpiMessage($"SYSTem:STORage:SD:LOGging \"{fileName}\"");
     }
+
+    /// <summary>
+    /// Creates a command message to delete a file from the SD card.
+    /// </summary>
+    /// <param name="fileName">The name of the file to delete.</param>
+    /// <remarks>
+    /// Command: SYSTem:STORage:SD:DELete "filename"
+    /// Example: messageProducer.Send(ScpiMessageProducer.DeleteSdFile("data.bin"));
+    /// </remarks>
+    public static IOutboundMessage<string> DeleteSdFile(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
+        }
+
+        return new ScpiMessage($"SYSTem:STORage:SD:DELete \"{fileName}\"");
+    }
+
+    /// <summary>
+    /// Creates a command message to format the entire SD card.
+    /// </summary>
+    /// <remarks>
+    /// Warning: This is a destructive operation that erases all data on the SD card.
+    /// Command: SYSTem:STORage:SD:FORmat
+    /// Example: messageProducer.Send(ScpiMessageProducer.FormatSdCard);
+    /// </remarks>
+    public static IOutboundMessage<string> FormatSdCard => new ScpiMessage("SYSTem:STORage:SD:FORmat");
+
+    /// <summary>
+    /// Creates a command message to set the maximum file size before auto-splitting on the SD card.
+    /// </summary>
+    /// <param name="bytes">The maximum file size in bytes. Use 0 for the default (3.9 GB).</param>
+    /// <remarks>
+    /// Command: SYSTem:STORage:SD:MAXSize bytes
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetSdMaxFileSize(1073741824)); // 1 GB
+    /// </remarks>
+    public static IOutboundMessage<string> SetSdMaxFileSize(long bytes)
+    {
+        if (bytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Max file size cannot be negative.");
+        }
+
+        return new ScpiMessage($"SYSTem:STORage:SD:MAXSize {bytes}");
+    }
+
+    /// <summary>
+    /// Creates a query message to get the current maximum file size setting for the SD card.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:STORage:SD:MAXSize?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdMaxFileSize);
+    /// </remarks>
+    public static IOutboundMessage<string> GetSdMaxFileSize => new ScpiMessage("SYSTem:STORage:SD:MAXSize?");
+
+    /// <summary>
+    /// Creates a command message to run an SD card write speed benchmark.
+    /// </summary>
+    /// <param name="size">The size in bytes to benchmark.</param>
+    /// <remarks>
+    /// Command: SYSTem:STORage:SD:BENCHmark size
+    /// Example: messageProducer.Send(ScpiMessageProducer.RunSdBenchmark(1048576)); // 1 MB
+    /// </remarks>
+    public static IOutboundMessage<string> RunSdBenchmark(long size)
+    {
+        if (size <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(size), size, "Benchmark size must be positive.");
+        }
+
+        return new ScpiMessage($"SYSTem:STORage:SD:BENCHmark {size}");
+    }
+
+    /// <summary>
+    /// Creates a query message to get the SD card benchmark results.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:STORage:SD:BENCHmark?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdBenchmarkResults);
+    /// </remarks>
+    public static IOutboundMessage<string> GetSdBenchmarkResults => new ScpiMessage("SYSTem:STORage:SD:BENCHmark?");
+
+    /// <summary>
+    /// Creates a command message to set the streaming target interface.
+    /// </summary>
+    /// <param name="streamInterface">The target interface for streaming data.</param>
+    /// <remarks>
+    /// Command: SYSTem:STReam:INTerface value
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
+    /// </remarks>
+    public static IOutboundMessage<string> SetStreamInterface(StreamInterface streamInterface)
+    {
+        if (!Enum.IsDefined(typeof(StreamInterface), streamInterface))
+        {
+            throw new ArgumentOutOfRangeException(nameof(streamInterface), streamInterface, "Unknown stream interface.");
+        }
+
+        return new ScpiMessage($"SYSTem:STReam:INTerface {(int)streamInterface}");
+    }
+
+    /// <summary>
+    /// Creates a query message to get the current streaming target interface.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:STReam:INTerface?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamInterface);
+    /// </remarks>
+    public static IOutboundMessage<string> GetStreamInterface => new ScpiMessage("SYSTem:STReam:INTerface?");
 
     /// <summary>
     /// Creates a command message to start data streaming at the specified frequency.
