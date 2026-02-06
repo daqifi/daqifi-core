@@ -58,6 +58,12 @@ namespace Daqifi.Core.Device
         private IMessageProducer<string>? _messageProducer;
         private IMessageConsumer<DaqifiOutMessage>? _messageConsumer;
         private readonly IStreamTransport? _transport;
+
+        /// <summary>
+        /// Gets the transport used for device communication, if available.
+        /// </summary>
+        protected IStreamTransport? Transport => _transport;
+
         private IProtocolHandler? _protocolHandler;
         private bool _disposed;
         private bool _isInitialized;
@@ -228,6 +234,61 @@ namespace Daqifi.Core.Device
                 // Fallback for backward compatibility - no implementation yet
                 // This will be enhanced in later steps when we add transport abstraction
                 throw new NotImplementedException("Direct message sending without message producer is not yet implemented. Use constructor with Stream parameter.");
+            }
+        }
+
+        /// <summary>
+        /// Temporarily pauses the protobuf message consumer to allow raw byte access to the
+        /// underlying transport stream. The consumer is restored when the returned action completes
+        /// or is disposed.
+        /// </summary>
+        /// <param name="rawAction">
+        /// An async function that receives the transport stream and performs raw I/O.
+        /// The protobuf consumer will not read from the stream while this action is executing.
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        protected virtual async Task ExecuteRawCaptureAsync(
+            Func<Stream, CancellationToken, Task> rawAction,
+            CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            if (_transport == null)
+            {
+                throw new InvalidOperationException("ExecuteRawCaptureAsync requires a transport-based connection.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                // Stop the protobuf consumer so it doesn't compete for stream bytes
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                    var stopped = _messageConsumer.StopSafely(timeoutMs: 6000);
+                    if (!stopped)
+                    {
+                        _messageConsumer.Stop();
+                    }
+                }
+
+                // Hand the stream to the caller for raw I/O
+                await rawAction(_transport.Stream, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Restart the protobuf consumer
+                if (_messageConsumer != null)
+                {
+                    _messageConsumer.Start();
+                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                }
             }
         }
 

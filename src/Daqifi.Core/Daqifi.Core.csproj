@@ -30,6 +30,7 @@
     <PackageReference Include="Google.Protobuf" Version="3.33.5" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.102" PrivateAssets="All"/>
     <PackageReference Include="System.IO.Ports" Version="10.0.2" />
+    <InternalsVisibleTo Include="Daqifi.Core.Tests" />
   </ItemGroup>
 
 

@@ -5,6 +5,8 @@ using Daqifi.Core.Device.Network;
 using Daqifi.Core.Device.SdCard;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -41,6 +43,12 @@ namespace Daqifi.Core.Device
         /// Gets a value indicating whether the device is currently logging data to the SD card.
         /// </summary>
         public bool IsLoggingToSdCard => _isLoggingToSdCard;
+
+        /// <summary>
+        /// Gets a value indicating whether the device is connected over USB (serial transport).
+        /// SD card file downloads require a USB connection because the SD card and WiFi/LAN share the SPI bus.
+        /// </summary>
+        public virtual bool IsUsbConnection => Transport is SerialStreamTransport;
 
         /// <summary>
         /// Gets the most recently retrieved list of files on the SD card.
@@ -409,6 +417,140 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.FormatSdCard);
 
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Downloads a file from the device's SD card over USB.
+        /// </summary>
+        /// <param name="fileName">The name of the file to download.</param>
+        /// <param name="destinationStream">The stream to write file contents to.</param>
+        /// <param name="progress">Optional progress reporting.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>Metadata about the downloaded file.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
+            string fileName,
+            Stream destinationStream,
+            IProgress<SdCardTransferProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            if (!IsUsbConnection)
+            {
+                throw new InvalidOperationException(
+                    "SD card file download is only supported over USB (serial) connections. " +
+                    "The SD card and WiFi/LAN share the SPI bus, so file downloads require a USB connection.");
+            }
+
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
+            }
+
+            ValidateSdCardFileName(fileName);
+            ArgumentNullException.ThrowIfNull(destinationStream);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_isLoggingToSdCard)
+            {
+                throw new InvalidOperationException("Cannot download files while logging to SD card.");
+            }
+
+            // Stop streaming if active
+            if (IsStreaming)
+            {
+                StopStreaming();
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            long fileSize = 0;
+
+            try
+            {
+                await ExecuteRawCaptureAsync(async (stream, ct) =>
+                {
+                    // Prepare SD card interface
+                    PrepareSdInterface();
+
+                    // Small delay to let the interface switch settle
+                    await Task.Delay(50, ct).ConfigureAwait(false);
+
+                    // Send the SCPI command to request the file
+                    Send(ScpiMessageProducer.GetSdFile(fileName));
+
+                    // Receive the file data
+                    var receiver = new SdCardFileReceiver(stream);
+                    var bytesReceived = await receiver.ReceiveAsync(
+                        destinationStream,
+                        fileName,
+                        progress,
+                        timeout: TimeSpan.FromMinutes(30),
+                        cancellationToken: ct).ConfigureAwait(false);
+
+                    fileSize = bytesReceived;
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                // Restore LAN interface
+                if (IsConnected)
+                {
+                    try
+                    {
+                        PrepareLanInterface();
+                    }
+                    catch
+                    {
+                        // Best-effort restoration; the device may have disconnected
+                    }
+                }
+            }
+
+            stopwatch.Stop();
+            return new SdCardDownloadResult(fileName, fileSize, stopwatch.Elapsed);
+        }
+
+        /// <summary>
+        /// Downloads a file from the device's SD card over USB to a temporary file.
+        /// </summary>
+        /// <param name="fileName">The name of the file to download.</param>
+        /// <param name="progress">Optional progress reporting.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>Metadata about the downloaded file, including the local file path.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
+            string fileName,
+            IProgress<SdCardTransferProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}.bin");
+            try
+            {
+                await using var fileStream = new FileStream(
+                    tempPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    bufferSize: 65536,
+                    useAsync: true);
+
+                var result = await DownloadSdCardFileAsync(fileName, fileStream, progress, cancellationToken)
+                    .ConfigureAwait(false);
+
+                return result with { FilePath = tempPath };
+            }
+            catch
+            {
+                try { File.Delete(tempPath); } catch { /* ignore cleanup failures */ }
+                throw;
+            }
         }
 
         /// <summary>
