@@ -82,7 +82,7 @@ public class Pic32BootloaderProtocolTests
     [Fact]
     public void ParseHexFile_DelegatesToParser()
     {
-        var lines = new[] { ":020000041D00C1", ":00000001FF" };
+        var lines = new[] { ":020000041D00DD", ":00000001FF" };
         var result = _protocol.ParseHexFile(lines);
 
         Assert.Equal(2, result.Count);
@@ -95,8 +95,8 @@ public class Pic32BootloaderProtocolTests
 
         var lines = new[]
         {
-            ":020000040001FA",                                   // Extended address 0x0001
-            ":10000000AABBCCDDEEFF001122334455667788990F",       // Data at 0x00010000 - protected
+            ":020000040001F9",                                   // Extended address 0x0001
+            ":10000000AABBCCDDEEFF00112233445566778899F8",       // Data at 0x00010000 - protected
             ":00000001FF"                                        // EOF
         };
 

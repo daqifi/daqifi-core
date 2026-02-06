@@ -20,7 +20,6 @@ public class IntelHexParser
 
     private readonly uint _beginProtectedAddress;
     private readonly uint _endProtectedAddress;
-    private ushort _baseAddress;
 
     /// <summary>
     /// Creates a new Intel HEX parser with the default protected memory range.
@@ -48,12 +47,12 @@ public class IntelHexParser
     /// <param name="lines">The lines from the HEX file (each starting with ':').</param>
     /// <returns>A list of byte arrays, each representing one hex record.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="lines"/> is null.</exception>
-    /// <exception cref="InvalidDataException">Thrown when a line is malformed.</exception>
+    /// <exception cref="InvalidDataException">Thrown when a line is malformed or has an invalid checksum.</exception>
     public List<byte[]> ParseHexRecords(string[] lines)
     {
         ArgumentNullException.ThrowIfNull(lines);
 
-        _baseAddress = 0;
+        ushort baseAddress = 0;
         var hexRecords = new List<byte[]>();
 
         foreach (var line in lines)
@@ -66,8 +65,11 @@ public class IntelHexParser
             ValidateLine(line);
 
             var hexLine = ConvertLineToBytes(line);
+            ValidateChecksum(hexLine, line);
 
-            if (IsProtectedHexRecord(hexLine))
+            baseAddress = UpdateBaseAddress(hexLine, baseAddress);
+
+            if (IsProtectedHexRecord(hexLine, baseAddress))
             {
                 continue;
             }
@@ -85,12 +87,12 @@ public class IntelHexParser
     /// <param name="lines">The lines from the HEX file (each starting with ':').</param>
     /// <returns>A list of <see cref="HexFileRecord"/> with computed addresses.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="lines"/> is null.</exception>
-    /// <exception cref="InvalidDataException">Thrown when a line is malformed.</exception>
+    /// <exception cref="InvalidDataException">Thrown when a line is malformed or has an invalid checksum.</exception>
     public List<HexFileRecord> ParseRecords(string[] lines)
     {
         ArgumentNullException.ThrowIfNull(lines);
 
-        _baseAddress = 0;
+        ushort baseAddress = 0;
         var records = new List<HexFileRecord>();
 
         foreach (var line in lines)
@@ -103,17 +105,12 @@ public class IntelHexParser
             ValidateLine(line);
 
             var hexLine = ConvertLineToBytes(line);
+            ValidateChecksum(hexLine, line);
             var recordType = hexLine[3];
 
-            // Update base address for extended linear address records
-            if (recordType == 0x04)
-            {
-                var dataArray = hexLine.Skip(4).Take(hexLine.Length - 5).ToArray();
-                if (BitConverter.IsLittleEndian) Array.Reverse(dataArray);
-                _baseAddress = BitConverter.ToUInt16(dataArray, 0);
-            }
+            baseAddress = UpdateBaseAddress(hexLine, baseAddress);
 
-            if (IsProtectedHexRecord(hexLine))
+            if (IsProtectedHexRecord(hexLine, baseAddress))
             {
                 continue;
             }
@@ -121,7 +118,7 @@ public class IntelHexParser
             var offsetAddressArray = hexLine.Skip(1).Take(2).ToArray();
             if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
             var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
-            var fullAddress = ((uint)_baseAddress << 16) | offsetAddress;
+            var fullAddress = ((uint)baseAddress << 16) | offsetAddress;
 
             records.Add(new HexFileRecord(fullAddress, hexLine, recordType));
         }
@@ -150,6 +147,21 @@ public class IntelHexParser
         }
     }
 
+    private static void ValidateChecksum(byte[] record, string line)
+    {
+        byte sum = 0;
+        foreach (var b in record)
+        {
+            sum += b;
+        }
+
+        if (sum != 0)
+        {
+            throw new InvalidDataException(
+                $"The hex record \"{line}\" has an invalid checksum");
+        }
+    }
+
     private static byte[] ConvertLineToBytes(string line)
     {
         var hexLine = new byte[(line.Length - 1) / 2];
@@ -157,30 +169,42 @@ public class IntelHexParser
         for (var i = 1; i < line.Length; i += 2)
         {
             var hex = line.Substring(i, 2);
-            hexLine[(i - 1) / 2] = byte.Parse(hex, NumberStyles.HexNumber);
+            try
+            {
+                hexLine[(i - 1) / 2] = byte.Parse(hex, NumberStyles.HexNumber);
+            }
+            catch (FormatException ex)
+            {
+                throw new InvalidDataException(
+                    $"The hex record \"{line}\" contains invalid hex characters \"{hex}\"", ex);
+            }
         }
 
         return hexLine;
     }
 
-    private bool IsProtectedHexRecord(byte[] hexRecord)
+    private static ushort UpdateBaseAddress(byte[] hexRecord, ushort currentBaseAddress)
     {
-        var offsetAddressArray = hexRecord.Skip(1).Take(2).ToArray();
         var recordType = hexRecord[3];
-        var dataArray = hexRecord.Skip(4).Take(hexRecord.Length - 5).ToArray();
-
-        // Extended Linear Address record - update the base address
         if (recordType == 0x04)
         {
+            var dataArray = hexRecord.Skip(4).Take(hexRecord.Length - 5).ToArray();
             if (BitConverter.IsLittleEndian) Array.Reverse(dataArray);
-            _baseAddress = BitConverter.ToUInt16(dataArray, 0);
+            return BitConverter.ToUInt16(dataArray, 0);
         }
-        // Data record - check against protected range
-        else if (recordType == 0x00)
+        return currentBaseAddress;
+    }
+
+    private bool IsProtectedHexRecord(byte[] hexRecord, ushort baseAddress)
+    {
+        var recordType = hexRecord[3];
+
+        if (recordType == 0x00)
         {
+            var offsetAddressArray = hexRecord.Skip(1).Take(2).ToArray();
             if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
             var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
-            var hexRecordAddress = ((uint)_baseAddress << 16) | offsetAddress;
+            var hexRecordAddress = ((uint)baseAddress << 16) | offsetAddress;
 
             if (hexRecordAddress >= _beginProtectedAddress && hexRecordAddress <= _endProtectedAddress)
             {

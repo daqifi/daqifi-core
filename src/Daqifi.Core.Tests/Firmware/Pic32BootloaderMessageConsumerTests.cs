@@ -85,6 +85,26 @@ public class Pic32BootloaderMessageConsumerTests
         Assert.Equal("0.0", result);
     }
 
+    [Fact]
+    public void DecodeVersionResponse_TooShortForVersionBytes_ReturnsZeroVersion()
+    {
+        // SOH + DLE + cmd but no version bytes (only 3 bytes, need at least 5)
+        var data = new byte[] { SOH, DLE, 0x01 };
+        var result = Pic32BootloaderMessageConsumer.DecodeVersionResponse(data);
+
+        Assert.Equal("0.0", result);
+    }
+
+    [Fact]
+    public void DecodeVersionResponse_ExactlyTwoBytes_ReturnsZeroVersion()
+    {
+        // Only 2 bytes: passes length check but can't have DLE+cmd+versions
+        var data = new byte[] { SOH, DLE };
+        var result = Pic32BootloaderMessageConsumer.DecodeVersionResponse(data);
+
+        Assert.Equal("0.0", result);
+    }
+
     #endregion
 
     #region DecodeProgramFlashResponse

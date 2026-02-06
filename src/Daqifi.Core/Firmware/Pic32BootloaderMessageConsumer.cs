@@ -26,14 +26,23 @@ public static class Pic32BootloaderMessageConsumer
 
         if (data[0] != START_OF_HEADER) return "Error";
 
-        // The command byte (0x01) matches SOH, so it will be DLE-escaped
-        if (data[1] == DATA_LINK_ESCAPE && data[2] == REQUEST_VERSION_COMMAND)
+        // The command byte (0x01) matches SOH, so it will be DLE-escaped.
+        // Minimum valid version response: SOH + DLE + cmd + major + minor = 5 bytes
+        // With DLE-escaped version bytes it can be up to 7 bytes
+        if (data.Length >= 5 && data[1] == DATA_LINK_ESCAPE && data[2] == REQUEST_VERSION_COMMAND)
         {
             var pointer = 3;
 
-            majorVersion = data[pointer] == DATA_LINK_ESCAPE ? data[++pointer] : data[pointer];
-            pointer++;
-            minorVersion = data[pointer] == DATA_LINK_ESCAPE ? data[++pointer] : data[pointer];
+            if (pointer < data.Length)
+            {
+                majorVersion = data[pointer] == DATA_LINK_ESCAPE && pointer + 1 < data.Length ? data[++pointer] : data[pointer];
+                pointer++;
+            }
+
+            if (pointer < data.Length)
+            {
+                minorVersion = data[pointer] == DATA_LINK_ESCAPE && pointer + 1 < data.Length ? data[++pointer] : data[pointer];
+            }
         }
 
         return $"{majorVersion}.{minorVersion}";
