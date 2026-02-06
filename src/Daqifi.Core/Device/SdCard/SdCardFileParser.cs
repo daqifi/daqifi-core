@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -44,11 +43,15 @@ public sealed class SdCardFileParser
 
         options ??= new SdCardParseOptions();
 
+        if (options.BufferSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
+        }
+
         var fileCreatedDate = options.SessionStartTime
                               ?? SdCardFileListParser.TryParseDateFromLogFileName(fileName);
 
-        // Read all messages from the stream so we can inspect the first one for config.
-        // We buffer the raw DaqifiOutMessage list so the session is replayable.
+        // Read all messages from the stream, peeking at the first for config.
         var allMessages = await ReadAllMessagesAsync(fileStream, options, ct).ConfigureAwait(false);
 
         SdCardDeviceConfiguration? config = null;
@@ -70,7 +73,8 @@ public sealed class SdCardFileParser
             allMessages,
             streamStartIndex,
             fileCreatedDate,
-            tickPeriod);
+            tickPeriod,
+            ct);
 
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples);
     }
@@ -90,6 +94,11 @@ public sealed class SdCardFileParser
         ArgumentNullException.ThrowIfNull(filePath);
 
         options ??= new SdCardParseOptions();
+
+        if (options.BufferSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
+        }
 
         await using var stream = new FileStream(
             filePath,

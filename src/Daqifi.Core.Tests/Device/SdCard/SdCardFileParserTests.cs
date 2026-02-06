@@ -441,6 +441,34 @@ public class SdCardFileParserTests
 
     #endregion
 
+    #region Input validation
+
+    [Fact]
+    public async Task ParseAsync_WithNonPositiveBufferSize_ThrowsArgumentOutOfRange()
+    {
+        // Arrange
+        using var stream = new MemoryStream(Array.Empty<byte>());
+        var options = new SdCardParseOptions { BufferSize = 0 };
+
+        // Act & Assert
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => _parser.ParseAsync(stream, "test.bin", options));
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithNegativeBufferSize_ThrowsArgumentOutOfRange()
+    {
+        // Arrange
+        using var stream = new MemoryStream(Array.Empty<byte>());
+        var options = new SdCardParseOptions { BufferSize = -1 };
+
+        // Act & Assert
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => _parser.ParseAsync(stream, "test.bin", options));
+    }
+
+    #endregion
+
     #region Digital-only data
 
     [Fact]
