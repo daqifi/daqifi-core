@@ -48,5 +48,23 @@ namespace Daqifi.Core.Device.SdCard
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
         Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Deletes a file from the SD card.
+        /// </summary>
+        /// <param name="fileName">The name of the file to delete.</param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Formats the entire SD card, erasing all data.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        Task FormatSdCardAsync(CancellationToken cancellationToken = default);
     }
 }

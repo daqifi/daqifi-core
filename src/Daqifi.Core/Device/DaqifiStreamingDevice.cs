@@ -328,6 +328,90 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Deletes a file from the SD card.
+        /// </summary>
+        /// <param name="fileName">The name of the file to delete.</param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public async Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            if (_isLoggingToSdCard)
+            {
+                throw new InvalidOperationException("Cannot delete files while logging to SD card.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
+            }
+
+            ValidateSdCardFileName(fileName);
+
+            // Stop streaming if active
+            if (IsStreaming)
+            {
+                StopStreaming();
+            }
+
+            IReadOnlyList<string> lines;
+            try
+            {
+                lines = await ExecuteTextCommandAsync(() =>
+                {
+                    PrepareSdInterface();
+                    Send(ScpiMessageProducer.DeleteSdFile(fileName));
+                    Send(ScpiMessageProducer.GetSdFileList);
+                }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+            }
+            finally
+            {
+                if (IsConnected)
+                {
+                    PrepareLanInterface();
+                }
+            }
+
+            _sdCardFiles = SdCardFileListParser.ParseFileList(lines);
+        }
+
+        /// <summary>
+        /// Formats the entire SD card, erasing all data.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task FormatSdCardAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            if (_isLoggingToSdCard)
+            {
+                throw new InvalidOperationException("Cannot format SD card while logging.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Send(ScpiMessageProducer.EnableStorageSd);
+            Send(ScpiMessageProducer.FormatSdCard);
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Validates an SD card filename to prevent SCPI command injection.
         /// </summary>
         /// <param name="fileName">The filename to validate.</param>

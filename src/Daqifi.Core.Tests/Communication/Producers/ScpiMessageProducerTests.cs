@@ -1,4 +1,6 @@
+using System;
 using System.Text;
+using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 
@@ -279,6 +281,115 @@ public class ScpiMessageProducerTests
     {
         var message = ScpiMessageProducer.SetUsbTransparencyMode(1);
         Assert.Equal("SYSTem:USB:SetTransparentMode 1", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void DeleteSdFile_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.DeleteSdFile("data.bin");
+        Assert.Equal("SYSTem:STORage:SD:DELete \"data.bin\"", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void DeleteSdFile_WithNullOrEmptyFileName_Throws(string? fileName)
+    {
+        Assert.Throws<ArgumentException>(
+            () => ScpiMessageProducer.DeleteSdFile(fileName!));
+    }
+
+    [Fact]
+    public void FormatSdCard_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.FormatSdCard;
+        Assert.Equal("SYSTem:STORage:SD:FORmat", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetSdMaxFileSize_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetSdMaxFileSize(1073741824);
+        Assert.Equal("SYSTem:STORage:SD:MAXSize 1073741824", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetSdMaxFileSize_WithZero_ReturnsDefaultCommand()
+    {
+        var message = ScpiMessageProducer.SetSdMaxFileSize(0);
+        Assert.Equal("SYSTem:STORage:SD:MAXSize 0", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetSdMaxFileSize_WithNegativeValue_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.SetSdMaxFileSize(-1));
+    }
+
+    [Fact]
+    public void GetSdMaxFileSize_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetSdMaxFileSize;
+        Assert.Equal("SYSTem:STORage:SD:MAXSize?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void RunSdBenchmark_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.RunSdBenchmark(1048576);
+        Assert.Equal("SYSTem:STORage:SD:BENCHmark 1048576", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void RunSdBenchmark_WithZeroOrNegative_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.RunSdBenchmark(0));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.RunSdBenchmark(-1));
+    }
+
+    [Fact]
+    public void GetSdBenchmarkResults_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetSdBenchmarkResults;
+        Assert.Equal("SYSTem:STORage:SD:BENCHmark?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Theory]
+    [InlineData(StreamInterface.Usb, 0)]
+    [InlineData(StreamInterface.WiFi, 1)]
+    [InlineData(StreamInterface.SdCard, 2)]
+    [InlineData(StreamInterface.All, 3)]
+    public void SetStreamInterface_ReturnsCorrectCommand(StreamInterface iface, int expectedValue)
+    {
+        var message = ScpiMessageProducer.SetStreamInterface(iface);
+        Assert.Equal($"SYSTem:STReam:INTerface {expectedValue}", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetStreamInterface_WithUndefinedValue_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.SetStreamInterface((StreamInterface)99));
+    }
+
+    [Fact]
+    public void GetStreamInterface_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetStreamInterface;
+        Assert.Equal("SYSTem:STReam:INTerface?", message.Data);
         AssertMessageFormat(message);
     }
 
