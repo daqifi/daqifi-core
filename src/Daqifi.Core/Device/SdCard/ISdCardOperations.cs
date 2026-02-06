@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -66,5 +68,35 @@ namespace Daqifi.Core.Device.SdCard
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
         Task FormatSdCardAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Downloads a file from the device's SD card over USB.
+        /// </summary>
+        /// <param name="fileName">The name of the file to download.</param>
+        /// <param name="destinationStream">The stream to write file contents to.</param>
+        /// <param name="progress">Optional progress reporting.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>Metadata about the downloaded file.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        Task<SdCardDownloadResult> DownloadSdCardFileAsync(
+            string fileName,
+            Stream destinationStream,
+            IProgress<SdCardTransferProgress>? progress = null,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Downloads a file from the device's SD card over USB to a temporary file.
+        /// </summary>
+        /// <param name="fileName">The name of the file to download.</param>
+        /// <param name="progress">Optional progress reporting.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>Metadata about the downloaded file, including the local <see cref="SdCardDownloadResult.FilePath"/>.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        Task<SdCardDownloadResult> DownloadSdCardFileAsync(
+            string fileName,
+            IProgress<SdCardTransferProgress>? progress = null,
+            CancellationToken cancellationToken = default);
     }
 }

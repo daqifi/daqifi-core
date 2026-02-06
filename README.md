@@ -8,7 +8,7 @@ The DAQiFi Core Library is a .NET library designed to simplify interaction with 
 - **Device Discovery**: Find DAQiFi devices connected via WiFi, USB/Serial, or HID bootloader mode
 - **Easy Connection**: Single-call device connection with `DaqifiDeviceFactory`
 - **Data Streaming**: Stream data from devices in real-time with event-driven API
-- **SD Card Operations**: List SD card files and start/stop SD logging over USB/Serial connections (not available over WiFi)
+- **SD Card Operations**: List, download, delete, and format SD card files; start/stop SD logging over USB/Serial connections (not available over WiFi)
 - **Transport Layer**: TCP, UDP, and Serial communication with async/await patterns
 - **Protocol Buffers**: Efficient binary message serialization for device communication
 - **Cross-Platform**: Compatible with .NET 8.0 and .NET 9.0

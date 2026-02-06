@@ -4,8 +4,10 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -441,6 +443,184 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 () => device.FormatSdCardAsync());
         }
 
+        #region DownloadSdCardFileAsync Tests
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenDisconnected_Throws()
+        {
+            // Arrange
+            var device = new DaqifiStreamingDevice("TestDevice");
+            using var stream = new MemoryStream();
+
+            // Act & Assert
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.DownloadSdCardFileAsync("test.bin", stream));
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenNotSerialTransport_Throws()
+        {
+            // Arrange — use the testable device which has no transport (simulates non-USB)
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            using var stream = new MemoryStream();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.DownloadSdCardFileAsync("test.bin", stream));
+            Assert.Contains("USB", ex.Message);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public async Task DownloadSdCardFileAsync_WithNullOrEmptyFileName_ThrowsArgumentException(string? fileName)
+        {
+            // Arrange
+            var device = new TestableDownloadDevice("TestDevice");
+            device.Connect();
+            using var stream = new MemoryStream();
+
+            // Act & Assert
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => device.DownloadSdCardFileAsync(fileName!, stream));
+        }
+
+        [Theory]
+        [InlineData("file\".bin")]
+        [InlineData("file\n.bin")]
+        [InlineData("file;.bin")]
+        public async Task DownloadSdCardFileAsync_WithInvalidCharacters_ThrowsArgumentException(string fileName)
+        {
+            // Arrange
+            var device = new TestableDownloadDevice("TestDevice");
+            device.Connect();
+            using var stream = new MemoryStream();
+
+            // Act & Assert
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => device.DownloadSdCardFileAsync(fileName, stream));
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenLogging_Throws()
+        {
+            // Arrange
+            var device = new TestableDownloadDevice("TestDevice");
+            device.Connect();
+            await device.StartSdCardLoggingAsync("test.bin");
+            using var stream = new MemoryStream();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.DownloadSdCardFileAsync("data.bin", stream));
+            Assert.Contains("logging", ex.Message);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_SendsCorrectCommands()
+        {
+            // Arrange
+            var fileData = new byte[] { 0x01, 0x02, 0x03 };
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = fileData;
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // PrepareSdInterface
+            Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands); // PrepareSdInterface
+            Assert.Contains("SYSTem:STORage:SD:GET \"data.bin\"", sentCommands); // GetSdFile
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WritesFileDataToDestination()
+        {
+            // Arrange
+            var fileData = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = fileData;
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert
+            Assert.Equal(fileData, destinationStream.ToArray());
+            Assert.Equal("data.bin", result.FileName);
+            Assert.Equal(fileData.Length, result.FileSize);
+            Assert.True(result.Duration > TimeSpan.Zero);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_RestoresLanInterface()
+        {
+            // Arrange
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = new byte[] { 0x01 };
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert — LAN interface should be restored after download
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands); // DisableStorageSd
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_ToTempFile_ReturnsFilePath()
+        {
+            // Arrange
+            var fileData = new byte[] { 0x01, 0x02, 0x03 };
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = fileData;
+            device.Connect();
+
+            // Act
+            var result = await device.DownloadSdCardFileAsync("data.bin");
+
+            // Assert
+            Assert.NotNull(result.FilePath);
+            Assert.True(File.Exists(result.FilePath));
+            Assert.Equal(fileData, await File.ReadAllBytesAsync(result.FilePath));
+            Assert.Equal("data.bin", result.FileName);
+
+            // Cleanup
+            File.Delete(result.FilePath);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_StopsStreamingBeforeDownload()
+        {
+            // Arrange
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = new byte[] { 0x01 };
+            device.Connect();
+            device.StartStreaming();
+            Assert.True(device.IsStreaming);
+            device.SentMessages.Clear();
+
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert — stop streaming command should be sent before the download commands
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
+        }
+
+        #endregion
+
         /// <summary>
         /// A testable version of DaqifiStreamingDevice that captures sent messages
         /// and returns canned text responses for ExecuteTextCommandAsync.
@@ -471,6 +651,56 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 // Execute the setup action so we can capture the SCPI commands
                 setupAction();
                 return Task.FromResult<IReadOnlyList<string>>(CannedTextResponse);
+            }
+        }
+
+        /// <summary>
+        /// A testable version of DaqifiStreamingDevice that simulates a USB connection
+        /// so DownloadSdCardFileAsync passes the USB transport check.
+        /// </summary>
+        private class TestableDownloadDevice : DaqifiStreamingDevice
+        {
+            private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
+
+            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+            public List<string> CannedTextResponse { get; set; } = new();
+            public byte[] CannedFileData { get; set; } = Array.Empty<byte>();
+
+            public TestableDownloadDevice(string name, IPAddress? ipAddress = null)
+                : base(name, ipAddress)
+            {
+            }
+
+            public override bool IsUsbConnection => true;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    SentMessages.Add(stringMessage);
+                }
+            }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                CancellationToken cancellationToken = default)
+            {
+                setupAction();
+                return Task.FromResult<IReadOnlyList<string>>(CannedTextResponse);
+            }
+
+            protected override async Task ExecuteRawCaptureAsync(
+                Func<Stream, CancellationToken, Task> rawAction,
+                CancellationToken cancellationToken = default)
+            {
+                // Build a stream with file data + EOF marker
+                var data = new byte[CannedFileData.Length + EofMarker.Length];
+                Array.Copy(CannedFileData, 0, data, 0, CannedFileData.Length);
+                Array.Copy(EofMarker, 0, data, CannedFileData.Length, EofMarker.Length);
+
+                using var fakeStream = new MemoryStream(data);
+                await rawAction(fakeStream, cancellationToken);
             }
         }
     }
