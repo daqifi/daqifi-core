@@ -8,7 +8,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
-using Daqifi.Core.Device.Protocol;
 
 namespace Daqifi.Core.Device.SdCard;
 
@@ -51,20 +50,41 @@ public sealed class SdCardFileParser
         var fileCreatedDate = options.SessionStartTime
                               ?? SdCardFileListParser.TryParseDateFromLogFileName(fileName);
 
-        // Read all messages from the stream, peeking at the first for config.
+        // Read all messages from the stream.
         var allMessages = await ReadAllMessagesAsync(fileStream, options, ct).ConfigureAwait(false);
 
         SdCardDeviceConfiguration? config = null;
         var streamStartIndex = 0;
 
-        if (allMessages.Count > 0 &&
-            ProtobufProtocolHandler.DetectMessageType(allMessages[0]) == ProtobufMessageType.Status)
+        // First, check if the first message is a dedicated status message.
+        // Some firmware versions embed config fields (e.g., AnalogInPortNum/TimestampFreq)
+        // inside stream messages, so we only treat the first message as status when it
+        // has no stream payload.
+        if (allMessages.Count > 0 && !HasStreamPayload(allMessages[0]))
         {
             config = ExtractDeviceConfiguration(allMessages[0]);
             streamStartIndex = 1;
         }
 
+        // If no dedicated status message was found, or the status message had no TimestampFreq,
+        // scan all messages for config fields. Device firmware often embeds config fields
+        // (TimestampFreq, DeviceSn, etc.) in streaming data messages rather than writing
+        // a separate status header.
+        if (config == null || config.TimestampFrequency == 0)
+        {
+            var scannedConfig = ScanMessagesForConfiguration(allMessages);
+            if (scannedConfig != null)
+            {
+                config = MergeConfigurations(config, scannedConfig);
+            }
+        }
+
         var timestampFrequency = config?.TimestampFrequency ?? 0u;
+        if (timestampFrequency == 0 && options.FallbackTimestampFrequency > 0)
+        {
+            timestampFrequency = options.FallbackTimestampFrequency;
+        }
+
         var tickPeriod = timestampFrequency > 0
             ? 1.0 / timestampFrequency
             : 0.0;
@@ -266,6 +286,127 @@ public sealed class SdCardFileParser
 
         // Rollover: ticks remaining to max + current
         return (long)(uint.MaxValue - previous) + current + 1;
+    }
+
+    /// <summary>
+    /// Determines whether a message contains stream sample payload fields.
+    /// </summary>
+    private static bool HasStreamPayload(DaqifiOutMessage message)
+    {
+        return message.AnalogInData.Count > 0 ||
+               message.AnalogInDataFloat.Count > 0 ||
+               message.DigitalData.Length > 0;
+    }
+
+    /// <summary>
+    /// Scans all messages for device configuration fields that may be embedded in streaming
+    /// data messages. Returns a merged configuration from the first non-zero value found
+    /// for each field, or null if no config fields are found in any message.
+    /// </summary>
+    private static SdCardDeviceConfiguration? ScanMessagesForConfiguration(List<DaqifiOutMessage> messages)
+    {
+        uint timestampFreq = 0;
+        uint analogPortNum = 0;
+        uint digitalPortNum = 0;
+        ulong deviceSn = 0;
+        string? devicePn = null;
+        string? fwRev = null;
+        IReadOnlyList<(double Slope, double Intercept)>? calibration = null;
+
+        foreach (var msg in messages)
+        {
+            if (timestampFreq == 0 && msg.TimestampFreq != 0)
+            {
+                timestampFreq = msg.TimestampFreq;
+            }
+
+            if (analogPortNum == 0 && msg.AnalogInPortNum != 0)
+            {
+                analogPortNum = msg.AnalogInPortNum;
+            }
+
+            if (digitalPortNum == 0 && msg.DigitalPortNum != 0)
+            {
+                digitalPortNum = msg.DigitalPortNum;
+            }
+
+            if (deviceSn == 0 && msg.DeviceSn != 0)
+            {
+                deviceSn = msg.DeviceSn;
+            }
+
+            if (devicePn == null && !string.IsNullOrEmpty(msg.DevicePn))
+            {
+                devicePn = msg.DevicePn;
+            }
+
+            if (fwRev == null && !string.IsNullOrEmpty(msg.DeviceFwRev))
+            {
+                fwRev = msg.DeviceFwRev;
+            }
+
+            if (calibration == null && msg.AnalogInCalM.Count > 0 && msg.AnalogInCalB.Count > 0)
+            {
+                var count = Math.Min(msg.AnalogInCalM.Count, msg.AnalogInCalB.Count);
+                var cal = new (double, double)[count];
+                for (var i = 0; i < count; i++)
+                {
+                    cal[i] = (msg.AnalogInCalM[i], msg.AnalogInCalB[i]);
+                }
+
+                calibration = cal;
+            }
+
+            // If we've found all fields, stop scanning
+            if (timestampFreq != 0 && analogPortNum != 0 && digitalPortNum != 0 &&
+                deviceSn != 0 && devicePn != null && fwRev != null && calibration != null)
+            {
+                break;
+            }
+        }
+
+        // Only return a config if we found at least one meaningful field
+        if (timestampFreq == 0 && analogPortNum == 0 && digitalPortNum == 0 &&
+            deviceSn == 0 && devicePn == null && fwRev == null && calibration == null)
+        {
+            return null;
+        }
+
+        return new SdCardDeviceConfiguration(
+            AnalogPortCount: (int)analogPortNum,
+            DigitalPortCount: (int)digitalPortNum,
+            TimestampFrequency: timestampFreq,
+            DeviceSerialNumber: deviceSn != 0 ? deviceSn.ToString() : null,
+            DevicePartNumber: devicePn,
+            FirmwareRevision: fwRev,
+            CalibrationValues: calibration);
+    }
+
+    /// <summary>
+    /// Merges two configurations, preferring non-zero/non-null values from the primary config,
+    /// falling back to values from the scanned config.
+    /// </summary>
+    private static SdCardDeviceConfiguration MergeConfigurations(
+        SdCardDeviceConfiguration? primary,
+        SdCardDeviceConfiguration scanned)
+    {
+        if (primary == null)
+        {
+            return scanned;
+        }
+
+        return new SdCardDeviceConfiguration(
+            AnalogPortCount: primary.AnalogPortCount != 0 ? primary.AnalogPortCount : scanned.AnalogPortCount,
+            DigitalPortCount: primary.DigitalPortCount != 0 ? primary.DigitalPortCount : scanned.DigitalPortCount,
+            TimestampFrequency: primary.TimestampFrequency != 0 ? primary.TimestampFrequency : scanned.TimestampFrequency,
+            DeviceSerialNumber: primary.DeviceSerialNumber ?? scanned.DeviceSerialNumber,
+            DevicePartNumber: !string.IsNullOrEmpty(primary.DevicePartNumber)
+                ? primary.DevicePartNumber
+                : scanned.DevicePartNumber,
+            FirmwareRevision: !string.IsNullOrEmpty(primary.FirmwareRevision)
+                ? primary.FirmwareRevision
+                : scanned.FirmwareRevision,
+            CalibrationValues: primary.CalibrationValues ?? scanned.CalibrationValues);
     }
 
     /// <summary>
