@@ -102,6 +102,108 @@ public class SdCardFileParserTests
 
     #endregion
 
+    #region Config scanning from stream messages
+
+    [Fact]
+    public async Task ParseAsync_WithConfigFieldsInStreamMessages_ExtractsConfig()
+    {
+        // Arrange — no dedicated status message, but streaming messages include TimestampFreq
+        var msg1 = SdCardTestFileBuilder.CreateStreamMessage(
+            timestamp: 100_000_000,
+            analogFloatValues: new[] { 1.0f, 2.0f });
+        msg1.TimestampFreq = 50_000_000; // 50 MHz clock embedded in stream message
+
+        var msg2 = SdCardTestFileBuilder.CreateStreamMessage(
+            timestamp: 150_000_000, // 1 second later at 50 MHz
+            analogFloatValues: new[] { 3.0f, 4.0f });
+
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(msg1)
+            .AddMessage(msg2);
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin");
+
+        // Assert — config should be extracted from scanning
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+
+        // Timestamps should be properly reconstructed (not all the same)
+        var samples = await ToListAsync(session.Samples);
+        Assert.Equal(2, samples.Count);
+        var timeDiff = (samples[1].Timestamp - samples[0].Timestamp).TotalSeconds;
+        Assert.InRange(timeDiff, 0.9, 1.1); // ~1 second apart
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithConfigScatteredAcrossMessages_MergesConfig()
+    {
+        // Arrange — config fields spread across different messages
+        var msg1 = SdCardTestFileBuilder.CreateStreamMessage(
+            timestamp: 1000,
+            analogFloatValues: new[] { 1.0f });
+        msg1.TimestampFreq = 80_000_000;
+        msg1.DeviceSn = 123456789;
+
+        var msg2 = SdCardTestFileBuilder.CreateStreamMessage(
+            timestamp: 2000,
+            analogFloatValues: new[] { 2.0f });
+        msg2.DevicePn = "Nyquist1";
+        msg2.DeviceFwRev = "3.2.0";
+
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(msg1)
+            .AddMessage(msg2);
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "scattered.bin");
+
+        // Assert — config merges fields from all messages
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal(80_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal("123456789", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal("Nyquist1", session.DeviceConfig.DevicePartNumber);
+        Assert.Equal("3.2.0", session.DeviceConfig.FirmwareRevision);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithStatusMessageMissingTimestampFreq_FillsFromScan()
+    {
+        // Arrange — status message has port counts but no TimestampFreq,
+        // a later stream message has TimestampFreq
+        var statusMsg = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 4,
+            DigitalPortNum = 2
+        };
+
+        var streamMsg = SdCardTestFileBuilder.CreateStreamMessage(
+            timestamp: 100_000_000,
+            analogFloatValues: new[] { 1.0f, 2.0f, 3.0f, 4.0f });
+        streamMsg.TimestampFreq = 50_000_000;
+
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(statusMsg)
+            .AddMessage(streamMsg);
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "partial_status.bin");
+
+        // Assert — merged config has both port counts and timestamp freq
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal(4, session.DeviceConfig.AnalogPortCount);
+        Assert.Equal(2, session.DeviceConfig.DigitalPortCount);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+    }
+
+    #endregion
+
     #region Empty file
 
     [Fact]
