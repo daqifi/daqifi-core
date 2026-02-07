@@ -8,7 +8,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
-using Daqifi.Core.Device.Protocol;
 
 namespace Daqifi.Core.Device.SdCard;
 
@@ -57,9 +56,11 @@ public sealed class SdCardFileParser
         SdCardDeviceConfiguration? config = null;
         var streamStartIndex = 0;
 
-        // First, check if the first message is a dedicated status message (no data fields).
-        if (allMessages.Count > 0 &&
-            ProtobufProtocolHandler.DetectMessageType(allMessages[0]) == ProtobufMessageType.Status)
+        // First, check if the first message is a dedicated status message.
+        // Some firmware versions embed config fields (e.g., AnalogInPortNum/TimestampFreq)
+        // inside stream messages, so we only treat the first message as status when it
+        // has no stream payload.
+        if (allMessages.Count > 0 && !HasStreamPayload(allMessages[0]))
         {
             config = ExtractDeviceConfiguration(allMessages[0]);
             streamStartIndex = 1;
@@ -288,6 +289,16 @@ public sealed class SdCardFileParser
     }
 
     /// <summary>
+    /// Determines whether a message contains stream sample payload fields.
+    /// </summary>
+    private static bool HasStreamPayload(DaqifiOutMessage message)
+    {
+        return message.AnalogInData.Count > 0 ||
+               message.AnalogInDataFloat.Count > 0 ||
+               message.DigitalData.Length > 0;
+    }
+
+    /// <summary>
     /// Scans all messages for device configuration fields that may be embedded in streaming
     /// data messages. Returns a merged configuration from the first non-zero value found
     /// for each field, or null if no config fields are found in any message.
@@ -389,8 +400,12 @@ public sealed class SdCardFileParser
             DigitalPortCount: primary.DigitalPortCount != 0 ? primary.DigitalPortCount : scanned.DigitalPortCount,
             TimestampFrequency: primary.TimestampFrequency != 0 ? primary.TimestampFrequency : scanned.TimestampFrequency,
             DeviceSerialNumber: primary.DeviceSerialNumber ?? scanned.DeviceSerialNumber,
-            DevicePartNumber: primary.DevicePartNumber ?? scanned.DevicePartNumber,
-            FirmwareRevision: primary.FirmwareRevision ?? scanned.FirmwareRevision,
+            DevicePartNumber: !string.IsNullOrEmpty(primary.DevicePartNumber)
+                ? primary.DevicePartNumber
+                : scanned.DevicePartNumber,
+            FirmwareRevision: !string.IsNullOrEmpty(primary.FirmwareRevision)
+                ? primary.FirmwareRevision
+                : scanned.FirmwareRevision,
             CalibrationValues: primary.CalibrationValues ?? scanned.CalibrationValues);
     }
 
