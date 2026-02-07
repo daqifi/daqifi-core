@@ -79,6 +79,11 @@ public sealed class SdCardFileParser
         }
 
         var timestampFrequency = config?.TimestampFrequency ?? 0u;
+        if (timestampFrequency == 0 && options.FallbackTimestampFrequency > 0)
+        {
+            timestampFrequency = options.FallbackTimestampFrequency;
+        }
+
         var tickPeriod = timestampFrequency > 0
             ? 1.0 / timestampFrequency
             : 0.0;

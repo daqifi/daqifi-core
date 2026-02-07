@@ -202,6 +202,80 @@ public class SdCardFileParserTests
         Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
     }
 
+    [Fact]
+    public async Task ParseAsync_WithFallbackTimestampFrequency_ReconstructsTimestamps()
+    {
+        // Arrange — no config at all, but messages have valid timestamps
+        // Simulate device firmware that doesn't include TimestampFreq
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 100_000_000,
+                analogFloatValues: new[] { 1.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 105_000_000, // 5M ticks later = 0.1s at 50 MHz
+                analogFloatValues: new[] { 2.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 110_000_000, // 10M ticks later = 0.2s at 50 MHz
+                analogFloatValues: new[] { 3.0f }));
+
+        using var stream = builder.Build();
+
+        var options = new SdCardParseOptions
+        {
+            FallbackTimestampFrequency = 50_000_000, // 50 MHz fallback
+            SessionStartTime = new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)
+        };
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "no_config.bin", options);
+
+        // Assert — no config in file but timestamps should work via fallback
+        var samples = await ToListAsync(session.Samples);
+        Assert.Equal(3, samples.Count);
+
+        // First sample at base time
+        Assert.Equal(options.SessionStartTime.Value, samples[0].Timestamp);
+
+        // Second sample ~0.1s later
+        var diff1 = (samples[1].Timestamp - samples[0].Timestamp).TotalSeconds;
+        Assert.InRange(diff1, 0.09, 0.11);
+
+        // Third sample ~0.2s from first
+        var diff2 = (samples[2].Timestamp - samples[0].Timestamp).TotalSeconds;
+        Assert.InRange(diff2, 0.19, 0.21);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithFallbackTimestampFrequency_FileFrequencyTakesPrecedence()
+    {
+        // Arrange — file has TimestampFreq, so fallback should be ignored
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStatusMessage(timestampFreq: 50_000_000))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 100_000_000,
+                analogFloatValues: new[] { 1.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 150_000_000, // 1 second at 50 MHz
+                analogFloatValues: new[] { 2.0f }));
+
+        using var stream = builder.Build();
+
+        var options = new SdCardParseOptions
+        {
+            FallbackTimestampFrequency = 1_000_000, // Different frequency — should be ignored
+            SessionStartTime = new DateTime(2024, 6, 15, 12, 0, 0, DateTimeKind.Utc)
+        };
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "has_config.bin", options);
+
+        // Assert — should use file's 50 MHz, not fallback's 1 MHz
+        var samples = await ToListAsync(session.Samples);
+        Assert.Equal(2, samples.Count);
+        var diff = (samples[1].Timestamp - samples[0].Timestamp).TotalSeconds;
+        Assert.InRange(diff, 0.9, 1.1); // 1 second at 50 MHz, not 50 seconds at 1 MHz
+    }
+
     #endregion
 
     #region Empty file
