@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,19 @@ namespace Daqifi.Core.Device
         /// The delay in milliseconds to wait for the WiFi module to restart after applying configuration.
         /// </summary>
         private const int WIFI_MODULE_RESTART_DELAY_MS = 2000;
+
+        /// <summary>
+        /// The delay in milliseconds to wait after switching between LAN and SD card interfaces.
+        /// The SD card and LAN share the SPI bus, so a settle period is needed for the device
+        /// firmware to complete the interface switch before sending further commands.
+        /// </summary>
+        private const int SD_INTERFACE_SETTLE_DELAY_MS = 100;
+
+        /// <summary>
+        /// Maximum number of retry attempts for SD card list operations that receive transient
+        /// SCPI errors (e.g., -200 Execution error) due to interface-switch timing.
+        /// </summary>
+        private const int SD_LIST_MAX_RETRIES = 1;
 
         private bool _isLoggingToSdCard;
         private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
@@ -257,8 +271,38 @@ namespace Daqifi.Core.Device
                 lines = await ExecuteTextCommandAsync(() =>
                 {
                     PrepareSdInterface();
+
+                    // Allow the device firmware to complete the SPI bus switch
+                    // before querying the SD card. Without this delay, the device
+                    // can return SCPI error -200 (Execution error).
+                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+
                     Send(ScpiMessageProducer.GetSdFileList);
                 }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                // If the response contains a SCPI error (transient timing issue),
+                // retry once after an additional settle delay.
+                if (ContainsScpiError(lines))
+                {
+                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+
+                        lines = await ExecuteTextCommandAsync(() =>
+                        {
+                            PrepareSdInterface();
+                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                            Send(ScpiMessageProducer.GetSdFileList);
+                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                        if (!ContainsScpiError(lines))
+                        {
+                            break;
+                        }
+                    }
+                }
             }
             finally
             {
@@ -377,9 +421,33 @@ namespace Daqifi.Core.Device
                 lines = await ExecuteTextCommandAsync(() =>
                 {
                     PrepareSdInterface();
+                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
                     Send(ScpiMessageProducer.DeleteSdFile(fileName));
                     Send(ScpiMessageProducer.GetSdFileList);
                 }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                if (ContainsScpiError(lines))
+                {
+                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+
+                        lines = await ExecuteTextCommandAsync(() =>
+                        {
+                            PrepareSdInterface();
+                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                            Send(ScpiMessageProducer.DeleteSdFile(fileName));
+                            Send(ScpiMessageProducer.GetSdFileList);
+                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                        if (!ContainsScpiError(lines))
+                        {
+                            break;
+                        }
+                    }
+                }
             }
             finally
             {
@@ -551,6 +619,18 @@ namespace Daqifi.Core.Device
                 try { File.Delete(tempPath); } catch { /* ignore cleanup failures */ }
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Checks whether any line in the response contains a SCPI error indicator.
+        /// These errors (e.g., "**ERROR: -200") can occur transiently when the device
+        /// firmware has not finished switching the SPI bus interface.
+        /// </summary>
+        /// <param name="lines">The response lines to check.</param>
+        /// <returns>True if any line contains a SCPI error, false otherwise.</returns>
+        private static bool ContainsScpiError(IReadOnlyList<string> lines)
+        {
+            return lines.Any(line => line.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
