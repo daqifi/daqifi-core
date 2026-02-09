@@ -481,11 +481,12 @@ namespace Daqifi.Core.Tests.Device.SdCard
             // Act
             await device.FormatSdCardAsync();
 
-            // Assert
+            // Assert — defensive stop is always sent first (issue #118)
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(2, sentCommands.Count);
-            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
-            Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[1]);
+            Assert.Equal(3, sentCommands.Count);
+            Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
+            Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[2]);
         }
 
         [Fact]
@@ -511,6 +512,79 @@ namespace Daqifi.Core.Tests.Device.SdCard
             await Assert.ThrowsAsync<InvalidOperationException>(
                 () => device.FormatSdCardAsync());
         }
+
+        #region Defensive stop tests (issue #118)
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            // Act
+            await device.GetSdCardFilesAsync();
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            // Act
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = new byte[] { 0x01 };
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
+        public async Task FormatSdCardAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            // Act
+            await device.FormatSdCardAsync();
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        #endregion
 
         #region DownloadSdCardFileAsync Tests
 
