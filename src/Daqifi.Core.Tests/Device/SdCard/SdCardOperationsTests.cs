@@ -403,6 +403,75 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_WithScpiError_RetriesAndReturnsFiles()
+        {
+            // Arrange - simulate error on first call, success on second
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "Daqifi/log_20240115_103000.bin" });
+            device.Connect();
+
+            // Act
+            var files = await device.GetSdCardFilesAsync();
+
+            // Assert - should have retried and returned files from second attempt
+            Assert.Single(files);
+            Assert.Equal("log_20240115_103000.bin", files[0].FileName);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithPersistentScpiError_ReturnsEmptyAfterRetries()
+        {
+            // Arrange - simulate persistent error
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.Connect();
+
+            // Act
+            var files = await device.GetSdCardFilesAsync();
+
+            // Assert - should be empty since all responses were errors
+            Assert.Empty(files);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithScpiError_RetriesAndReturnsFiles()
+        {
+            // Arrange
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "Daqifi/remaining.bin" });
+            device.Connect();
+
+            // Act
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            // Assert
+            Assert.Single(device.SdCardFiles);
+            Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithNoError_DoesNotRetry()
+        {
+            // Arrange
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "Daqifi/test.bin" });
+            device.Connect();
+
+            // Act
+            var files = await device.GetSdCardFilesAsync();
+
+            // Assert
+            Assert.Single(files);
+            Assert.Equal(1, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
         public async Task FormatSdCardAsync_WhenConnected_SendsCorrectCommands()
         {
             // Arrange
@@ -620,6 +689,43 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         #endregion
+
+        /// <summary>
+        /// A testable device that returns different responses on successive calls to
+        /// ExecuteTextCommandAsync, allowing tests to verify retry behavior.
+        /// </summary>
+        private class RetryableSdCardStreamingDevice : DaqifiStreamingDevice
+        {
+            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+            public Queue<List<string>> ResponseSequence { get; } = new();
+            public int ExecuteTextCommandCallCount { get; private set; }
+
+            public RetryableSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
+                : base(name, ipAddress)
+            {
+            }
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    SentMessages.Add(stringMessage);
+                }
+            }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                CancellationToken cancellationToken = default)
+            {
+                setupAction();
+                ExecuteTextCommandCallCount++;
+                var response = ResponseSequence.Count > 0
+                    ? ResponseSequence.Dequeue()
+                    : new List<string>();
+                return Task.FromResult<IReadOnlyList<string>>(response);
+            }
+        }
 
         /// <summary>
         /// A testable version of DaqifiStreamingDevice that captures sent messages
