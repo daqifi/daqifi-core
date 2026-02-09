@@ -259,11 +259,9 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Stop streaming if active
-            if (IsStreaming)
-            {
-                StopStreaming();
-            }
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
 
             IReadOnlyList<string> lines;
             try
@@ -409,11 +407,9 @@ namespace Daqifi.Core.Device
 
             ValidateSdCardFileName(fileName);
 
-            // Stop streaming if active
-            if (IsStreaming)
-            {
-                StopStreaming();
-            }
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
 
             IReadOnlyList<string> lines;
             try
@@ -481,6 +477,10 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
+
             Send(ScpiMessageProducer.EnableStorageSd);
             Send(ScpiMessageProducer.FormatSdCard);
 
@@ -530,11 +530,9 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Cannot download files while logging to SD card.");
             }
 
-            // Stop streaming if active
-            if (IsStreaming)
-            {
-                StopStreaming();
-            }
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
 
             var stopwatch = Stopwatch.StartNew();
             long fileSize = 0;
