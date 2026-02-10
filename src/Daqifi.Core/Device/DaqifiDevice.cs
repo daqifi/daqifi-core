@@ -344,7 +344,9 @@ namespace Daqifi.Core.Device
                     }
                 }
 
-                // Stop the protobuf consumer
+                // Stop the protobuf consumer so it doesn't compete for stream bytes.
+                // The serial transport sets ReadTimeout=500ms after connect, so the
+                // consumer thread's blocking Read will unblock within 500ms.
                 if (_messageConsumer != null)
                 {
                     _messageConsumer.MessageReceived -= OnInboundMessageReceived;

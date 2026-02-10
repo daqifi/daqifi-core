@@ -127,6 +127,13 @@ public class SerialStreamTransport : IStreamTransport
                 };
 
                 _serialPort.Open();
+
+                // After a successful open, lower the ReadTimeout to a short operational
+                // value. The connection timeout is only needed for retry/backoff logic,
+                // not for blocking reads during normal operation. A short ReadTimeout
+                // ensures consumer threads can be stopped promptly (StopSafely).
+                _serialPort.ReadTimeout = 500;
+
                 OnStatusChanged(true, null);
                 return; // Success!
             }
