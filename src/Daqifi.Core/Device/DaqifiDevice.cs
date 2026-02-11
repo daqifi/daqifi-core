@@ -310,6 +310,11 @@ namespace Daqifi.Core.Device
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default)
         {
+            if (responseTimeoutMs <= 0)
+                throw new ArgumentOutOfRangeException(nameof(responseTimeoutMs), responseTimeoutMs, "Timeout must be positive.");
+            if (completionTimeoutMs <= 0)
+                throw new ArgumentOutOfRangeException(nameof(completionTimeoutMs), completionTimeoutMs, "Timeout must be positive.");
+
             var sw = Stopwatch.StartNew();
 
             if (!IsConnected)

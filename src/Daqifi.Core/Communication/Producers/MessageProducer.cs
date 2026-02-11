@@ -104,6 +104,7 @@ public class MessageProducer<T> : IMessageProducer<T>
         
         // Queue is empty, now stop normally
         _isRunning = false;
+        _messageAvailable.Set();
         _producerThread?.Join(1000);
         _producerThread = null;
         
