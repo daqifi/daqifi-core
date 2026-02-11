@@ -12,6 +12,7 @@ public class MessageProducer<T> : IMessageProducer<T>
 {
     private readonly Stream _stream;
     private readonly ConcurrentQueue<IOutboundMessage<T>> _messageQueue;
+    private readonly ManualResetEventSlim _messageAvailable = new(false);
     private volatile bool _isRunning;
     private bool _disposed;
     private Thread? _producerThread;
@@ -62,13 +63,14 @@ public class MessageProducer<T> : IMessageProducer<T>
     public void Stop()
     {
         _isRunning = false;
-        
+        _messageAvailable.Set();
+
         // Clear the queue
         while (_messageQueue.TryDequeue(out _))
         {
             // Empty the queue
         }
-        
+
         // Wait for thread to finish
         _producerThread?.Join(1000);
         _producerThread = null;
@@ -102,6 +104,7 @@ public class MessageProducer<T> : IMessageProducer<T>
         
         // Queue is empty, now stop normally
         _isRunning = false;
+        _messageAvailable.Set();
         _producerThread?.Join(1000);
         _producerThread = null;
         
@@ -125,13 +128,7 @@ public class MessageProducer<T> : IMessageProducer<T>
             throw new InvalidOperationException("Message producer is not running. Call Start() first.");
 
         _messageQueue.Enqueue(message);
-        
-        // Double-check running state after enqueue to avoid race condition
-        if (!_isRunning)
-        {
-            // If stopped after enqueuing, we should still honor the contract
-            // The message is queued and will be processed when/if restarted
-        }
+        _messageAvailable.Set();
     }
 
     /// <summary>
@@ -143,9 +140,10 @@ public class MessageProducer<T> : IMessageProducer<T>
         {
             try
             {
-                // Sleep first to avoid busy waiting
-                Thread.Sleep(100);
-                
+                // Wait for a message to be enqueued or timeout after 100ms
+                _messageAvailable.Wait(100);
+                _messageAvailable.Reset();
+
                 // Process all available messages
                 while (_messageQueue.TryDequeue(out var message))
                 {
@@ -197,6 +195,7 @@ public class MessageProducer<T> : IMessageProducer<T>
         if (!_disposed)
         {
             StopSafely();
+            _messageAvailable.Dispose();
             _disposed = true;
         }
     }

@@ -790,6 +790,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default)
             {
                 setupAction();
@@ -826,6 +827,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default)
             {
                 // Execute the setup action so we can capture the SCPI commands
@@ -864,6 +866,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default)
             {
                 setupAction();
