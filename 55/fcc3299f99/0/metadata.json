@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.3",
+  "checkpoint_id": "55fcc3299f99",
+  "session_id": "b27ea555-6ebb-4b89-8323-488a6c7c1c7a",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-13T04:50:02.9122Z",
+  "branch": "feature/multi-format-sd-card-logging",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/Daqifi.Core/Device/DaqifiStreamingDevice.cs"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "d2f2e77c-93f5-46ea-8fd9-cf0788043981",
+  "checkpoint_transcript_start": 169,
+  "transcript_lines_at_start": 169,
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 13751,
+    "cache_read_tokens": 1277695,
+    "output_tokens": 991,
+    "api_call_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-13T04:50:02.70037Z",
+    "agent_lines": 0,
+    "human_added": 296,
+    "human_modified": 13621,
+    "human_removed": 0,
+    "total_committed": 298,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-tylerkron-projects-daqifi-core-and-desktop-daqifi-core/b27ea555-6ebb-4b89-8323-488a6c7c1c7a.jsonl"
+}

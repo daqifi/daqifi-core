@@ -1,0 +1,9 @@
+Implement https://github.com/daqifi/daqifi-core/issues/123
+
+---
+
+does the readme need to be updated too?
+
+---
+
+review qodo feedback. Implement what you agree with and tell me what you disagree with
