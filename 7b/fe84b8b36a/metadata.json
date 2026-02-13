@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.3",
+  "checkpoint_id": "7bfe84b8b36a",
+  "strategy": "manual-commit",
+  "branch": "feature/multi-format-sd-card-logging",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/Daqifi.Core.Tests/Device/SdCard/SdCardFileListParserTests.cs",
+    "src/Daqifi.Core.Tests/Device/SdCard/SdCardFileParserTests.cs",
+    "src/Daqifi.Core.Tests/Device/SdCard/SdCardOperationsTests.cs",
+    "src/Daqifi.Core/Communication/Producers/ScpiMessageProducer.cs",
+    "src/Daqifi.Core/Device/DaqifiStreamingDevice.cs",
+    "src/Daqifi.Core/Device/SdCard/SdCardLogFormat.cs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7b/fe84b8b36a/0/metadata.json",
+      "transcript": "/7b/fe84b8b36a/0/full.jsonl",
+      "context": "/7b/fe84b8b36a/0/context.md",
+      "content_hash": "/7b/fe84b8b36a/0/content_hash.txt",
+      "prompt": "/7b/fe84b8b36a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 282986,
+    "cache_read_tokens": 7178595,
+    "output_tokens": 9867,
+    "api_call_count": 62
+  }
+}

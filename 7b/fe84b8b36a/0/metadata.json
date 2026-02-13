@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.3",
+  "checkpoint_id": "7bfe84b8b36a",
+  "session_id": "b27ea555-6ebb-4b89-8323-488a6c7c1c7a",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-13T20:41:24.941546Z",
+  "branch": "feature/multi-format-sd-card-logging",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/Daqifi.Core.Tests/Device/SdCard/SdCardFileListParserTests.cs",
+    "src/Daqifi.Core.Tests/Device/SdCard/SdCardFileParserTests.cs",
+    "src/Daqifi.Core.Tests/Device/SdCard/SdCardOperationsTests.cs",
+    "src/Daqifi.Core/Communication/Producers/ScpiMessageProducer.cs",
+    "src/Daqifi.Core/Device/DaqifiStreamingDevice.cs",
+    "src/Daqifi.Core/Device/SdCard/SdCardLogFormat.cs"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "d9acf033-d049-4bcd-9e30-d31f86ccde4d",
+  "checkpoint_transcript_start": 226,
+  "transcript_lines_at_start": 226,
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 282986,
+    "cache_read_tokens": 7178595,
+    "output_tokens": 9867,
+    "api_call_count": 62
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-13T20:41:24.38201Z",
+    "agent_lines": 0,
+    "human_added": 297,
+    "human_modified": 13621,
+    "human_removed": 0,
+    "total_committed": 297,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-tylerkron-projects-daqifi-core-and-desktop-daqifi-core/b27ea555-6ebb-4b89-8323-488a6c7c1c7a.jsonl"
+}
