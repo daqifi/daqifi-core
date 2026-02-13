@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.3",
+  "checkpoint_id": "5d8fa90a2c01",
+  "session_id": "b27ea555-6ebb-4b89-8323-488a6c7c1c7a",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-13T20:43:01.402719Z",
+  "branch": "fix/parallel-tfm-test-race",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/Daqifi.Core.Tests/Device/SdCard/SdCardFileParserTests.cs"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "2ed06714-b3a4-41fc-b506-752219efd04a",
+  "checkpoint_transcript_start": 527,
+  "transcript_lines_at_start": 527,
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 3890,
+    "cache_read_tokens": 1194053,
+    "output_tokens": 370,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-13T20:43:00.83546Z",
+    "agent_lines": 0,
+    "human_added": 300,
+    "human_modified": 13621,
+    "human_removed": 0,
+    "total_committed": 300,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-tylerkron-projects-daqifi-core-and-desktop-daqifi-core/b27ea555-6ebb-4b89-8323-488a6c7c1c7a.jsonl"
+}
