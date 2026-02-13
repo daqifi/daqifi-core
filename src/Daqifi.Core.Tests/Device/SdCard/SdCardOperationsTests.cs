@@ -293,20 +293,20 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task StartSdCardLoggingAsync_WithTestDataFormat_SendsTestDataFormatCommand()
+        public async Task StartSdCardLoggingAsync_WithCsvFormat_SendsCsvFormatCommand()
         {
             // Arrange
             var device = new TestableSdCardStreamingDevice("TestDevice");
             device.Connect();
 
             // Act
-            await device.StartSdCardLoggingAsync("mylog.dat", SdCardLogFormat.TestData);
+            await device.StartSdCardLoggingAsync("mylog.csv", SdCardLogFormat.Csv);
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
             Assert.Equal(4, sentCommands.Count);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.dat\"", sentCommands[1]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.csv\"", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:FORmat 2", sentCommands[2]);
             Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
         }
@@ -331,21 +331,21 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task StartSdCardLoggingAsync_WithNullFileName_TestDataFormat_GeneratesDatExtension()
+        public async Task StartSdCardLoggingAsync_WithNullFileName_CsvFormat_GeneratesCsvExtension()
         {
             // Arrange
             var device = new TestableSdCardStreamingDevice("TestDevice");
             device.Connect();
 
             // Act
-            await device.StartSdCardLoggingAsync(null, SdCardLogFormat.TestData);
+            await device.StartSdCardLoggingAsync(null, SdCardLogFormat.Csv);
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
             var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
-            Assert.Contains(".dat", loggingCommand);
+            Assert.Contains(".csv", loggingCommand);
             Assert.DoesNotContain(".bin", loggingCommand);
         }
 
@@ -358,6 +358,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Act — explicitly specifying Protobuf format should behave identically to the default
             await device.StartSdCardLoggingAsync("mylog.bin", SdCardLogFormat.Protobuf);
+
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();

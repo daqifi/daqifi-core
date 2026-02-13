@@ -341,7 +341,7 @@ namespace Daqifi.Core.Device
             var extension = format switch
             {
                 SdCardLogFormat.Json => ".json",
-                SdCardLogFormat.TestData => ".dat",
+                SdCardLogFormat.Csv => ".csv",
                 _ => ".bin",
             };
 

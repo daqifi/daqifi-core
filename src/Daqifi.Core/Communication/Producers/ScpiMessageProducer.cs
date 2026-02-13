@@ -293,14 +293,14 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> SetJsonStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 1");
 
     /// <summary>
-    /// Creates a command message to set the stream format to TestData (diagnostic).
+    /// Creates a command message to set the stream format to CSV.
     /// </summary>
     /// <remarks>
-    /// Sets the stream format to TestData (format = 2).
+    /// Sets the stream format to CSV (format = 2).
     /// Command: SYSTem:STReam:FORmat 2
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetTestDataStreamFormat);
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetCsvStreamFormat);
     /// </remarks>
-    public static IOutboundMessage<string> SetTestDataStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 2");
+    public static IOutboundMessage<string> SetCsvStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 2");
 
     /// <summary>
     /// Creates a query message to get the current stream format.
@@ -309,7 +309,7 @@ public class ScpiMessageProducer
     /// Returns the current stream format:
     /// - 0 = Protobuf
     /// - 1 = JSON
-    /// - 2 = TestData
+    /// - 2 = CSV
     /// Command: SYSTem:STReam:FORmat?
     /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamFormat);
     /// </remarks>

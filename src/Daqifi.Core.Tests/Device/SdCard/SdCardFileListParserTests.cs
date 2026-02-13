@@ -191,24 +191,24 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public void ParseFileList_WithDatLogFileName_ParsesDate()
+        public void ParseFileList_WithCsvLogFileName_ParsesDate()
         {
             // Arrange
-            var lines = new[] { "log_20240115_103000.dat" };
+            var lines = new[] { "log_20240115_103000.csv" };
 
             // Act
             var result = SdCardFileListParser.ParseFileList(lines);
 
             // Assert
             Assert.Single(result);
-            Assert.Equal("log_20240115_103000.dat", result[0].FileName);
+            Assert.Equal("log_20240115_103000.csv", result[0].FileName);
             Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), result[0].CreatedDate);
         }
 
         [Theory]
         [InlineData("log_20240115_103000.bin", "log_20240115_103000.bin")]
         [InlineData("log_20240115_103000.json", "log_20240115_103000.json")]
-        [InlineData("log_20240115_103000.dat", "log_20240115_103000.dat")]
+        [InlineData("log_20240115_103000.csv", "log_20240115_103000.csv")]
         public void ParseFileList_WithMultipleFormats_RetainsCorrectFileName(string input, string expected)
         {
             // Arrange

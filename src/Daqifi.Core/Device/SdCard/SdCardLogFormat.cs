@@ -19,8 +19,8 @@ namespace Daqifi.Core.Device.SdCard
         Json = 1,
 
         /// <summary>
-        /// TestData format (.dat). Diagnostic format containing checksums and counters.
+        /// CSV text format (.csv). Comma-separated values for easy import into spreadsheet tools.
         /// </summary>
-        TestData = 2,
+        Csv = 2,
     }
 }
