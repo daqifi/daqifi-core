@@ -174,5 +174,53 @@ namespace Daqifi.Core.Tests.Device.SdCard
             // Assert
             Assert.Empty(result);
         }
+
+        [Fact]
+        public void ParseFileList_WithJsonLogFileName_ParsesDate()
+        {
+            // Arrange
+            var lines = new[] { "log_20240115_103000.json" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("log_20240115_103000.json", result[0].FileName);
+            Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), result[0].CreatedDate);
+        }
+
+        [Fact]
+        public void ParseFileList_WithCsvLogFileName_ParsesDate()
+        {
+            // Arrange
+            var lines = new[] { "log_20240115_103000.csv" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("log_20240115_103000.csv", result[0].FileName);
+            Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), result[0].CreatedDate);
+        }
+
+        [Theory]
+        [InlineData("log_20240115_103000.bin", "log_20240115_103000.bin")]
+        [InlineData("log_20240115_103000.json", "log_20240115_103000.json")]
+        [InlineData("log_20240115_103000.csv", "log_20240115_103000.csv")]
+        public void ParseFileList_WithMultipleFormats_RetainsCorrectFileName(string input, string expected)
+        {
+            // Arrange
+            var lines = new[] { input };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal(expected, result[0].FileName);
+            Assert.NotNull(result[0].CreatedDate);
+        }
     }
 }
