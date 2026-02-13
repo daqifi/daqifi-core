@@ -351,12 +351,8 @@ namespace Daqifi.Core.Device
 
             ValidateSdCardFileName(logFileName);
 
-            var formatCommand = format switch
-            {
-                SdCardLogFormat.Json => ScpiMessageProducer.SetJsonStreamFormat,
-                SdCardLogFormat.TestData => ScpiMessageProducer.SetTestDataStreamFormat,
-                _ => ScpiMessageProducer.SetProtobufStreamFormat,
-            };
+            // SdCardLogFormat integer values map 1:1 to SYSTem:STReam:FORmat SCPI arguments
+            var formatCommand = new ScpiMessage($"SYSTem:STReam:FORmat {(int)format}");
 
             Send(ScpiMessageProducer.EnableStorageSd);
             Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
