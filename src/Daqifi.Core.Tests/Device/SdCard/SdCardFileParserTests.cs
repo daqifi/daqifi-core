@@ -521,7 +521,10 @@ public class SdCardFileParserTests
                 timestamp: 500,
                 analogFloatValues: new[] { 42.0f }));
 
-        var tempPath = Path.Combine(Path.GetTempPath(), "log_20240115_103000.bin");
+        // Use a unique temp directory so parallel multi-TFM test runs don't share the same path
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempDir);
+        var tempPath = Path.Combine(tempDir, "log_20240115_103000.bin");
         try
         {
             await File.WriteAllBytesAsync(tempPath, builder.Build().ToArray());
@@ -541,7 +544,7 @@ public class SdCardFileParserTests
         }
         finally
         {
-            File.Delete(tempPath);
+            Directory.Delete(tempDir, recursive: true);
         }
     }
 
