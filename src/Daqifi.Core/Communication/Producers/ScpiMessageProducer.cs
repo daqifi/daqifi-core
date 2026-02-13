@@ -293,6 +293,16 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> SetJsonStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 1");
 
     /// <summary>
+    /// Creates a command message to set the stream format to TestData (diagnostic).
+    /// </summary>
+    /// <remarks>
+    /// Sets the stream format to TestData (format = 2).
+    /// Command: SYSTem:STReam:FORmat 2
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetTestDataStreamFormat);
+    /// </remarks>
+    public static IOutboundMessage<string> SetTestDataStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 2");
+
+    /// <summary>
     /// Creates a query message to get the current stream format.
     /// </summary>
     /// <remarks>

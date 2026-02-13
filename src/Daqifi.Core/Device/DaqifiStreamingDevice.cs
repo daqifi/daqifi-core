@@ -320,14 +320,16 @@ namespace Daqifi.Core.Device
         /// Starts logging data to the SD card.
         /// </summary>
         /// <param name="fileName">
-        /// The name of the log file. If null, a timestamped name is generated automatically
-        /// using the pattern "log_YYYYMMDD_HHMMSS.bin".
+        /// The name of the log file. If null or empty, a timestamped name is generated automatically
+        /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
+        /// (.bin for Protobuf, .json for JSON, .dat for TestData).
         /// </param>
+        /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task StartSdCardLoggingAsync(string? fileName = null, CancellationToken cancellationToken = default)
+        public Task StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
@@ -336,15 +338,29 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            var extension = format switch
+            {
+                SdCardLogFormat.Json => ".json",
+                SdCardLogFormat.TestData => ".dat",
+                _ => ".bin",
+            };
+
             var logFileName = !string.IsNullOrWhiteSpace(fileName)
                 ? fileName!
-                : $"log_{DateTime.Now:yyyyMMdd_HHmmss}.bin";
+                : $"log_{DateTime.Now:yyyyMMdd_HHmmss}{extension}";
 
             ValidateSdCardFileName(logFileName);
 
+            var formatCommand = format switch
+            {
+                SdCardLogFormat.Json => ScpiMessageProducer.SetJsonStreamFormat,
+                SdCardLogFormat.TestData => ScpiMessageProducer.SetTestDataStreamFormat,
+                _ => ScpiMessageProducer.SetProtobufStreamFormat,
+            };
+
             Send(ScpiMessageProducer.EnableStorageSd);
             Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
-            Send(ScpiMessageProducer.SetProtobufStreamFormat);
+            Send(formatCommand);
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
 
             _isLoggingToSdCard = true;

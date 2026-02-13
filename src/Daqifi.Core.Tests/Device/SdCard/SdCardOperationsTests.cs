@@ -274,6 +274,97 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task StartSdCardLoggingAsync_WithJsonFormat_SendsJsonFormatCommand()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync("mylog.json", SdCardLogFormat.Json);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(4, sentCommands.Count);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.json\"", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:FORmat 1", sentCommands[2]);
+            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithTestDataFormat_SendsTestDataFormatCommand()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync("mylog.dat", SdCardLogFormat.TestData);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(4, sentCommands.Count);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.dat\"", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:FORmat 2", sentCommands[2]);
+            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithNullFileName_JsonFormat_GeneratesJsonExtension()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync(null, SdCardLogFormat.Json);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            Assert.NotNull(loggingCommand);
+            Assert.Contains("log_", loggingCommand);
+            Assert.Contains(".json", loggingCommand);
+            Assert.DoesNotContain(".bin", loggingCommand);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithNullFileName_TestDataFormat_GeneratesDatExtension()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync(null, SdCardLogFormat.TestData);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            Assert.NotNull(loggingCommand);
+            Assert.Contains("log_", loggingCommand);
+            Assert.Contains(".dat", loggingCommand);
+            Assert.DoesNotContain(".bin", loggingCommand);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithProtobufFormat_SendsProtobufFormatCommand()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act — explicitly specifying Protobuf format should behave identically to the default
+            await device.StartSdCardLoggingAsync("mylog.bin", SdCardLogFormat.Protobuf);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STReam:FORmat 0", sentCommands);
+        }
+
+        [Fact]
         public async Task StartSdCardLoggingAsync_WhenDisconnected_Throws()
         {
             // Arrange
