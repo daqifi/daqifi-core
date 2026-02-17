@@ -281,7 +281,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.Connect();
 
             // Act
-            await device.StartSdCardLoggingAsync("mylog.json", SdCardLogFormat.Json);
+            await device.StartSdCardLoggingAsync("mylog.json", format: SdCardLogFormat.Json);
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -300,7 +300,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.Connect();
 
             // Act
-            await device.StartSdCardLoggingAsync("mylog.csv", SdCardLogFormat.Csv);
+            await device.StartSdCardLoggingAsync("mylog.csv", format: SdCardLogFormat.Csv);
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -319,7 +319,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.Connect();
 
             // Act
-            await device.StartSdCardLoggingAsync(null, SdCardLogFormat.Json);
+            await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Json);
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -338,7 +338,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.Connect();
 
             // Act
-            await device.StartSdCardLoggingAsync(null, SdCardLogFormat.Csv);
+            await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Csv);
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -357,7 +357,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.Connect();
 
             // Act — explicitly specifying Protobuf format should behave identically to the default
-            await device.StartSdCardLoggingAsync("mylog.bin", SdCardLogFormat.Protobuf);
+            await device.StartSdCardLoggingAsync("mylog.bin", format: SdCardLogFormat.Protobuf);
 
 
             // Assert

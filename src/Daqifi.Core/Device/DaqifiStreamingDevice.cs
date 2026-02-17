@@ -324,12 +324,16 @@ namespace Daqifi.Core.Device
         /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
         /// (.bin for Protobuf, .json for JSON, .dat for TestData).
         /// </param>
+        /// <param name="channelMask">
+        /// Optional binary string mask to enable specific ADC channels (e.g. "0000000011" enables channels 0 and 1).
+        /// If null or empty, the current device channel configuration is used.
+        /// </param>
         /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task StartSdCardLoggingAsync(string? fileName = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+        public async Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
@@ -355,14 +359,24 @@ namespace Daqifi.Core.Device
             var formatCommand = new ScpiMessage($"SYSTem:STReam:FORmat {(int)format}");
 
             Send(ScpiMessageProducer.EnableStorageSd);
+            await Task.Delay(100, cancellationToken);
+
             Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
+            await Task.Delay(100, cancellationToken);
+
             Send(formatCommand);
+            await Task.Delay(100, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(channelMask))
+            {
+                Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
+                await Task.Delay(100, cancellationToken);
+            }
+
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
 
             _isLoggingToSdCard = true;
             IsStreaming = true;
-
-            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -608,7 +622,9 @@ namespace Daqifi.Core.Device
             IProgress<SdCardTransferProgress>? progress = null,
             CancellationToken cancellationToken = default)
         {
-            var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}.bin");
+            var ext = Path.GetExtension(fileName);
+            if (string.IsNullOrEmpty(ext)) ext = ".bin";
+            var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}{ext}");
             try
             {
                 await using var fileStream = new FileStream(
