@@ -37,4 +37,11 @@ public sealed class SdCardParseOptions
     /// </para>
     /// </summary>
     public uint FallbackTimestampFrequency { get; set; }
+
+    /// <summary>
+    /// Gets or sets a device configuration override for formats that don't embed
+    /// config metadata (JSON/CSV). When set, this config is used instead of inference.
+    /// For Protobuf files, this is ignored since config is embedded in the file.
+    /// </summary>
+    public SdCardDeviceConfiguration? ConfigurationOverride { get; set; }
 }
