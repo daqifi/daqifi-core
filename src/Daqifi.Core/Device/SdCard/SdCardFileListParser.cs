@@ -40,6 +40,12 @@ namespace Daqifi.Core.Device.SdCard
 
                 var path = line.Trim();
 
+                // Skip SCPI error responses (e.g., "**ERROR: -200, \"Execution error\"")
+                if (path.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 // If a file size is present after the path, keep only the first token.
                 var tokenEnd = path.IndexOfAny(new[] { ' ', '\t' });
                 if (tokenEnd > 0)

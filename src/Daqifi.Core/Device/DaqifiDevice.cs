@@ -6,6 +6,8 @@ using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Protocol;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -271,7 +273,7 @@ namespace Daqifi.Core.Device
                 if (_messageConsumer != null)
                 {
                     _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    var stopped = _messageConsumer.StopSafely(timeoutMs: 6000);
+                    var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
                     if (!stopped)
                     {
                         _messageConsumer.Stop();
@@ -297,7 +299,8 @@ namespace Daqifi.Core.Device
         /// line-based text consumer, collecting text responses, then restoring the protobuf consumer.
         /// </summary>
         /// <param name="setupAction">An action that sends SCPI commands to the device while the text consumer is active.</param>
-        /// <param name="responseTimeoutMs">The time in milliseconds to wait for text responses after sending commands.</param>
+        /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
+        /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A list of text lines received from the device.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
@@ -305,8 +308,16 @@ namespace Daqifi.Core.Device
         protected virtual async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
+            int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default)
         {
+            if (responseTimeoutMs <= 0)
+                throw new ArgumentOutOfRangeException(nameof(responseTimeoutMs), responseTimeoutMs, "Timeout must be positive.");
+            if (completionTimeoutMs <= 0)
+                throw new ArgumentOutOfRangeException(nameof(completionTimeoutMs), completionTimeoutMs, "Timeout must be positive.");
+
+            var sw = Stopwatch.StartNew();
+
             if (!IsConnected)
             {
                 throw new InvalidOperationException("Device is not connected.");
@@ -339,16 +350,20 @@ namespace Daqifi.Core.Device
                     }
                 }
 
-                // Stop the protobuf consumer
+                // Stop the protobuf consumer so it doesn't compete for stream bytes.
+                // The serial transport sets ReadTimeout=500ms after connect, so the
+                // consumer thread's blocking Read will unblock within 500ms.
                 if (_messageConsumer != null)
                 {
                     _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    var stopped = _messageConsumer.StopSafely(timeoutMs: 6000);
+                    var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
                     if (!stopped)
                     {
                         _messageConsumer.Stop();
                     }
                 }
+
+                Trace.WriteLine($"[ExecuteTextCommandAsync] Protobuf consumer stopped at {sw.ElapsedMilliseconds}ms");
 
                 // Create a temporary text consumer on the same stream
                 using var textConsumer = new StreamMessageConsumer<string>(
@@ -363,14 +378,17 @@ namespace Daqifi.Core.Device
                 textConsumer.Start();
                 await Task.Delay(50, cancellationToken);
 
+                Trace.WriteLine($"[ExecuteTextCommandAsync] Text consumer started at {sw.ElapsedMilliseconds}ms");
+
                 // Execute the setup action (sends SCPI commands)
                 setupAction();
 
-                // Wait for responses using an inactivity-based timeout.
-                // Instead of a fixed delay, poll for new messages and stop when
-                // no new messages arrive within the timeout window.
+                Trace.WriteLine($"[ExecuteTextCommandAsync] Setup action completed at {sw.ElapsedMilliseconds}ms");
+
+                // Wait for responses using a two-phase inactivity-based timeout:
+                // Phase 1: Wait up to responseTimeoutMs for the first response.
+                // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
                 var lastMessageTime = DateTime.UtcNow;
-                var inactivityTimeout = TimeSpan.FromMilliseconds(responseTimeoutMs);
                 var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
                 var startTime = DateTime.UtcNow;
                 var hasReceivedAny = false;
@@ -382,14 +400,34 @@ namespace Daqifi.Core.Device
                     if (collectedLines.Count > previousCount)
                     {
                         lastMessageTime = DateTime.UtcNow;
-                        hasReceivedAny = true;
+                        if (!hasReceivedAny)
+                        {
+                            hasReceivedAny = true;
+                            Trace.WriteLine($"[ExecuteTextCommandAsync] First response at {sw.ElapsedMilliseconds}ms");
+                        }
                     }
 
-                    if (hasReceivedAny && DateTime.UtcNow - lastMessageTime >= inactivityTimeout)
+                    var elapsed = DateTime.UtcNow - lastMessageTime;
+
+                    if (hasReceivedAny)
                     {
-                        break;
+                        // Phase 2: short completion timeout after first data
+                        if (elapsed >= TimeSpan.FromMilliseconds(completionTimeoutMs))
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        // Phase 1: full initial timeout waiting for first data
+                        if (elapsed >= TimeSpan.FromMilliseconds(responseTimeoutMs))
+                        {
+                            break;
+                        }
                     }
                 }
+
+                Trace.WriteLine($"[ExecuteTextCommandAsync] Collection complete at {sw.ElapsedMilliseconds}ms, {collectedLines.Count} lines");
 
                 // Stop the text consumer
                 textConsumer.StopSafely();
@@ -414,6 +452,8 @@ namespace Daqifi.Core.Device
                     _messageConsumer.Start();
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
+
+                Trace.WriteLine($"[ExecuteTextCommandAsync] Total elapsed: {sw.ElapsedMilliseconds}ms");
             }
 
             return collectedLines;
@@ -506,19 +546,37 @@ namespace Daqifi.Core.Device
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
 
-                // Standard initialization sequence with delays between commands
-                Send(ScpiMessageProducer.DisableDeviceEcho);
-                await Task.Delay(100);
+                // Send the text-mode SCPI setup commands via ExecuteTextCommandAsync so that
+                // any -200 execution error response is captured rather than silently discarded
+                // by the protobuf consumer.  The protobuf consumer is stopped for the duration
+                // of this call and restarted afterward, leaving the device in protobuf mode
+                // and ready to receive the SYSInfoPB? response.
+                var initLines = await ExecuteTextCommandAsync(() =>
+                {
+                    Send(ScpiMessageProducer.DisableDeviceEcho);
+                    Thread.Sleep(100);
 
-                Send(ScpiMessageProducer.StopStreaming);
-                await Task.Delay(100);
+                    Send(ScpiMessageProducer.StopStreaming);
+                    Thread.Sleep(100);
 
-                Send(ScpiMessageProducer.TurnDeviceOn);
-                await Task.Delay(100);
+                    Send(ScpiMessageProducer.TurnDeviceOn);
+                    Thread.Sleep(100);
 
-                Send(ScpiMessageProducer.SetProtobufStreamFormat);
-                await Task.Delay(100);
+                    Send(ScpiMessageProducer.SetProtobufStreamFormat);
+                }, responseTimeoutMs: 1000, cancellationToken: CancellationToken.None);
 
+                // Surface any SCPI error that occurred during initialization so callers
+                // know the device is not in the expected state.
+                var errorLine = initLines.FirstOrDefault(
+                    l => l.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
+                if (errorLine != null)
+                {
+                    throw new InvalidOperationException(
+                        $"Device returned a SCPI error during initialization: {errorLine.Trim()}");
+                }
+
+                // Query device info – expects a protobuf response, so use plain Send()
+                // now that the protobuf consumer is running again.
                 Send(ScpiMessageProducer.GetDeviceInfo);
                 await Task.Delay(500); // Longer delay to allow device info response
 

@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,19 @@ namespace Daqifi.Core.Device
         /// The delay in milliseconds to wait for the WiFi module to restart after applying configuration.
         /// </summary>
         private const int WIFI_MODULE_RESTART_DELAY_MS = 2000;
+
+        /// <summary>
+        /// The delay in milliseconds to wait after switching between LAN and SD card interfaces.
+        /// The SD card and LAN share the SPI bus, so a settle period is needed for the device
+        /// firmware to complete the interface switch before sending further commands.
+        /// </summary>
+        private const int SD_INTERFACE_SETTLE_DELAY_MS = 100;
+
+        /// <summary>
+        /// Maximum number of retry attempts for SD card list operations that receive transient
+        /// SCPI errors (e.g., -200 Execution error) due to interface-switch timing.
+        /// </summary>
+        private const int SD_LIST_MAX_RETRIES = 1;
 
         private bool _isLoggingToSdCard;
         private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
@@ -245,11 +259,9 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Stop streaming if active
-            if (IsStreaming)
-            {
-                StopStreaming();
-            }
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
 
             IReadOnlyList<string> lines;
             try
@@ -257,8 +269,38 @@ namespace Daqifi.Core.Device
                 lines = await ExecuteTextCommandAsync(() =>
                 {
                     PrepareSdInterface();
+
+                    // Allow the device firmware to complete the SPI bus switch
+                    // before querying the SD card. Without this delay, the device
+                    // can return SCPI error -200 (Execution error).
+                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+
                     Send(ScpiMessageProducer.GetSdFileList);
                 }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                // If the response contains a SCPI error (transient timing issue),
+                // retry once after an additional settle delay.
+                if (ContainsScpiError(lines))
+                {
+                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+
+                        lines = await ExecuteTextCommandAsync(() =>
+                        {
+                            PrepareSdInterface();
+                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                            Send(ScpiMessageProducer.GetSdFileList);
+                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                        if (!ContainsScpiError(lines))
+                        {
+                            break;
+                        }
+                    }
+                }
             }
             finally
             {
@@ -278,14 +320,20 @@ namespace Daqifi.Core.Device
         /// Starts logging data to the SD card.
         /// </summary>
         /// <param name="fileName">
-        /// The name of the log file. If null, a timestamped name is generated automatically
-        /// using the pattern "log_YYYYMMDD_HHMMSS.bin".
+        /// The name of the log file. If null or empty, a timestamped name is generated automatically
+        /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
+        /// (.bin for Protobuf, .json for JSON, .dat for TestData).
         /// </param>
+        /// <param name="channelMask">
+        /// Optional binary string mask to enable specific ADC channels (e.g. "0000000011" enables channels 0 and 1).
+        /// If null or empty, the current device channel configuration is used.
+        /// </param>
+        /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task StartSdCardLoggingAsync(string? fileName = null, CancellationToken cancellationToken = default)
+        public async Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
@@ -294,21 +342,41 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            var extension = format switch
+            {
+                SdCardLogFormat.Json => ".json",
+                SdCardLogFormat.Csv => ".csv",
+                _ => ".bin",
+            };
+
             var logFileName = !string.IsNullOrWhiteSpace(fileName)
                 ? fileName!
-                : $"log_{DateTime.Now:yyyyMMdd_HHmmss}.bin";
+                : $"log_{DateTime.Now:yyyyMMdd_HHmmss}{extension}";
 
             ValidateSdCardFileName(logFileName);
 
+            // SdCardLogFormat integer values map 1:1 to SYSTem:STReam:FORmat SCPI arguments
+            var formatCommand = new ScpiMessage($"SYSTem:STReam:FORmat {(int)format}");
+
             Send(ScpiMessageProducer.EnableStorageSd);
+            await Task.Delay(100, cancellationToken);
+
             Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
-            Send(ScpiMessageProducer.SetProtobufStreamFormat);
+            await Task.Delay(100, cancellationToken);
+
+            Send(formatCommand);
+            await Task.Delay(100, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(channelMask))
+            {
+                Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
+                await Task.Delay(100, cancellationToken);
+            }
+
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
 
             _isLoggingToSdCard = true;
             IsStreaming = true;
-
-            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -365,11 +433,9 @@ namespace Daqifi.Core.Device
 
             ValidateSdCardFileName(fileName);
 
-            // Stop streaming if active
-            if (IsStreaming)
-            {
-                StopStreaming();
-            }
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
 
             IReadOnlyList<string> lines;
             try
@@ -377,9 +443,33 @@ namespace Daqifi.Core.Device
                 lines = await ExecuteTextCommandAsync(() =>
                 {
                     PrepareSdInterface();
+                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
                     Send(ScpiMessageProducer.DeleteSdFile(fileName));
                     Send(ScpiMessageProducer.GetSdFileList);
                 }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                if (ContainsScpiError(lines))
+                {
+                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+
+                        lines = await ExecuteTextCommandAsync(() =>
+                        {
+                            PrepareSdInterface();
+                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                            Send(ScpiMessageProducer.DeleteSdFile(fileName));
+                            Send(ScpiMessageProducer.GetSdFileList);
+                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                        if (!ContainsScpiError(lines))
+                        {
+                            break;
+                        }
+                    }
+                }
             }
             finally
             {
@@ -412,6 +502,10 @@ namespace Daqifi.Core.Device
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
 
             Send(ScpiMessageProducer.EnableStorageSd);
             Send(ScpiMessageProducer.FormatSdCard);
@@ -462,11 +556,9 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Cannot download files while logging to SD card.");
             }
 
-            // Stop streaming if active
-            if (IsStreaming)
-            {
-                StopStreaming();
-            }
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
 
             var stopwatch = Stopwatch.StartNew();
             long fileSize = 0;
@@ -530,7 +622,9 @@ namespace Daqifi.Core.Device
             IProgress<SdCardTransferProgress>? progress = null,
             CancellationToken cancellationToken = default)
         {
-            var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}.bin");
+            var ext = Path.GetExtension(fileName);
+            if (string.IsNullOrEmpty(ext)) ext = ".bin";
+            var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}{ext}");
             try
             {
                 await using var fileStream = new FileStream(
@@ -551,6 +645,18 @@ namespace Daqifi.Core.Device
                 try { File.Delete(tempPath); } catch { /* ignore cleanup failures */ }
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Checks whether any line in the response contains a SCPI error indicator.
+        /// These errors (e.g., "**ERROR: -200") can occur transiently when the device
+        /// firmware has not finished switching the SPI bus interface.
+        /// </summary>
+        /// <param name="lines">The response lines to check.</param>
+        /// <returns>True if any line contains a SCPI error, false otherwise.</returns>
+        private static bool ContainsScpiError(IReadOnlyList<string> lines)
+        {
+            return lines.Any(line => line.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>

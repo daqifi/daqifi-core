@@ -274,6 +274,98 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task StartSdCardLoggingAsync_WithJsonFormat_SendsJsonFormatCommand()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync("mylog.json", format: SdCardLogFormat.Json);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(4, sentCommands.Count);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.json\"", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:FORmat 1", sentCommands[2]);
+            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithCsvFormat_SendsCsvFormatCommand()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync("mylog.csv", format: SdCardLogFormat.Csv);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(4, sentCommands.Count);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.csv\"", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:FORmat 2", sentCommands[2]);
+            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithNullFileName_JsonFormat_GeneratesJsonExtension()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Json);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            Assert.NotNull(loggingCommand);
+            Assert.Contains("log_", loggingCommand);
+            Assert.Contains(".json", loggingCommand);
+            Assert.DoesNotContain(".bin", loggingCommand);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithNullFileName_CsvFormat_GeneratesCsvExtension()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Csv);
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            Assert.NotNull(loggingCommand);
+            Assert.Contains("log_", loggingCommand);
+            Assert.Contains(".csv", loggingCommand);
+            Assert.DoesNotContain(".bin", loggingCommand);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithProtobufFormat_SendsProtobufFormatCommand()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act — explicitly specifying Protobuf format should behave identically to the default
+            await device.StartSdCardLoggingAsync("mylog.bin", format: SdCardLogFormat.Protobuf);
+
+
+            // Assert
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STReam:FORmat 0", sentCommands);
+        }
+
+        [Fact]
         public async Task StartSdCardLoggingAsync_WhenDisconnected_Throws()
         {
             // Arrange
@@ -403,6 +495,75 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_WithScpiError_RetriesAndReturnsFiles()
+        {
+            // Arrange - simulate error on first call, success on second
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "Daqifi/log_20240115_103000.bin" });
+            device.Connect();
+
+            // Act
+            var files = await device.GetSdCardFilesAsync();
+
+            // Assert - should have retried and returned files from second attempt
+            Assert.Single(files);
+            Assert.Equal("log_20240115_103000.bin", files[0].FileName);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithPersistentScpiError_ReturnsEmptyAfterRetries()
+        {
+            // Arrange - simulate persistent error
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.Connect();
+
+            // Act
+            var files = await device.GetSdCardFilesAsync();
+
+            // Assert - should be empty since all responses were errors
+            Assert.Empty(files);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithScpiError_RetriesAndReturnsFiles()
+        {
+            // Arrange
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "Daqifi/remaining.bin" });
+            device.Connect();
+
+            // Act
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            // Assert
+            Assert.Single(device.SdCardFiles);
+            Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithNoError_DoesNotRetry()
+        {
+            // Arrange
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "Daqifi/test.bin" });
+            device.Connect();
+
+            // Act
+            var files = await device.GetSdCardFilesAsync();
+
+            // Assert
+            Assert.Single(files);
+            Assert.Equal(1, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
         public async Task FormatSdCardAsync_WhenConnected_SendsCorrectCommands()
         {
             // Arrange
@@ -412,11 +573,12 @@ namespace Daqifi.Core.Tests.Device.SdCard
             // Act
             await device.FormatSdCardAsync();
 
-            // Assert
+            // Assert — defensive stop is always sent first (issue #118)
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(2, sentCommands.Count);
-            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
-            Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[1]);
+            Assert.Equal(3, sentCommands.Count);
+            Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
+            Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[2]);
         }
 
         [Fact]
@@ -442,6 +604,79 @@ namespace Daqifi.Core.Tests.Device.SdCard
             await Assert.ThrowsAsync<InvalidOperationException>(
                 () => device.FormatSdCardAsync());
         }
+
+        #region Defensive stop tests (issue #118)
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            // Act
+            await device.GetSdCardFilesAsync();
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            // Act
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = new byte[] { 0x01 };
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
+        public async Task FormatSdCardAsync_WhenNotStreaming_StillSendsStopCommand()
+        {
+            // Arrange — device is connected but NOT streaming
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            // Act
+            await device.FormatSdCardAsync();
+
+            // Assert — stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        #endregion
 
         #region DownloadSdCardFileAsync Tests
 
@@ -622,6 +857,44 @@ namespace Daqifi.Core.Tests.Device.SdCard
         #endregion
 
         /// <summary>
+        /// A testable device that returns different responses on successive calls to
+        /// ExecuteTextCommandAsync, allowing tests to verify retry behavior.
+        /// </summary>
+        private class RetryableSdCardStreamingDevice : DaqifiStreamingDevice
+        {
+            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+            public Queue<List<string>> ResponseSequence { get; } = new();
+            public int ExecuteTextCommandCallCount { get; private set; }
+
+            public RetryableSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
+                : base(name, ipAddress)
+            {
+            }
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    SentMessages.Add(stringMessage);
+                }
+            }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                setupAction();
+                ExecuteTextCommandCallCount++;
+                var response = ResponseSequence.Count > 0
+                    ? ResponseSequence.Dequeue()
+                    : new List<string>();
+                return Task.FromResult<IReadOnlyList<string>>(response);
+            }
+        }
+
+        /// <summary>
         /// A testable version of DaqifiStreamingDevice that captures sent messages
         /// and returns canned text responses for ExecuteTextCommandAsync.
         /// </summary>
@@ -646,6 +919,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default)
             {
                 // Execute the setup action so we can capture the SCPI commands
@@ -684,6 +958,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default)
             {
                 setupAction();

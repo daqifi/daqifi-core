@@ -150,11 +150,16 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     continue;
                 }
 
-                // Try to read data from stream (non-blocking)
+                // Try to read data from stream
                 int bytesRead = 0;
                 try
                 {
                     bytesRead = _stream.Read(_buffer, 0, _buffer.Length);
+                }
+                catch (TimeoutException)
+                {
+                    // Expected when no data is available within ReadTimeout; just loop
+                    continue;
                 }
                 catch (Exception ex)
                 {
@@ -162,7 +167,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     Thread.Sleep(100); // Back off on error
                     continue;
                 }
-                
+
                 if (bytesRead == 0)
                 {
                     Thread.Sleep(10); // No data available, wait briefly

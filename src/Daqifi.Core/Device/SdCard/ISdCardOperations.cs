@@ -35,13 +35,19 @@ namespace Daqifi.Core.Device.SdCard
         /// Starts logging data to the SD card.
         /// </summary>
         /// <param name="fileName">
-        /// The name of the log file. If null, a timestamped name is generated automatically
-        /// using the pattern "log_YYYYMMDD_HHMMSS.bin".
+        /// The name of the log file. If null or empty, a timestamped name is generated automatically
+        /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
+        /// (.bin for Protobuf, .json for JSON, .dat for TestData).
         /// </param>
+        /// <param name="channelMask">
+        /// Optional binary string mask to enable specific ADC channels (e.g. "0000000011" enables channels 0 and 1).
+        /// If null or empty, the current device channel configuration is used.
+        /// </param>
+        /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
-        Task StartSdCardLoggingAsync(string? fileName = null, CancellationToken cancellationToken = default);
+        Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Stops logging data to the SD card.
