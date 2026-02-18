@@ -8,6 +8,7 @@ namespace Daqifi.Core.Communication.Transport;
 public sealed class HidLibraryTransport : IHidTransport
 {
     private static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DefaultWriteTimeout = TimeSpan.FromSeconds(10);
 
     private readonly IHidPlatform _hidPlatform;
     private readonly SemaphoreSlim _connectionLock = new(1, 1);
@@ -16,6 +17,7 @@ public sealed class HidLibraryTransport : IHidTransport
     private IHidTransportDevice? _connectedDevice;
     private bool _disposed;
     private TimeSpan _readTimeout = DefaultReadTimeout;
+    private TimeSpan _writeTimeout = DefaultWriteTimeout;
 
     /// <summary>
     /// Initializes a new transport instance backed by the default HidLibrary adapter.
@@ -51,12 +53,19 @@ public sealed class HidLibraryTransport : IHidTransport
         get => _readTimeout;
         set
         {
-            if (value <= TimeSpan.Zero)
-            {
-                throw new ArgumentOutOfRangeException(nameof(value), "Read timeout must be greater than zero.");
-            }
-
+            ValidateTimeout(value, nameof(value), "Read timeout must be greater than zero.");
             _readTimeout = value;
+        }
+    }
+
+    /// <inheritdoc />
+    public TimeSpan WriteTimeout
+    {
+        get => _writeTimeout;
+        set
+        {
+            ValidateTimeout(value, nameof(value), "Write timeout must be greater than zero.");
+            _writeTimeout = value;
         }
     }
 
@@ -150,7 +159,7 @@ public sealed class HidLibraryTransport : IHidTransport
         try
         {
             var device = GetConnectedDevice();
-            var timeoutMs = ToTimeoutMilliseconds(ReadTimeout);
+            var timeoutMs = ToTimeoutMilliseconds(WriteTimeout);
             var successful = await device.WriteAsync(data, timeoutMs)
                 .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -275,9 +284,14 @@ public sealed class HidLibraryTransport : IHidTransport
             return;
         }
 
+        _disposed = true;
+
+        var device = _connectedDevice;
+        ClearConnectionState();
+
         try
         {
-            Disconnect();
+            device?.Close();
         }
         catch
         {
@@ -286,7 +300,6 @@ public sealed class HidLibraryTransport : IHidTransport
 
         _connectionLock.Dispose();
         _ioLock.Dispose();
-        _disposed = true;
     }
 
     private static string? NormalizeSerialFilter(string? serialNumber)
@@ -312,10 +325,7 @@ public sealed class HidLibraryTransport : IHidTransport
 
     private static int ToTimeoutMilliseconds(TimeSpan timeout)
     {
-        if (timeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be greater than zero.");
-        }
+        ValidateTimeout(timeout, nameof(timeout), "Timeout must be greater than zero.");
 
         if (timeout.TotalMilliseconds > int.MaxValue)
         {
@@ -323,6 +333,14 @@ public sealed class HidLibraryTransport : IHidTransport
         }
 
         return (int)Math.Ceiling(timeout.TotalMilliseconds);
+    }
+
+    private static void ValidateTimeout(TimeSpan timeout, string parameterName, string message)
+    {
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(parameterName, message);
+        }
     }
 
     private IHidTransportDevice GetConnectedDevice()

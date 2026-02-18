@@ -25,20 +25,17 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
     /// Initializes a new finder that filters to DAQiFi bootloader VID/PID by default.
     /// </summary>
     public HidDeviceFinder()
-        : this(new HidLibraryDeviceEnumerator(), DefaultVendorId, DefaultProductId)
+        : this(new HidLibraryDeviceEnumerator())
     {
     }
 
-    internal HidDeviceFinder(
-        IHidDeviceEnumerator hidDeviceEnumerator,
-        int? vendorIdFilter = DefaultVendorId,
-        int? productIdFilter = DefaultProductId)
+    internal HidDeviceFinder(IHidDeviceEnumerator hidDeviceEnumerator)
     {
         _hidDeviceEnumerator = hidDeviceEnumerator
             ?? throw new ArgumentNullException(nameof(hidDeviceEnumerator));
 
-        VendorIdFilter = vendorIdFilter;
-        ProductIdFilter = productIdFilter;
+        VendorIdFilter = DefaultVendorId;
+        ProductIdFilter = DefaultProductId;
     }
 
     /// <summary>

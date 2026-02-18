@@ -28,6 +28,8 @@ public sealed class HidLibraryDeviceEnumerator : IHidDeviceEnumerator
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        // HidLibrary enumeration is synchronous; return a completed task to keep
+        // the interface async without adding extra thread-pool hops.
         var devices = _hidPlatform.EnumerateDevices()
             .Where(device => !vendorId.HasValue || device.VendorId == vendorId.Value)
             .Where(device => !productId.HasValue || device.ProductId == productId.Value)

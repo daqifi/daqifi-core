@@ -12,6 +12,7 @@ public class HidLibraryTransportTests
         using var transport = new HidLibraryTransport(platform);
 
         Assert.Equal(TimeSpan.FromSeconds(10), transport.ReadTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(10), transport.WriteTimeout);
     }
 
     [Fact]
@@ -51,6 +52,22 @@ public class HidLibraryTransportTests
     }
 
     [Fact]
+    public async Task ConnectAsync_WhenAlreadyConnected_DoesNotOpenAnotherDevice()
+    {
+        var first = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
+        var second = new FakeHidTransportDevice(0x04D8, 0x003C, "path-b", "SN-B");
+        var platform = new FakeHidPlatform([first, second]);
+
+        using var transport = new HidLibraryTransport(platform);
+        await transport.ConnectAsync(0x04D8, 0x003C);
+        await transport.ConnectAsync(0x04D8, 0x003C);
+
+        Assert.Equal(1, platform.EnumerateCalls);
+        Assert.Equal(1, first.OpenCount);
+        Assert.Equal(0, second.OpenCount);
+    }
+
+    [Fact]
     public async Task ConnectAsync_WhenNoMatchingDevice_ThrowsIOException()
     {
         var platform = new FakeHidPlatform([]);
@@ -81,6 +98,22 @@ public class HidLibraryTransportTests
         await transport.ConnectAsync(0x04D8, 0x003C);
 
         await Assert.ThrowsAsync<IOException>(() => transport.WriteAsync([0xAB, 0xCD]));
+    }
+
+    [Fact]
+    public async Task WriteAsync_UsesConfiguredWriteTimeout()
+    {
+        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
+        var platform = new FakeHidPlatform([device]);
+        using var transport = new HidLibraryTransport(platform)
+        {
+            WriteTimeout = TimeSpan.FromMilliseconds(321)
+        };
+
+        await transport.ConnectAsync(0x04D8, 0x003C);
+        await transport.WriteAsync([0xAB, 0xCD]);
+
+        Assert.Equal(321, device.LastWriteTimeoutMs);
     }
 
     [Fact]
@@ -159,7 +192,13 @@ public class HidLibraryTransportTests
             _devices = devices;
         }
 
-        public IReadOnlyList<IHidTransportDevice> EnumerateDevices() => _devices;
+        public int EnumerateCalls { get; private set; }
+
+        public IReadOnlyList<IHidTransportDevice> EnumerateDevices()
+        {
+            EnumerateCalls++;
+            return _devices;
+        }
     }
 
     private sealed class FakeHidTransportDevice : IHidTransportDevice

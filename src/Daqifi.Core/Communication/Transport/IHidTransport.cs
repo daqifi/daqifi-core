@@ -37,6 +37,12 @@ public interface IHidTransport : IDisposable
     TimeSpan ReadTimeout { get; set; }
 
     /// <summary>
+    /// Gets or sets the default write timeout used when <see cref="WriteAsync(byte[], CancellationToken)"/>
+    /// is called.
+    /// </summary>
+    TimeSpan WriteTimeout { get; set; }
+
+    /// <summary>
     /// Connects to a HID device by vendor/product identifier, optionally targeting a serial number.
     /// </summary>
     /// <param name="vendorId">Target USB vendor ID.</param>

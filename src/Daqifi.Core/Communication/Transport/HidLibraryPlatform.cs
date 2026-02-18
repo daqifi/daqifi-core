@@ -125,12 +125,11 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
     private static HidTransportReadResult MapReadResult(HidDeviceData deviceData)
     {
         var payload = deviceData.Data ?? Array.Empty<byte>();
-        var statusName = deviceData.Status.ToString();
 
-        return statusName switch
+        return deviceData.Status switch
         {
-            "Success" => HidTransportReadResult.Success(payload),
-            "WaitTimedOut" => HidTransportReadResult.TimedOut(payload),
+            HidDeviceData.ReadStatus.Success => HidTransportReadResult.Success(payload),
+            HidDeviceData.ReadStatus.WaitTimedOut => HidTransportReadResult.TimedOut(payload),
             _ => HidTransportReadResult.Error(
                 payload,
                 $"HID read failed with status '{deviceData.Status}'.")

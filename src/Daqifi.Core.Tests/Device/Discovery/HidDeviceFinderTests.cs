@@ -31,7 +31,7 @@ public class HidDeviceFinderTests
     public async Task DiscoverAsync_WithCustomFilters_UsesProvidedFilterValues()
     {
         var enumerator = new FakeHidDeviceEnumerator();
-        using var finder = new HidDeviceFinder(enumerator, vendorIdFilter: null, productIdFilter: null);
+        using var finder = new HidDeviceFinder(enumerator);
 
         finder.VendorIdFilter = 0x1234;
         finder.ProductIdFilter = 0x9999;
