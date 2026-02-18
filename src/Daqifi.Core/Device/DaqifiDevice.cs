@@ -7,6 +7,7 @@ using Daqifi.Core.Device.Protocol;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -545,19 +546,37 @@ namespace Daqifi.Core.Device
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
 
-                // Standard initialization sequence with delays between commands
-                Send(ScpiMessageProducer.DisableDeviceEcho);
-                await Task.Delay(100);
+                // Send the text-mode SCPI setup commands via ExecuteTextCommandAsync so that
+                // any -200 execution error response is captured rather than silently discarded
+                // by the protobuf consumer.  The protobuf consumer is stopped for the duration
+                // of this call and restarted afterward, leaving the device in protobuf mode
+                // and ready to receive the SYSInfoPB? response.
+                var initLines = await ExecuteTextCommandAsync(() =>
+                {
+                    Send(ScpiMessageProducer.DisableDeviceEcho);
+                    Thread.Sleep(100);
 
-                Send(ScpiMessageProducer.StopStreaming);
-                await Task.Delay(100);
+                    Send(ScpiMessageProducer.StopStreaming);
+                    Thread.Sleep(100);
 
-                Send(ScpiMessageProducer.TurnDeviceOn);
-                await Task.Delay(100);
+                    Send(ScpiMessageProducer.TurnDeviceOn);
+                    Thread.Sleep(100);
 
-                Send(ScpiMessageProducer.SetProtobufStreamFormat);
-                await Task.Delay(100);
+                    Send(ScpiMessageProducer.SetProtobufStreamFormat);
+                }, responseTimeoutMs: 1000, cancellationToken: CancellationToken.None);
 
+                // Surface any SCPI error that occurred during initialization so callers
+                // know the device is not in the expected state.
+                var errorLine = initLines.FirstOrDefault(
+                    l => l.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
+                if (errorLine != null)
+                {
+                    throw new InvalidOperationException(
+                        $"Device returned a SCPI error during initialization: {errorLine.Trim()}");
+                }
+
+                // Query device info – expects a protobuf response, so use plain Send()
+                // now that the protobuf consumer is running again.
                 Send(ScpiMessageProducer.GetDeviceInfo);
                 await Task.Delay(500); // Longer delay to allow device info response
 
