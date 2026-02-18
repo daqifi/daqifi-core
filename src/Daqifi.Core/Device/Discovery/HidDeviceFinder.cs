@@ -1,74 +1,111 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
+using Daqifi.Core.Communication.Transport;
 
 namespace Daqifi.Core.Device.Discovery;
 
 /// <summary>
 /// Discovers DAQiFi devices in USB HID bootloader mode.
-/// Note: Full HID enumeration requires platform-specific HID libraries.
-/// This is a basic implementation that can be extended when HID support is added.
 /// </summary>
 public class HidDeviceFinder : IDeviceFinder, IDisposable
 {
-    #region Constants
+    /// <summary>
+    /// Default DAQiFi bootloader vendor ID.
+    /// </summary>
+    public const int DefaultVendorId = 0x04D8;
 
-    private const int VendorId = 0x4D8;
-    private const int ProductId = 0x03C;
+    /// <summary>
+    /// Default DAQiFi bootloader product ID.
+    /// </summary>
+    public const int DefaultProductId = 0x003C;
 
-    #endregion
-
-    #region Private Fields
-
+    private readonly IHidDeviceEnumerator _hidDeviceEnumerator;
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private bool _disposed;
 
-    #endregion
+    /// <summary>
+    /// Initializes a new finder that filters to DAQiFi bootloader VID/PID by default.
+    /// </summary>
+    public HidDeviceFinder()
+        : this(new HidLibraryDeviceEnumerator(), DefaultVendorId, DefaultProductId)
+    {
+    }
 
-    #region Events
+    internal HidDeviceFinder(
+        IHidDeviceEnumerator hidDeviceEnumerator,
+        int? vendorIdFilter = DefaultVendorId,
+        int? productIdFilter = DefaultProductId)
+    {
+        _hidDeviceEnumerator = hidDeviceEnumerator
+            ?? throw new ArgumentNullException(nameof(hidDeviceEnumerator));
+
+        VendorIdFilter = vendorIdFilter;
+        ProductIdFilter = productIdFilter;
+    }
 
     /// <summary>
-    /// Occurs when a device is discovered.
+    /// Gets or sets the vendor ID filter used by <see cref="DiscoverAsync(CancellationToken)"/>.
     /// </summary>
+    public int? VendorIdFilter { get; set; }
+
+    /// <summary>
+    /// Gets or sets the product ID filter used by <see cref="DiscoverAsync(CancellationToken)"/>.
+    /// </summary>
+    public int? ProductIdFilter { get; set; }
+
+    /// <inheritdoc />
     public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
 
-    /// <summary>
-    /// Occurs when device discovery completes.
-    /// </summary>
+    /// <inheritdoc />
     public event EventHandler? DiscoveryCompleted;
 
-    #endregion
-
-    #region Public Methods
+    /// <inheritdoc />
+    public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    {
+        return DiscoverAsync(VendorIdFilter, ProductIdFilter, cancellationToken);
+    }
 
     /// <summary>
-    /// Discovers HID devices asynchronously with a cancellation token.
+    /// Discovers HID devices asynchronously with explicit optional VID/PID filtering.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token to abort the operation.</param>
-    /// <returns>A task containing the collection of discovered devices.</returns>
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    /// <param name="vendorIdFilter">Optional vendor ID filter.</param>
+    /// <param name="productIdFilter">Optional product ID filter.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Discovered HID devices mapped to <see cref="IDeviceInfo"/>.</returns>
+    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(
+        int? vendorIdFilter,
+        int? productIdFilter,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
-        // Prevent concurrent discovery operations
-        await _discoverySemaphore.WaitAsync(cancellationToken);
+        await _discoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var discoveredDevices = new List<IDeviceInfo>();
+            var hidDevices = await _hidDeviceEnumerator
+                .EnumerateAsync(vendorIdFilter, productIdFilter, cancellationToken)
+                .ConfigureAwait(false);
 
-            // TODO: Implement HID enumeration when HID library is added
-            // This would enumerate HID devices matching VendorId 0x4D8 and ProductId 0x03C
-            // For now, return empty list as HID library dependency is not yet added to core
+            var discoveredDevices = new List<IDeviceInfo>(hidDevices.Count);
 
-            // Sample implementation would be:
-            // 1. Use platform-specific HID API (HidApi, LibUsbDotNet, or HidSharp)
-            // 2. Enumerate devices with matching VendorId/ProductId
-            // 3. Create DeviceInfo for each found device
-            // 4. Raise DeviceDiscovered events
+            foreach (var hidDevice in hidDevices)
+            {
+                var deviceInfo = new DeviceInfo
+                {
+                    Name = string.IsNullOrWhiteSpace(hidDevice.ProductName)
+                        ? "DAQiFi Bootloader"
+                        : hidDevice.ProductName,
+                    SerialNumber = hidDevice.SerialNumber ?? string.Empty,
+                    FirmwareVersion = string.Empty,
+                    ConnectionType = ConnectionType.Hid,
+                    Type = DeviceType.Unknown,
+                    DevicePath = hidDevice.DevicePath
+                };
+
+                discoveredDevices.Add(deviceInfo);
+                OnDeviceDiscovered(deviceInfo);
+            }
 
             OnDiscoveryCompleted();
-            return await Task.FromResult(discoveredDevices);
+            return discoveredDevices;
         }
         finally
         {
@@ -76,61 +113,47 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
         }
     }
 
-    /// <summary>
-    /// Discovers HID devices asynchronously with a timeout.
-    /// </summary>
-    /// <param name="timeout">The timeout for discovery.</param>
-    /// <returns>A task containing the collection of discovered devices.</returns>
+    /// <inheritdoc />
     public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
     {
         using var cts = new CancellationTokenSource(timeout);
-        return await DiscoverAsync(cts.Token);
+        return await DiscoverAsync(cts.Token).ConfigureAwait(false);
     }
 
-    #endregion
-
-    #region Private Methods
-
     /// <summary>
-    /// Raises the DeviceDiscovered event.
+    /// Raises the <see cref="DeviceDiscovered"/> event.
     /// </summary>
+    /// <param name="deviceInfo">The discovered device metadata.</param>
     protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
     {
         DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
     }
 
     /// <summary>
-    /// Raises the DiscoveryCompleted event.
+    /// Raises the <see cref="DiscoveryCompleted"/> event.
     /// </summary>
     protected virtual void OnDiscoveryCompleted()
     {
         DiscoveryCompleted?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>
-    /// Throws ObjectDisposedException if this instance has been disposed.
-    /// </summary>
     private void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(HidDeviceFinder));
-    }
-
-    #endregion
-
-    #region IDisposable
-
-    /// <summary>
-    /// Disposes the device finder.
-    /// </summary>
-    public void Dispose()
-    {
-        if (!_disposed)
         {
-            _discoverySemaphore.Dispose();
-            _disposed = true;
+            throw new ObjectDisposedException(nameof(HidDeviceFinder));
         }
     }
 
-    #endregion
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _discoverySemaphore.Dispose();
+        _disposed = true;
+    }
 }
