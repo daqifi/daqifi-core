@@ -3,7 +3,7 @@ using System.IO;
 namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
-/// HID transport implementation backed by HidLibrary.
+/// HID transport implementation backed by HidSharp.
 /// </summary>
 public sealed class HidLibraryTransport : IHidTransport
 {
@@ -20,7 +20,7 @@ public sealed class HidLibraryTransport : IHidTransport
     private TimeSpan _writeTimeout = DefaultWriteTimeout;
 
     /// <summary>
-    /// Initializes a new transport instance backed by the default HidLibrary adapter.
+    /// Initializes a new transport instance backed by the default HidSharp adapter.
     /// </summary>
     public HidLibraryTransport()
         : this(new HidLibraryPlatform())

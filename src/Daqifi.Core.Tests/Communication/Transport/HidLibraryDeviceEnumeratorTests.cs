@@ -89,6 +89,20 @@ public class HidLibraryDeviceEnumeratorTests
             () => enumerator.EnumerateAsync(cancellationToken: cts.Token));
     }
 
+    [Fact]
+    public async Task EnumerateAsync_WhenPlatformThrows_ThrowsInvalidOperationExceptionWithFilterContext()
+    {
+        var platform = new ThrowingHidPlatform(new InvalidOperationException("HID backend unavailable."));
+        var enumerator = new HidLibraryDeviceEnumerator(platform);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => enumerator.EnumerateAsync(vendorId: 0x04D8, productId: 0x003C));
+
+        Assert.Contains("VID=0x04D8", exception.Message);
+        Assert.Contains("PID=0x003C", exception.Message);
+        Assert.NotNull(exception.InnerException);
+    }
+
     private sealed class FakeHidPlatform : IHidPlatform
     {
         private readonly IReadOnlyList<IHidTransportDevice> _devices;
@@ -143,5 +157,20 @@ public class HidLibraryDeviceEnumeratorTests
 
         public Task<HidTransportReadResult> ReadAsync(int timeoutMs)
             => Task.FromResult(HidTransportReadResult.Success(Array.Empty<byte>()));
+    }
+
+    private sealed class ThrowingHidPlatform : IHidPlatform
+    {
+        private readonly Exception _exception;
+
+        public ThrowingHidPlatform(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public IReadOnlyList<IHidTransportDevice> EnumerateDevices()
+        {
+            throw _exception;
+        }
     }
 }

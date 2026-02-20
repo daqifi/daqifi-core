@@ -1,5 +1,5 @@
-using System.Text;
-using HidLibrary;
+using System.IO;
+using HidSharp;
 
 namespace Daqifi.Core.Communication.Transport;
 
@@ -53,29 +53,34 @@ internal sealed class HidLibraryPlatform : IHidPlatform
     {
         try
         {
-            return HidDevices.Enumerate()
+            return DeviceList.Local.GetHidDevices()
                 .Select(device => (IHidTransportDevice)new HidLibraryTransportDevice(device))
                 .ToList();
         }
         catch (Exception ex) when (
             ex is DllNotFoundException ||
             ex is PlatformNotSupportedException ||
-            ex is EntryPointNotFoundException)
+            ex is EntryPointNotFoundException ||
+            ex is BadImageFormatException ||
+            ex is TypeInitializationException)
         {
-            return Array.Empty<IHidTransportDevice>();
+            throw new InvalidOperationException(
+                "HID backend is unavailable. USB HID enumeration could not be initialized in this process.",
+                ex);
         }
     }
 }
 
 internal sealed class HidLibraryTransportDevice : IHidTransportDevice
 {
-    private readonly IHidDevice _device;
+    private readonly HidDevice _device;
+    private HidStream? _stream;
 
-    public HidLibraryTransportDevice(IHidDevice device)
+    public HidLibraryTransportDevice(HidDevice device)
     {
         _device = device ?? throw new ArgumentNullException(nameof(device));
-        VendorId = _device.Attributes.VendorId;
-        ProductId = _device.Attributes.ProductId;
+        VendorId = _device.VendorID;
+        ProductId = _device.ProductID;
         DevicePath = _device.DevicePath;
         SerialNumber = ReadSerialNumber(_device);
         ProductName = ReadProductName(_device);
@@ -86,66 +91,123 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
     public string DevicePath { get; }
     public string? SerialNumber { get; }
     public string? ProductName { get; }
-    public bool IsConnected => _device.IsConnected;
+    public bool IsConnected
+    {
+        get
+        {
+            var stream = _stream;
+            if (stream == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return stream.CanRead && stream.CanWrite;
+            }
+            catch (Exception ex) when (
+                ex is ObjectDisposedException ||
+                ex is IOException)
+            {
+                return false;
+            }
+        }
+    }
 
     public void Open()
     {
-        _device.OpenDevice();
+        if (_stream != null)
+        {
+            return;
+        }
+
+        if (!_device.TryOpen(out var stream) || stream == null)
+        {
+            throw new IOException("Failed to open HID device.");
+        }
+
+        _stream = stream;
     }
 
     public void Close()
     {
-        _device.CloseDevice();
+        var stream = _stream;
+        _stream = null;
+        stream?.Dispose();
     }
 
     public bool Write(byte[] data, int timeoutMs)
     {
         ArgumentNullException.ThrowIfNull(data);
-        return _device.Write(data, timeoutMs);
+        var stream = GetOpenStream();
+        stream.WriteTimeout = timeoutMs;
+        var payload = FormatOutputReport(data);
+
+        try
+        {
+            stream.Write(payload);
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is TimeoutException ||
+            ex is IOException ||
+            ex is ObjectDisposedException)
+        {
+            return false;
+        }
     }
 
     public Task<bool> WriteAsync(byte[] data, int timeoutMs)
     {
         ArgumentNullException.ThrowIfNull(data);
-        return _device.WriteAsync(data, timeoutMs);
+        return Task.FromResult(Write(data, timeoutMs));
     }
 
     public HidTransportReadResult Read(int timeoutMs)
     {
-        var data = _device.Read(timeoutMs);
-        return MapReadResult(data);
-    }
+        var stream = GetOpenStream();
+        stream.ReadTimeout = timeoutMs;
 
-    public async Task<HidTransportReadResult> ReadAsync(int timeoutMs)
-    {
-        var data = await _device.ReadAsync(timeoutMs).ConfigureAwait(false);
-        return MapReadResult(data);
-    }
-
-    private static HidTransportReadResult MapReadResult(HidDeviceData deviceData)
-    {
-        var payload = deviceData.Data ?? Array.Empty<byte>();
-
-        return deviceData.Status switch
+        try
         {
-            HidDeviceData.ReadStatus.Success => HidTransportReadResult.Success(payload),
-            HidDeviceData.ReadStatus.WaitTimedOut => HidTransportReadResult.TimedOut(payload),
-            _ => HidTransportReadResult.Error(
-                payload,
-                $"HID read failed with status '{deviceData.Status}'.")
-        };
+            var data = stream.Read() ?? Array.Empty<byte>();
+            if (data.Length == 0)
+            {
+                return HidTransportReadResult.TimedOut(data);
+            }
+
+            var payload = ExtractInputPayload(data);
+            if (payload.Length == 0)
+            {
+                return HidTransportReadResult.TimedOut(payload);
+            }
+
+            return HidTransportReadResult.Success(payload);
+        }
+        catch (TimeoutException)
+        {
+            return HidTransportReadResult.TimedOut(Array.Empty<byte>());
+        }
+        catch (Exception ex) when (
+            ex is IOException ||
+            ex is ObjectDisposedException)
+        {
+            return HidTransportReadResult.Error(
+                Array.Empty<byte>(),
+                ex.Message);
+        }
     }
 
-    private static string? ReadSerialNumber(IHidDevice device)
+    public Task<HidTransportReadResult> ReadAsync(int timeoutMs)
+    {
+        return Task.FromResult(Read(timeoutMs));
+    }
+
+    private static string? ReadSerialNumber(HidDevice device)
     {
         try
         {
-            if (!device.ReadSerialNumber(out var data))
-            {
-                return null;
-            }
-
-            return DecodeHidString(data);
+            return NormalizeHidString(device.GetSerialNumber());
         }
         catch
         {
@@ -153,16 +215,11 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
         }
     }
 
-    private static string? ReadProductName(IHidDevice device)
+    private static string? ReadProductName(HidDevice device)
     {
         try
         {
-            if (!device.ReadProduct(out var data))
-            {
-                return null;
-            }
-
-            return DecodeHidString(data);
+            return NormalizeHidString(device.GetProductName());
         }
         catch
         {
@@ -170,20 +227,52 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
         }
     }
 
-    private static string? DecodeHidString(byte[]? rawData)
+    private HidStream GetOpenStream()
     {
-        if (rawData == null || rawData.Length == 0)
+        if (_stream == null)
+        {
+            throw new InvalidOperationException("HID device stream is not open.");
+        }
+
+        return _stream;
+    }
+
+    private static string? NormalizeHidString(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
         {
             return null;
         }
 
-        var unicode = Encoding.Unicode.GetString(rawData).TrimEnd('\0').Trim();
-        if (!string.IsNullOrWhiteSpace(unicode))
+        return value.Trim().TrimEnd('\0');
+    }
+
+    private byte[] FormatOutputReport(byte[] payload)
+    {
+        var reportLength = _device.GetMaxOutputReportLength();
+        if (reportLength <= 0)
         {
-            return unicode;
+            return payload;
         }
 
-        var ascii = Encoding.ASCII.GetString(rawData).TrimEnd('\0').Trim();
-        return string.IsNullOrWhiteSpace(ascii) ? null : ascii;
+        // Keep compatibility with the previous transport behavior:
+        // callers provide protocol payload only; prepend report ID byte and pad.
+        var formatted = new byte[reportLength];
+        var bytesToCopy = Math.Min(payload.Length, reportLength - 1);
+        Array.Copy(payload, 0, formatted, 1, bytesToCopy);
+        return formatted;
+    }
+
+    private static byte[] ExtractInputPayload(byte[] report)
+    {
+        if (report.Length <= 1)
+        {
+            return Array.Empty<byte>();
+        }
+
+        // Report ID is the first byte for HID APIs; protocol payload starts after it.
+        var payload = new byte[report.Length - 1];
+        Array.Copy(report, 1, payload, 0, payload.Length);
+        return payload;
     }
 }
