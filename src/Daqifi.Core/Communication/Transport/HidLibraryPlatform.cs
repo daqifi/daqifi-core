@@ -255,11 +255,17 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
             return payload;
         }
 
+        var maxPayloadLength = reportLength - 1;
+        if (payload.Length > maxPayloadLength)
+        {
+            throw new IOException(
+                $"HID payload length {payload.Length} exceeds max report payload size {maxPayloadLength}.");
+        }
+
         // Keep compatibility with the previous transport behavior:
         // callers provide protocol payload only; prepend report ID byte and pad.
         var formatted = new byte[reportLength];
-        var bytesToCopy = Math.Min(payload.Length, reportLength - 1);
-        Array.Copy(payload, 0, formatted, 1, bytesToCopy);
+        Array.Copy(payload, 0, formatted, 1, payload.Length);
         return formatted;
     }
 
