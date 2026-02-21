@@ -76,7 +76,7 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostWifiReconnectDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// Maximum HID connection attempts during bootloader connect.
+    /// Maximum HID connection attempts during bootloader connect, including the initial attempt.
     /// </summary>
     public int HidConnectRetryCount { get; set; } = 3;
 
@@ -86,7 +86,7 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan HidConnectRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
-    /// Maximum programming attempts per flash record.
+    /// Maximum programming attempts per flash record, including the initial attempt.
     /// </summary>
     public int FlashWriteRetryCount { get; set; } = 3;
 
@@ -107,7 +107,9 @@ public sealed class FirmwareUpdateServiceOptions
 
     /// <summary>
     /// Arguments template for WiFi flash tool execution.
-    /// Supports <c>{port}</c> and <c>{firmwarePath}</c> placeholders.
+    /// Supports <c>{port}</c> and optional <c>{firmwarePath}</c> placeholders.
+    /// The default WINC script-based flow discovers firmware artifacts from its working directory
+    /// and therefore does not require <c>{firmwarePath}</c>.
     /// </summary>
     public string WifiFlashToolArgumentsTemplate { get; set; } = "/p {port} /d WINC1500 /k /e /i aio /w";
 

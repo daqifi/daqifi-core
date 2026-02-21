@@ -14,6 +14,7 @@ public interface IFirmwareUpdateService
 
     /// <summary>
     /// Raised whenever the update state transitions.
+    /// Handlers should not synchronously invoke update operations on this same service instance.
     /// </summary>
     event EventHandler<FirmwareUpdateStateChangedEventArgs>? StateChanged;
 

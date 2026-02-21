@@ -10,6 +10,7 @@ internal interface IHidPlatform
 
 internal interface IHidTransportDevice
 {
+    // Implementations are not thread-safe. Callers should synchronize access.
     int VendorId { get; }
     int ProductId { get; }
     string DevicePath { get; }
@@ -170,18 +171,8 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
 
         try
         {
-            var data = stream.Read() ?? Array.Empty<byte>();
-            if (data.Length == 0)
-            {
-                return HidTransportReadResult.TimedOut(data);
-            }
-
-            var payload = ExtractInputPayload(data);
-            if (payload.Length == 0)
-            {
-                return HidTransportReadResult.TimedOut(payload);
-            }
-
+            var report = stream.Read() ?? Array.Empty<byte>();
+            var payload = ExtractInputPayload(report);
             return HidTransportReadResult.Success(payload);
         }
         catch (TimeoutException)

@@ -39,7 +39,6 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             [FirmwareUpdateState.Connecting] = new HashSet<FirmwareUpdateState>
             {
                 FirmwareUpdateState.ErasingFlash,
-                FirmwareUpdateState.Programming,
                 FirmwareUpdateState.Failed
             },
             [FirmwareUpdateState.ErasingFlash] = new HashSet<FirmwareUpdateState>
@@ -111,7 +110,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     }
 
     /// <summary>
-    /// Gets the composed firmware download service.
+    /// Gets the composed firmware download service for callers that coordinate
+    /// firmware acquisition and update orchestration from a shared service graph.
     /// </summary>
     public IFirmwareDownloadService FirmwareDownloadService { get; }
 
@@ -735,6 +735,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IStreamingDevice device,
         CancellationToken cancellationToken)
     {
+        // This loop is bounded by the caller's state timeout via ExecuteWithStateTimeoutAsync.
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
