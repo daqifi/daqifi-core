@@ -9,13 +9,13 @@ The DAQiFi Core Library is a .NET library designed to simplify interaction with 
 - **Easy Connection**: Single-call device connection with `DaqifiDeviceFactory`
 - **Data Streaming**: Stream data from devices in real-time with event-driven API
 - **SD Card Operations**: List, download, delete, and format SD card files; start/stop SD logging over USB/Serial connections (not available over WiFi)
+- **Firmware Update Orchestration**: Programmatic PIC32 bootloader updates with state/progress reporting, timeout/retry handling, and cancellation support
 - **Transport Layer**: TCP, UDP, and Serial communication with async/await patterns
 - **Protocol Buffers**: Efficient binary message serialization for device communication
 - **Cross-Platform**: Compatible with .NET 8.0 and .NET 9.0
 
 ### 🚧 In Development
 - **Channel Configuration**: Advanced channel setup and calibration
-- **Firmware Updates**: Manage firmware updates seamlessly
 
 ## Getting Started
 
@@ -143,7 +143,18 @@ Both devices are identified by their part number in the discovery response.
 
 - **WiFi**: Network-connected devices discovered via UDP broadcast
 - **Serial**: USB-connected devices enumerated via serial ports
-- **HID**: Devices in bootloader mode (requires platform-specific HID library)
+- **HID**: Devices in bootloader mode (HidSharp backend)
+
+### Firmware Update Orchestration
+
+The core library exposes `IFirmwareUpdateService` for update orchestration:
+
+- `UpdateFirmwareAsync(...)` for PIC32 firmware flashing from a local Intel HEX file
+- `UpdateWifiModuleAsync(...)` for WiFi module flashing through an external tool runner
+
+The service emits explicit state transitions and `IProgress<FirmwareUpdateProgress>` updates for UI/CLI telemetry.
+
+Note: the default WiFi flash tool configuration uses `winc_flash_tool.cmd` conventions. If you run on macOS/Linux, provide a compatible executable/script and argument template via `FirmwareUpdateServiceOptions`.
 
 ## Real-World Usage
 
