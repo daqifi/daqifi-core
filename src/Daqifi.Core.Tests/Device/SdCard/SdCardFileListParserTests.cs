@@ -222,5 +222,86 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal(expected, result[0].FileName);
             Assert.NotNull(result[0].CreatedDate);
         }
+
+        [Fact]
+        public void ParseFileList_WithPlainErrorLine_SkipsErrorLine()
+        {
+            // Arrange
+            var lines = new[] { "ERROR: -200, \"Execution error\"" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void ParseFileList_WithPlainErrorMixedWithFiles_OnlyReturnsFiles()
+        {
+            // Arrange
+            var lines = new[]
+            {
+                "ERROR: -200, \"Execution error\"",
+                "Daqifi/log_20240115_103000.bin",
+                "ERROR: -100, \"Command error\""
+            };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("log_20240115_103000.bin", result[0].FileName);
+        }
+
+        [Theory]
+        [InlineData("ERROR: -200, \"Execution error\"")]
+        [InlineData("error: -200")]
+        [InlineData("  ERROR: -100")]
+        public void ParseFileList_WithVariousPlainErrorFormats_SkipsAll(string errorLine)
+        {
+            // Arrange
+            var lines = new[] { errorLine };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void ParseFileList_WithControlCharacterInFilename_SkipsFile()
+        {
+            // Arrange
+            var lines = new[] { "log_\x01corrupt.bin" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void ParseFileList_WithControlCharMixedWithValidFiles_OnlyReturnsCleanFiles()
+        {
+            // Arrange
+            var lines = new[]
+            {
+                "log_20240115_103000.bin",
+                "log_\x01corrupt.bin",
+                "log_20240116_120000.bin"
+            };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Equal(2, result.Count);
+            Assert.Equal("log_20240115_103000.bin", result[0].FileName);
+            Assert.Equal("log_20240116_120000.bin", result[1].FileName);
+        }
     }
 }
