@@ -656,7 +656,12 @@ namespace Daqifi.Core.Device
         /// <returns>True if any line contains a SCPI error, false otherwise.</returns>
         private static bool ContainsScpiError(IReadOnlyList<string> lines)
         {
-            return lines.Any(line => line.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
+            return lines.Any(line =>
+            {
+                var trimmed = line.TrimStart();
+                return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
+                    || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
+            });
         }
 
         /// <summary>

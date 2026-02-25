@@ -52,6 +52,14 @@ namespace Daqifi.Core.Device
         public IReadOnlyList<IChannel> Channels => _channels.AsReadOnly();
 
         /// <summary>
+        /// Gets the device's timestamp clock frequency in Hz.
+        /// Populated from the <c>TimestampFreq</c> field of the status message.
+        /// Used as the fallback frequency for SD card log file parsing when no
+        /// per-message timestamp frequency is available.
+        /// </summary>
+        public uint TimestampFrequency { get; private set; }
+
+        /// <summary>
         /// Gets or sets the current operational state of the device.
         /// </summary>
         public DeviceState State { get; private set; } = DeviceState.Disconnected;
@@ -627,6 +635,12 @@ namespace Daqifi.Core.Device
             if (message == null)
             {
                 throw new ArgumentNullException(nameof(message));
+            }
+
+            // Update timestamp frequency if present
+            if (message.TimestampFreq != 0)
+            {
+                TimestampFrequency = message.TimestampFreq;
             }
 
             // Clear existing channels before repopulating

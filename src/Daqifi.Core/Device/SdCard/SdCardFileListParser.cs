@@ -40,8 +40,9 @@ namespace Daqifi.Core.Device.SdCard
 
                 var path = line.Trim();
 
-                // Skip SCPI error responses (e.g., "**ERROR: -200, \"Execution error\"")
-                if (path.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+                // Skip SCPI error responses: "**ERROR: -200, ..." or "ERROR: -200, ..."
+                if (path.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase) ||
+                    path.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -62,6 +63,12 @@ namespace Daqifi.Core.Device.SdCard
                 // Extract just the filename from the path
                 var fileName = Path.GetFileName(path);
                 if (string.IsNullOrWhiteSpace(fileName))
+                {
+                    continue;
+                }
+
+                // Skip filenames with control characters (corrupted SD card directory entries)
+                if (fileName.Any(char.IsControl))
                 {
                     continue;
                 }

@@ -685,4 +685,46 @@ public class ChannelPopulationTests
     }
 
     #endregion
+
+    #region TimestampFrequency Tests
+
+    [Fact]
+    public void TimestampFrequency_DefaultsToZero()
+    {
+        // Arrange & Act
+        var device = new DaqifiDevice("TestDevice");
+
+        // Assert
+        Assert.Equal(0u, device.TimestampFrequency);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_WithTimestampFreq_PopulatesTimestampFrequency()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage { TimestampFreq = 48000000 };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        Assert.Equal(48000000u, device.TimestampFrequency);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_WithZeroTimestampFreq_DoesNotOverwriteExistingValue()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { TimestampFreq = 48000000 });
+
+        // Act — message with TimestampFreq = 0 should not reset the value
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { TimestampFreq = 0 });
+
+        // Assert
+        Assert.Equal(48000000u, device.TimestampFrequency);
+    }
+
+    #endregion
 }
