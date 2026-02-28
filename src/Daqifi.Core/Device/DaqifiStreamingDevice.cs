@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Network;
 using Daqifi.Core.Device.SdCard;
+using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -20,7 +21,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider
     {
         /// <summary>
         /// The delay in milliseconds to wait for the WiFi module to restart after applying configuration.
@@ -677,6 +678,23 @@ namespace Daqifi.Core.Device
                     "Filename contains invalid characters. Quotes, newlines, and semicolons are not allowed.",
                     nameof(fileName));
             }
+        }
+
+        /// <inheritdoc />
+        public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetLanChipInfo),
+                responseTimeoutMs: 2000,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            LanChipInfoParser.TryParseLines(lines, out var info);
+            return info;
         }
     }
 }
