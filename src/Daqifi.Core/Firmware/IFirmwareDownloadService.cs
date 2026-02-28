@@ -67,6 +67,14 @@ public interface IFirmwareDownloadService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets the latest WiFi firmware release information without downloading.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The latest WiFi release info, or null if none found.</returns>
+    Task<FirmwareReleaseInfo?> GetLatestWifiReleaseAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Invalidates the cached release data, forcing the next call to query the API.
     /// </summary>
     void InvalidateCache();

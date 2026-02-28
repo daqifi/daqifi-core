@@ -152,6 +152,8 @@ The core library exposes `IFirmwareUpdateService` for update orchestration:
 - `UpdateFirmwareAsync(...)` for PIC32 firmware flashing from a local Intel HEX file
 - `UpdateWifiModuleAsync(...)` for WiFi module flashing through an external tool runner
 
+`UpdateWifiModuleAsync` automatically queries the device's current WiFi chip firmware version via `ILanChipInfoProvider` and compares it against the latest GitHub release. If the device is already up to date, the flash is skipped and the service reports `Complete` immediately — no unnecessary reflashing.
+
 The service emits explicit state transitions and `IProgress<FirmwareUpdateProgress>` updates for UI/CLI telemetry.
 
 Note: the default WiFi flash tool configuration uses `winc_flash_tool.cmd` conventions. If you run on macOS/Linux, provide a compatible executable/script and argument template via `FirmwareUpdateServiceOptions`.

@@ -347,6 +347,150 @@ public class FirmwareUpdateServiceTests
         }
     }
 
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenDeviceVersionMatchesLatest_SkipsFlashAndReportsComplete()
+    {
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            TagName = "19.5.4",
+            IsPreRelease = false
+        };
+
+        var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease };
+        var device = new FakeLanChipInfoStreamingDevice("COM9", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var progressEvents = new List<FirmwareUpdateProgress>();
+        var progress = new CapturingProgress<FirmwareUpdateProgress>(progressEvents);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        // Device should NOT have been put into firmware update mode
+        Assert.DoesNotContain("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
+        // Progress should contain a Complete event at 100%
+        var completeEvent = Assert.Single(progressEvents, p => p.State == FirmwareUpdateState.Complete);
+        Assert.Equal(100, completeEvent.PercentComplete);
+        Assert.Contains("already up to date", completeEvent.CurrentOperation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenDeviceVersionIsOlder_ProceedsWithFlash()
+    {
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 6, 1, null, 0),
+            TagName = "19.6.1",
+            IsPreRelease = false
+        };
+
+        var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease };
+        var device = new FakeLanChipInfoStreamingDevice("COM10", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        // Device SHOULD have been put into firmware update mode
+        Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenDeviceDoesNotSupportLanQuery_ProceedsWithFlash()
+    {
+        // FakeStreamingDevice does NOT implement ILanChipInfoProvider — version check is skipped
+        var device = new FakeStreamingDevice("COM11");
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
+    }
+
     private static FirmwareUpdateServiceOptions CreateFastOptions()
     {
         return new FirmwareUpdateServiceOptions
@@ -451,6 +595,65 @@ public class FirmwareUpdateServiceTests
         public void StopStreaming()
         {
             IsStreaming = false;
+        }
+    }
+
+    private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
+    {
+        private readonly LanChipInfo? _chipInfo;
+        private ConnectionStatus _status = ConnectionStatus.Connected;
+
+        public FakeLanChipInfoStreamingDevice(string name, LanChipInfo? chipInfo)
+        {
+            Name = name;
+            _chipInfo = chipInfo;
+            IsConnected = true;
+        }
+
+        public string Name { get; }
+        public IPAddress? IpAddress => null;
+        public bool IsConnected { get; private set; }
+        public ConnectionStatus Status => _status;
+        public int StreamingFrequency { get; set; }
+        public bool IsStreaming { get; private set; }
+
+        public List<string> SentCommands { get; } = [];
+
+        public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public void Connect()
+        {
+            IsConnected = true;
+            _status = ConnectionStatus.Connected;
+            StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+        }
+
+        public void Disconnect()
+        {
+            IsConnected = false;
+            _status = ConnectionStatus.Disconnected;
+            StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+        }
+
+        public void Send<T>(IOutboundMessage<T> message)
+        {
+            if (message is IOutboundMessage<string> textMessage)
+            {
+                SentCommands.Add(textMessage.Data);
+            }
+        }
+
+        public void StartStreaming() => IsStreaming = true;
+        public void StopStreaming() => IsStreaming = false;
+
+        public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_chipInfo);
         }
     }
 
@@ -668,6 +871,8 @@ public class FirmwareUpdateServiceTests
 
     private sealed class FakeFirmwareDownloadService : IFirmwareDownloadService
     {
+        public FirmwareReleaseInfo? LatestWifiRelease { get; set; }
+
         public Task<FirmwareReleaseInfo?> GetLatestReleaseAsync(bool includePreRelease = false, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<FirmwareReleaseInfo?>(null);
@@ -694,6 +899,11 @@ public class FirmwareUpdateServiceTests
         public Task<(string ExtractedPath, string Version)?> DownloadWifiFirmwareAsync(string destinationDirectory, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<(string ExtractedPath, string Version)?>(null);
+        }
+
+        public Task<FirmwareReleaseInfo?> GetLatestWifiReleaseAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(LatestWifiRelease);
         }
 
         public void InvalidateCache()

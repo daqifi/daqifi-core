@@ -129,6 +129,14 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     }
 
     /// <inheritdoc />
+    public async Task<FirmwareReleaseInfo?> GetLatestWifiReleaseAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var releases = await GetWifiReleasesAsync(cancellationToken);
+        return FindLatestRelease(releases, includePreRelease: false, assetExtension: null);
+    }
+
+    /// <inheritdoc />
     public async Task<(string ExtractedPath, string Version)?> DownloadWifiFirmwareAsync(
         string destinationDirectory,
         IProgress<int>? progress = null,

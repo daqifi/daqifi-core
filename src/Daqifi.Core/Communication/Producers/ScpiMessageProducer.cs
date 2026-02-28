@@ -501,4 +501,15 @@ public class ScpiMessageProducer
     {
         return new ScpiMessage($"SYSTem:USB:SetTransparentMode {mode}");
     }
+
+    /// <summary>
+    /// Creates a query message to get LAN chip information including the WiFi module firmware version.
+    /// </summary>
+    /// <remarks>
+    /// The device returns a JSON response:
+    /// <c>{"ChipId":&lt;id&gt;,"FwVersion":"&lt;version&gt;","BuildDate":"&lt;date&gt;"}</c>
+    /// Command: SYSTem:COMMunicate:LAN:GETChipInfo?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetLanChipInfo);
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanChipInfo => new ScpiMessage("SYSTem:COMMunicate:LAN:GETChipInfo?");
 }
