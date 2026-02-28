@@ -718,7 +718,7 @@ namespace Daqifi.Core.Device
                 {
                     Name = $"DIO{i}",
                     Direction = ChannelDirection.Input,
-                    IsEnabled = true
+                    IsEnabled = false
                 };
 
                 _channels.Add(channel);

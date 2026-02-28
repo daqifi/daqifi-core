@@ -316,7 +316,7 @@ public class ChannelPopulationTests
 
         // Assert
         var digitalChannels = device.Channels.Where(c => c.Type == ChannelType.Digital).ToList();
-        Assert.All(digitalChannels, c => Assert.True(c.IsEnabled));
+        Assert.All(digitalChannels, c => Assert.False(c.IsEnabled));
     }
 
     #endregion
