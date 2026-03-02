@@ -805,6 +805,19 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             .ConfigureAwait(false);
 
         await SafeDisconnectHidAsync().ConfigureAwait(false);
+
+        // First pass: wait for the serial port to re-enumerate after the new firmware boots.
+        // The port appears before the firmware's SCPI subsystem is ready, so the InitializeAsync
+        // inside Connect() may send TurnDeviceOn before the device can process it.
+        await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
+
+        // Disconnect immediately and wait for the firmware to finish initializing SCPI,
+        // then reconnect so that InitializeAsync (TurnDeviceOn, etc.) lands on a ready device.
+        device.Disconnect();
+        _logger.LogInformation(
+            "Serial port re-enumerated; waiting {Delay} ms for firmware SCPI subsystem to be ready.",
+            _options.PostReconnectStabilizationDelay.TotalMilliseconds);
+        await Task.Delay(_options.PostReconnectStabilizationDelay, cancellationToken).ConfigureAwait(false);
         await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
     }
 

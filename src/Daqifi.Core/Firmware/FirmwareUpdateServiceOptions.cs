@@ -76,6 +76,14 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostWifiReconnectDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// Delay applied after the serial port re-enumerates post-PIC32 flash, before sending
+    /// SCPI initialization commands. The port becomes available before the firmware's SCPI
+    /// subsystem is ready; this gap prevents TurnDeviceOn and other init commands from being
+    /// silently discarded by a not-yet-ready device.
+    /// </summary>
+    public TimeSpan PostReconnectStabilizationDelay { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Maximum HID connection attempts during bootloader connect, including the initial attempt.
     /// </summary>
     public int HidConnectRetryCount { get; set; } = 3;
@@ -156,6 +164,7 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(PostForceBootDelay, nameof(PostForceBootDelay));
         ValidatePositive(PostLanFirmwareModeDelay, nameof(PostLanFirmwareModeDelay));
         ValidatePositive(PostWifiReconnectDelay, nameof(PostWifiReconnectDelay));
+        ValidatePositive(PostReconnectStabilizationDelay, nameof(PostReconnectStabilizationDelay));
         ValidatePositive(HidConnectRetryDelay, nameof(HidConnectRetryDelay));
         ValidatePositive(FlashWriteRetryDelay, nameof(FlashWriteRetryDelay));
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
