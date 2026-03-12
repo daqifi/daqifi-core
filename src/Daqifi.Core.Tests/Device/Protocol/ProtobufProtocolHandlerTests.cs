@@ -122,13 +122,47 @@ public class ProtobufProtocolHandlerTests
         Assert.False(streamHandlerCalled);
     }
 
+    [Fact]
+    public async Task HandleAsync_WithFloatStreamMessage_CallsStreamHandler()
+    {
+        // Arrange - USB firmware sends pre-scaled float values (AnalogInDataFloat)
+        var streamHandlerCalled = false;
+        DaqifiOutMessage receivedMessage = null;
+
+        var handler = new ProtobufProtocolHandler(
+            streamMessageHandler: msg =>
+            {
+                streamHandlerCalled = true;
+                receivedMessage = msg;
+            });
+
+        var streamMessage = new DaqifiOutMessage
+        {
+            MsgTimeStamp = 99999
+        };
+        streamMessage.AnalogInDataFloat.Add(1.234f);
+        streamMessage.AnalogInDataFloat.Add(2.345f);
+
+        var inboundMessage = new GenericInboundMessage<object>(streamMessage);
+
+        // Act
+        await handler.HandleAsync(inboundMessage);
+
+        // Assert
+        Assert.True(streamHandlerCalled, "Stream handler should be called for AnalogInDataFloat messages");
+        Assert.NotNull(receivedMessage);
+        Assert.Equal(99999u, receivedMessage.MsgTimeStamp);
+        Assert.Equal(2, receivedMessage.AnalogInDataFloat.Count);
+    }
+
     [Theory]
-    [InlineData(8u, 0u, 0u, 0u, 0, 0, ProtobufMessageType.Status)]
-    [InlineData(0u, 16u, 0u, 0u, 0, 0, ProtobufMessageType.Status)]
-    [InlineData(0u, 0u, 2u, 0u, 0, 0, ProtobufMessageType.Status)]
-    [InlineData(0u, 0u, 0u, 12345u, 1, 0, ProtobufMessageType.Stream)]
-    [InlineData(0u, 0u, 0u, 12345u, 0, 1, ProtobufMessageType.Stream)]
-    [InlineData(0u, 0u, 0u, 0u, 0, 0, ProtobufMessageType.Unknown)]
+    [InlineData(8u, 0u, 0u, 0u, 0, 0, false, ProtobufMessageType.Status)]
+    [InlineData(0u, 16u, 0u, 0u, 0, 0, false, ProtobufMessageType.Status)]
+    [InlineData(0u, 0u, 2u, 0u, 0, 0, false, ProtobufMessageType.Status)]
+    [InlineData(0u, 0u, 0u, 12345u, 1, 0, false, ProtobufMessageType.Stream)]   // int data
+    [InlineData(0u, 0u, 0u, 12345u, 0, 1, false, ProtobufMessageType.Stream)]   // digital data
+    [InlineData(0u, 0u, 0u, 12345u, 0, 0, true, ProtobufMessageType.Stream)]    // float data (USB firmware)
+    [InlineData(0u, 0u, 0u, 0u, 0, 0, false, ProtobufMessageType.Unknown)]
     public void DetectMessageType_ReturnsCorrectType(
         uint analogInPortNum,
         uint digitalPortNum,
@@ -136,6 +170,7 @@ public class ProtobufProtocolHandlerTests
         uint msgTimeStamp,
         int analogDataCount,
         int digitalDataLength,
+        bool hasFloatData,
         ProtobufMessageType expectedType)
     {
         // Arrange
@@ -155,6 +190,11 @@ public class ProtobufProtocolHandlerTests
         if (digitalDataLength > 0)
         {
             message.DigitalData = Google.Protobuf.ByteString.CopyFrom(new byte[digitalDataLength]);
+        }
+
+        if (hasFloatData)
+        {
+            message.AnalogInDataFloat.Add(1.5f);
         }
 
         // Act

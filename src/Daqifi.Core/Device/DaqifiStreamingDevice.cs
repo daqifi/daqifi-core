@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
@@ -99,6 +100,39 @@ namespace Daqifi.Core.Device
         public DaqifiStreamingDevice(string name, IStreamTransport transport) : base(name, transport)
         {
             StreamingFrequency = 100;
+        }
+
+        /// <summary>
+        /// Initializes the device with the standard SCPI sequence and, for USB/serial connections,
+        /// additionally sets the streaming interface to USB so data is routed to the serial consumer
+        /// rather than to a previously-configured WiFi destination.
+        /// </summary>
+        /// <remarks>
+        /// The DAQiFi firmware persists the last configured stream interface across sessions.
+        /// If the device was previously set to stream to WiFi (<c>SYSTem:STReam:INTerface 1</c>),
+        /// it will continue sending data over WiFi even when connected via USB — causing the serial
+        /// consumer to receive nothing. Sending <c>SYSTem:STReam:INTerface 0</c> during USB
+        /// initialization ensures data flows to the serial port.
+        /// </remarks>
+        /// <returns>A task representing the asynchronous initialization operation.</returns>
+        public override async Task InitializeAsync()
+        {
+            // Capture pre-init state so we can skip the USB step on repeated calls
+            // (base.InitializeAsync() guards with _isInitialized and returns early on repeats).
+            var needsUsbInit = IsUsbConnection && State != DeviceState.Ready;
+
+            await base.InitializeAsync();
+
+            if (needsUsbInit)
+            {
+                // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
+                // command is sent in text mode (protobuf consumer temporarily stopped) and any
+                // SCPI error response is captured rather than garbling the protobuf stream.
+                await ExecuteTextCommandAsync(
+                    () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
+                    responseTimeoutMs: 500,
+                    cancellationToken: CancellationToken.None);
+            }
         }
 
         /// <summary>

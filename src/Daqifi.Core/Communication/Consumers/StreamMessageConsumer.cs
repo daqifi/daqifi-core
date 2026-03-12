@@ -101,6 +101,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         _isRunning = false;
         var stopped = _consumerThread?.Join(timeoutMs) ?? true;
         _consumerThread = null;
+        _messageBuffer.Clear();
 
         return stopped;
     }
