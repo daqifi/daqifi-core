@@ -128,10 +128,16 @@ namespace Daqifi.Core.Device
                 // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
                 // command is sent in text mode (protobuf consumer temporarily stopped) and any
                 // SCPI error response is captured rather than garbling the protobuf stream.
-                await ExecuteTextCommandAsync(
+                var lines = await ExecuteTextCommandAsync(
                     () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
                     responseTimeoutMs: 500,
                     cancellationToken: CancellationToken.None);
+
+                if (ContainsScpiError(lines))
+                {
+                    throw new InvalidOperationException(
+                        "Device returned a SCPI error while setting stream interface to USB.");
+                }
             }
         }
 
