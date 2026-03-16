@@ -184,7 +184,9 @@ public sealed class SdCardJsonFileParserTests
     [Fact]
     public async Task ParseAsync_ConfigurationOverride_UsesProvidedConfig()
     {
-        // Arrange
+        // Arrange — JSON has no metadata headers, so override fills in device info gaps.
+        // TimestampFrequency is inferred from FallbackTimestampFrequency (50MHz default),
+        // so the inferred value takes precedence over the override's value.
         await using var stream = SdCardTestJsonFileBuilder.BuildJsonFile(
             (100u, new[] { 1.0, 2.0 }, "")
         );
@@ -210,8 +212,13 @@ public sealed class SdCardJsonFileParserTests
 
         // Assert
         Assert.NotNull(session.DeviceConfig);
+        // Override fills gaps for metadata not present in JSON data
         Assert.Equal("TEST123", session.DeviceConfig.DeviceSerialNumber);
-        Assert.Equal(1000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal("NQ1", session.DeviceConfig.DevicePartNumber);
+        Assert.Equal("1.0.0", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
+        // Inferred frequency (from FallbackTimestampFrequency) takes precedence
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
     }
 
     [Fact]

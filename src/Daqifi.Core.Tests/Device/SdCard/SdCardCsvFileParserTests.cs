@@ -393,7 +393,8 @@ public sealed class SdCardCsvFileParserTests
     [Fact]
     public async Task ParseAsync_ConfigurationOverride_OverridesEmbeddedHeaders()
     {
-        // Arrange — even though the file has # comment headers, ConfigurationOverride wins
+        // Arrange — file has headers; override fills gaps (FirmwareRevision, DigitalPortCount)
+        // while file-parsed values take precedence for fields the file already provides.
         await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
             "Nyquist 1", "7E2815916200E898", 50_000_000u,
             (1000u, new[] { 1.0, 2.0 })
@@ -418,9 +419,13 @@ public sealed class SdCardCsvFileParserTests
         var session = await parser.ParseAsync(stream, "test.csv", options);
 
         Assert.NotNull(session.DeviceConfig);
-        Assert.Equal("OVERRIDE_SN", session.DeviceConfig.DeviceSerialNumber);
-        Assert.Equal("OVERRIDE_DEVICE", session.DeviceConfig.DevicePartNumber);
-        Assert.Equal(1_000_000u, session.DeviceConfig.TimestampFrequency);
+        // File-parsed values take precedence
+        Assert.Equal("7E2815916200E898", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
+        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        // Override fills gaps not present in the file
+        Assert.Equal("9.9.9", session.DeviceConfig.FirmwareRevision);
+        Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
     }
 
     // -------------------------------------------------------------------------

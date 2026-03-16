@@ -35,13 +35,21 @@ public sealed class SdCardParseOptions
     /// This value is only used as a fallback — if the file contains a valid
     /// <c>TimestampFreq</c>, it takes precedence.
     /// </para>
+    /// <para>
+    /// Defaults to 50 MHz (the Nyquist device clock frequency). Set to 0 to
+    /// disable the fallback entirely.
+    /// </para>
     /// </summary>
-    public uint FallbackTimestampFrequency { get; set; }
+    public uint FallbackTimestampFrequency { get; set; } = 50_000_000;
 
     /// <summary>
-    /// Gets or sets a device configuration override for formats that don't embed
-    /// config metadata (JSON/CSV). When set, this config is used instead of inference.
-    /// For Protobuf files, this is ignored since config is embedded in the file.
+    /// Gets or sets a device configuration override. When set, fields from this
+    /// config fill in any gaps not found in the file itself.
+    /// <para>
+    /// This is useful when the device is connected during download — the device's
+    /// live status provides calibration, resolution, and port range values that
+    /// may not be embedded in the SD card log file.
+    /// </para>
     /// </summary>
     public SdCardDeviceConfiguration? ConfigurationOverride { get; set; }
 }
