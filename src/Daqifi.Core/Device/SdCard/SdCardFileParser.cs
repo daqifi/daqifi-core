@@ -79,6 +79,15 @@ public sealed class SdCardFileParser
             }
         }
 
+        // Apply ConfigurationOverride as a fallback for any fields not found in the file.
+        // This is useful when the device is connected during download — the device's live
+        // status provides calibration, resolution, and port range values that may not be
+        // embedded in the SD card log file.
+        if (options.ConfigurationOverride != null)
+        {
+            config = MergeConfigurations(config, options.ConfigurationOverride);
+        }
+
         var timestampFrequency = config?.TimestampFrequency ?? 0u;
         if (timestampFrequency == 0 && options.FallbackTimestampFrequency > 0)
         {
@@ -94,6 +103,7 @@ public sealed class SdCardFileParser
             streamStartIndex,
             fileCreatedDate,
             tickPeriod,
+            config,
             ct);
 
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples);
@@ -208,6 +218,7 @@ public sealed class SdCardFileParser
         int startIndex,
         DateTime? anchorTime,
         double tickPeriod,
+        SdCardDeviceConfiguration? config,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var baseTime = anchorTime ?? DateTime.UtcNow;
@@ -220,12 +231,48 @@ public sealed class SdCardFileParser
 
             var msg = messages[i];
 
-            // Skip non-stream messages
+            // Skip non-stream messages (no analog and no digital data)
             if (msg.AnalogInData.Count == 0 &&
                 msg.AnalogInDataFloat.Count == 0 &&
                 msg.DigitalData.Length == 0)
             {
                 continue;
+            }
+
+            // Merge consecutive messages at the same timestamp into a single entry.
+            // Device firmware often sends separate analog and digital messages per sample
+            // period with the same MsgTimeStamp.
+            while (i + 1 < messages.Count && messages[i + 1].MsgTimeStamp == msg.MsgTimeStamp)
+            {
+                var next = messages[i + 1];
+                if (!HasStreamPayload(next))
+                {
+                    break;
+                }
+
+                i++;
+
+                // Take analog data from whichever message has it
+                if (msg.AnalogInDataFloat.Count == 0 && next.AnalogInDataFloat.Count > 0)
+                {
+                    msg.AnalogInDataFloat.AddRange(next.AnalogInDataFloat);
+                }
+                else if (msg.AnalogInData.Count == 0 && next.AnalogInData.Count > 0)
+                {
+                    msg.AnalogInData.AddRange(next.AnalogInData);
+                }
+
+                // Take digital data from whichever message has it
+                if (msg.DigitalData.Length == 0 && next.DigitalData.Length > 0)
+                {
+                    msg.DigitalData = next.DigitalData;
+                }
+
+                // Take per-channel timestamps from whichever message has them
+                if (msg.AnalogInDataTs.Count == 0 && next.AnalogInDataTs.Count > 0)
+                {
+                    msg.AnalogInDataTs.AddRange(next.AnalogInDataTs);
+                }
             }
 
             // Reconstruct timestamp
@@ -247,10 +294,20 @@ public sealed class SdCardFileParser
                 timestamp = baseTime.AddSeconds(elapsedSeconds);
             }
 
-            // Extract analog values (prefer float, fall back to raw int)
-            var analogValues = msg.AnalogInDataFloat.Count > 0
-                ? msg.AnalogInDataFloat.Select(v => (double)v).ToArray()
-                : msg.AnalogInData.Select(v => (double)v).ToArray();
+            // Extract analog values (prefer float, fall back to scaled raw int)
+            double[] analogValues;
+            if (msg.AnalogInDataFloat.Count > 0)
+            {
+                analogValues = msg.AnalogInDataFloat.Select(v => (double)v).ToArray();
+            }
+            else if (msg.AnalogInData.Count > 0)
+            {
+                analogValues = ScaleRawAnalogValues(msg.AnalogInData, config);
+            }
+            else
+            {
+                analogValues = Array.Empty<double>();
+            }
 
             // Extract digital data
             var digitalData = 0u;
@@ -272,6 +329,40 @@ public sealed class SdCardFileParser
         }
 
         await Task.CompletedTask; // keep the method async-compatible
+    }
+
+    /// <summary>
+    /// Scales raw ADC integer values using calibration parameters from the device config.
+    /// Formula: <c>(raw / resolution * portRange * calM + calB) * internalScaleM</c>
+    /// </summary>
+    private static double[] ScaleRawAnalogValues(
+        Google.Protobuf.Collections.RepeatedField<int> rawValues,
+        SdCardDeviceConfiguration? config)
+    {
+        if (config?.CalibrationValues == null || config.Resolution == 0)
+        {
+            // No calibration data available — return raw values as-is
+            return rawValues.Select(v => (double)v).ToArray();
+        }
+
+        var result = new double[rawValues.Count];
+        var resolution = (double)config.Resolution;
+        var cal = config.CalibrationValues;
+        var portRange = config.PortRange;
+        var intScale = config.InternalScaleM;
+
+        for (var ch = 0; ch < rawValues.Count; ch++)
+        {
+            var calM = ch < cal.Count ? cal[ch].Slope : 1.0;
+            var calB = ch < cal.Count ? cal[ch].Intercept : 0.0;
+            var range = portRange != null && ch < portRange.Count ? portRange[ch] : 1.0;
+            var scaleM = intScale != null && ch < intScale.Count ? intScale[ch] : 1.0;
+
+            var normalized = rawValues[ch] / resolution;
+            result[ch] = (normalized * range * calM + calB) * scaleM;
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -312,6 +403,9 @@ public sealed class SdCardFileParser
         string? devicePn = null;
         string? fwRev = null;
         IReadOnlyList<(double Slope, double Intercept)>? calibration = null;
+        uint resolution = 0;
+        IReadOnlyList<double>? portRange = null;
+        IReadOnlyList<double>? internalScaleM = null;
 
         foreach (var msg in messages)
         {
@@ -357,9 +451,25 @@ public sealed class SdCardFileParser
                 calibration = cal;
             }
 
+            if (resolution == 0 && msg.AnalogInRes != 0)
+            {
+                resolution = msg.AnalogInRes;
+            }
+
+            if (portRange == null && msg.AnalogInPortRange.Count > 0)
+            {
+                portRange = msg.AnalogInPortRange.Select(v => (double)v).ToArray();
+            }
+
+            if (internalScaleM == null && msg.AnalogInIntScaleM.Count > 0)
+            {
+                internalScaleM = msg.AnalogInIntScaleM.Select(v => (double)v).ToArray();
+            }
+
             // If we've found all fields, stop scanning
             if (timestampFreq != 0 && analogPortNum != 0 && digitalPortNum != 0 &&
-                deviceSn != 0 && devicePn != null && fwRev != null && calibration != null)
+                deviceSn != 0 && devicePn != null && fwRev != null && calibration != null &&
+                resolution != 0 && portRange != null && internalScaleM != null)
             {
                 break;
             }
@@ -367,7 +477,8 @@ public sealed class SdCardFileParser
 
         // Only return a config if we found at least one meaningful field
         if (timestampFreq == 0 && analogPortNum == 0 && digitalPortNum == 0 &&
-            deviceSn == 0 && devicePn == null && fwRev == null && calibration == null)
+            deviceSn == 0 && devicePn == null && fwRev == null && calibration == null &&
+            resolution == 0 && portRange == null && internalScaleM == null)
         {
             return null;
         }
@@ -379,7 +490,10 @@ public sealed class SdCardFileParser
             DeviceSerialNumber: deviceSn != 0 ? deviceSn.ToString() : null,
             DevicePartNumber: devicePn,
             FirmwareRevision: fwRev,
-            CalibrationValues: calibration);
+            CalibrationValues: calibration,
+            Resolution: resolution,
+            PortRange: portRange,
+            InternalScaleM: internalScaleM);
     }
 
     /// <summary>
@@ -406,7 +520,10 @@ public sealed class SdCardFileParser
             FirmwareRevision: !string.IsNullOrEmpty(primary.FirmwareRevision)
                 ? primary.FirmwareRevision
                 : scanned.FirmwareRevision,
-            CalibrationValues: primary.CalibrationValues ?? scanned.CalibrationValues);
+            CalibrationValues: primary.CalibrationValues ?? scanned.CalibrationValues,
+            Resolution: primary.Resolution != 0 ? primary.Resolution : scanned.Resolution,
+            PortRange: primary.PortRange ?? scanned.PortRange,
+            InternalScaleM: primary.InternalScaleM ?? scanned.InternalScaleM);
     }
 
     /// <summary>
@@ -428,6 +545,14 @@ public sealed class SdCardFileParser
             calibration = cal;
         }
 
+        var portRange = statusMessage.AnalogInPortRange.Count > 0
+            ? statusMessage.AnalogInPortRange.Select(v => (double)v).ToArray()
+            : null;
+
+        var internalScaleM = statusMessage.AnalogInIntScaleM.Count > 0
+            ? statusMessage.AnalogInIntScaleM.Select(v => (double)v).ToArray()
+            : null;
+
         return new SdCardDeviceConfiguration(
             AnalogPortCount: (int)statusMessage.AnalogInPortNum,
             DigitalPortCount: (int)statusMessage.DigitalPortNum,
@@ -435,7 +560,10 @@ public sealed class SdCardFileParser
             DeviceSerialNumber: statusMessage.DeviceSn != 0 ? statusMessage.DeviceSn.ToString() : null,
             DevicePartNumber: statusMessage.DevicePn,
             FirmwareRevision: statusMessage.DeviceFwRev,
-            CalibrationValues: calibration);
+            CalibrationValues: calibration,
+            Resolution: statusMessage.AnalogInRes,
+            PortRange: portRange,
+            InternalScaleM: internalScaleM);
     }
 
     /// <summary>

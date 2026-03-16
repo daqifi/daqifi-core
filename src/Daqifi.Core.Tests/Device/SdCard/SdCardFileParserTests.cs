@@ -553,9 +553,9 @@ public class SdCardFileParserTests
     #region Analog int data fallback
 
     [Fact]
-    public async Task ParseAsync_WithIntAnalogData_FallsBackToIntValues()
+    public async Task ParseAsync_WithIntAnalogData_NoCalibration_ReturnsRawValues()
     {
-        // Arrange
+        // Arrange — no calibration data, so raw ADC values are returned as-is
         var builder = new SdCardTestFileBuilder()
             .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
                 timestamp: 1000,
@@ -573,6 +573,67 @@ public class SdCardFileParserTests
         Assert.Equal(100.0, samples[0].AnalogValues[0]);
         Assert.Equal(200.0, samples[0].AnalogValues[1]);
         Assert.Equal(300.0, samples[0].AnalogValues[2]);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithIntAnalogData_AndCalibration_ScalesValues()
+    {
+        // Arrange — status message provides calibration, resolution, port range, and internal scale
+        var statusMsg = SdCardTestFileBuilder.CreateStatusMessage();
+        statusMsg.AnalogInRes = 65535;
+        statusMsg.AnalogInPortRange.AddRange(new[] { 1.0f, 1.0f });
+        statusMsg.AnalogInIntScaleM.AddRange(new[] { 1.0f, 1.0f });
+        statusMsg.AnalogInCalM.AddRange(new[] { 1.0f, 2.0f });
+        statusMsg.AnalogInCalB.AddRange(new[] { 0.0f, 0.1f });
+
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(statusMsg)
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 1000,
+                analogIntValues: new[] { 32768, 32768 }));
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "scaled.bin");
+
+        // Assert
+        var samples = await ToListAsync(session.Samples);
+        Assert.Single(samples);
+        Assert.Equal(2, samples[0].AnalogValues.Count);
+
+        // Channel 0: (32768/65535 * 1.0 * 1.0 + 0.0) * 1.0 ≈ 0.50001
+        Assert.InRange(samples[0].AnalogValues[0], 0.499, 0.501);
+
+        // Channel 1: (32768/65535 * 1.0 * 2.0 + 0.1) * 1.0 ≈ 1.1000
+        Assert.InRange(samples[0].AnalogValues[1], 1.099, 1.101);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithIntAnalogData_ScannedCalibration_ScalesValues()
+    {
+        // Arrange — calibration embedded in stream messages, no dedicated status
+        var msg1 = SdCardTestFileBuilder.CreateStreamMessage(
+            timestamp: 1000,
+            analogIntValues: new[] { 0 });
+        msg1.AnalogInRes = 65535;
+        msg1.AnalogInPortRange.AddRange(new[] { 1.0f });
+        msg1.AnalogInIntScaleM.AddRange(new[] { 1.0f });
+        msg1.AnalogInCalM.AddRange(new[] { 1.0f });
+        msg1.AnalogInCalB.AddRange(new[] { 0.5f }); // offset of 0.5
+
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(msg1);
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "scanned_cal.bin");
+
+        // Assert — raw 0, scaled to calB: (0/65535 * 1.0 * 1.0 + 0.5) * 1.0 = 0.5
+        var samples = await ToListAsync(session.Samples);
+        Assert.Single(samples);
+        Assert.InRange(samples[0].AnalogValues[0], 0.499, 0.501);
     }
 
     #endregion
@@ -724,7 +785,7 @@ public class SdCardFileParserTests
     [Fact]
     public async Task ParseAsync_WithDigitalOnlyData_ParsesCorrectly()
     {
-        // Arrange
+        // Arrange — standalone digital-only message (no analog at all)
         var builder = new SdCardTestFileBuilder()
             .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
                 timestamp: 1000,
@@ -740,6 +801,56 @@ public class SdCardFileParserTests
         Assert.Single(samples);
         Assert.Empty(samples[0].AnalogValues);
         Assert.Equal(0xCDABu, samples[0].DigitalData); // little-endian
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithPairedAnalogAndDigitalMessages_MergesIntoSingleEntry()
+    {
+        // Arrange — device sends analog+digital then digital-only at same timestamp
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 1000,
+                analogFloatValues: new[] { 1.0f, 2.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 1000,
+                digitalData: new byte[] { 0x0F }));
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "paired.bin");
+
+        // Assert — both messages merged into one entry
+        var samples = await ToListAsync(session.Samples);
+        Assert.Single(samples);
+        Assert.Equal(2, samples[0].AnalogValues.Count);
+        Assert.InRange(samples[0].AnalogValues[0], 0.99, 1.01);
+        Assert.Equal(0x0Fu, samples[0].DigitalData);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithSeparateAnalogAndDigitalAtDifferentTimestamps_YieldsBoth()
+    {
+        // Arrange — analog and digital at different timestamps are separate entries
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 1000,
+                analogFloatValues: new[] { 1.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 2000,
+                digitalData: new byte[] { 0xFF }));
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "separate.bin");
+
+        // Assert — two separate entries
+        var samples = await ToListAsync(session.Samples);
+        Assert.Equal(2, samples.Count);
+        Assert.Single(samples[0].AnalogValues);
+        Assert.Empty(samples[1].AnalogValues);
+        Assert.Equal(0xFFu, samples[1].DigitalData);
     }
 
     #endregion
