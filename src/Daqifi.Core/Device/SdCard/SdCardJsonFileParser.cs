@@ -237,23 +237,13 @@ public sealed class SdCardJsonFileParser
 
     private static SdCardDeviceConfiguration InferConfiguration(string firstLine, SdCardParseOptions options)
     {
-        // Use override if provided
-        if (options.ConfigurationOverride != null)
-        {
-            return options.ConfigurationOverride;
-        }
-
         // Parse first line to infer analog channel count
         var parsed = TryParseJsonLine(firstLine);
         var analogCount = parsed?.analog.Count ?? 0;
 
         var timestampFreq = options.FallbackTimestampFrequency;
-        if (timestampFreq == 0)
-        {
-            timestampFreq = 50_000_000;  // Default for Nyquist devices
-        }
 
-        return new SdCardDeviceConfiguration(
+        var inferred = new SdCardDeviceConfiguration(
             AnalogPortCount: analogCount,
             DigitalPortCount: 0,  // Cannot infer from data
             TimestampFrequency: timestampFreq,
@@ -261,6 +251,34 @@ public sealed class SdCardJsonFileParser
             DevicePartNumber: null,
             FirmwareRevision: null,
             CalibrationValues: null);
+
+        return MergeConfiguration(inferred, options.ConfigurationOverride);
+    }
+
+    /// <summary>
+    /// Merges an override configuration into an inferred configuration.
+    /// Inferred (file-derived) values are primary; the override fills in gaps (zero or null fields).
+    /// </summary>
+    private static SdCardDeviceConfiguration MergeConfiguration(
+        SdCardDeviceConfiguration inferred,
+        SdCardDeviceConfiguration? overrideConfig)
+    {
+        if (overrideConfig == null)
+        {
+            return inferred;
+        }
+
+        return new SdCardDeviceConfiguration(
+            AnalogPortCount: inferred.AnalogPortCount > 0 ? inferred.AnalogPortCount : overrideConfig.AnalogPortCount,
+            DigitalPortCount: inferred.DigitalPortCount > 0 ? inferred.DigitalPortCount : overrideConfig.DigitalPortCount,
+            TimestampFrequency: inferred.TimestampFrequency > 0 ? inferred.TimestampFrequency : overrideConfig.TimestampFrequency,
+            DeviceSerialNumber: inferred.DeviceSerialNumber ?? overrideConfig.DeviceSerialNumber,
+            DevicePartNumber: inferred.DevicePartNumber ?? overrideConfig.DevicePartNumber,
+            FirmwareRevision: inferred.FirmwareRevision ?? overrideConfig.FirmwareRevision,
+            CalibrationValues: inferred.CalibrationValues ?? overrideConfig.CalibrationValues,
+            Resolution: inferred.Resolution > 0 ? inferred.Resolution : overrideConfig.Resolution,
+            PortRange: inferred.PortRange ?? overrideConfig.PortRange,
+            InternalScaleM: inferred.InternalScaleM ?? overrideConfig.InternalScaleM);
     }
 
     /// <summary>

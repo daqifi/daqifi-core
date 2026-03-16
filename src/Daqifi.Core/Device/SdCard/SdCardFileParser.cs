@@ -339,22 +339,22 @@ public sealed class SdCardFileParser
         Google.Protobuf.Collections.RepeatedField<int> rawValues,
         SdCardDeviceConfiguration? config)
     {
-        if (config?.CalibrationValues == null || config.Resolution == 0)
+        if (config == null || config.Resolution == 0)
         {
-            // No calibration data available — return raw values as-is
+            // No config or resolution available — return raw values as-is
             return rawValues.Select(v => (double)v).ToArray();
         }
 
         var result = new double[rawValues.Count];
         var resolution = (double)config.Resolution;
-        var cal = config.CalibrationValues;
+        var cal = config.CalibrationValues; // May be null — defaults applied per-channel below
         var portRange = config.PortRange;
         var intScale = config.InternalScaleM;
 
         for (var ch = 0; ch < rawValues.Count; ch++)
         {
-            var calM = ch < cal.Count ? cal[ch].Slope : 1.0;
-            var calB = ch < cal.Count ? cal[ch].Intercept : 0.0;
+            var calM = cal != null && ch < cal.Count ? cal[ch].Slope : 1.0;
+            var calB = cal != null && ch < cal.Count ? cal[ch].Intercept : 0.0;
             var range = portRange != null && ch < portRange.Count ? portRange[ch] : 1.0;
             var scaleM = intScale != null && ch < intScale.Count ? intScale[ch] : 1.0;
 
