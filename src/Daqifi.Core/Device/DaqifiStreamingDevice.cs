@@ -399,7 +399,16 @@ namespace Daqifi.Core.Device
             // SdCardLogFormat integer values map 1:1 to SYSTem:STReam:FORmat SCPI arguments
             var formatCommand = new ScpiMessage($"SYSTem:STReam:FORmat {(int)format}");
 
+            // SD card and LAN share the SPI bus on the hardware, so LAN must be
+            // disabled before the SD card can be used.
+            Send(ScpiMessageProducer.DisableNetworkLan);
+            await Task.Delay(100, cancellationToken);
+
             Send(ScpiMessageProducer.EnableStorageSd);
+            await Task.Delay(100, cancellationToken);
+
+            // Route the data stream to the SD card interface.
+            Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
             await Task.Delay(100, cancellationToken);
 
             Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
@@ -438,6 +447,12 @@ namespace Daqifi.Core.Device
 
             StopStreaming();
             Send(ScpiMessageProducer.DisableStorageSd);
+
+            // Restore stream interface to USB so subsequent non-SD operations work.
+            if (IsUsbConnection)
+            {
+                Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb));
+            }
 
             _isLoggingToSdCard = false;
 

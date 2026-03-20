@@ -113,11 +113,13 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(4, sentCommands.Count);
-            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.bin\"", sentCommands[1]);
-            Assert.Equal("SYSTem:STReam:FORmat 0", sentCommands[2]);
-            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
+            Assert.Equal(6, sentCommands.Count);
+            Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.bin\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STReam:FORmat 0", sentCommands[4]);
+            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
         }
 
         [Fact]
@@ -285,11 +287,13 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(4, sentCommands.Count);
-            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.json\"", sentCommands[1]);
-            Assert.Equal("SYSTem:STReam:FORmat 1", sentCommands[2]);
-            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
+            Assert.Equal(6, sentCommands.Count);
+            Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.json\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STReam:FORmat 1", sentCommands[4]);
+            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
         }
 
         [Fact]
@@ -304,11 +308,13 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(4, sentCommands.Count);
-            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[0]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.csv\"", sentCommands[1]);
-            Assert.Equal("SYSTem:STReam:FORmat 2", sentCommands[2]);
-            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[3]);
+            Assert.Equal(6, sentCommands.Count);
+            Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
+            Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
+            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.csv\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STReam:FORmat 2", sentCommands[4]);
+            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
         }
 
         [Fact]
