@@ -29,9 +29,9 @@
     <None Include="../../README.md" Pack="true" PackagePath="/" />
     <PackageReference Include="Google.Protobuf" Version="3.34.0" />
     <PackageReference Include="HidSharp" Version="2.6.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.103" PrivateAssets="All" />
-    <PackageReference Include="System.IO.Ports" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.201" PrivateAssets="All" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.5" />
     <InternalsVisibleTo Include="Daqifi.Core.Tests" />
   </ItemGroup>
 
