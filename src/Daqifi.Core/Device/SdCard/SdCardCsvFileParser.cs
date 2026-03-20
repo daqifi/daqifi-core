@@ -368,23 +368,30 @@ public sealed class SdCardCsvFileParser
 
             // Parse digital I/O pair if present (last pair)
             uint digitalData = 0;
+            uint dioTimestamp = 0;
             if (layout.HasDigitalPair && totalPairs > analogPairCount)
             {
                 var dioIndex = analogPairCount;
+                var dioTsCol = columns[dioIndex * 2];
                 var dioValCol = columns[dioIndex * 2 + 1];
+                uint.TryParse(dioTsCol, NumberStyles.None, CultureInfo.InvariantCulture, out dioTimestamp);
                 if (uint.TryParse(dioValCol, NumberStyles.None, CultureInfo.InvariantCulture, out var dioVal))
                 {
                     digitalData = dioVal;
                 }
             }
 
-            if (perChannelTimestamps.Count == 0)
+            // Use first analog channel's timestamp, or fall back to dio timestamp
+            var rowTimestamp = perChannelTimestamps.Count > 0
+                ? perChannelTimestamps[0]
+                : dioTimestamp;
+
+            if (perChannelTimestamps.Count == 0 && dioTimestamp == 0 && !layout.HasDigitalPair)
             {
                 return null;
             }
 
-            // Use first channel's timestamp as the row timestamp
-            return (perChannelTimestamps[0], analogValues, digitalData, perChannelTimestamps);
+            return (rowTimestamp, analogValues, digitalData, perChannelTimestamps);
         }
         catch
         {

@@ -680,6 +680,38 @@ public sealed class SdCardCsvFileParserTests
         Assert.Equal(3, samples[0].AnalogValues.Count);
     }
 
+    [Fact]
+    public async Task ParseAsync_DigitalOnlyCsv_ParsesDioRows()
+    {
+        // Arrange — CSV with only a dio column pair, no analog channels
+        var content =
+            "# Device: Nyquist 1\n" +
+            "# Serial Number: SN001\n" +
+            "# Timestamp Tick Rate: 100 Hz\n" +
+            "dio_ts,dio_val\n" +
+            "1000,5\n" +
+            "1100,3\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            SessionStartTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+
+        var session = await parser.ParseAsync(stream, "test.csv", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(0, session.DeviceConfig!.AnalogPortCount);
+        Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
+        Assert.Equal(2, samples.Count);
+        Assert.Empty(samples[0].AnalogValues);
+        Assert.Equal(5u, samples[0].DigitalData);
+        Assert.Equal(3u, samples[1].DigitalData);
+        // Second sample should be 1 second later (100 ticks / 100 Hz)
+        Assert.Equal(new DateTime(2024, 1, 1, 0, 0, 1, DateTimeKind.Utc), samples[1].Timestamp);
+    }
+
     // -------------------------------------------------------------------------
     // Helper
     // -------------------------------------------------------------------------
