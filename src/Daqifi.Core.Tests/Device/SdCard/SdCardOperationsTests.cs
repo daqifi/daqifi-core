@@ -123,6 +123,19 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task StartSdCardLoggingAsync_OverNonUsbConnection_ThrowsInvalidOperationException()
+        {
+            // Arrange — use a device that reports IsUsbConnection = false
+            var device = new TestableNonUsbStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.StartSdCardLoggingAsync("test.bin"));
+            Assert.Contains("USB", ex.Message);
+        }
+
+        [Fact]
         public async Task StartSdCardLoggingAsync_WithCustomFileName_UsesProvidedName()
         {
             // Arrange
@@ -184,9 +197,10 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(2, sentCommands.Count);
+            Assert.Equal(3, sentCommands.Count);
             Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[1]);
+            Assert.Equal("SYSTem:STReam:INTerface 0", sentCommands[2]); // Restore USB
         }
 
         [Fact]
@@ -701,8 +715,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
         [Fact]
         public async Task DownloadSdCardFileAsync_WhenNotSerialTransport_Throws()
         {
-            // Arrange — use the testable device which has no transport (simulates non-USB)
-            var device = new TestableSdCardStreamingDevice("TestDevice");
+            // Arrange — use a device that reports IsUsbConnection = false
+            var device = new TestableNonUsbStreamingDevice("TestDevice");
             device.Connect();
             using var stream = new MemoryStream();
 
@@ -909,6 +923,11 @@ namespace Daqifi.Core.Tests.Device.SdCard
             public List<IOutboundMessage<string>> SentMessages { get; } = new();
             public List<string> CannedTextResponse { get; set; } = new();
 
+            /// <summary>
+            /// Simulates a USB connection so SD card operations are allowed.
+            /// </summary>
+            public override bool IsUsbConnection => true;
+
             public TestableSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
                 : base(name, ipAddress)
             {
@@ -982,6 +1001,23 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
                 using var fakeStream = new MemoryStream(data);
                 await rawAction(fakeStream, cancellationToken);
+            }
+        }
+        /// <summary>
+        /// A testable device that reports IsUsbConnection = false to verify
+        /// that SD card operations reject non-USB connections.
+        /// </summary>
+        private class TestableNonUsbStreamingDevice : DaqifiStreamingDevice
+        {
+            public TestableNonUsbStreamingDevice(string name, IPAddress? ipAddress = null)
+                : base(name, ipAddress)
+            {
+            }
+
+            public override bool IsUsbConnection => false;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
             }
         }
     }

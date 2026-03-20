@@ -381,6 +381,13 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
+            if (!IsUsbConnection)
+            {
+                throw new InvalidOperationException(
+                    "SD card logging requires a USB/serial connection. " +
+                    "The SD card and WiFi/LAN share the SPI bus, so SD operations cannot be performed over a network connection.");
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
 
             var extension = format switch
