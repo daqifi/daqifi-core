@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,8 +16,9 @@ namespace Daqifi.Core.Device.SdCard;
 /// <list type="bullet">
 ///   <item><description>Up to three <c>#</c>-prefixed comment lines containing device metadata
 ///   (device name, serial number, and timestamp tick rate).</description></item>
-///   <item><description>A column header row: <c>ch0_ts,ch0_val,ch1_ts,ch1_val,...</c></description></item>
-///   <item><description>Data rows with interleaved per-channel timestamp/value pairs.</description></item>
+///   <item><description>A column header row: <c>ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val</c></description></item>
+///   <item><description>Data rows with interleaved per-channel timestamp/value pairs.
+///   Analog values are raw ADC counts that require scaling.</description></item>
 /// </list>
 /// </para>
 /// </summary>
@@ -69,7 +71,8 @@ public sealed class SdCardCsvFileParser
                 EmptySamples());
         }
 
-        var config = MergeConfiguration(ParseHeader(lines, options), options.ConfigurationOverride);
+        var (headerConfig, columnLayout) = ParseHeader(lines, options);
+        var config = MergeConfiguration(headerConfig, options.ConfigurationOverride);
 
         // Find the index of the first data row (after comments and column header)
         var dataStartIndex = FindDataStartIndex(lines);
@@ -88,6 +91,7 @@ public sealed class SdCardCsvFileParser
             lines,
             dataStartIndex,
             config,
+            columnLayout,
             fileCreatedDate,
             options);
 
@@ -120,14 +124,25 @@ public sealed class SdCardCsvFileParser
     }
 
     /// <summary>
-    /// Parses device metadata from the comment header lines.
+    /// Describes the column layout parsed from the CSV header row.
     /// </summary>
-    private static SdCardDeviceConfiguration ParseHeader(List<string> lines, SdCardParseOptions options)
+    /// <param name="AnalogPairCount">Number of analog channel column pairs (ts + val).</param>
+    /// <param name="HasDigitalPair">Whether the last column pair is a digital I/O pair (dio_ts, dio_val).</param>
+    private sealed record CsvColumnLayout(int AnalogPairCount, bool HasDigitalPair);
+
+    /// <summary>
+    /// Parses device metadata and column layout from the comment header lines.
+    /// </summary>
+    private static (SdCardDeviceConfiguration Config, CsvColumnLayout Layout) ParseHeader(
+        List<string> lines,
+        SdCardParseOptions options)
     {
         string? deviceName = null;
         string? serialNumber = null;
         var timestampFreq = options.FallbackTimestampFrequency;
         var analogChannelCount = 0;
+        var digitalChannelCount = 0;
+        var hasDigitalPair = false;
 
         foreach (var line in lines)
         {
@@ -162,12 +177,29 @@ public sealed class SdCardCsvFileParser
                 }
             }
             else if (line.Contains("_ts,", StringComparison.OrdinalIgnoreCase) ||
-                     line.StartsWith("ch", StringComparison.OrdinalIgnoreCase))
+                     line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) ||
+                     line.StartsWith("ain", StringComparison.OrdinalIgnoreCase))
             {
-                // Column header: ch0_ts,ch0_val,ch1_ts,ch1_val,...
-                // Count channel pairs (every 2 columns = 1 channel)
+                // Column header: ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val
+                // Count channel pairs and identify digital columns
                 var cols = line.Split(',');
-                analogChannelCount = cols.Length / 2;
+                var totalPairs = cols.Length / 2;
+
+                // Check each pair to distinguish analog from digital
+                for (var p = 0; p < totalPairs; p++)
+                {
+                    var nameCol = cols[p * 2]; // e.g., "ain0_ts" or "dio_ts"
+                    if (nameCol.StartsWith("dio", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasDigitalPair = true;
+                        digitalChannelCount = 1;
+                    }
+                    else
+                    {
+                        analogChannelCount++;
+                    }
+                }
+
                 break;
             }
             else
@@ -177,14 +209,18 @@ public sealed class SdCardCsvFileParser
             }
         }
 
-        return new SdCardDeviceConfiguration(
+        var config = new SdCardDeviceConfiguration(
             AnalogPortCount: analogChannelCount,
-            DigitalPortCount: 0,
+            DigitalPortCount: digitalChannelCount,
             TimestampFrequency: timestampFreq,
             DeviceSerialNumber: serialNumber,
             DevicePartNumber: deviceName,
             FirmwareRevision: null,
             CalibrationValues: null);
+
+        var layout = new CsvColumnLayout(analogChannelCount, hasDigitalPair);
+
+        return (config, layout);
     }
 
     /// <summary>
@@ -200,9 +236,10 @@ public sealed class SdCardCsvFileParser
                 continue;  // Comment line
             }
 
-            // Check if it's the column header (contains "_ts," or starts with "ch")
+            // Check if it's the column header (contains "_ts," or starts with "ch"/"ain")
             if (line.Contains("_ts,", StringComparison.OrdinalIgnoreCase) ||
-                (line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && !char.IsDigit(line[2])))
+                (line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && !char.IsDigit(line[2])) ||
+                line.StartsWith("ain", StringComparison.OrdinalIgnoreCase))
             {
                 continue;  // Column header line
             }
@@ -217,6 +254,7 @@ public sealed class SdCardCsvFileParser
         List<string> lines,
         int dataStartIndex,
         SdCardDeviceConfiguration config,
+        CsvColumnLayout columnLayout,
         DateTime? fileCreatedDate,
         SdCardParseOptions options)
     {
@@ -230,7 +268,6 @@ public sealed class SdCardCsvFileParser
         var bytesRead = 0L;
 
         var progress = options.Progress;
-        var dataLines = lines.Count - dataStartIndex;
         var totalBytes = lines.Sum(l => l.Length + 1); // +1 for newline
 
         for (var i = dataStartIndex; i < lines.Count; i++)
@@ -239,14 +276,17 @@ public sealed class SdCardCsvFileParser
             linesProcessed++;
             bytesRead += line.Length + 1;
 
-            var parsed = TryParseCsvDataRow(line);
+            var parsed = TryParseCsvDataRow(line, columnLayout);
             if (parsed == null)
             {
                 // Skip malformed lines
                 continue;
             }
 
-            var (rowTimestamp, analogValues, perChannelTimestamps) = parsed.Value;
+            var (rowTimestamp, rawAnalogValues, digitalData, perChannelTimestamps) = parsed.Value;
+
+            // Scale raw ADC values using device calibration
+            var analogValues = ScaleRawAnalogValues(rawAnalogValues, config);
 
             // Reconstruct absolute timestamp using first channel timestamp
             var absoluteTime = baseTime;
@@ -266,7 +306,7 @@ public sealed class SdCardCsvFileParser
                 absoluteTime = baseTime.AddSeconds(elapsedSeconds);
             }
 
-            yield return new SdCardLogEntry(absoluteTime, analogValues, 0u, perChannelTimestamps);
+            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps);
 
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)
@@ -283,9 +323,11 @@ public sealed class SdCardCsvFileParser
 
     /// <summary>
     /// Parses a firmware CSV data row with interleaved per-channel timestamp/value pairs.
-    /// Format: ch0_ts,ch0_val,ch1_ts,ch1_val,...
+    /// Separates analog channel pairs from the digital I/O pair based on the column layout.
+    /// Format: ain0_ts,ain0_val,...,dio_ts,dio_val
     /// </summary>
-    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, IReadOnlyList<uint> perChannelTimestamps)? TryParseCsvDataRow(string line)
+    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, uint digitalData, IReadOnlyList<uint> perChannelTimestamps)?
+        TryParseCsvDataRow(string line, CsvColumnLayout layout)
     {
         try
         {
@@ -296,11 +338,16 @@ public sealed class SdCardCsvFileParser
                 return null;
             }
 
-            var channelCount = columns.Length / 2;
-            var analogValues = new List<double>(channelCount);
-            var perChannelTimestamps = new List<uint>(channelCount);
+            var totalPairs = columns.Length / 2;
+            var analogPairCount = layout.AnalogPairCount > 0
+                ? Math.Min(layout.AnalogPairCount, totalPairs)
+                : (layout.HasDigitalPair ? totalPairs - 1 : totalPairs);
 
-            for (var ch = 0; ch < channelCount; ch++)
+            var analogValues = new List<double>(analogPairCount);
+            var perChannelTimestamps = new List<uint>(analogPairCount);
+
+            // Parse analog channel pairs
+            for (var ch = 0; ch < analogPairCount; ch++)
             {
                 var tsCol = columns[ch * 2];
                 var valCol = columns[ch * 2 + 1];
@@ -319,13 +366,64 @@ public sealed class SdCardCsvFileParser
                 analogValues.Add(val);
             }
 
+            // Parse digital I/O pair if present (last pair)
+            uint digitalData = 0;
+            if (layout.HasDigitalPair && totalPairs > analogPairCount)
+            {
+                var dioIndex = analogPairCount;
+                var dioValCol = columns[dioIndex * 2 + 1];
+                if (uint.TryParse(dioValCol, NumberStyles.None, CultureInfo.InvariantCulture, out var dioVal))
+                {
+                    digitalData = dioVal;
+                }
+            }
+
+            if (perChannelTimestamps.Count == 0)
+            {
+                return null;
+            }
+
             // Use first channel's timestamp as the row timestamp
-            return (perChannelTimestamps[0], analogValues, perChannelTimestamps);
+            return (perChannelTimestamps[0], analogValues, digitalData, perChannelTimestamps);
         }
         catch
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Scales raw ADC values to real voltage using device calibration data.
+    /// Formula: (raw / resolution * portRange * calM + calB) * internalScaleM
+    /// </summary>
+    private static IReadOnlyList<double> ScaleRawAnalogValues(
+        IReadOnlyList<double> rawValues,
+        SdCardDeviceConfiguration? config)
+    {
+        if (config == null || config.Resolution == 0)
+        {
+            // No config or resolution available — return raw values as-is
+            return rawValues;
+        }
+
+        var result = new double[rawValues.Count];
+        var resolution = (double)config.Resolution;
+        var cal = config.CalibrationValues;
+        var portRange = config.PortRange;
+        var intScale = config.InternalScaleM;
+
+        for (var ch = 0; ch < rawValues.Count; ch++)
+        {
+            var calM = cal != null && ch < cal.Count ? cal[ch].Slope : 1.0;
+            var calB = cal != null && ch < cal.Count ? cal[ch].Intercept : 0.0;
+            var range = portRange != null && ch < portRange.Count ? portRange[ch] : 1.0;
+            var scaleM = intScale != null && ch < intScale.Count ? intScale[ch] : 1.0;
+
+            var normalized = rawValues[ch] / resolution;
+            result[ch] = (normalized * range * calM + calB) * scaleM;
+        }
+
+        return result;
     }
 
     /// <summary>

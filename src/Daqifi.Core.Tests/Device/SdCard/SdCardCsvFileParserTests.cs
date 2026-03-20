@@ -53,9 +53,9 @@ public sealed class SdCardCsvFileParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_DigitalDataIsAlwaysZero_BecauseFirmwareCsvHasNoDigitalColumn()
+    public async Task ParseAsync_NoDioColumn_DigitalDataIsZero()
     {
-        // Arrange — real firmware CSV has no digital data column
+        // Arrange — CSV without a dio column pair → digital data defaults to 0
         await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
             "Nyquist 1", "SN123", 50_000_000u,
             (1000u, new[] { 10.0, 20.0 })
@@ -65,7 +65,6 @@ public sealed class SdCardCsvFileParserTests
         var session = await parser.ParseAsync(stream, "test.csv");
         var samples = await ToListAsync(session.Samples);
 
-        // DigitalData is always 0 in the firmware CSV format
         Assert.Single(samples);
         Assert.Equal(0u, samples[0].DigitalData);
     }
@@ -481,6 +480,204 @@ public sealed class SdCardCsvFileParserTests
         {
             await parser.ParseAsync(stream, "test.csv", ct: cts.Token);
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // ADC scaling
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ParseAsync_WithCalibrationConfig_ScalesRawAdcValues()
+    {
+        // Arrange — raw ADC values (e.g., 22 counts on a 16-bit ADC)
+        // with calibration config that should scale them to voltage
+        await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
+            "Nyquist 1", "7E2815916200E898", 50_000_000u,
+            (1000u, new[] { 0.0, 22.0, 16.0 })
+        );
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 3,
+            DigitalPortCount: 0,
+            TimestampFrequency: 50_000_000u,
+            DeviceSerialNumber: "7E2815916200E898",
+            DevicePartNumber: "Nyquist 1",
+            FirmwareRevision: "3.4.4",
+            CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0), (1.0, 0.0) },
+            Resolution: 65535,
+            PortRange: new[] { 10.0, 10.0, 10.0 },
+            InternalScaleM: new[] { 1.0, 1.0, 1.0 });
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            ConfigurationOverride = overrideConfig
+        };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "test.csv", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert — raw value 22 should be scaled: (22 / 65535) * 10.0 * 1.0 + 0.0 = ~0.00336
+        Assert.Single(samples);
+        Assert.Equal(3, samples[0].AnalogValues.Count);
+        Assert.Equal(0.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(22.0 / 65535.0 * 10.0, samples[0].AnalogValues[1], precision: 5);
+        Assert.Equal(16.0 / 65535.0 * 10.0, samples[0].AnalogValues[2], precision: 5);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithoutCalibrationConfig_ReturnsRawValues()
+    {
+        // Arrange — no config override, no resolution → raw values pass through
+        await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
+            "Nyquist 1", "SN001", 100u,
+            (1000u, new[] { 22.0, 16.0 })
+        );
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var session = await parser.ParseAsync(stream, "test.csv");
+        var samples = await ToListAsync(session.Samples);
+
+        // No scaling applied — raw values returned as-is
+        Assert.Single(samples);
+        Assert.Equal(22.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(16.0, samples[0].AnalogValues[1], precision: 5);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithCalibrationOffsets_AppliesFullFormula()
+    {
+        // Arrange — test the full scaling formula: (raw / resolution * portRange * calM + calB) * internalScaleM
+        await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
+            "TestDevice", "SN001", 100u,
+            (1000u, new[] { 32768.0 })  // half-scale on 16-bit ADC
+        );
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 1,
+            DigitalPortCount: 0,
+            TimestampFrequency: 100u,
+            DeviceSerialNumber: "SN001",
+            DevicePartNumber: "TestDevice",
+            FirmwareRevision: null,
+            CalibrationValues: new[] { (1.02, -0.05) },  // calM=1.02, calB=-0.05
+            Resolution: 65535,
+            PortRange: new[] { 10.0 },
+            InternalScaleM: new[] { 2.0 });
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            ConfigurationOverride = overrideConfig
+        };
+
+        var session = await parser.ParseAsync(stream, "test.csv", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Expected: (32768 / 65535 * 10.0 * 1.02 + (-0.05)) * 2.0
+        var normalized = 32768.0 / 65535.0;
+        var expected = (normalized * 10.0 * 1.02 + (-0.05)) * 2.0;
+        Assert.Single(samples);
+        Assert.Equal(expected, samples[0].AnalogValues[0], precision: 5);
+    }
+
+    // -------------------------------------------------------------------------
+    // DIO column handling
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ParseAsync_WithDioColumn_ParsesDigitalDataSeparately()
+    {
+        // Arrange — firmware CSV with ain columns + dio column at the end
+        var content =
+            "# Device: Nyquist 1\n" +
+            "# Serial Number: 7E2815916200E898\n" +
+            "# Timestamp Tick Rate: 50000000 Hz\n" +
+            "ain0_ts,ain0_val,ain1_ts,ain1_val,dio_ts,dio_val\n" +
+            "1000,0,1000,22,1000,5\n" +
+            "2000,1,2000,23,2000,3\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var session = await parser.ParseAsync(stream, "test.csv");
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert — 2 analog channels (not 3), dio parsed as digital data
+        Assert.Equal(2, session.DeviceConfig!.AnalogPortCount);
+        Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
+        Assert.Equal(2, samples.Count);
+
+        // Analog values (unscaled since no config override)
+        Assert.Equal(2, samples[0].AnalogValues.Count);
+        Assert.Equal(0.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(22.0, samples[0].AnalogValues[1], precision: 5);
+
+        // Digital data
+        Assert.Equal(5u, samples[0].DigitalData);
+        Assert.Equal(3u, samples[1].DigitalData);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithDioColumnAndScaling_ScalesOnlyAnalogValues()
+    {
+        // Arrange — ain columns should be scaled, dio column should not
+        var content =
+            "# Device: Nyquist 1\n" +
+            "# Serial Number: SN001\n" +
+            "# Timestamp Tick Rate: 100 Hz\n" +
+            "ain0_ts,ain0_val,dio_ts,dio_val\n" +
+            "1000,32768,1000,7\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 1,
+            DigitalPortCount: 1,
+            TimestampFrequency: 100u,
+            DeviceSerialNumber: "SN001",
+            DevicePartNumber: "Nyquist 1",
+            FirmwareRevision: null,
+            CalibrationValues: new[] { (1.0, 0.0) },
+            Resolution: 65535,
+            PortRange: new[] { 10.0 },
+            InternalScaleM: new[] { 1.0 });
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            ConfigurationOverride = overrideConfig
+        };
+
+        var session = await parser.ParseAsync(stream, "test.csv", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+        // Analog should be scaled: 32768 / 65535 * 10.0 ≈ 5.0
+        Assert.Equal(32768.0 / 65535.0 * 10.0, samples[0].AnalogValues[0], precision: 3);
+        // Digital should remain as-is
+        Assert.Equal(7u, samples[0].DigitalData);
+    }
+
+    [Fact]
+    public async Task ParseAsync_AinColumnHeader_CorrectlyParsed()
+    {
+        // Arrange — real firmware uses ain0, ain1, ain2 etc. as column prefixes
+        var content =
+            "# Device: Nyquist 1\n" +
+            "# Serial Number: SN001\n" +
+            "# Timestamp Tick Rate: 50000000 Hz\n" +
+            "ain0_ts,ain0_val,ain1_ts,ain1_val,ain2_ts,ain2_val\n" +
+            "1000,10,1000,20,1000,30\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var session = await parser.ParseAsync(stream, "test.csv");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(3, session.DeviceConfig!.AnalogPortCount);
+        Assert.Equal(0, session.DeviceConfig.DigitalPortCount);
+        Assert.Single(samples);
+        Assert.Equal(3, samples[0].AnalogValues.Count);
     }
 
     // -------------------------------------------------------------------------

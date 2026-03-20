@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -128,7 +129,10 @@ public sealed class SdCardJsonFileParser
                 continue;
             }
 
-            var (timestamp, analogValues, digitalData) = parsed.Value;
+            var (timestamp, rawAnalogValues, digitalData) = parsed.Value;
+
+            // Scale raw ADC values using device calibration
+            var analogValues = ScaleRawAnalogValues(rawAnalogValues, config);
 
             // Reconstruct absolute timestamp
             var absoluteTime = baseTime;
@@ -253,6 +257,40 @@ public sealed class SdCardJsonFileParser
             CalibrationValues: null);
 
         return MergeConfiguration(inferred, options.ConfigurationOverride);
+    }
+
+    /// <summary>
+    /// Scales raw ADC values to real voltage using device calibration data.
+    /// Formula: (raw / resolution * portRange * calM + calB) * internalScaleM
+    /// </summary>
+    private static IReadOnlyList<double> ScaleRawAnalogValues(
+        IReadOnlyList<double> rawValues,
+        SdCardDeviceConfiguration? config)
+    {
+        if (config == null || config.Resolution == 0)
+        {
+            // No config or resolution available — return raw values as-is
+            return rawValues;
+        }
+
+        var result = new double[rawValues.Count];
+        var resolution = (double)config.Resolution;
+        var cal = config.CalibrationValues;
+        var portRange = config.PortRange;
+        var intScale = config.InternalScaleM;
+
+        for (var ch = 0; ch < rawValues.Count; ch++)
+        {
+            var calM = cal != null && ch < cal.Count ? cal[ch].Slope : 1.0;
+            var calB = cal != null && ch < cal.Count ? cal[ch].Intercept : 0.0;
+            var range = portRange != null && ch < portRange.Count ? portRange[ch] : 1.0;
+            var scaleM = intScale != null && ch < intScale.Count ? intScale[ch] : 1.0;
+
+            var normalized = rawValues[ch] / resolution;
+            result[ch] = (normalized * range * calM + calB) * scaleM;
+        }
+
+        return result;
     }
 
     /// <summary>

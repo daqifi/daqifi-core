@@ -340,6 +340,70 @@ public sealed class SdCardJsonFileParserTests
         Assert.Null(samples[0].AnalogTimestamps);  // JSON/CSV formats don't support per-channel timestamps
     }
 
+    // -------------------------------------------------------------------------
+    // ADC scaling
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ParseAsync_WithCalibrationConfig_ScalesRawAdcValues()
+    {
+        // Arrange — raw ADC integer values in JSON
+        await using var stream = SdCardTestJsonFileBuilder.BuildJsonFileWithIntegers(
+            (100u, new[] { 0, 22, 16 }, "00")
+        );
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 3,
+            DigitalPortCount: 0,
+            TimestampFrequency: 100u,
+            DeviceSerialNumber: "SN001",
+            DevicePartNumber: "TestDevice",
+            FirmwareRevision: null,
+            CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0), (1.0, 0.0) },
+            Resolution: 65535,
+            PortRange: new[] { 10.0, 10.0, 10.0 },
+            InternalScaleM: new[] { 1.0, 1.0, 1.0 });
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            SessionStartTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            FallbackTimestampFrequency = 100,
+            ConfigurationOverride = overrideConfig
+        };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert — raw 22 → (22 / 65535) * 10.0 ≈ 0.00336
+        Assert.Single(samples);
+        Assert.Equal(0.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(22.0 / 65535.0 * 10.0, samples[0].AnalogValues[1], precision: 5);
+        Assert.Equal(16.0 / 65535.0 * 10.0, samples[0].AnalogValues[2], precision: 5);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithoutCalibrationConfig_ReturnsRawValues()
+    {
+        // Arrange — no config override → values pass through as-is
+        await using var stream = SdCardTestJsonFileBuilder.BuildJsonFileWithIntegers(
+            (100u, new[] { 22, 16 }, "00")
+        );
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            FallbackTimestampFrequency = 100
+        };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+        Assert.Equal(22.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(16.0, samples[0].AnalogValues[1], precision: 5);
+    }
+
     private static async Task<List<T>> ToListAsync<T>(IAsyncEnumerable<T> source)
     {
         var list = new List<T>();
