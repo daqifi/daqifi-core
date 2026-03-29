@@ -45,7 +45,7 @@ device.MessageReceived += (sender, e) =>
 };
 
 // Configure channels and start streaming
-device.Send(ScpiMessageProducer.EnableAdcChannels("0000000011")); // Enable first 2 channels
+device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // Enable first 2 channels (bitmask 0b11 = 3)
 device.Send(ScpiMessageProducer.StartStreaming(100)); // 100 Hz sample rate
 
 await Task.Delay(TimeSpan.FromSeconds(10)); // Stream for 10 seconds

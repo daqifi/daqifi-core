@@ -366,7 +366,8 @@ namespace Daqifi.Core.Device
         /// (.bin for Protobuf, .json for JSON, .dat for TestData).
         /// </param>
         /// <param name="channelMask">
-        /// Optional binary string mask to enable specific ADC channels (e.g. "0000000011" enables channels 0 and 1).
+        /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).
+        /// The firmware parses this as a decimal integer where each bit enables a channel.
         /// If null or empty, the current device channel configuration is used.
         /// </param>
         /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>

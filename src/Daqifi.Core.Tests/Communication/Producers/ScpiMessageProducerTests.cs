@@ -151,8 +151,8 @@ public class ScpiMessageProducerTests
     [Fact]
     public void EnableAdcChannels_ReturnsCorrectCommand()
     {
-        var message = ScpiMessageProducer.EnableAdcChannels("0001010100");
-        Assert.Equal("ENAble:VOLTage:DC 0001010100", message.Data);
+        var message = ScpiMessageProducer.EnableAdcChannels("84");
+        Assert.Equal("ENAble:VOLTage:DC 84", message.Data);
         AssertMessageFormat(message);
     }
 
