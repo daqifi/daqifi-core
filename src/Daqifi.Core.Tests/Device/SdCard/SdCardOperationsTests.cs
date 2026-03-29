@@ -197,10 +197,11 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(3, sentCommands.Count);
+            Assert.Equal(4, sentCommands.Count);
             Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 0", sentCommands[2]); // Restore USB
+            Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[3]); // Re-enable LAN
         }
 
         [Fact]

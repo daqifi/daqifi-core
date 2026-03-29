@@ -461,6 +461,10 @@ namespace Daqifi.Core.Device
                 Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb));
             }
 
+            // Re-enable LAN interface. StartSdCardLoggingAsync disables LAN because
+            // the SD card and WiFi/LAN share the SPI bus on the hardware.
+            Send(ScpiMessageProducer.EnableNetworkLan);
+
             _isLoggingToSdCard = false;
 
             return Task.CompletedTask;
