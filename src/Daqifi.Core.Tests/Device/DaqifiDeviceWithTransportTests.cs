@@ -189,7 +189,29 @@ public class DaqifiDeviceWithTransportTests
         Assert.Contains("SYSTem:SYSInfoPB?", streamContent);
     }
 
-    [Fact] 
+    [Fact]
+    public void DaqifiDevice_Disconnect_ShouldNotReportLostStatus()
+    {
+        // Arrange
+        using var transport = new MockStreamTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        device.Connect();
+        Assert.Equal(ConnectionStatus.Connected, device.Status);
+
+        var statusChanges = new List<ConnectionStatus>();
+        device.StatusChanged += (sender, args) => statusChanges.Add(args.Status);
+
+        // Act - Intentional disconnect
+        device.Disconnect();
+
+        // Assert - Should go straight to Disconnected, never Lost
+        Assert.DoesNotContain(ConnectionStatus.Lost, statusChanges);
+        Assert.Contains(ConnectionStatus.Disconnected, statusChanges);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+    }
+
+    [Fact]
     public void DaqifiDevice_TransportConnectionLost_ShouldUpdateStatus()
     {
         // Arrange
