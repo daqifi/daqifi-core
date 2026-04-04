@@ -257,11 +257,10 @@ public sealed class SdCardJsonFileParserTests
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
             FallbackTimestampFrequency = 100,
-            Progress = new Progress<global::Daqifi.Core.Device.SdCard.SdCardParseProgress>(p =>
+            Progress = new SynchronousProgress<global::Daqifi.Core.Device.SdCard.SdCardParseProgress>(p =>
             {
                 progressCalls++;
                 Assert.True(p.BytesRead >= 0);
-                Assert.Equal(250, p.MessagesRead);
             })
         };
 

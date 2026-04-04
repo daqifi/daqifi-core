@@ -485,16 +485,13 @@ public class SdCardFileParserTests
         var progressReports = new List<SdCardParseProgress>();
         var options = new SdCardParseOptions
         {
-            Progress = new Progress<SdCardParseProgress>(p => progressReports.Add(p))
+            Progress = new SynchronousProgress<SdCardParseProgress>(p => progressReports.Add(p))
         };
 
         // Act
         var session = await _parser.ParseAsync(stream, "progress.bin", options);
         // Enumerate samples to force full parse
         await ToListAsync(session.Samples);
-
-        // Allow progress handler to execute (Progress<T> posts to SynchronizationContext)
-        await Task.Delay(100);
 
         // Assert — at least one progress report
         Assert.NotEmpty(progressReports);
