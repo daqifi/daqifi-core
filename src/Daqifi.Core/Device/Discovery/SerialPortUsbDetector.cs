@@ -225,6 +225,8 @@ internal static class SerialPortUsbDetector
 
     #region Helpers
 
+    private const int ProcessTimeoutMs = 5000;
+
     private static string RunProcess(string fileName, string arguments)
     {
         try
@@ -242,9 +244,18 @@ internal static class SerialPortUsbDetector
             };
 
             process.Start();
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(5000);
-            return output;
+
+            // Read stdout asynchronously so we can enforce a timeout.
+            // ReadToEnd() before WaitForExit() can block indefinitely if the process stalls.
+            var readTask = process.StandardOutput.ReadToEndAsync();
+            if (process.WaitForExit(ProcessTimeoutMs) && readTask.Wait(ProcessTimeoutMs))
+            {
+                return readTask.Result;
+            }
+
+            // Process or read timed out — kill and return empty
+            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            return string.Empty;
         }
         catch
         {
