@@ -452,7 +452,10 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            StopStreaming();
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
+
             Send(ScpiMessageProducer.DisableStorageSd);
 
             // Restore stream interface to USB so subsequent non-SD operations work.

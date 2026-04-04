@@ -205,6 +205,24 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task StopSdCardLoggingAsync_SendsStopCommandEvenWhenIsStreamingIsFalse()
+        {
+            // Arrange - simulate stale IsStreaming state (see issue #118)
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            await device.StartSdCardLoggingAsync("test.bin");
+            device.StopStreaming(); // Sets IsStreaming = false
+            device.SentMessages.Clear();
+
+            // Act
+            await device.StopSdCardLoggingAsync();
+
+            // Assert - stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
         public async Task StopSdCardLoggingAsync_SetsIsLoggingToFalse()
         {
             // Arrange
