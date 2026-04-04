@@ -447,7 +447,7 @@ public sealed class SdCardCsvFileParserTests
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
-            Progress = new Progress<global::Daqifi.Core.Device.SdCard.SdCardParseProgress>(p =>
+            Progress = new SynchronousProgress<global::Daqifi.Core.Device.SdCard.SdCardParseProgress>(p =>
             {
                 progressCalls++;
                 lastProgress = p;
