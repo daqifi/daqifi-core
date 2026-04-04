@@ -76,6 +76,7 @@ namespace Daqifi.Core.Device
 
         private IProtocolHandler? _protocolHandler;
         private bool _disposed;
+        private bool _isDisconnecting;
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
         
@@ -198,6 +199,7 @@ namespace Daqifi.Core.Device
         /// </summary>
         public void Disconnect()
         {
+            _isDisconnecting = true;
             try
             {
                 // Unsubscribe from message consumer events
@@ -218,6 +220,7 @@ namespace Daqifi.Core.Device
                 Status = ConnectionStatus.Disconnected;
                 State = DeviceState.Disconnected;
                 _isInitialized = false;
+                _isDisconnecting = false;
             }
         }
 
@@ -489,8 +492,9 @@ namespace Daqifi.Core.Device
             }
             else
             {
-                // Transport disconnected, update device status
-                if (Status == ConnectionStatus.Connected)
+                // Transport disconnected — only report Lost for unexpected drops,
+                // not during an intentional Disconnect() call
+                if (Status == ConnectionStatus.Connected && !_isDisconnecting)
                 {
                     Status = ConnectionStatus.Lost;
                 }
