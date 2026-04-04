@@ -583,8 +583,8 @@ internal class ScpiCommandProcessor
         // Channel configuration
         else if (command.StartsWith("enable:voltage:dc "))
         {
-            var binaryString = command.Split(' ')[1];
-            var mask = Convert.ToUInt32(binaryString, 2);
+            var maskString = command.Split(' ')[1];
+            var mask = Convert.ToUInt32(maskString);
             _device.SetChannelMask(mask);
             return null;
         }
