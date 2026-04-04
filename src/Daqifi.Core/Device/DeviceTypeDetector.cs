@@ -10,7 +10,7 @@ public static class DeviceTypeDetector
     /// </summary>
     /// <param name="partNumber">The device part number (e.g., "Nq1", "Nq2", "Nq3").</param>
     /// <returns>The detected DeviceType, or DeviceType.Unknown if not recognized.</returns>
-    public static DeviceType DetectFromPartNumber(string partNumber)
+    public static DeviceType DetectFromPartNumber(string? partNumber)
     {
         if (string.IsNullOrWhiteSpace(partNumber))
         {

@@ -330,7 +330,7 @@ public class TimestampProcessorTests
     #region Thread Safety Tests
 
     [Fact]
-    public void ProcessTimestamp_IsThreadSafe()
+    public async Task ProcessTimestamp_IsThreadSafe()
     {
         // Arrange
         var processor = new TimestampProcessor();
@@ -348,15 +348,15 @@ public class TimestampProcessorTests
             }));
         }
 
-        Task.WaitAll(tasks.ToArray());
+        await Task.WhenAll(tasks.ToArray());
 
         // Assert - All tasks completed without exception
         Assert.Equal(100, results.Count);
-        Assert.Single(results.Where(r => r.IsFirstMessage)); // Only one first message
+        Assert.Single(results, r => r.IsFirstMessage); // Only one first message
     }
 
     [Fact]
-    public void ProcessTimestamp_MultipleDevicesInParallel_IsThreadSafe()
+    public async Task ProcessTimestamp_MultipleDevicesInParallel_IsThreadSafe()
     {
         // Arrange
         var processor = new TimestampProcessor();
@@ -384,7 +384,7 @@ public class TimestampProcessorTests
             }
         }
 
-        Task.WaitAll(tasks.ToArray());
+        await Task.WhenAll(tasks.ToArray());
 
         // Assert - All devices have 10 results
         Assert.Equal(10, results.Count);

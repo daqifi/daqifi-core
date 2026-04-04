@@ -140,7 +140,7 @@ public class AnalogChannelTests
     }
 
     [Fact]
-    public void SetActiveSample_IsThreadSafe()
+    public async Task SetActiveSample_IsThreadSafe()
     {
         // Arrange
         var channel = new AnalogChannel(0);
@@ -153,7 +153,7 @@ public class AnalogChannelTests
             tasks.Add(Task.Run(() => channel.SetActiveSample(value, DateTime.UtcNow)));
         }
 
-        Task.WaitAll(tasks.ToArray());
+        await Task.WhenAll(tasks.ToArray());
 
         // Assert
         Assert.NotNull(channel.ActiveSample);

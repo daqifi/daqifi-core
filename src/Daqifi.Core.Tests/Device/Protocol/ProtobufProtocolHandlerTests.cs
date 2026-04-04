@@ -38,11 +38,11 @@ public class ProtobufProtocolHandlerTests
     }
 
     [Fact]
-    public async void HandleAsync_WithStatusMessage_CallsStatusHandler()
+    public async Task HandleAsync_WithStatusMessage_CallsStatusHandler()
     {
         // Arrange
         var statusHandlerCalled = false;
-        DaqifiOutMessage receivedMessage = null;
+        DaqifiOutMessage? receivedMessage = null;
 
         var handler = new ProtobufProtocolHandler(
             statusMessageHandler: msg =>
@@ -69,11 +69,11 @@ public class ProtobufProtocolHandlerTests
     }
 
     [Fact]
-    public async void HandleAsync_WithStreamMessage_CallsStreamHandler()
+    public async Task HandleAsync_WithStreamMessage_CallsStreamHandler()
     {
         // Arrange
         var streamHandlerCalled = false;
-        DaqifiOutMessage receivedMessage = null;
+        DaqifiOutMessage? receivedMessage = null;
 
         var handler = new ProtobufProtocolHandler(
             streamMessageHandler: msg =>
@@ -102,7 +102,7 @@ public class ProtobufProtocolHandlerTests
     }
 
     [Fact]
-    public async void HandleAsync_WithNonProtobufMessage_DoesNotCallHandlers()
+    public async Task HandleAsync_WithNonProtobufMessage_DoesNotCallHandlers()
     {
         // Arrange
         var statusHandlerCalled = false;
@@ -127,7 +127,7 @@ public class ProtobufProtocolHandlerTests
     {
         // Arrange - USB firmware sends pre-scaled float values (AnalogInDataFloat)
         var streamHandlerCalled = false;
-        DaqifiOutMessage receivedMessage = null;
+        DaqifiOutMessage? receivedMessage = null;
 
         var handler = new ProtobufProtocolHandler(
             streamMessageHandler: msg =>

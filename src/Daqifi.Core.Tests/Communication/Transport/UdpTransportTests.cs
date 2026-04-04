@@ -2,6 +2,7 @@ using Daqifi.Core.Communication.Transport;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
 
@@ -188,11 +189,11 @@ public class UdpTransportTests
     }
 
     [Fact]
-    public void Dispose_ShouldCloseTransport()
+    public async Task Dispose_ShouldCloseTransport()
     {
         // Arrange
         var transport = new UdpTransport(0);
-        transport.OpenAsync().Wait();
+        await transport.OpenAsync();
 
         // Act
         transport.Dispose();
@@ -202,7 +203,7 @@ public class UdpTransportTests
     }
 
     [Fact]
-    public void ConnectionInfo_ShouldReflectStatus()
+    public async Task ConnectionInfo_ShouldReflectStatus()
     {
         // Arrange - use dynamic port to avoid conflicts in parallel test runs
         using var transport = new UdpTransport(0);
@@ -210,7 +211,7 @@ public class UdpTransportTests
         // Act & Assert
         Assert.Contains("Closed", transport.ConnectionInfo);
 
-        transport.OpenAsync().Wait();
+        await transport.OpenAsync();
         Assert.Contains("Open", transport.ConnectionInfo);
     }
 }
