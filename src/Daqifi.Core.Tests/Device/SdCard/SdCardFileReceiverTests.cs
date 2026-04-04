@@ -115,13 +115,10 @@ public class SdCardFileReceiverTests
         var receiver = new SdCardFileReceiver(sourceStream, bufferSize: 100);
 
         var progressReports = new System.Collections.Generic.List<SdCardTransferProgress>();
-        var progress = new Progress<SdCardTransferProgress>(p => progressReports.Add(p));
+        var progress = new SynchronousProgress<SdCardTransferProgress>(p => progressReports.Add(p));
 
         // Act
         await receiver.ReceiveAsync(destinationStream, "test.bin", progress);
-
-        // Allow progress callbacks to fire (they're posted to the sync context)
-        await Task.Delay(100);
 
         // Assert — we should have received at least one progress report
         Assert.NotEmpty(progressReports);
