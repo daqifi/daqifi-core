@@ -197,10 +197,29 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal(3, sentCommands.Count);
+            Assert.Equal(4, sentCommands.Count);
             Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 0", sentCommands[2]); // Restore USB
+            Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[3]); // Re-enable LAN
+        }
+
+        [Fact]
+        public async Task StopSdCardLoggingAsync_SendsStopCommandEvenWhenIsStreamingIsFalse()
+        {
+            // Arrange - simulate stale IsStreaming state (see issue #118)
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            await device.StartSdCardLoggingAsync("test.bin");
+            device.StopStreaming(); // Sets IsStreaming = false
+            device.SentMessages.Clear();
+
+            // Act
+            await device.StopSdCardLoggingAsync();
+
+            // Assert - stop command should still be sent defensively
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
         }
 
         [Fact]
