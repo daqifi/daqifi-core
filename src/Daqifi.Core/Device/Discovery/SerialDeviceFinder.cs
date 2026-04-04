@@ -15,7 +15,7 @@ namespace Daqifi.Core.Device.Discovery;
 
 /// <summary>
 /// Discovers DAQiFi devices connected via USB/Serial ports.
-/// Probes each port by sending SCPI commands and validating protobuf responses.
+/// Filters ports by USB VID/PID, then probes candidates in parallel using SCPI commands.
 /// </summary>
 public class SerialDeviceFinder : IDeviceFinder, IDisposable
 {
@@ -23,10 +23,14 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
     private const int DefaultBaudRate = 9600;
     private const int ProbeTimeoutMs = 1000;
-    private const int DeviceWakeUpDelayMs = 1000;
-    private const int ResponseTimeoutMs = 4000;
-    private const int MaxRetries = 3;
-    private const int RetryIntervalMs = 1000;
+
+    /// <summary>
+    /// Discovery-specific timeouts (shorter than connection timeouts for fast scanning).
+    /// </summary>
+    private const int DiscoveryWakeUpDelayMs = 200;
+    private const int DiscoveryResponseTimeoutMs = 1000;
+    private const int DiscoveryMaxRetries = 2;
+    private const int DiscoveryRetryIntervalMs = 300;
     private const int PollIntervalMs = 100;
 
     #endregion
@@ -77,7 +81,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
     /// <summary>
     /// Discovers devices asynchronously with a cancellation token.
-    /// Probes each serial port to identify DAQiFi devices.
+    /// Filters ports by USB VID/PID, then probes candidates in parallel.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token to abort the operation.</param>
     /// <returns>A task containing the collection of discovered DAQiFi devices.</returns>
@@ -89,32 +93,21 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
         await _discoverySemaphore.WaitAsync(cancellationToken);
         try
         {
-            var discoveredDevices = new List<IDeviceInfo>();
-            var availablePorts = FilterProbableDaqifiPorts(SerialStreamTransport.GetAvailablePortNames());
+            var allPorts = FilterProbableDaqifiPorts(SerialStreamTransport.GetAvailablePortNames());
 
-            foreach (var portName in availablePorts)
+            // Filter by USB VID/PID before probing (avoids sending SCPI to non-DAQiFi devices)
+            var candidatePorts = FilterByUsbVidPid(allPorts).ToList();
+
+            // Probe candidate ports in parallel
+            var probeTasks = candidatePorts.Select(portName =>
+                TryGetDeviceInfoAsync(portName, cancellationToken));
+
+            var results = await Task.WhenAll(probeTasks);
+            var discoveredDevices = results.Where(d => d != null).Cast<IDeviceInfo>().ToList();
+
+            foreach (var device in discoveredDevices)
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-
-                try
-                {
-                    var deviceInfo = await TryGetDeviceInfoAsync(portName, cancellationToken);
-                    if (deviceInfo != null)
-                    {
-                        discoveredDevices.Add(deviceInfo);
-                        OnDeviceDiscovered(deviceInfo);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception)
-                {
-                    // Skip ports that fail to open or respond
-                    // This is normal as not all serial ports are DAQiFi devices
-                }
+                OnDeviceDiscovered(device);
             }
 
             OnDiscoveryCompleted();
@@ -144,6 +137,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// <summary>
     /// Attempts to probe a serial port and retrieve device information.
     /// Opens the port, sends GetDeviceInfo command, and waits for a status response.
+    /// Uses reduced timeouts and minimal commands optimized for fast discovery.
     /// </summary>
     /// <param name="portName">The serial port name.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -167,8 +161,8 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             port.Open();
             port.DtrEnable = true;
 
-            // Wait for device to wake up (devices need time after DTR is enabled)
-            await Task.Delay(DeviceWakeUpDelayMs, cancellationToken);
+            // Brief delay for device to wake up after DTR is enabled
+            await Task.Delay(DiscoveryWakeUpDelayMs, cancellationToken);
 
             // Set up message producer and consumer
             var stream = port.BaseStream;
@@ -197,36 +191,23 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
             consumer.Start();
 
-            // Initialize device - send commands to prepare for communication
-            // These are required for the device to respond properly
-            producer.Send(ScpiMessageProducer.DisableDeviceEcho);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.StopStreaming);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.TurnDeviceOn);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.SetProtobufStreamFormat);
-            await Task.Delay(100, cancellationToken);
-
-            // Send GetDeviceInfo command with retry logic
-            var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
+            // Discovery only needs GetDeviceInfo — no setup commands required.
+            // The full initialization sequence (DisableEcho, StopStreaming, TurnDeviceOn,
+            // SetProtobufStreamFormat) is handled during connection, not discovery.
+            var timeout = DateTime.UtcNow.AddMilliseconds(DiscoveryResponseTimeoutMs);
             var lastRequestTime = DateTime.MinValue;
             var retryCount = 0;
 
             while (statusMessage == null && DateTime.UtcNow < timeout && !cancellationToken.IsCancellationRequested)
             {
-                // Send request every RetryIntervalMs, up to MaxRetries times
-                if ((DateTime.UtcNow - lastRequestTime).TotalMilliseconds >= RetryIntervalMs && retryCount < MaxRetries)
+                if ((DateTime.UtcNow - lastRequestTime).TotalMilliseconds >= DiscoveryRetryIntervalMs &&
+                    retryCount < DiscoveryMaxRetries)
                 {
                     producer.Send(ScpiMessageProducer.GetDeviceInfo);
                     lastRequestTime = DateTime.UtcNow;
                     retryCount++;
                 }
 
-                // Wait a bit for response
                 var remainingTime = Math.Min(PollIntervalMs, (int)(timeout - DateTime.UtcNow).TotalMilliseconds);
                 if (remainingTime > 0)
                 {
@@ -309,12 +290,63 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     }
 
     /// <summary>
+    /// Filters ports by USB VID/PID using the system's USB device information.
+    /// </summary>
+    /// <param name="ports">Ports to filter.</param>
+    /// <returns>Ports that are candidates for DAQiFi devices.</returns>
+    internal static IEnumerable<string> FilterByUsbVidPid(IEnumerable<string> ports)
+    {
+        return FilterByUsbVidPid(ports, SerialPortUsbDetector.GetPortUsbInfo());
+    }
+
+    /// <summary>
+    /// Filters ports by USB VID/PID, keeping only ports that belong to known DAQiFi vendors.
+    /// Ports with unknown USB identity (non-USB or detection failed) are included as candidates.
+    /// If VID/PID detection is entirely unavailable (empty dictionary), all ports are returned.
+    /// </summary>
+    /// <param name="ports">Ports to filter.</param>
+    /// <param name="usbInfo">USB VID/PID info per port from <see cref="SerialPortUsbDetector"/>.</param>
+    /// <returns>Ports that are candidates for DAQiFi devices.</returns>
+    internal static IEnumerable<string> FilterByUsbVidPid(
+        IEnumerable<string> ports, Dictionary<string, SerialPortUsbDetector.UsbId> usbInfo)
+    {
+        var portList = ports.ToList();
+
+        if (usbInfo.Count == 0)
+        {
+            // VID/PID detection unavailable — probe all ports
+            return portList;
+        }
+
+        var candidates = new List<string>();
+        foreach (var port in portList)
+        {
+            if (usbInfo.TryGetValue(port, out var id))
+            {
+                // USB info available — only include if VID matches DAQiFi
+                if (SerialPortUsbDetector.IsDaqifiVendor(id.VendorId))
+                {
+                    candidates.Add(port);
+                }
+            }
+            else
+            {
+                // No USB info for this port — include to be safe
+                // (could be a non-USB serial port or detection missed it)
+                candidates.Add(port);
+            }
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
     /// Filters the list of available ports to only include those likely to be DAQiFi devices.
     /// Excludes debug ports, Bluetooth ports, and on macOS prefers /dev/cu.* over /dev/tty.*.
     /// </summary>
     /// <param name="allPorts">All available serial port names.</param>
     /// <returns>Filtered list of ports to probe.</returns>
-    private static IEnumerable<string> FilterProbableDaqifiPorts(string[] allPorts)
+    internal static IEnumerable<string> FilterProbableDaqifiPorts(string[] allPorts)
     {
         // Skip debug and bluetooth ports which are unlikely to be DAQiFi devices
         var excludePatterns = new[]
