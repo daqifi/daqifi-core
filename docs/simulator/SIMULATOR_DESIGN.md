@@ -151,7 +151,7 @@ SYSTem:STReam:FORmat <0|1|2>
 SYSTem:STReam:FORmat?
 
 # Configuration
-ENAble:VOLTage:DC <binary_string>
+ENAble:VOLTage:DC <decimal_bitmask>
 
 # Digital I/O
 DIO:PORt:DIRection <ch>,<dir>
@@ -282,7 +282,7 @@ Length-delimited DaqifiOutMessage containing:
 
 **Example Exchange**:
 ```
-Client -> Server: "ENAble:VOLTage:DC 0000000011\r\n"
+Client -> Server: "ENAble:VOLTage:DC 3\r\n"
 Server -> Client: (no response)
 
 Client -> Server: "SYSTem:StartStreamData 100\r\n"
@@ -412,7 +412,7 @@ public async Task CanConnectAndStreamData()
     device.Connect();
 
     // Configure channels
-    device.Send(ScpiMessageProducer.EnableAnalogChannels("0000000011"));
+    device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // 0b11 = channels 0,1
 
     // Start streaming
     var messagesReceived = new List<DaqifiOutMessage>();

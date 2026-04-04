@@ -261,7 +261,7 @@ Implement TCP server for data connections and SCPI command processing, enabling 
   - `SYSTem:ECHO <-1|1>`
   - `SYSTem:StartStreamData <freq>`
   - `SYSTem:StopStreamData`
-  - `ENAble:VOLTage:DC <binary_string>`
+  - `ENAble:VOLTage:DC <decimal_bitmask>`
 - [ ] Integrate TCP server with `DeviceSimulator.StartAsync()`
 - [ ] Write integration tests with `DaqifiDevice` and `TcpStreamTransport`
 
@@ -279,7 +279,7 @@ Implement TCP server for data connections and SCPI command processing, enabling 
 
 **Example**:
 ```
-Client: "ENAble:VOLTage:DC 0000000011\r\n"
+Client: "ENAble:VOLTage:DC 3\r\n"
 Server: (no response)
 
 Client: "SYSTem:SYSInfoPB?\r\n"

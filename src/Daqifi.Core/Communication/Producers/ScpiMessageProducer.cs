@@ -316,24 +316,23 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat?");
 
     /// <summary>
-    /// Creates a command message to enable ADC channels using a binary string.
+    /// Creates a command message to enable ADC channels using a decimal bitmask.
     /// </summary>
-    /// <param name="channelSetString">A binary string where each character represents a channel (0 = disabled, 1 = enabled), right-to-left. For example, "0001010100" enables channels 2, 4, and 6.</param>
+    /// <param name="channelSetString">A decimal integer string representing a bitmask where each bit enables a channel. For example, "84" (0b1010100) enables channels 2, 4, and 6.</param>
     /// <remarks>
-    /// The binary string is read from right to left, where position 0 is the rightmost bit:
-    /// - Position 0: Channel 0
-    /// - Position 1: Channel 1
-    /// - Position 2: Channel 2
+    /// The firmware parses this value as a decimal integer and interprets it as a bitmask:
+    /// - Bit 0 (value 1): Channel 0
+    /// - Bit 1 (value 2): Channel 1
+    /// - Bit 2 (value 4): Channel 2
     /// etc.
-    /// 
-    /// Command: ENAble:VOLTage:DC binaryString
-    /// Example: 
+    ///
+    /// Command: ENAble:VOLTage:DC decimalMask
     /// <code>
-    /// // Enable channels 2, 4, and 6
-    /// messageProducer.Send(ScpiMessageProducer.EnableAdcChannels("0001010100"));
-    /// 
-    /// // Enable channels 0 and 1
-    /// messageProducer.Send(ScpiMessageProducer.EnableAdcChannels("0000000011"));
+    /// // Enable channels 2, 4, and 6 (bitmask = 4 + 16 + 64 = 84)
+    /// device.Send(ScpiMessageProducer.EnableAdcChannels("84"));
+    ///
+    /// // Enable channels 0 and 1 (bitmask = 1 + 2 = 3)
+    /// device.Send(ScpiMessageProducer.EnableAdcChannels("3"));
     /// </code>
     /// </remarks>
     public static IOutboundMessage<string> EnableAdcChannels(string channelSetString)
