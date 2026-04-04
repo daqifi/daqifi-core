@@ -31,7 +31,7 @@ public class DeviceTypeDetectorTests
     [InlineData("")]
     [InlineData(" ")]
     [InlineData(null)]
-    public void DetectFromPartNumber_EmptyOrNull_ReturnsUnknown(string partNumber)
+    public void DetectFromPartNumber_EmptyOrNull_ReturnsUnknown(string? partNumber)
     {
         // Act
         var result = DeviceTypeDetector.DetectFromPartNumber(partNumber);

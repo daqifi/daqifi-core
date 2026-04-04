@@ -125,7 +125,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 var tempBuffer = new byte[_buffer.Length];
                 while (networkStream.DataAvailable)
                 {
-                    _stream.Read(tempBuffer, 0, tempBuffer.Length);
+                    _ = _stream.Read(tempBuffer, 0, tempBuffer.Length);
                 }
             }
         }

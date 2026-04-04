@@ -253,7 +253,7 @@ public sealed class SdCardJsonFileParserTests
         );
 
         var progressCalls = 0;
-        var lastProgress = default(global::Daqifi.Core.Device.SdCard.SdCardParseProgress);
+        global::Daqifi.Core.Device.SdCard.SdCardParseProgress? lastProgress = null;
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
@@ -273,7 +273,8 @@ public sealed class SdCardJsonFileParserTests
         // Assert
         Assert.Equal(250, samples.Count);
         Assert.True(progressCalls >= 2);  // At least 2 progress updates (100-line batches + final)
-        Assert.Equal(250, lastProgress.MessagesRead);
+        Assert.NotNull(lastProgress);
+        Assert.Equal(250, lastProgress!.MessagesRead);
     }
 
     [Fact]

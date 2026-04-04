@@ -180,8 +180,8 @@ public sealed class SdCardCsvFileParserTests
         Assert.Single(samples);
         Assert.NotNull(samples[0].AnalogTimestamps);
         Assert.Equal(2, samples[0].AnalogTimestamps!.Count);
-        Assert.Equal(1000u, samples[0].AnalogTimestamps[0]);
-        Assert.Equal(1001u, samples[0].AnalogTimestamps[1]);
+        Assert.Equal(1000u, samples[0].AnalogTimestamps![0]);
+        Assert.Equal(1001u, samples[0].AnalogTimestamps![1]);
     }
 
     [Fact]
@@ -201,9 +201,9 @@ public sealed class SdCardCsvFileParserTests
         Assert.NotNull(samples[0].AnalogTimestamps);
         Assert.Equal(3, samples[0].AnalogTimestamps!.Count);
         // All channels share the same timestamp in shared-ts mode
-        Assert.Equal(1746522255u, samples[0].AnalogTimestamps[0]);
-        Assert.Equal(1746522255u, samples[0].AnalogTimestamps[1]);
-        Assert.Equal(1746522255u, samples[0].AnalogTimestamps[2]);
+        Assert.Equal(1746522255u, samples[0].AnalogTimestamps![0]);
+        Assert.Equal(1746522255u, samples[0].AnalogTimestamps![1]);
+        Assert.Equal(1746522255u, samples[0].AnalogTimestamps![2]);
     }
 
     // -------------------------------------------------------------------------
@@ -443,7 +443,7 @@ public sealed class SdCardCsvFileParserTests
             "TestDevice", "SN001", 100u, rows);
 
         var progressCalls = 0;
-        var lastProgress = default(global::Daqifi.Core.Device.SdCard.SdCardParseProgress);
+        global::Daqifi.Core.Device.SdCard.SdCardParseProgress? lastProgress = null;
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
         {
@@ -459,7 +459,8 @@ public sealed class SdCardCsvFileParserTests
 
         Assert.Equal(250, samples.Count);
         Assert.True(progressCalls >= 2, $"Expected ≥2 progress callbacks, got {progressCalls}");
-        Assert.Equal(250, lastProgress.MessagesRead);
+        Assert.NotNull(lastProgress);
+        Assert.Equal(250, lastProgress!.MessagesRead);
         Assert.True(lastProgress.BytesRead > 0);
     }
 

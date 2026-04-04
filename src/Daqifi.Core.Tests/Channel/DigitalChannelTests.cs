@@ -120,7 +120,7 @@ public class DigitalChannelTests
     }
 
     [Fact]
-    public void SetActiveSample_IsThreadSafe()
+    public async Task SetActiveSample_IsThreadSafe()
     {
         // Arrange
         var channel = new DigitalChannel(0);
@@ -133,7 +133,7 @@ public class DigitalChannelTests
             tasks.Add(Task.Run(() => channel.SetActiveSample(value, DateTime.UtcNow)));
         }
 
-        Task.WaitAll(tasks.ToArray());
+        await Task.WhenAll(tasks.ToArray());
 
         // Assert
         Assert.NotNull(channel.ActiveSample);
