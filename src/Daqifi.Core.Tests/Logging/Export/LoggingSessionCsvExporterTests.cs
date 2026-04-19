@@ -380,7 +380,7 @@ public class LoggingSessionCsvExporterTests
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0)]);
 
-        var reported = new List<int>();
+        var reported = new System.Collections.Concurrent.ConcurrentBag<int>();
         var tcs = new TaskCompletionSource();
         var progress = new Progress<int>(v =>
         {
@@ -401,7 +401,7 @@ public class LoggingSessionCsvExporterTests
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T1, Ch1.Key, 2.0)]);
 
-        var reported = new List<int>();
+        var reported = new System.Collections.Concurrent.ConcurrentBag<int>();
         var tcs = new TaskCompletionSource();
         var progress = new Progress<int>(v =>
         {
@@ -413,6 +413,21 @@ public class LoggingSessionCsvExporterTests
         await tcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Contains(100, reported);
+    }
+
+    // ── AverageWindow validation ─────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public async Task Export_AverageWindowZeroOrNegative_ThrowsArgumentOutOfRange(int window)
+    {
+        var source = new InMemoryLoggingSessionSource([Ch1], [new SampleRow(T0, Ch1.Key, 1.0)]);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            new LoggingSessionCsvExporter().ExportAsync(source, new StringWriter(),
+                new CsvExportOptions { AverageWindow = window }));
     }
 
     // ── Cancellation ─────────────────────────────────────────────────────────

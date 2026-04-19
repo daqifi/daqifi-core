@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Daqifi.Core.Logging.Export;
@@ -20,6 +21,9 @@ public class LoggingSessionCsvExporter
     /// Reported periodically as samples are processed; always reports 100 on completion.
     /// </param>
     /// <param name="cancellationToken">Token that aborts the export mid-stream.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <see cref="CsvExportOptions.AverageWindow"/> is set to a value less than or equal to zero.
+    /// </exception>
     public async Task ExportAsync(
         ILoggingSessionSource source,
         TextWriter writer,
@@ -27,6 +31,10 @@ public class LoggingSessionCsvExporter
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (options.AverageWindow.HasValue && options.AverageWindow.Value <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), options.AverageWindow.Value,
+                $"{nameof(CsvExportOptions.AverageWindow)} must be greater than zero.");
+
         var channels = source.GetChannels();
         if (channels.Count == 0)
             return;
@@ -35,7 +43,9 @@ public class LoggingSessionCsvExporter
 
         await WriteHeaderAsync(writer, channelKeys, options);
 
-        var totalSamples = await source.GetSampleCountAsync(cancellationToken);
+        var totalSamples = progress != null
+            ? await source.GetSampleCountAsync(cancellationToken)
+            : 0;
 
         if (options.AverageWindow.HasValue)
             await ExportAveragedAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken);
@@ -76,7 +86,7 @@ public class LoggingSessionCsvExporter
 
             if (currentTick.HasValue && sample.TimestampTicks != currentTick.Value)
             {
-                WriteTimestampRow(writer, sb, bucket, channelKeys, firstTicks.Value, options);
+                await WriteTimestampRowAsync(writer, sb, bucket, channelKeys, firstTicks.Value, options);
                 processed += bucket.Count;
                 ReportProgress(progress, processed, totalSamples);
                 bucket.Clear();
@@ -87,14 +97,12 @@ public class LoggingSessionCsvExporter
         }
 
         if (bucket.Count > 0)
-        {
-            WriteTimestampRow(writer, sb, bucket, channelKeys, firstTicks!.Value, options);
-        }
+            await WriteTimestampRowAsync(writer, sb, bucket, channelKeys, firstTicks!.Value, options);
 
         progress?.Report(100);
     }
 
-    private static void WriteTimestampRow(
+    private static async Task WriteTimestampRowAsync(
         TextWriter writer,
         StringBuilder sb,
         List<SampleRow> bucket,
@@ -114,11 +122,11 @@ public class LoggingSessionCsvExporter
         {
             sb.Append(options.Delimiter);
             if (lookup.TryGetValue(key, out var value))
-                sb.Append(value.ToString("G"));
+                sb.Append(value.ToString("G", CultureInfo.InvariantCulture));
         }
 
         sb.AppendLine();
-        writer.Write(sb.ToString());
+        await writer.WriteAsync(sb.ToString());
     }
 
     private static async Task ExportAveragedAsync(
@@ -162,7 +170,7 @@ public class LoggingSessionCsvExporter
                 {
                     sb.Append(options.Delimiter);
                     if (counts[key] > 0)
-                        sb.Append((totals[key] / counts[key]).ToString("G"));
+                        sb.Append((totals[key] / counts[key]).ToString("G", CultureInfo.InvariantCulture));
                 }
 
                 sb.AppendLine();
@@ -189,7 +197,7 @@ public class LoggingSessionCsvExporter
     private static string FormatTimestamp(long ticks, long firstTicks, bool useRelativeTime)
     {
         if (useRelativeTime)
-            return ((ticks - firstTicks) / (double)TimeSpan.TicksPerSecond).ToString("F3");
+            return ((ticks - firstTicks) / (double)TimeSpan.TicksPerSecond).ToString("F3", CultureInfo.InvariantCulture);
 
         return (ticks > 0 && ticks <= DateTime.MaxValue.Ticks)
             ? new DateTime(ticks).ToString("O")
