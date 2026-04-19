@@ -96,15 +96,6 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> DisableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 0");
 
     /// <summary>
-    /// Creates a query message to get the current SD card logging state.
-    /// </summary>
-    /// <remarks>
-    /// Command: SYSTem:STORage:SD:LOGging?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdLoggingState);
-    /// </remarks>
-    public static IOutboundMessage<string> GetSdLoggingState => new ScpiMessage("SYSTem:STORage:SD:LOGging?");
-
-    /// <summary>
     /// Creates a query message to get the list of files on the SD card.
     /// </summary>
     /// <remarks>
@@ -132,12 +123,12 @@ public class ScpiMessageProducer
     /// <param name="fileName">The name of the file to create or append to. Must be enclosed in quotes.</param>
     /// <remarks>
     /// The specified file will be created if it doesn't exist, or appended to if it already exists.
-    /// Command: SYSTem:STORage:SD:LOGging "filename.bin"
+    /// Command: SYSTem:STORage:SD:FILE "filename.bin"
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
     public static IOutboundMessage<string> SetSdLoggingFileName(string fileName)
     {
-        return new ScpiMessage($"SYSTem:STORage:SD:LOGging \"{fileName}\"");
+        return new ScpiMessage($"SYSTem:STORage:SD:FILE \"{fileName}\"");
     }
 
     /// <summary>
@@ -255,22 +246,22 @@ public class ScpiMessageProducer
     /// <param name="frequency">The streaming frequency in Hz (1-1000).</param>
     /// <remarks>
     /// Starts streaming data from enabled channels at the specified frequency.
-    /// Command: SYSTem:StartStreamData frequency
+    /// Command: SYSTem:STReam:START frequency
     /// Example: messageProducer.Send(ScpiMessageProducer.StartStreaming(100)); // Stream at 100Hz
     /// </remarks>
     public static IOutboundMessage<string> StartStreaming(int frequency)
     {
-        return new ScpiMessage($"SYSTem:StartStreamData {frequency}");
+        return new ScpiMessage($"SYSTem:STReam:START {frequency}");
     }
 
     /// <summary>
     /// Creates a command message to stop data streaming.
     /// </summary>
     /// <remarks>
-    /// Command: SYSTem:StopStreamData
+    /// Command: SYSTem:STReam:STOP
     /// Example: messageProducer.Send(ScpiMessageProducer.StopStreaming);
     /// </remarks>
-    public static IOutboundMessage<string> StopStreaming => new ScpiMessage("SYSTem:StopStreamData");
+    public static IOutboundMessage<string> StopStreaming => new ScpiMessage("SYSTem:STReam:STOP");
 
     /// <summary>
     /// Creates a command message to set the stream format to Protocol Buffer.
@@ -494,11 +485,11 @@ public class ScpiMessageProducer
     /// </summary>
     /// <param name="mode">The transparency mode (0 = disabled, 1 = enabled).</param>
     /// <remarks>
-    /// Command: SYSTem:USB:SetTransparentMode mode
+    /// Command: SYSTem:USB:TRANSparent:MODE mode
     /// </remarks>
     public static IOutboundMessage<string> SetUsbTransparencyMode(int mode)
     {
-        return new ScpiMessage($"SYSTem:USB:SetTransparentMode {mode}");
+        return new ScpiMessage($"SYSTem:USB:TRANSparent:MODE {mode}");
     }
 
     /// <summary>
