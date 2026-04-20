@@ -9,10 +9,9 @@ namespace Daqifi.Core.Communication.Consumers;
 /// </summary>
 public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 {
-    private const int MaxRetryAttempts = 3;
     private const int MaxVarint32Bytes = 5;
     private const int MaxMessageSizeBytes = 1024 * 1024;
-    
+
     /// <summary>
     /// Parses raw data into protobuf messages.
     /// </summary>
@@ -28,9 +27,8 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             return messages;
 
         var currentIndex = 0;
-        var retryCount = 0;
 
-        while (currentIndex < data.Length && retryCount < MaxRetryAttempts)
+        while (currentIndex < data.Length)
         {
             var remainingData = new ReadOnlySpan<byte>(data, currentIndex, data.Length - currentIndex);
 
@@ -38,50 +36,48 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             {
                 if (prefixIsMalformed)
                 {
-                    currentIndex += Math.Max(prefixBytes, 1);
+                    // Skip this byte and resync; advancing by 1 (not by prefixBytes) is
+                    // important because the malformed run may overlap a valid frame that
+                    // starts mid-way through it.
+                    currentIndex++;
                     consumedBytes = currentIndex;
-                    retryCount++;
                     continue;
                 }
 
-                break; // Not enough data for length prefix yet.
+                break; // Not enough data for length prefix yet — wait for the next read.
             }
 
-            if (messageLength <= 0)
+            if (messageLength <= 0 || messageLength > MaxMessageSizeBytes)
             {
-                currentIndex += Math.Max(prefixBytes, 1);
+                currentIndex++;
                 consumedBytes = currentIndex;
-                retryCount++;
-                continue;
-            }
-
-            if (messageLength > MaxMessageSizeBytes)
-            {
-                currentIndex += Math.Max(prefixBytes, 1);
-                consumedBytes = currentIndex;
-                retryCount++;
                 continue;
             }
 
             if (remainingData.Length < prefixBytes + messageLength)
             {
-                break; // Wait for more data.
+                // Not enough buffered data for this frame yet. It might be a real frame
+                // waiting on more bytes — bail and wait. If the prefix turns out to be
+                // garbage, the next read will append more data and we'll retry from the
+                // same position; once a real frame eventually appears we resync to it
+                // by advancing one byte at a time on parse failures above.
+                break;
             }
 
             try
             {
-                var payload = remainingData.Slice(prefixBytes, messageLength).ToArray();
-                var message = DaqifiOutMessage.Parser.ParseFrom(payload);
+                // ParseFrom(ReadOnlySpan) avoids the per-attempt byte[] copy, which matters
+                // because byte-by-byte resync over a garbage buffer can call this many times
+                // before finding (or failing to find) a valid frame.
+                var message = DaqifiOutMessage.Parser.ParseFrom(remainingData.Slice(prefixBytes, messageLength));
                 currentIndex += prefixBytes + messageLength;
                 consumedBytes = currentIndex;
                 messages.Add(new ProtobufMessage(message));
-                retryCount = 0;
             }
             catch (Exception)
             {
                 currentIndex++;
                 consumedBytes = currentIndex;
-                retryCount++;
             }
         }
 

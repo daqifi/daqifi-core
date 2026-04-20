@@ -105,6 +105,45 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
+    public void ProtobufMessageParser_ParseMessages_RecoversFromLeadingGarbage()
+    {
+        // Reproduces the real-world failure where boot-time garbage on the serial port
+        // (DTR pulse on Microchip USB-to-Serial chips, partial frames, etc.) leaves
+        // unrecognizable bytes at the head of the consumer buffer. When a valid streaming
+        // frame eventually arrives, the parser must skip past the garbage and parse the
+        // valid frame instead of stalling forever.
+        //
+        // With the original 3-retry cap, the parser exits after 3 failed attempts and
+        // never advances past the garbage; subsequent reads keep stacking bytes onto a
+        // buffer the parser refuses to drain.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // 20 bytes of 0x00 — each is a valid but zero-length varint. The parser
+        // should advance one byte per attempt and ultimately reach the valid frame.
+        // This exposes the old 3-retry cap, which exited after only 3 advances and
+        // left the buffer perpetually clogged with garbage.
+        var junk = Enumerable.Repeat((byte)0x00, 20).ToArray();
+
+        // Length-prefixed valid frame.
+        using var stream = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 42 }.WriteDelimitedTo(stream);
+        var validFrame = stream.ToArray();
+
+        var data = junk.Concat(validFrame).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert — parser must skip the 20 junk bytes and recover the valid frame.
+        Assert.Single(messages);
+        var parsed = Assert.IsType<DaqifiOutMessage>(messages[0].Data);
+        Assert.Equal(42UL, parsed.MsgTimeStamp);
+        Assert.Equal(data.Length, consumedBytes);
+    }
+
+    [Fact]
     public void ProtobufMessageParser_ParseMessages_ReturnsCorrectMessageType()
     {
         // Arrange
