@@ -66,8 +66,10 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 
             try
             {
-                var payload = remainingData.Slice(prefixBytes, messageLength).ToArray();
-                var message = DaqifiOutMessage.Parser.ParseFrom(payload);
+                // ParseFrom(ReadOnlySpan) avoids the per-attempt byte[] copy, which matters
+                // because byte-by-byte resync over a garbage buffer can call this many times
+                // before finding (or failing to find) a valid frame.
+                var message = DaqifiOutMessage.Parser.ParseFrom(remainingData.Slice(prefixBytes, messageLength));
                 currentIndex += prefixBytes + messageLength;
                 consumedBytes = currentIndex;
                 messages.Add(new ProtobufMessage(message));
