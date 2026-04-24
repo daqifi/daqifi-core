@@ -189,6 +189,48 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
+    public void ProtobufMessageParser_ParseMessages_PreservesPartialFrameAfterGarbage()
+    {
+        // Guards the consumer contract: when leading garbage is followed by the
+        // beginning of a real frame whose payload hasn't fully arrived yet, the
+        // parser must consume only the garbage. StreamMessageConsumer (and the
+        // SD-card parser) trim consumedBytes from their buffers unconditionally,
+        // so advancing even one byte into the real prefix or payload here would
+        // permanently corrupt the frame on the next read. An earlier revision of
+        // the partial-frame recovery logic had this bug — it kept resyncing
+        // aggressively after past-garbage advances and ate into real frames that
+        // straddled reads.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // Leading garbage: bytes that advance the parser without being mistaken
+        // for a real frame. 20 zero bytes each decode as a zero-length varint
+        // prefix and get skipped one byte at a time.
+        var junk = Enumerable.Repeat((byte)0x00, 20).ToArray();
+
+        // Full valid frame, from which we'll keep only the length prefix and a
+        // single body byte (the field tag) to simulate an incomplete arrival.
+        using var stream = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 99 }.WriteDelimitedTo(stream);
+        var fullFrame = stream.ToArray();
+        Assert.True(fullFrame.Length >= 2, "Test precondition: frame has prefix + body");
+        var partialFrame = fullFrame.Take(2).ToArray();
+
+        var data = junk.Concat(partialFrame).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert — no message parsed yet, and consumedBytes stops exactly at the
+        // real frame boundary. The caller will retain the partial frame for the
+        // next call, at which point the completing bytes arrive and parsing
+        // succeeds.
+        Assert.Empty(messages);
+        Assert.Equal(junk.Length, consumedBytes);
+    }
+
+    [Fact]
     public void ProtobufMessageParser_ParseMessages_ReturnsCorrectMessageType()
     {
         // Arrange
