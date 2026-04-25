@@ -144,6 +144,93 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
+    public void ProtobufMessageParser_ParseMessages_RecoversFromOversizedPrefix()
+    {
+        // Reproduces the streaming-startup stall that left the desktop Live Graph empty
+        // while the device LED blinked and the byte-buffer grew unbounded (66 → 8202 B in 2s
+        // with zero MessageReceived events fired).
+        //
+        // Cause: boot-time garbage on the serial port (USB CDC handshake, DTR pulse bytes,
+        // partial frames from an earlier session) occasionally forms a plausible-looking
+        // varint length prefix that encodes a large message — tens of KB, still under the
+        // 1 MB cap. The parser sees "prefix OK, need N bytes" and bails at the length check
+        // waiting for more data. Since the declared length is huge, enough data never
+        // arrives in a reasonable window, the buffer piles up forever, and the valid frame
+        // sitting just past the bogus prefix is never parsed.
+        //
+        // This test: three bytes that varint-encode 32768 (`0x80 0x80 0x02`) — far more
+        // than will ever be buffered from normal DAQiFi streaming, but well under the old
+        // 1 MB cap — followed by a valid DaqifiOutMessage frame. The parser must reject
+        // the oversized prefix, resync, and recover the valid frame.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // Varint encoding 32768 = (0 << 0) | (0 << 7) | (2 << 14). The first two bytes
+        // set the continuation bit; the third terminates. Plausible under the old 1 MB
+        // cap but impossibly large for a real streaming frame at any configured rate.
+        var bogusPrefix = new byte[] { 0x80, 0x80, 0x02 };
+
+        using var stream = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 12345 }.WriteDelimitedTo(stream);
+        var validFrame = stream.ToArray();
+
+        var data = bogusPrefix.Concat(validFrame).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert — parser must treat the oversized declared length as garbage, advance,
+        // and recover the valid frame. Before the fix, it stalled: 0 messages, 0 consumed.
+        Assert.Single(messages);
+        var parsed = Assert.IsType<DaqifiOutMessage>(messages[0].Data);
+        Assert.Equal(12345UL, parsed.MsgTimeStamp);
+        Assert.Equal(data.Length, consumedBytes);
+    }
+
+    [Fact]
+    public void ProtobufMessageParser_ParseMessages_PreservesPartialFrameAfterGarbage()
+    {
+        // Guards the consumer contract: when leading garbage is followed by the
+        // beginning of a real frame whose payload hasn't fully arrived yet, the
+        // parser must consume only the garbage. StreamMessageConsumer (and the
+        // SD-card parser) trim consumedBytes from their buffers unconditionally,
+        // so advancing even one byte into the real prefix or payload here would
+        // permanently corrupt the frame on the next read. An earlier revision of
+        // the partial-frame recovery logic had this bug — it kept resyncing
+        // aggressively after past-garbage advances and ate into real frames that
+        // straddled reads.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // Leading garbage: bytes that advance the parser without being mistaken
+        // for a real frame. 20 zero bytes each decode as a zero-length varint
+        // prefix and get skipped one byte at a time.
+        var junk = Enumerable.Repeat((byte)0x00, 20).ToArray();
+
+        // Full valid frame, from which we'll keep only the length prefix and a
+        // single body byte (the field tag) to simulate an incomplete arrival.
+        using var stream = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 99 }.WriteDelimitedTo(stream);
+        var fullFrame = stream.ToArray();
+        Assert.True(fullFrame.Length >= 2, "Test precondition: frame has prefix + body");
+        var partialFrame = fullFrame.Take(2).ToArray();
+
+        var data = junk.Concat(partialFrame).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert — no message parsed yet, and consumedBytes stops exactly at the
+        // real frame boundary. The caller will retain the partial frame for the
+        // next call, at which point the completing bytes arrive and parsing
+        // succeeds.
+        Assert.Empty(messages);
+        Assert.Equal(junk.Length, consumedBytes);
+    }
+
+    [Fact]
     public void ProtobufMessageParser_ParseMessages_ReturnsCorrectMessageType()
     {
         // Arrange
