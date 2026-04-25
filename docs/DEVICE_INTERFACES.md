@@ -282,4 +282,4 @@ However, for connection state changes (Connect/Disconnect), coordinate access fr
 - **Type Safety**: Generic message types provide compile-time safety
 - **Retry Support**: Built-in connection retry with exponential backoff
 - **Thread-Safe Sending**: Background message queue for thread-safe command sending
-- **Cross-Platform**: Compatible with .NET 8.0 and .NET 9.0
+- **Cross-Platform**: Compatible with .NET 9.0 and .NET 10.0

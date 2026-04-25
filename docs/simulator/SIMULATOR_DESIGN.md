@@ -11,7 +11,7 @@ This document outlines the design for a C# native device simulator that will ena
 3. **Test Enablement**: Unlock full integration testing without hardware
 4. **Fault Injection**: Support simulated errors, timeouts, and edge cases
 5. **Developer Productivity**: Fast test execution, easy debugging, deterministic behavior
-6. **CI/CD Friendly**: Runs in any environment that supports .NET 8.0+
+6. **CI/CD Friendly**: Runs in any environment that supports .NET 9.0+
 
 ## Non-Goals
 
