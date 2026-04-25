@@ -53,22 +53,29 @@ device.Send(ScpiMessageProducer.StopStreaming);
 
 ### Connection Options
 
+**TCP with built-in retry presets:**
 ```csharp
-// With retry options for unreliable networks
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
     "192.168.1.100",
     9760,
     DeviceConnectionOptions.Resilient); // 5 retries, longer timeouts
+```
 
-// Connect via Serial/USB
-using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3"); // Windows
+**Serial/USB connection:**
+```csharp
+using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");             // Windows
 using var device = await DaqifiDeviceFactory.ConnectSerialAsync("/dev/cu.usbmodem1"); // macOS
+```
 
-// Connect from discovery result
+**Connect from a discovery result:**
+```csharp
+using var wifiFinder = new WiFiDeviceFinder();
 var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
+```
 
-// Custom options
+**Custom retry options:**
+```csharp
 using Daqifi.Core.Communication.Transport; // For ConnectionRetryOptions
 
 var options = new DeviceConnectionOptions
@@ -79,9 +86,9 @@ var options = new DeviceConnectionOptions
         MaxAttempts = 3,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     },
-    InitializeDevice = true // Sends standard init commands
+    InitializeDevice = true
 };
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync(ip, port, options);
+using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, options);
 ```
 
 ### Quick Start: Device Discovery
