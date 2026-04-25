@@ -1,3 +1,4 @@
+using System.Globalization;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Logging.Export;
 
@@ -171,6 +172,18 @@ public class CsvExporterTests
         Assert.StartsWith($"INVALID({overflowTicks}),", lines[1]);
     }
 
+    [Fact]
+    public async Task Export_RelativeTime_InvalidTicks_StillWritesInvalidToken()
+    {
+        var source = new InMemorySampleSource(
+            [Ch1],
+            [new SampleRow(0L, Ch1.Key, 1.0)]);
+
+        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true });
+
+        Assert.StartsWith("INVALID(0),", lines[1]);
+    }
+
     // ── Timestamp bucketing ──────────────────────────────────────────────────
 
     [Fact]
@@ -277,7 +290,7 @@ public class CsvExporterTests
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true });
 
         var parts = lines[1].Split(',');
-        Assert.Equal(1.23456789.ToString("G"), parts[1]);
+        Assert.Equal(1.23456789.ToString("G", CultureInfo.InvariantCulture), parts[1]);
     }
 
     // ── Averaging mode ───────────────────────────────────────────────────────
@@ -352,6 +365,28 @@ public class CsvExporterTests
         var parts = lines[1].Split(',');
         Assert.Equal(3, parts.Length);
         Assert.Equal(string.Empty, parts[2]); // Ch2 has no samples in window
+    }
+
+    [Fact]
+    public async Task Export_AverageWindow_FlushesPartialFinalWindow()
+    {
+        // 5 samples, window=2 → 2 complete windows + 1 trailing sample that must still appear.
+        var samples = new[]
+        {
+            new SampleRow(T0, Ch1.Key, 2.0),
+            new SampleRow(T1, Ch1.Key, 4.0),
+            new SampleRow(T2, Ch1.Key, 6.0),
+            new SampleRow(T2 + TimeSpan.TicksPerSecond, Ch1.Key, 8.0),
+            new SampleRow(T2 + 2 * TimeSpan.TicksPerSecond, Ch1.Key, 10.0),
+        };
+        var source = new InMemorySampleSource([Ch1], samples);
+
+        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, AverageWindow = 2 });
+
+        Assert.Equal(4, lines.Length); // header + 2 full windows + 1 partial
+        Assert.Equal("3", lines[1].Split(',')[1]);  // (2+4)/2
+        Assert.Equal("7", lines[2].Split(',')[1]);  // (6+8)/2
+        Assert.Equal("10", lines[3].Split(',')[1]); // partial window holds only the 5th sample
     }
 
     [Fact]
@@ -444,6 +479,23 @@ public class CsvExporterTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public async Task Export_CancelledBeforeStart_DoesNotWriteHeader()
+    {
+        var source = new InMemorySampleSource(
+            [Ch1],
+            [new SampleRow(T0, Ch1.Key, 1.0)]);
+        var writer = new StringWriter();
+
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new CsvExporter().ExportAsync(source, writer, new CsvExportOptions(), cancellationToken: cts.Token));
+
+        Assert.Equal(string.Empty, writer.ToString());
     }
 
     // ── Channel key format ───────────────────────────────────────────────────

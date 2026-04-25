@@ -32,8 +32,12 @@ public class CsvExporter
         CancellationToken cancellationToken = default)
     {
         if (options.AverageWindow.HasValue && options.AverageWindow.Value <= 0)
-            throw new ArgumentOutOfRangeException(nameof(options), options.AverageWindow.Value,
+            throw new ArgumentOutOfRangeException(
+                $"{nameof(options)}.{nameof(CsvExportOptions.AverageWindow)}",
+                options.AverageWindow.Value,
                 $"{nameof(CsvExportOptions.AverageWindow)} must be greater than zero.");
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         var channels = source.GetChannels();
         if (channels.Count == 0)
@@ -163,18 +167,7 @@ public class CsvExporter
 
             if (windowCount >= window)
             {
-                sb.Clear();
-                sb.Append(FormatTimestamp(lastTick, firstTicks.Value, options.UseRelativeTime));
-
-                foreach (var key in channelKeys)
-                {
-                    sb.Append(options.Delimiter);
-                    if (counts[key] > 0)
-                        sb.Append((totals[key] / counts[key]).ToString("G", CultureInfo.InvariantCulture));
-                }
-
-                sb.AppendLine();
-                await writer.WriteAsync(sb.ToString());
+                await WriteAveragedRowAsync(writer, sb, channelKeys, totals, counts, lastTick, firstTicks.Value, options);
 
                 foreach (var key in channelKeys)
                 {
@@ -187,21 +180,51 @@ public class CsvExporter
             }
         }
 
+        // Flush any trailing samples that didn't fill a complete window.
+        if (windowCount > 0 && firstTicks.HasValue)
+            await WriteAveragedRowAsync(writer, sb, channelKeys, totals, counts, lastTick, firstTicks.Value, options);
+
         progress?.Report(100);
+    }
+
+    private static async Task WriteAveragedRowAsync(
+        TextWriter writer,
+        StringBuilder sb,
+        List<string> channelKeys,
+        Dictionary<string, double> totals,
+        Dictionary<string, int> counts,
+        long lastTick,
+        long firstTicks,
+        CsvExportOptions options)
+    {
+        sb.Clear();
+        sb.Append(FormatTimestamp(lastTick, firstTicks, options.UseRelativeTime));
+
+        foreach (var key in channelKeys)
+        {
+            sb.Append(options.Delimiter);
+            if (counts[key] > 0)
+                sb.Append((totals[key] / counts[key]).ToString("G", CultureInfo.InvariantCulture));
+        }
+
+        sb.AppendLine();
+        await writer.WriteAsync(sb.ToString());
     }
 
     /// <summary>
     /// Formats a tick value as an absolute ISO 8601 string or relative seconds string.
-    /// Ticks that are out of the valid <see cref="DateTime"/> range are rendered as <c>INVALID({ticks})</c>.
+    /// Ticks that are out of the valid <see cref="DateTime"/> range are rendered as <c>INVALID({ticks})</c>
+    /// in both modes.
     /// </summary>
     private static string FormatTimestamp(long ticks, long firstTicks, bool useRelativeTime)
     {
+        if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks)
+            return $"INVALID({ticks})";
+
         if (useRelativeTime)
             return ((ticks - firstTicks) / (double)TimeSpan.TicksPerSecond).ToString("F3", CultureInfo.InvariantCulture);
 
-        return (ticks > 0 && ticks <= DateTime.MaxValue.Ticks)
-            ? new DateTime(ticks).ToString("O")
-            : $"INVALID({ticks})";
+        return new DateTime(ticks).ToString("O");
     }
 
     private static void ReportProgress(IProgress<int>? progress, int processed, int total)
