@@ -3,7 +3,7 @@ using Daqifi.Core.Channel;
 namespace Daqifi.Core.Logging.Export;
 
 /// <summary>
-/// Identifies a channel within a logging session by device and channel name.
+/// Identifies a channel by device and channel name.
 /// </summary>
 /// <param name="DeviceName">The name of the device that owns this channel.</param>
 /// <param name="DeviceSerialNo">The serial number of the device that owns this channel.</param>

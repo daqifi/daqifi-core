@@ -4,16 +4,16 @@ using System.Text;
 namespace Daqifi.Core.Logging.Export;
 
 /// <summary>
-/// Exports a logging session to CSV format, writing to any <see cref="TextWriter"/>.
-/// Storage concerns are delegated to <see cref="ILoggingSessionSource"/>; this class
+/// Exports timestamped channel samples to CSV format, writing to any <see cref="TextWriter"/>.
+/// Storage concerns are delegated to <see cref="ISampleSource"/>; this class
 /// contains only row-formatting and timestamp logic.
 /// </summary>
-public class LoggingSessionCsvExporter
+public class CsvExporter
 {
     /// <summary>
-    /// Exports the session provided by <paramref name="source"/> as CSV to <paramref name="writer"/>.
+    /// Exports the samples provided by <paramref name="source"/> as CSV to <paramref name="writer"/>.
     /// </summary>
-    /// <param name="source">The data source for the session being exported.</param>
+    /// <param name="source">The data source being exported.</param>
     /// <param name="writer">The destination writer. The caller is responsible for disposing it.</param>
     /// <param name="options">Export formatting options.</param>
     /// <param name="progress">
@@ -25,7 +25,7 @@ public class LoggingSessionCsvExporter
     /// Thrown when <see cref="CsvExportOptions.AverageWindow"/> is set to a value less than or equal to zero.
     /// </exception>
     public async Task ExportAsync(
-        ILoggingSessionSource source,
+        ISampleSource source,
         TextWriter writer,
         CsvExportOptions options,
         IProgress<int>? progress = null,
@@ -66,7 +66,7 @@ public class LoggingSessionCsvExporter
     }
 
     private static async Task ExportAllSamplesAsync(
-        ILoggingSessionSource source,
+        ISampleSource source,
         TextWriter writer,
         CsvExportOptions options,
         List<string> channelKeys,
@@ -130,7 +130,7 @@ public class LoggingSessionCsvExporter
     }
 
     private static async Task ExportAveragedAsync(
-        ILoggingSessionSource source,
+        ISampleSource source,
         TextWriter writer,
         CsvExportOptions options,
         List<string> channelKeys,

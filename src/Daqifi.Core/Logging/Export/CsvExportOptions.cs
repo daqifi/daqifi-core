@@ -1,7 +1,7 @@
 namespace Daqifi.Core.Logging.Export;
 
 /// <summary>
-/// Controls how <see cref="LoggingSessionCsvExporter"/> formats a CSV export.
+/// Controls how <see cref="CsvExporter"/> formats a CSV export.
 /// </summary>
 public class CsvExportOptions
 {

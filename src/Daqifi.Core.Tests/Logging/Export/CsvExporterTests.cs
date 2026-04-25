@@ -3,7 +3,7 @@ using Daqifi.Core.Logging.Export;
 
 namespace Daqifi.Core.Tests.Logging.Export;
 
-public class LoggingSessionCsvExporterTests
+public class CsvExporterTests
 {
     private static readonly ChannelDescriptor Ch1 = new("DevA", "SN001", "Channel1", ChannelType.Analog);
     private static readonly ChannelDescriptor Ch2 = new("DevA", "SN001", "Channel2", ChannelType.Analog);
@@ -14,13 +14,13 @@ public class LoggingSessionCsvExporterTests
     private static readonly long T2 = T0 + 2 * TimeSpan.TicksPerSecond;
 
     private static async Task<(string[] lines, string header)> ExportToLinesAsync(
-        ILoggingSessionSource source,
+        ISampleSource source,
         CsvExportOptions options,
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
         var sw = new StringWriter();
-        var exporter = new LoggingSessionCsvExporter();
+        var exporter = new CsvExporter();
         await exporter.ExportAsync(source, sw, options, progress, cancellationToken);
         var content = sw.ToString();
         var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
@@ -34,7 +34,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_AbsoluteTime_WritesTimeHeader()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0)]);
 
@@ -46,7 +46,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_RelativeTime_WritesRelativeTimeHeader()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0)]);
 
@@ -58,7 +58,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_MultipleChannels_WritesAllChannelKeysInHeader()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1, Ch2],
             [new SampleRow(T0, Ch1.Key, 1.0)]);
 
@@ -71,9 +71,9 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_NoChannels_WritesNothingAndReturns()
     {
-        var source = new InMemoryLoggingSessionSource([], []);
+        var source = new InMemorySampleSource([], []);
         var sw = new StringWriter();
-        var exporter = new LoggingSessionCsvExporter();
+        var exporter = new CsvExporter();
         await exporter.ExportAsync(source, sw, new CsvExportOptions());
 
         Assert.Empty(sw.ToString());
@@ -84,7 +84,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_AbsoluteTime_FormatsAsIso8601RoundTrip()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 42.0)]);
 
@@ -98,7 +98,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_RelativeTime_FirstRowIsZero()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T1, Ch1.Key, 2.0)]);
 
@@ -110,7 +110,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_RelativeTime_SecondRowIsCorrectOffset()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T1, Ch1.Key, 2.0)]);
 
@@ -123,7 +123,7 @@ public class LoggingSessionCsvExporterTests
     public async Task Export_RelativeTime_SubSecondPrecision_ThreeDecimalPlaces()
     {
         var halfSecond = T0 + TimeSpan.TicksPerSecond / 2;
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(halfSecond, Ch1.Key, 2.0)]);
 
@@ -137,7 +137,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_ZeroTicks_WritesInvalidToken()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(0L, Ch1.Key, 1.0)]);
 
@@ -149,7 +149,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_NegativeTicks_WritesInvalidToken()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(-1L, Ch1.Key, 1.0)]);
 
@@ -162,7 +162,7 @@ public class LoggingSessionCsvExporterTests
     public async Task Export_TicksBeyondMaxValue_WritesInvalidToken()
     {
         var overflowTicks = DateTime.MaxValue.Ticks + 1;
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(overflowTicks, Ch1.Key, 1.0)]);
 
@@ -176,7 +176,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_SameTimestamp_MultipleChannels_WritesOneRow()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1, Ch2],
             [new SampleRow(T0, Ch1.Key, 1.1), new SampleRow(T0, Ch2.Key, 2.2)]);
 
@@ -188,7 +188,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_SameTimestamp_MultipleChannels_BothValuesInRow()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1, Ch2],
             [new SampleRow(T0, Ch1.Key, 1.1), new SampleRow(T0, Ch2.Key, 2.2)]);
 
@@ -202,7 +202,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_DuplicateChannelAtSameTimestamp_LastValueWins()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.1), new SampleRow(T0, Ch1.Key, 9.9)]);
 
@@ -218,7 +218,7 @@ public class LoggingSessionCsvExporterTests
     public async Task Export_ChannelMissingAtTimestamp_LeavesEmptyCell()
     {
         // Ch1 has a sample at T0, Ch2 does not
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1, Ch2],
             [new SampleRow(T0, Ch1.Key, 5.0)]);
 
@@ -242,7 +242,7 @@ public class LoggingSessionCsvExporterTests
             new SampleRow(T1, Ch1.Key, 3.0), // Ch2 missing at T1
             new SampleRow(T2, Ch2.Key, 4.0), // Ch1 missing at T2
         };
-        var source = new InMemoryLoggingSessionSource([Ch1, Ch2], samples);
+        var source = new InMemorySampleSource([Ch1, Ch2], samples);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true });
 
@@ -254,7 +254,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_TabDelimiter_UsesTabInOutput()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1, Ch2],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T0, Ch2.Key, 2.0)]);
 
@@ -270,7 +270,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_AllSamples_UsesGeneralFormat()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.23456789)]);
 
@@ -288,7 +288,7 @@ public class LoggingSessionCsvExporterTests
         var samples = Enumerable.Range(0, 6)
             .Select(i => new SampleRow(T0 + i * TimeSpan.TicksPerMillisecond, Ch1.Key, i + 1.0))
             .ToList();
-        var source = new InMemoryLoggingSessionSource([Ch1], samples);
+        var source = new InMemorySampleSource([Ch1], samples);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, AverageWindow = 2 });
 
@@ -307,7 +307,7 @@ public class LoggingSessionCsvExporterTests
             new SampleRow(T2, Ch1.Key, 3.0),
             new SampleRow(T2 + TimeSpan.TicksPerSecond, Ch1.Key, 4.0),
         };
-        var source = new InMemoryLoggingSessionSource([Ch1], samples);
+        var source = new InMemorySampleSource([Ch1], samples);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, AverageWindow = 2 });
 
@@ -326,7 +326,7 @@ public class LoggingSessionCsvExporterTests
             new SampleRow(T0, Ch1.Key, 10.0),
             new SampleRow(T1, Ch2.Key, 20.0),
         };
-        var source = new InMemoryLoggingSessionSource([Ch1, Ch2], samples);
+        var source = new InMemorySampleSource([Ch1, Ch2], samples);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, AverageWindow = 2 });
 
@@ -345,7 +345,7 @@ public class LoggingSessionCsvExporterTests
             new SampleRow(T0, Ch1.Key, 5.0),
             new SampleRow(T1, Ch1.Key, 7.0),
         };
-        var source = new InMemoryLoggingSessionSource([Ch1, Ch2], samples);
+        var source = new InMemorySampleSource([Ch1, Ch2], samples);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, AverageWindow = 2 });
 
@@ -364,7 +364,7 @@ public class LoggingSessionCsvExporterTests
             new SampleRow(T0, Ch1.Key, 1.0),
             new SampleRow(t500ms, Ch1.Key, 2.0),
         };
-        var source = new InMemoryLoggingSessionSource([Ch1], samples);
+        var source = new InMemorySampleSource([Ch1], samples);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true, AverageWindow = 2 });
 
@@ -376,7 +376,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_ReportsProgressAt100OnCompletion()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0)]);
 
@@ -388,7 +388,7 @@ public class LoggingSessionCsvExporterTests
             if (v == 100) tcs.TrySetResult();
         });
 
-        await new LoggingSessionCsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), progress);
+        await new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), progress);
         await tcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Contains(100, reported);
@@ -397,7 +397,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_Averaged_ReportsProgressAt100OnCompletion()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T1, Ch1.Key, 2.0)]);
 
@@ -409,7 +409,7 @@ public class LoggingSessionCsvExporterTests
             if (v == 100) tcs.TrySetResult();
         });
 
-        await new LoggingSessionCsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions { AverageWindow = 2 }, progress);
+        await new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions { AverageWindow = 2 }, progress);
         await tcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Contains(100, reported);
@@ -423,10 +423,10 @@ public class LoggingSessionCsvExporterTests
     [InlineData(-100)]
     public async Task Export_AverageWindowZeroOrNegative_ThrowsArgumentOutOfRange(int window)
     {
-        var source = new InMemoryLoggingSessionSource([Ch1], [new SampleRow(T0, Ch1.Key, 1.0)]);
+        var source = new InMemorySampleSource([Ch1], [new SampleRow(T0, Ch1.Key, 1.0)]);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            new LoggingSessionCsvExporter().ExportAsync(source, new StringWriter(),
+            new CsvExporter().ExportAsync(source, new StringWriter(),
                 new CsvExportOptions { AverageWindow = window }));
     }
 
@@ -435,7 +435,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_CancelledBeforeStart_ThrowsOperationCancelled()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0)]);
 
@@ -443,7 +443,7 @@ public class LoggingSessionCsvExporterTests
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            new LoggingSessionCsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), cancellationToken: cts.Token));
+            new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), cancellationToken: cts.Token));
     }
 
     // ── Channel key format ───────────────────────────────────────────────────
@@ -457,7 +457,7 @@ public class LoggingSessionCsvExporterTests
     [Fact]
     public async Task Export_DigitalChannel_IncludedInHeader()
     {
-        var source = new InMemoryLoggingSessionSource(
+        var source = new InMemorySampleSource(
             [Ch1, ChDig],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T0, ChDig.Key, 1.0)]);
 
@@ -473,7 +473,7 @@ public class LoggingSessionCsvExporterTests
     {
         // If this file compiles, the types exist without EF/WPF dependencies.
         // This test is a compile-time guarantee — it always passes if the project builds.
-        var _ = new LoggingSessionCsvExporter();
+        var _ = new CsvExporter();
         Assert.NotNull(_);
     }
 }

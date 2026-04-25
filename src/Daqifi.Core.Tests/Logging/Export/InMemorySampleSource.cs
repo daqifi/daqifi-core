@@ -2,21 +2,17 @@ using Daqifi.Core.Logging.Export;
 
 namespace Daqifi.Core.Tests.Logging.Export;
 
-internal sealed class InMemoryLoggingSessionSource : ILoggingSessionSource
+internal sealed class InMemorySampleSource : ISampleSource
 {
     private readonly List<ChannelDescriptor> _channels;
     private readonly List<SampleRow> _samples;
 
-    public DateTime SessionStart { get; }
-
-    public InMemoryLoggingSessionSource(
+    public InMemorySampleSource(
         IEnumerable<ChannelDescriptor> channels,
-        IEnumerable<SampleRow> samples,
-        DateTime? sessionStart = null)
+        IEnumerable<SampleRow> samples)
     {
         _channels = channels.ToList();
         _samples = samples.OrderBy(s => s.TimestampTicks).ToList();
-        SessionStart = sessionStart ?? DateTime.UtcNow;
     }
 
     public IReadOnlyList<ChannelDescriptor> GetChannels() => _channels;
