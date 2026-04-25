@@ -12,10 +12,8 @@ The DAQiFi Core Library is a .NET library designed to simplify interaction with 
 - **Firmware Update Orchestration**: Programmatic PIC32 bootloader updates with state/progress reporting, timeout/retry handling, and cancellation support
 - **Transport Layer**: TCP, UDP, and Serial communication with async/await patterns
 - **Protocol Buffers**: Efficient binary message serialization for device communication
-- **Cross-Platform**: Compatible with .NET 8.0 and .NET 9.0
-
-### 🚧 In Development
-- **Channel Configuration**: Advanced channel setup and calibration
+- **Network Configuration**: Programmatic WiFi SSID/password/mode updates via `INetworkConfigurable`
+- **Cross-Platform**: Compatible with .NET 9.0 and .NET 10.0
 
 ## Getting Started
 
@@ -55,18 +53,29 @@ device.Send(ScpiMessageProducer.StopStreaming);
 
 ### Connection Options
 
+**TCP with built-in retry presets:**
 ```csharp
-// With retry options for unreliable networks
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
     "192.168.1.100",
     9760,
     DeviceConnectionOptions.Resilient); // 5 retries, longer timeouts
+```
 
-// Connect from discovery result
+**Serial/USB connection:**
+```csharp
+using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");             // Windows
+using var device = await DaqifiDeviceFactory.ConnectSerialAsync("/dev/cu.usbmodem1"); // macOS
+```
+
+**Connect from a discovery result:**
+```csharp
+using var wifiFinder = new WiFiDeviceFinder();
 var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
+```
 
-// Custom options
+**Custom retry options:**
+```csharp
 using Daqifi.Core.Communication.Transport; // For ConnectionRetryOptions
 
 var options = new DeviceConnectionOptions
@@ -77,9 +86,9 @@ var options = new DeviceConnectionOptions
         MaxAttempts = 3,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     },
-    InitializeDevice = true // Sends standard init commands
+    InitializeDevice = true
 };
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync(ip, port, options);
+using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, options);
 ```
 
 ### Quick Start: Device Discovery
@@ -127,7 +136,7 @@ catch (OperationCanceledException)
 }
 
 // Discover on custom UDP port (default is 30303)
-using var customFinder = new WiFiDeviceFinder(port: 12345);
+using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
 var customDevices = await customFinder.DiscoverAsync();
 ```
 
@@ -144,6 +153,25 @@ Both devices are identified by their part number in the discovery response.
 - **WiFi**: Network-connected devices discovered via UDP broadcast
 - **Serial**: USB-connected devices enumerated via serial ports
 - **HID**: Devices in bootloader mode (HidSharp backend)
+
+### Network Configuration
+
+Devices implementing `INetworkConfigurable` support programmatic WiFi setup:
+
+```csharp
+using Daqifi.Core.Device.Network;
+
+if (device is INetworkConfigurable networkDevice)
+{
+    var config = new NetworkConfiguration
+    {
+        Ssid = "MyNetwork",
+        Password = "secret",
+        Mode = WifiMode.ExistingNetwork
+    };
+    await networkDevice.UpdateNetworkConfigurationAsync(config);
+}
+```
 
 ### Firmware Update Orchestration
 
@@ -169,7 +197,7 @@ This library powers the [DAQiFi Desktop](https://github.com/daqifi/daqifi-deskto
 
 ## Requirements
 
-- .NET 8.0 or .NET 9.0
+- .NET 9.0 or .NET 10.0
 - For WiFi discovery: UDP port 30303 must be accessible (firewall configuration may be required)
 - For Serial discovery: Appropriate USB drivers for your platform
 - Admin privileges may be required for firewall configuration on Windows
