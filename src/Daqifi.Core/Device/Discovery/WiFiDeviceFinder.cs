@@ -244,7 +244,17 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 discoveredDevices.Add(deviceInfo);
             }
 
-            OnDeviceDiscovered(deviceInfo);
+            // Subscriber exceptions must not fault the receive task — with parallel per-NIC
+            // loops awaited via Task.WhenAll under an infinite-timeout overload, a single
+            // faulted task would hang DiscoverAsync indefinitely.
+            try
+            {
+                OnDeviceDiscovered(deviceInfo);
+            }
+            catch
+            {
+                // Swallow subscriber exceptions; continue receiving on this NIC.
+            }
         }
     }
 
@@ -333,18 +343,12 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
 
         foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
         {
-            if (networkInterface.OperationalStatus != OperationalStatus.Up ||
-                !networkInterface.Supports(NetworkInterfaceComponent.IPv4) ||
-                (networkInterface.NetworkInterfaceType != NetworkInterfaceType.Ethernet &&
-                 networkInterface.NetworkInterfaceType != NetworkInterfaceType.Wireless80211))
-            {
-                continue;
-            }
-
-            // Skip virtual/tunnel adapters (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware, TAP)
-            // that frequently share a subnet with the real adapter and cause Windows routing to pick
-            // the wrong egress NIC for broadcasts. See issue #179.
-            if (IsVirtualOrTunnelInterface(networkInterface.Name, networkInterface.Description))
+            if (!ShouldIncludeInterface(
+                    networkInterface.Name,
+                    networkInterface.Description,
+                    networkInterface.OperationalStatus,
+                    networkInterface.NetworkInterfaceType,
+                    networkInterface.Supports(NetworkInterfaceComponent.IPv4)))
             {
                 continue;
             }
@@ -389,6 +393,46 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         }
 
         return interfaces;
+    }
+
+    /// <summary>
+    /// Returns true if a NIC matching the given metadata should be included in discovery.
+    /// Centralizes the filter — Up + IPv4-capable + Ethernet/Wireless80211 + non-virtual —
+    /// so a mixed-NIC list can be exercised in unit tests without instantiating real
+    /// <see cref="NetworkInterface"/> objects. Internal for testing.
+    /// </summary>
+    internal static bool ShouldIncludeInterface(
+        string? name,
+        string? description,
+        OperationalStatus operationalStatus,
+        NetworkInterfaceType interfaceType,
+        bool supportsIPv4)
+    {
+        if (operationalStatus != OperationalStatus.Up)
+        {
+            return false;
+        }
+
+        if (!supportsIPv4)
+        {
+            return false;
+        }
+
+        if (interfaceType != NetworkInterfaceType.Ethernet &&
+            interfaceType != NetworkInterfaceType.Wireless80211)
+        {
+            return false;
+        }
+
+        // Skip virtual/tunnel adapters (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware, TAP)
+        // that frequently share a subnet with the real adapter and cause Windows routing to pick
+        // the wrong egress NIC for broadcasts. See issue #179.
+        if (IsVirtualOrTunnelInterface(name, description))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
