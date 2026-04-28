@@ -155,10 +155,17 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                     UdpClient? udp = null;
                     try
                     {
-                        udp = new UdpClient(new IPEndPoint(interfaceInfo.LocalAddress, 0))
+                        // Bind to the discovery port (with ReuseAddress) rather than an ephemeral
+                        // port so devices that target the well-known port for replies still reach
+                        // us. Per-NIC sockets coexist on the same port via distinct (LocalAddress,
+                        // port) tuples + SO_REUSEADDR.
+                        udp = new UdpClient
                         {
-                            EnableBroadcast = true
+                            EnableBroadcast = true,
+                            ExclusiveAddressUse = false
                         };
+                        udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                        udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, _discoveryPort));
                         await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint);
                         perNicClients.Add((udp, interfaceInfo.LocalAddress));
                     }
