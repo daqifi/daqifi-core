@@ -9,7 +9,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Network;
 
 namespace Daqifi.Core.Device.Discovery;
@@ -45,11 +44,6 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         /// The local interface address.
         /// </summary>
         public IPAddress LocalAddress { get; init; }
-
-        /// <summary>
-        /// The subnet mask for this interface.
-        /// </summary>
-        public IPAddress SubnetMask { get; init; }
     }
 
     #endregion
@@ -144,68 +138,54 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 return discoveredDevices;
             }
 
-            using var udpTransport = new UdpTransport(_discoveryPort);
-            await udpTransport.OpenAsync();
-
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             if (timeout != Timeout.InfiniteTimeSpan)
             {
                 cts.CancelAfter(timeout);
             }
 
+            // Bind a separate UdpClient per NIC so the OS routes each broadcast out the intended adapter
+            // and replies arrive on the socket whose bound IP is the actual local interface — avoiding
+            // misrouting on hosts where virtual NICs (WSL2 mirrored, Hyper-V) share a subnet with the real one.
+            var perNicClients = new List<(UdpClient Client, IPAddress LocalAddress)>();
             try
             {
-                // Send broadcast query to all network interfaces
                 foreach (var interfaceInfo in networkInterfaces)
                 {
+                    UdpClient? udp = null;
                     try
                     {
-                        await udpTransport.SendBroadcastAsync(_queryCommandBytes, interfaceInfo.BroadcastEndpoint);
+                        udp = new UdpClient(new IPEndPoint(interfaceInfo.LocalAddress, 0))
+                        {
+                            EnableBroadcast = true
+                        };
+                        await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint);
+                        perNicClients.Add((udp, interfaceInfo.LocalAddress));
                     }
                     catch (SocketException)
                     {
-                        // Continue with other endpoints if one fails
+                        udp?.Dispose();
                     }
                 }
 
-                // Listen for responses until timeout or cancellation
-                while (!cts.Token.IsCancellationRequested)
+                if (perNicClients.Count == 0)
                 {
-                    try
-                    {
-                        var result = await udpTransport.ReceiveAsync(TimeSpan.FromMilliseconds(100), cts.Token);
-
-                        if (result.HasValue)
-                        {
-                            var (data, remoteEndPoint) = result.Value;
-                            var receivedText = Encoding.ASCII.GetString(data);
-
-                            if (IsValidDiscoveryMessage(receivedText))
-                            {
-                                // Determine which local interface discovered this device
-                                var localInterfaceAddress = FindLocalInterfaceForRemoteAddress(remoteEndPoint.Address, networkInterfaces);
-                                var deviceInfo = ParseDeviceInfo(data, remoteEndPoint, localInterfaceAddress);
-                                if (deviceInfo != null)
-                                {
-                                    // Check for duplicates based on MAC address or serial number
-                                    if (!discoveredDevices.Any(d => IsDuplicateDevice(d, deviceInfo)))
-                                    {
-                                        discoveredDevices.Add(deviceInfo);
-                                        OnDeviceDiscovered(deviceInfo);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
+                    OnDiscoveryCompleted();
+                    return discoveredDevices;
                 }
+
+                var receiveTasks = perNicClients
+                    .Select(c => ReceiveLoopAsync(c.Client, c.LocalAddress, discoveredDevices, cts.Token))
+                    .ToArray();
+
+                await Task.WhenAll(receiveTasks);
             }
             finally
             {
-                await udpTransport.CloseAsync();
+                foreach (var (client, _) in perNicClients)
+                {
+                    try { client.Dispose(); } catch { /* ignore */ }
+                }
             }
 
             OnDiscoveryCompleted();
@@ -214,6 +194,57 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         finally
         {
             _discoverySemaphore.Release();
+        }
+    }
+
+    /// <summary>
+    /// Receives discovery responses on a single NIC-bound socket until cancellation.
+    /// The socket's bound IP is the authoritative LocalInterfaceAddress for any reply it receives.
+    /// </summary>
+    private async Task ReceiveLoopAsync(UdpClient udp, IPAddress localAddress, List<IDeviceInfo> discoveredDevices, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            UdpReceiveResult result;
+            try
+            {
+                result = await udp.ReceiveAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (SocketException)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+
+            var receivedText = Encoding.ASCII.GetString(result.Buffer);
+            if (!IsValidDiscoveryMessage(receivedText))
+            {
+                continue;
+            }
+
+            var deviceInfo = ParseDeviceInfo(result.Buffer, result.RemoteEndPoint, localAddress);
+            if (deviceInfo == null)
+            {
+                continue;
+            }
+
+            lock (discoveredDevices)
+            {
+                if (discoveredDevices.Any(d => IsDuplicateDevice(d, deviceInfo)))
+                {
+                    continue;
+                }
+                discoveredDevices.Add(deviceInfo);
+            }
+
+            OnDeviceDiscovered(deviceInfo);
         }
     }
 
@@ -310,6 +341,14 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 continue;
             }
 
+            // Skip virtual/tunnel adapters (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware, TAP)
+            // that frequently share a subnet with the real adapter and cause Windows routing to pick
+            // the wrong egress NIC for broadcasts. See issue #179.
+            if (IsVirtualOrTunnelInterface(networkInterface.Name, networkInterface.Description))
+            {
+                continue;
+            }
+
             var ipProperties = networkInterface.GetIPProperties();
             if (ipProperties == null)
             {
@@ -344,8 +383,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 interfaces.Add(new NetworkInterfaceInfo
                 {
                     BroadcastEndpoint = endpoint,
-                    LocalAddress = ipAddress,
-                    SubnetMask = subnetMask
+                    LocalAddress = ipAddress
                 });
             }
         }
@@ -354,52 +392,21 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     }
 
     /// <summary>
-    /// Finds the local interface address that is on the same subnet as the remote address.
+    /// Returns true if the adapter looks like a virtual/tunnel interface that should be skipped
+    /// (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware, TAP). Internal for testing.
     /// </summary>
-    /// <param name="remoteAddress">The remote device's IP address.</param>
-    /// <param name="networkInterfaces">The list of available network interfaces.</param>
-    /// <returns>The local interface address, or null if no matching interface is found.</returns>
-    private static IPAddress? FindLocalInterfaceForRemoteAddress(IPAddress remoteAddress, List<NetworkInterfaceInfo> networkInterfaces)
+    internal static bool IsVirtualOrTunnelInterface(string? name, string? description)
     {
-        if (remoteAddress.AddressFamily != AddressFamily.InterNetwork)
-        {
-            return null;
-        }
+        var n = name ?? string.Empty;
+        var d = description ?? string.Empty;
 
-        var remoteBytes = remoteAddress.GetAddressBytes();
-        if (remoteBytes.Length != 4)
-        {
-            return null;
-        }
-
-        foreach (var interfaceInfo in networkInterfaces)
-        {
-            var localBytes = interfaceInfo.LocalAddress.GetAddressBytes();
-            var maskBytes = interfaceInfo.SubnetMask.GetAddressBytes();
-
-            if (localBytes.Length != 4 || maskBytes.Length != 4)
-            {
-                continue;
-            }
-
-            // Check if remote address is on the same subnet as this interface
-            var isOnSameSubnet = true;
-            for (var i = 0; i < 4; i++)
-            {
-                if ((remoteBytes[i] & maskBytes[i]) != (localBytes[i] & maskBytes[i]))
-                {
-                    isOnSameSubnet = false;
-                    break;
-                }
-            }
-
-            if (isOnSameSubnet)
-            {
-                return interfaceInfo.LocalAddress;
-            }
-        }
-
-        return null;
+        return n.StartsWith("vEthernet", StringComparison.OrdinalIgnoreCase) ||
+               d.IndexOf("vEthernet", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               d.IndexOf("Hyper-V", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               d.IndexOf("WSL", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               d.IndexOf("VirtualBox", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               d.IndexOf("VMware", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               d.IndexOf("TAP", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     /// <summary>
