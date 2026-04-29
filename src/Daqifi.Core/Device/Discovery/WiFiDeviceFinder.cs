@@ -166,7 +166,17 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                             ExclusiveAddressUse = false
                         };
                         udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                        udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, _discoveryPort));
+                        try
+                        {
+                            udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, _discoveryPort));
+                        }
+                        catch (SocketException)
+                        {
+                            // Fall back to an ephemeral port if the well-known discovery port
+                            // can't be acquired on this platform/NIC (e.g. another process holds
+                            // it). Devices that reply to source-port still reach us either way.
+                            udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, 0));
+                        }
                         await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint);
                         perNicClients.Add((udp, interfaceInfo.LocalAddress));
                         added = true;
@@ -271,9 +281,12 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                         continue;
                     }
                     discoveredDevices.Add(deviceInfo);
-                }
 
-                OnDeviceDiscovered(deviceInfo);
+                    // Invoke under the lock so DeviceDiscovered fires sequentially across the
+                    // parallel per-NIC receive loops, matching the original (single-socket)
+                    // sequential-callback contract that subscribers may depend on.
+                    OnDeviceDiscovered(deviceInfo);
+                }
             }
             catch
             {
