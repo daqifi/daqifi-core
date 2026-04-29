@@ -153,6 +153,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 foreach (var interfaceInfo in networkInterfaces)
                 {
                     UdpClient? udp = null;
+                    var added = false;
                     try
                     {
                         // Bind to the discovery port (with ReuseAddress) rather than an ephemeral
@@ -168,10 +169,19 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                         udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, _discoveryPort));
                         await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint);
                         perNicClients.Add((udp, interfaceInfo.LocalAddress));
+                        added = true;
                     }
-                    catch (SocketException)
+                    catch
                     {
-                        udp?.Dispose();
+                        // Skip this NIC; continue with others. Any setup or send failure is
+                        // recoverable at the discovery level.
+                    }
+                    finally
+                    {
+                        if (!added)
+                        {
+                            udp?.Dispose();
+                        }
                     }
                 }
 
@@ -230,37 +240,38 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 break;
             }
 
-            var receivedText = Encoding.ASCII.GetString(result.Buffer);
-            if (!IsValidDiscoveryMessage(receivedText))
+            // Defense-in-depth: any unexpected exception in payload processing or subscriber
+            // dispatch must not fault this receive task. With parallel per-NIC loops awaited
+            // via Task.WhenAll under the infinite-timeout overload, a single faulted task would
+            // hang DiscoverAsync indefinitely.
+            try
             {
-                continue;
-            }
-
-            var deviceInfo = ParseDeviceInfo(result.Buffer, result.RemoteEndPoint, localAddress);
-            if (deviceInfo == null)
-            {
-                continue;
-            }
-
-            lock (discoveredDevices)
-            {
-                if (discoveredDevices.Any(d => IsDuplicateDevice(d, deviceInfo)))
+                var receivedText = Encoding.ASCII.GetString(result.Buffer);
+                if (!IsValidDiscoveryMessage(receivedText))
                 {
                     continue;
                 }
-                discoveredDevices.Add(deviceInfo);
-            }
 
-            // Subscriber exceptions must not fault the receive task — with parallel per-NIC
-            // loops awaited via Task.WhenAll under an infinite-timeout overload, a single
-            // faulted task would hang DiscoverAsync indefinitely.
-            try
-            {
+                var deviceInfo = ParseDeviceInfo(result.Buffer, result.RemoteEndPoint, localAddress);
+                if (deviceInfo == null)
+                {
+                    continue;
+                }
+
+                lock (discoveredDevices)
+                {
+                    if (discoveredDevices.Any(d => IsDuplicateDevice(d, deviceInfo)))
+                    {
+                        continue;
+                    }
+                    discoveredDevices.Add(deviceInfo);
+                }
+
                 OnDeviceDiscovered(deviceInfo);
             }
             catch
             {
-                // Swallow subscriber exceptions; continue receiving on this NIC.
+                // Swallow malformed payloads and subscriber exceptions; keep receiving.
             }
         }
     }
@@ -448,16 +459,21 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     /// </summary>
     internal static bool IsVirtualOrTunnelInterface(string? name, string? description)
     {
-        var n = name ?? string.Empty;
-        var d = description ?? string.Empty;
+        var n = (name ?? string.Empty).Trim();
+        var d = (description ?? string.Empty).Trim();
 
+        // Use specific TAP prefixes ("TAP-Windows", "TAP-", "TAP " with trailing space) rather
+        // than a generic "TAP" substring to avoid false positives on legitimate physical NIC
+        // descriptions that happen to contain those three letters.
         return n.StartsWith("vEthernet", StringComparison.OrdinalIgnoreCase) ||
                d.IndexOf("vEthernet", StringComparison.OrdinalIgnoreCase) >= 0 ||
                d.IndexOf("Hyper-V", StringComparison.OrdinalIgnoreCase) >= 0 ||
                d.IndexOf("WSL", StringComparison.OrdinalIgnoreCase) >= 0 ||
                d.IndexOf("VirtualBox", StringComparison.OrdinalIgnoreCase) >= 0 ||
                d.IndexOf("VMware", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("TAP", StringComparison.OrdinalIgnoreCase) >= 0;
+               d.IndexOf("TAP-Windows", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               d.IndexOf("TAP-", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               d.IndexOf("TAP ", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     /// <summary>
