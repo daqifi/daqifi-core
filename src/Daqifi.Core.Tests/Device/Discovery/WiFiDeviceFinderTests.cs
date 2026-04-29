@@ -114,6 +114,10 @@ public class WiFiDeviceFinderTests
     [InlineData("VirtualBox Host-Only Network", "VirtualBox Host-Only Ethernet Adapter")]
     [InlineData("VMware Network Adapter VMnet1", "VMware Virtual Ethernet Adapter for VMnet1")]
     [InlineData("OpenVPN TAP-Windows6", "TAP-Windows Adapter V9")]
+    // Keyword present only in name (not description) — both fields must be checked.
+    [InlineData("vEthernet (Default Switch)", "")]
+    [InlineData("WSL Bridge", "Generic Adapter")]
+    [InlineData("VMware NAT", "Generic Adapter")]
     public void IsVirtualOrTunnelInterface_VirtualAdapters_ReturnsTrue(string name, string description)
     {
         Assert.True(WiFiDeviceFinder.IsVirtualOrTunnelInterface(name, description));

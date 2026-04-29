@@ -239,6 +239,12 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
             {
                 break;
             }
+            catch
+            {
+                // Catch-all so an unexpected exception type cannot fault this receive task
+                // and hang DiscoverAsync via Task.WhenAll under the infinite-timeout overload.
+                break;
+            }
 
             // Defense-in-depth: any unexpected exception in payload processing or subscriber
             // dispatch must not fault this receive task. With parallel per-NIC loops awaited
@@ -462,18 +468,21 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         var n = (name ?? string.Empty).Trim();
         var d = (description ?? string.Empty).Trim();
 
-        // Use specific TAP prefixes ("TAP-Windows", "TAP-", "TAP " with trailing space) rather
-        // than a generic "TAP" substring to avoid false positives on legitimate physical NIC
-        // descriptions that happen to contain those three letters.
-        return n.StartsWith("vEthernet", StringComparison.OrdinalIgnoreCase) ||
-               d.IndexOf("vEthernet", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("Hyper-V", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("WSL", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("VirtualBox", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("VMware", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("TAP-Windows", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("TAP-", StringComparison.OrdinalIgnoreCase) >= 0 ||
-               d.IndexOf("TAP ", StringComparison.OrdinalIgnoreCase) >= 0;
+        static bool Contains(string haystack, string needle) =>
+            haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+
+        // Match keywords against BOTH name and description — virtualization markers can show
+        // up in either field depending on platform/locale. Use specific TAP prefixes to avoid
+        // false positives on legitimate physical NICs whose description happens to contain
+        // those three letters.
+        return Contains(n, "vEthernet") || Contains(d, "vEthernet") ||
+               Contains(n, "Hyper-V") || Contains(d, "Hyper-V") ||
+               Contains(n, "WSL") || Contains(d, "WSL") ||
+               Contains(n, "VirtualBox") || Contains(d, "VirtualBox") ||
+               Contains(n, "VMware") || Contains(d, "VMware") ||
+               Contains(n, "TAP-Windows") || Contains(d, "TAP-Windows") ||
+               Contains(n, "TAP-") || Contains(d, "TAP-") ||
+               Contains(n, "TAP ") || Contains(d, "TAP ");
     }
 
     /// <summary>
