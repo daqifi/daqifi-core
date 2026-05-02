@@ -29,6 +29,9 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
+        /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (e.g. corrupt card, unreadable directory).</exception>
+        /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. An empty directory returns an empty list rather than throwing.</exception>
         Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default);
 
         /// <summary>

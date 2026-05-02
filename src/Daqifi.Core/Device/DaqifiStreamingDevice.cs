@@ -291,6 +291,9 @@ namespace Daqifi.Core.Device
         /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
+        /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (corrupt card, unreadable directory).</exception>
+        /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. Empty directories return an empty list rather than throwing.</exception>
         public async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
@@ -351,6 +354,8 @@ namespace Daqifi.Core.Device
                     PrepareLanInterface();
                 }
             }
+
+            ThrowIfSdCardListError(lines);
 
             var files = SdCardFileListParser.ParseFileList(lines);
             _sdCardFiles = files;
@@ -727,12 +732,95 @@ namespace Daqifi.Core.Device
         /// <returns>True if any line contains a SCPI error, false otherwise.</returns>
         private static bool ContainsScpiError(IReadOnlyList<string> lines)
         {
-            return lines.Any(line =>
+            return lines.Any(IsScpiErrorLine);
+        }
+
+        // Strict SCPI error format: "**ERROR..." or "ERROR: ...". The colon (or **
+        // prefix) distinguishes a true SCPI error from firmware status text like
+        // "Error !! No SD Card Detected", which should not be surfaced as
+        // SdCardOperationException.LastScpiError.
+        private static bool IsScpiErrorLine(string line)
+        {
+            var trimmed = line.TrimStart();
+            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Permissive: any line that looks like a device error or status message,
+        // including firmware text such as "Error !! ...". Used to recognize that
+        // the parser would yield no result, without polluting LastScpiError with
+        // non-SCPI text.
+        private static bool IsNonResultLine(string line)
+        {
+            var trimmed = line.TrimStart();
+            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Inspects the final response from a <c>SYSTem:STORage:SD:LISt?</c> exchange
+        /// and throws a typed <see cref="SdCardOperationException"/> when the device
+        /// reported a real failure (no SD card, filesystem error, generic SCPI error).
+        /// If any non-error/non-empty line is present, callers proceed to parse — even
+        /// if SCPI error lines are interleaved — so a successful directory listing is
+        /// never masked by stray transient errors.
+        /// </summary>
+        private static void ThrowIfSdCardListError(IReadOnlyList<string> lines)
+        {
+            // LastScpiError must only carry a real SCPI-formatted error so callers
+            // can rely on its shape. Firmware status text ("Error !! ...") is
+            // surfaced via the exception's Message and RawDeviceResponse instead.
+            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
+
+            // Specific firmware-emitted error markers take precedence over generic
+            // content/error checks. They're plain text (not SCPI-shaped), so a
+            // simple "is there any content line?" check would otherwise miss them
+            // and pass garbage to the parser.
+            if (lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0))
             {
-                var trimmed = line.TrimStart();
-                return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
-                    || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
-            });
+                throw new SdCardNotPresentException(lines, lastScpiError);
+            }
+
+            var filesystemErrorLine = lines.FirstOrDefault(l =>
+                l.IndexOf("Failed to open directory", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (filesystemErrorLine != null)
+            {
+                throw new SdCardFilesystemException(lines, lastScpiError, filesystemErrorLine.Trim());
+            }
+
+            // If any line looks like a real result (non-empty, not an error or
+            // firmware status line), hand off to the parser. Stray interleaved
+            // error lines are still parsed away by SdCardFileListParser.
+            var hasContentLine = lines.Any(line =>
+                !string.IsNullOrWhiteSpace(line) && !IsNonResultLine(line));
+            if (hasContentLine)
+            {
+                return;
+            }
+
+            if (lastScpiError != null)
+            {
+                throw new SdCardOperationException(
+                    "The SD card list operation failed: " + lastScpiError,
+                    lines,
+                    lastScpiError);
+            }
+
+            // Defensive fallback: firmware status text ("Error !! ...") with no
+            // SCPI error and no recognized marker. Shouldn't happen for known
+            // firmware paths, but surfacing it as a typed exception is far
+            // better than silently returning an empty list.
+            var nonResultLine = lines.FirstOrDefault(l =>
+                !string.IsNullOrWhiteSpace(l) && IsNonResultLine(l))?.Trim();
+            if (nonResultLine != null)
+            {
+                throw new SdCardOperationException(
+                    "The SD card list operation failed: " + nonResultLine,
+                    lines,
+                    lastScpiError: null);
+            }
+
+            // No error lines and no content lines — empty directory. Caller continues.
         }
 
         /// <summary>
