@@ -552,20 +552,151 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task GetSdCardFilesAsync_WithPersistentScpiError_ReturnsEmptyAfterRetries()
+        public async Task GetSdCardFilesAsync_WithPersistentScpiError_ThrowsSdCardOperationException()
         {
-            // Arrange - simulate persistent error
+            // Arrange - simulate persistent bare SCPI error (card busy / timeout territory).
+            // Previous behavior returned an empty list, which made real failures look
+            // identical to "directory is empty". Issue #181 surfaces this as a typed
+            // exception so callers can show actionable detail.
             var device = new RetryableSdCardStreamingDevice("TestDevice");
             device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
             device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
             device.Connect();
 
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.GetSdCardFilesAsync());
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+            Assert.Contains("**ERROR", ex.LastScpiError);
+            Assert.NotEmpty(ex.RawDeviceResponse);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithNoSdCardDetected_ThrowsSdCardNotPresentException()
+        {
+            // Arrange - matches the firmware response when no SD card is installed:
+            // \r\nError !! No SD Card Detected\r\n + **ERROR: -200, "Execution error"
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string>
+            {
+                "Error !! No SD Card Detected",
+                "**ERROR: -200, \"Execution error\""
+            };
+            device.ResponseSequence.Enqueue(response);
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardNotPresentException>(
+                () => device.GetSdCardFilesAsync());
+            Assert.Contains("**ERROR", ex.LastScpiError);
+            Assert.NotEmpty(ex.RawDeviceResponse);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithFilesystemError_ThrowsSdCardFilesystemException()
+        {
+            // Arrange - matches the firmware response when the directory cannot be opened
+            // (corrupt FS, unformatted card, etc): "[Error:N]Failed to open directory ..."
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string>
+            {
+                "[Error:3]Failed to open directory /Daqifi"
+            };
+            device.ResponseSequence.Enqueue(response);
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            // Act & Assert
+            // Note: there is no SCPI error line in this response, but there are also
+            // no file lines, so the classifier treats it as a filesystem error.
+            var ex = await Assert.ThrowsAsync<SdCardFilesystemException>(
+                () => device.GetSdCardFilesAsync());
+            Assert.Contains("Failed to open directory", ex.DeviceMessage);
+            Assert.Contains("Failed to open directory", ex.Message);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithFilesystemErrorAndScpi_ThrowsSdCardFilesystemException()
+        {
+            // Arrange - filesystem error accompanied by an SCPI error line
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string>
+            {
+                "[Error:3]Failed to open directory /Daqifi",
+                "**ERROR: -200, \"Execution error\""
+            };
+            device.ResponseSequence.Enqueue(response);
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardFilesystemException>(
+                () => device.GetSdCardFilesAsync());
+            Assert.Contains("Failed to open directory", ex.DeviceMessage);
+            Assert.Contains("**ERROR", ex.LastScpiError);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithFilesAndInterleavedError_ReturnsFiles()
+        {
+            // Arrange - response contains both files and an SCPI error line.
+            // The presence of any error line triggers a retry (existing behavior),
+            // so we enqueue the same mixed payload twice. After all retries exhaust,
+            // because file lines are present, we still hand off to the parser and
+            // ignore the stray error line — issue #181 keeps this behavior intact.
+            var mixed = new List<string>
+            {
+                "Daqifi/log_20240115_103000.bin",
+                "**ERROR: -200, \"Execution error\""
+            };
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string>(mixed));
+            device.ResponseSequence.Enqueue(new List<string>(mixed));
+            device.Connect();
+
             // Act
             var files = await device.GetSdCardFilesAsync();
 
-            // Assert - should be empty since all responses were errors
+            // Assert
+            Assert.Single(files);
+            Assert.Equal("log_20240115_103000.bin", files[0].FileName);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithEmptyDirectory_ReturnsEmptyList()
+        {
+            // Arrange - device returns no lines (empty directory, no errors). This is
+            // the legitimate "0 files" case and must keep its existing behavior.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string>());
+            device.Connect();
+
+            // Act
+            var files = await device.GetSdCardFilesAsync();
+
+            // Assert
             Assert.Empty(files);
-            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+            Assert.Equal(1, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_OnError_StillRestoresLanInterface()
+        {
+            // Arrange - persistent error path must still restore the LAN interface
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
+            device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
+            device.Connect();
+
+            // Act
+            await Assert.ThrowsAsync<SdCardNotPresentException>(
+                () => device.GetSdCardFilesAsync());
+
+            // Assert - LAN restore commands must have been sent even though we threw
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands);
         }
 
         [Fact]

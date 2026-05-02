@@ -291,6 +291,9 @@ namespace Daqifi.Core.Device
         /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
+        /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (corrupt card, unreadable directory).</exception>
+        /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. Empty directories return an empty list rather than throwing.</exception>
         public async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
@@ -351,6 +354,8 @@ namespace Daqifi.Core.Device
                     PrepareLanInterface();
                 }
             }
+
+            ThrowIfSdCardListError(lines);
 
             var files = SdCardFileListParser.ParseFileList(lines);
             _sdCardFiles = files;
@@ -733,6 +738,61 @@ namespace Daqifi.Core.Device
                 return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
                     || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
             });
+        }
+
+        private static bool IsScpiErrorLine(string line)
+        {
+            var trimmed = line.TrimStart();
+            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Inspects the final response from a <c>SYSTem:STORage:SD:LISt?</c> exchange
+        /// and throws a typed <see cref="SdCardOperationException"/> when the device
+        /// reported a real failure (no SD card, filesystem error, generic SCPI error).
+        /// If any non-error/non-empty line is present, callers proceed to parse — even
+        /// if SCPI error lines are interleaved — so a successful directory listing is
+        /// never masked by stray transient errors.
+        /// </summary>
+        private static void ThrowIfSdCardListError(IReadOnlyList<string> lines)
+        {
+            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
+
+            // Specific firmware-emitted error markers take precedence over generic
+            // content/error checks. They're plain text (not SCPI-shaped), so a
+            // simple "is there any content line?" check would otherwise miss them
+            // and pass garbage to the parser.
+            if (lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                throw new SdCardNotPresentException(lines, lastScpiError);
+            }
+
+            var filesystemErrorLine = lines.FirstOrDefault(l =>
+                l.IndexOf("Failed to open directory", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (filesystemErrorLine != null)
+            {
+                throw new SdCardFilesystemException(lines, lastScpiError, filesystemErrorLine.Trim());
+            }
+
+            // If any line looks like a real result (non-empty, non-SCPI-error),
+            // hand off to the parser even if SCPI error lines are interleaved.
+            var hasContentLine = lines.Any(line =>
+                !string.IsNullOrWhiteSpace(line) && !IsScpiErrorLine(line));
+            if (hasContentLine)
+            {
+                return;
+            }
+
+            if (lastScpiError != null)
+            {
+                throw new SdCardOperationException(
+                    "The SD card list operation failed: " + lastScpiError,
+                    lines,
+                    lastScpiError);
+            }
+
+            // No error lines and no content lines — empty directory. Caller continues.
         }
 
         /// <summary>
