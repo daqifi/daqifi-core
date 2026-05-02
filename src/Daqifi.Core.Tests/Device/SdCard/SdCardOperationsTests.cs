@@ -681,6 +681,54 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_LastScpiError_ContainsOnlyScpiFormattedLine()
+        {
+            // Arrange — firmware emits both "Error !! ..." status text AND a SCPI error.
+            // LastScpiError must only carry the SCPI-formatted line so callers can
+            // parse it; the status text is preserved in RawDeviceResponse.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string>
+            {
+                "Error !! No SD Card Detected",
+                "**ERROR: -200, \"Execution error\""
+            };
+            device.ResponseSequence.Enqueue(response);
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            // Act
+            var ex = await Assert.ThrowsAsync<SdCardNotPresentException>(
+                () => device.GetSdCardFilesAsync());
+
+            // Assert — LastScpiError must be the SCPI line, never the firmware text
+            Assert.NotNull(ex.LastScpiError);
+            Assert.StartsWith("**ERROR", ex.LastScpiError);
+            Assert.DoesNotContain("Error !!", ex.LastScpiError);
+            Assert.Contains("Error !! No SD Card Detected", ex.RawDeviceResponse);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WithFirmwareTextOnly_ThrowsWithNullLastScpiError()
+        {
+            // Arrange — defensive: hypothetical firmware response with status text
+            // but no SCPI error line. Shouldn't happen for known paths, but the
+            // classifier must not silently return an empty list.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string> { "Error !! Some unfamiliar firmware error" };
+            device.ResponseSequence.Enqueue(response);
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            // Act
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.GetSdCardFilesAsync());
+
+            // Assert
+            Assert.Null(ex.LastScpiError);
+            Assert.Contains("Some unfamiliar firmware error", ex.Message);
+        }
+
+        [Fact]
         public async Task GetSdCardFilesAsync_OnError_StillRestoresLanInterface()
         {
             // Arrange - persistent error path must still restore the LAN interface

@@ -732,15 +732,25 @@ namespace Daqifi.Core.Device
         /// <returns>True if any line contains a SCPI error, false otherwise.</returns>
         private static bool ContainsScpiError(IReadOnlyList<string> lines)
         {
-            return lines.Any(line =>
-            {
-                var trimmed = line.TrimStart();
-                return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
-                    || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
-            });
+            return lines.Any(IsScpiErrorLine);
         }
 
+        // Strict SCPI error format: "**ERROR..." or "ERROR: ...". The colon (or **
+        // prefix) distinguishes a true SCPI error from firmware status text like
+        // "Error !! No SD Card Detected", which should not be surfaced as
+        // SdCardOperationException.LastScpiError.
         private static bool IsScpiErrorLine(string line)
+        {
+            var trimmed = line.TrimStart();
+            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Permissive: any line that looks like a device error or status message,
+        // including firmware text such as "Error !! ...". Used to recognize that
+        // the parser would yield no result, without polluting LastScpiError with
+        // non-SCPI text.
+        private static bool IsNonResultLine(string line)
         {
             var trimmed = line.TrimStart();
             return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
@@ -757,6 +767,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         private static void ThrowIfSdCardListError(IReadOnlyList<string> lines)
         {
+            // LastScpiError must only carry a real SCPI-formatted error so callers
+            // can rely on its shape. Firmware status text ("Error !! ...") is
+            // surfaced via the exception's Message and RawDeviceResponse instead.
             var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
 
             // Specific firmware-emitted error markers take precedence over generic
@@ -775,10 +788,11 @@ namespace Daqifi.Core.Device
                 throw new SdCardFilesystemException(lines, lastScpiError, filesystemErrorLine.Trim());
             }
 
-            // If any line looks like a real result (non-empty, non-SCPI-error),
-            // hand off to the parser even if SCPI error lines are interleaved.
+            // If any line looks like a real result (non-empty, not an error or
+            // firmware status line), hand off to the parser. Stray interleaved
+            // error lines are still parsed away by SdCardFileListParser.
             var hasContentLine = lines.Any(line =>
-                !string.IsNullOrWhiteSpace(line) && !IsScpiErrorLine(line));
+                !string.IsNullOrWhiteSpace(line) && !IsNonResultLine(line));
             if (hasContentLine)
             {
                 return;
@@ -790,6 +804,20 @@ namespace Daqifi.Core.Device
                     "The SD card list operation failed: " + lastScpiError,
                     lines,
                     lastScpiError);
+            }
+
+            // Defensive fallback: firmware status text ("Error !! ...") with no
+            // SCPI error and no recognized marker. Shouldn't happen for known
+            // firmware paths, but surfacing it as a typed exception is far
+            // better than silently returning an empty list.
+            var nonResultLine = lines.FirstOrDefault(l =>
+                !string.IsNullOrWhiteSpace(l) && IsNonResultLine(l))?.Trim();
+            if (nonResultLine != null)
+            {
+                throw new SdCardOperationException(
+                    "The SD card list operation failed: " + nonResultLine,
+                    lines,
+                    lastScpiError: null);
             }
 
             // No error lines and no content lines — empty directory. Caller continues.
