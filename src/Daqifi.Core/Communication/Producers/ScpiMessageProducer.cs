@@ -39,6 +39,16 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetDeviceInfo => new ScpiMessage("SYSTem:SYSInfoPB?");
 
     /// <summary>
+    /// Creates a query message to pop the next entry from the device's SCPI error queue.
+    /// </summary>
+    /// <remarks>
+    /// Returns the oldest queued error in standard SCPI format (e.g., <c>-200,"Execution error"</c>),
+    /// or <c>0,"No error"</c> when the queue is empty. Each call removes one entry.
+    /// Command: SYSTem:ERRor?
+    /// </remarks>
+    public static IOutboundMessage<string> GetSystemError => new ScpiMessage("SYSTem:ERRor?");
+
+    /// <summary>
     /// Creates a command message to force the device into bootloader mode.
     /// </summary>
     /// <remarks>

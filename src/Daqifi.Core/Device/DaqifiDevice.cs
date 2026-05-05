@@ -471,6 +471,83 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Pops <c>SYSTem:ERRor?</c> entries from the device until the queue reports
+        /// <c>"No error"</c> and returns the popped entries to the caller.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is the queue-inspection counterpart to the inline last-command
+        /// error check used elsewhere in the codebase (e.g. <c>ContainsScpiError</c>
+        /// in <see cref="DaqifiStreamingDevice"/>): that helper tells you whether
+        /// the captured response from a single command contained an error,
+        /// while this method tells you what is currently queued on the
+        /// device — including stale errors from prior commands or sessions.
+        /// </para>
+        /// <para>
+        /// Ownership of the popped entries is transferred to the caller so
+        /// they can log them, surface them in a health-check report, throw
+        /// on hardware faults, or discard them if known-stale.
+        /// </para>
+        /// <para>
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync"/>, which
+        /// pauses the protobuf consumer for the duration of the text exchange.
+        /// Avoid calling this during active streaming or concurrently with
+        /// other text commands.
+        /// </para>
+        /// </remarks>
+        /// <param name="maxIterations">
+        /// Safety cap on the number of <c>SYST:ERR?</c> queries. Defaults to 256
+        /// — large enough to drain a deeply queued device, small enough that a
+        /// runaway loop is bounded. If the cap is reached without seeing
+        /// <c>"No error"</c>, a warning is traced and the popped entries
+        /// collected so far are returned; callers that want to treat this as a
+        /// failure can compare <c>Count</c> to <paramref name="maxIterations"/>.
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>The list of error strings popped from the queue (empty if the queue was already clean).</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxIterations"/> is not positive.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public virtual async Task<IReadOnlyList<string>> DrainErrorQueueAsync(
+            int maxIterations = 256,
+            CancellationToken cancellationToken = default)
+        {
+            if (maxIterations <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxIterations), maxIterations, "Must be positive.");
+
+            var popped = new List<string>();
+            for (int i = 0; i < maxIterations; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var lines = await ExecuteTextCommandAsync(
+                    () => Send(ScpiMessageProducer.GetSystemError),
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                var reply = lines.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
+                if (reply == null)
+                {
+                    // No reply at all — either the queue is drained and the
+                    // device elected to stay silent, or the device is
+                    // unresponsive. Either way, hammering further would not
+                    // help; stop and return what we have.
+                    Trace.WriteLine($"[DrainErrorQueueAsync] Empty reply on iteration {i}; terminating after {popped.Count} popped entries.");
+                    return popped;
+                }
+
+                if (reply.Contains("No error", StringComparison.OrdinalIgnoreCase))
+                {
+                    return popped;
+                }
+
+                popped.Add(reply.Trim());
+            }
+
+            Trace.WriteLine($"[DrainErrorQueueAsync] Did not converge after {maxIterations} iterations; queue may still contain entries.");
+            return popped;
+        }
+
+        /// <summary>
         /// Raises the <see cref="MessageReceived"/> event when a message is received from the device.
         /// </summary>
         /// <param name="message">The message received from the device.</param>
