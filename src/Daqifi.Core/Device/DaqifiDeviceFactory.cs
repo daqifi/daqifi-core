@@ -291,6 +291,8 @@ public static class DaqifiDeviceFactory
                 nameof(deviceInfo));
         }
 
+        ValidatePort(deviceInfo.Port.Value);
+
         var effectiveOptions = options ?? DeviceConnectionOptions.Default;
 
         // Use the device name from the discovery info if not overridden in options
