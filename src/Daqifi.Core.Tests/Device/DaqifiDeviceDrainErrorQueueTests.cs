@@ -75,6 +75,23 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public async Task DrainErrorQueueAsync_TreatsErrorMessageContainingNoErrorPhraseAsRealError()
+        {
+            // Terminator detection must use the numeric SCPI code, not a
+            // substring match — otherwise a real error whose message text
+            // happens to contain "No error" would falsely terminate the drain.
+            var device = new SequencedReplyDevice("TestDevice");
+            device.Replies.Enqueue(new[] { "-200,\"Execution error: No error handler installed\"" });
+            device.Replies.Enqueue(new[] { "0,\"No error\"" });
+            device.Connect();
+
+            var popped = await device.DrainErrorQueueAsync();
+
+            Assert.Equal(new[] { "-200,\"Execution error: No error handler installed\"" }, popped);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
         public async Task DrainErrorQueueAsync_OnEmptyReply_TerminatesEarly()
         {
             // Empty reply should NOT be treated as an error and should NOT cause

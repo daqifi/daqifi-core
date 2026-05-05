@@ -7,6 +7,7 @@ using Daqifi.Core.Device.Protocol;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Threading;
@@ -524,7 +525,7 @@ namespace Daqifi.Core.Device
                     () => Send(ScpiMessageProducer.GetSystemError),
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
-                var reply = lines.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
+                var reply = lines.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l))?.Trim();
                 if (reply == null)
                 {
                     // Empty reply means timeout or unresponsive device, not a
@@ -533,12 +534,19 @@ namespace Daqifi.Core.Device
                     return popped;
                 }
 
-                if (reply.Contains("No error", StringComparison.OrdinalIgnoreCase))
+                // SCPI error replies are formatted as <code>,"<message>". Code 0
+                // (or +0) indicates an empty queue; anything else is a real
+                // error to capture. Parse the numeric prefix rather than
+                // substring-matching "No error" so a hypothetical error message
+                // containing that phrase can't be mistaken for the terminator.
+                var commaIndex = reply.IndexOf(',');
+                var codeSpan = commaIndex >= 0 ? reply.AsSpan(0, commaIndex).Trim() : reply.AsSpan().Trim();
+                if (int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out var code) && code == 0)
                 {
                     return popped;
                 }
 
-                popped.Add(reply.Trim());
+                popped.Add(reply);
             }
 
             Trace.WriteLine($"[DrainErrorQueueAsync] Did not converge after {maxIterations} iterations; queue may still contain entries.");
