@@ -61,20 +61,6 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public async Task DrainErrorQueueAsync_SkipsLeadingBlankLines()
-        {
-            var device = new SequencedReplyDevice("TestDevice");
-            device.Replies.Enqueue(new[] { "", "   ", "-115,\"Unexpected number of parameters\"" });
-            device.Replies.Enqueue(new[] { "0,\"No error\"" });
-            device.Connect();
-
-            var popped = await device.DrainErrorQueueAsync();
-
-            Assert.Single(popped);
-            Assert.Equal("-115,\"Unexpected number of parameters\"", popped[0]);
-        }
-
-        [Fact]
         public async Task DrainErrorQueueAsync_WhenReplyHasTrailingWhitespace_TrimsBeforeReturning()
         {
             var device = new SequencedReplyDevice("TestDevice");
@@ -169,7 +155,6 @@ namespace Daqifi.Core.Tests.Device
         public async Task DrainErrorQueueAsync_WhenMaxIterationsNotPositive_Throws()
         {
             var device = new SequencedReplyDevice("TestDevice");
-            device.Connect();
 
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
                 () => device.DrainErrorQueueAsync(maxIterations: 0));

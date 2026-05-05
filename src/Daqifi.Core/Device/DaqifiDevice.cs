@@ -496,7 +496,7 @@ namespace Daqifi.Core.Device
         /// </para>
         /// </remarks>
         /// <param name="maxIterations">
-        /// Safety cap on the number of <c>SYST:ERR?</c> queries. Defaults to 256
+        /// Safety cap on the number of <c>SYSTem:ERRor?</c> queries. Defaults to 256
         /// — large enough to drain a deeply queued device, small enough that a
         /// runaway loop is bounded. If the cap is reached without seeing
         /// <c>"No error"</c>, a warning is traced and the popped entries
@@ -527,10 +527,8 @@ namespace Daqifi.Core.Device
                 var reply = lines.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
                 if (reply == null)
                 {
-                    // No reply at all — either the queue is drained and the
-                    // device elected to stay silent, or the device is
-                    // unresponsive. Either way, hammering further would not
-                    // help; stop and return what we have.
+                    // Empty reply means timeout or unresponsive device, not a
+                    // queued error — terminate rather than spin to maxIterations.
                     Trace.WriteLine($"[DrainErrorQueueAsync] Empty reply on iteration {i}; terminating after {popped.Count} popped entries.");
                     return popped;
                 }
