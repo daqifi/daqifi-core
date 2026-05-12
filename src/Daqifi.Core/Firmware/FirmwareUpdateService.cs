@@ -841,10 +841,12 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         // are on.
         Exception? lastProbeException = null;
 
-        var attempt = 0;
+        // Tracks how many probe invocations have actually run. Distinct from
+        // the loop iteration counter so the timeout messages don't claim
+        // "attempt N" when the timeout fired before a probe ever executed.
+        var probesExecuted = 0;
         while (true)
         {
-            attempt++;
             try
             {
                 linkedToken.ThrowIfCancellationRequested();
@@ -852,13 +854,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
+                    $"Device did not become application-ready within {totalTimeout} (probes executed: {probesExecuted}). " +
                     "The transport reconnected but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
                     lastProbeException);
             }
 
             try
             {
+                probesExecuted++;
                 // WaitAsync(linkedToken) enforces the timeout deadline even
                 // when the probe ignores its own CancellationToken and would
                 // otherwise hang or return after the budget elapses. When
@@ -870,15 +873,15 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
                 if (isReady)
                 {
-                    if (attempt > 1)
+                    if (probesExecuted > 1)
                     {
                         _logger.LogDebug(
                             "Device became application-ready on probe attempt {Attempt}.",
-                            attempt);
+                            probesExecuted);
                     }
                     return;
                 }
-                _logger.LogDebug("Application-ready probe returned false on attempt {Attempt}; will retry.", attempt);
+                _logger.LogDebug("Application-ready probe returned false on attempt {Attempt}; will retry.", probesExecuted);
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
@@ -892,7 +895,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 if (timeoutCts.IsCancellationRequested)
                 {
                     throw new TimeoutException(
-                        $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
+                        $"Device did not become application-ready within {totalTimeout} (probes executed: {probesExecuted}). " +
                         "The wait for the readiness probe was canceled by the timeout — note the probe may ignore cancellation and continue running in the background.",
                         lastProbeException ?? ex);
                 }
@@ -901,7 +904,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 _logger.LogDebug(
                     ex,
                     "Application-ready probe was canceled on attempt {Attempt}; treating as not-ready and retrying.",
-                    attempt);
+                    probesExecuted);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -909,7 +912,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 _logger.LogDebug(
                     ex,
                     "Application-ready probe threw on attempt {Attempt}; treating as not-ready and retrying.",
-                    attempt);
+                    probesExecuted);
             }
 
             try
@@ -919,7 +922,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
+                    $"Device did not become application-ready within {totalTimeout} (probes executed: {probesExecuted}). " +
                     "The transport reconnected but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
                     lastProbeException);
             }
