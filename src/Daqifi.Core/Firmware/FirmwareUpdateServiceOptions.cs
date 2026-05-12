@@ -142,6 +142,15 @@ public sealed class FirmwareUpdateServiceOptions
     /// Wall-clock budget for the post-reconnect readiness probe. Default
     /// 30s covers a slow PIC32 boot and downstream-firmware initialization.
     /// </summary>
+    /// <remarks>
+    /// This budget runs INSIDE the JumpingToApp state, so the effective
+    /// upper bound is <c>JumpingToApplicationTimeout - (serial reconnect
+    /// elapsed)</c>. With the defaults (45s state timeout, ~1-5s typical
+    /// reconnect, 30s readiness budget) the readiness probe gets its full
+    /// budget; if you raise this near or above the state timeout, the
+    /// outer state-timeout will fire first and callers will see a generic
+    /// JumpingToApp timeout instead of the readiness-specific message.
+    /// </remarks>
     public TimeSpan PostReconnectReadinessTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
