@@ -871,6 +871,12 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     .WaitAsync(linkedToken)
                     .ConfigureAwait(false);
 
+                // Successful probe invocation (true OR false) means the most
+                // recent attempt completed normally. Clear lastProbeException
+                // so a later timeout doesn't carry forward a stale exception
+                // from an earlier failed attempt as its InnerException.
+                lastProbeException = null;
+
                 if (isReady)
                 {
                     if (probesExecuted > 1)

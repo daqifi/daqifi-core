@@ -664,6 +664,67 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_PostReconnectProbeThrowsThenFalseThenTimeout_DoesNotAttachStaleInner()
+    {
+        // The probe throws once, then returns false until the readiness budget
+        // expires. The TimeoutException must NOT carry the stale exception
+        // from attempt 1 as InnerException — a successful probe call (true OR
+        // false) should clear the captured exception.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var probeCallCount = 0;
+        var options = CreateFastOptions();
+        options.PostReconnectReadinessProbe = (_, _) =>
+        {
+            probeCallCount++;
+            // Attempt 1: throw. Subsequent attempts: return false until timeout.
+            return probeCallCount == 1
+                ? Task.FromException<bool>(new InvalidOperationException("transient-probe-error"))
+                : Task.FromResult(false);
+        };
+        options.PostReconnectReadinessTimeout = TimeSpan.FromMilliseconds(150);
+        options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException ex;
+        try
+        {
+            ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        var inner = Assert.IsType<TimeoutException>(ex.InnerException);
+        // Critical: the InvalidOperationException from attempt 1 must NOT
+        // be attached — the successful (false) probe in attempt 2+ cleared
+        // lastProbeException. InnerException.InnerException should be null.
+        Assert.Null(inner.InnerException);
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_NoPostReconnectProbe_PreservesLegacyBehavior()
     {
         // No probe configured == legacy behavior: Complete fires as
