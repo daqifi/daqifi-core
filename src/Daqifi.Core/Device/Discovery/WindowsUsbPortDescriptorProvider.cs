@@ -68,8 +68,14 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
                 if (!match.Success)
                     continue;
 
-                var vid = int.Parse(match.Groups["vid"].Value, System.Globalization.NumberStyles.HexNumber);
-                var pid = int.Parse(match.Groups["pid"].Value, System.Globalization.NumberStyles.HexNumber);
+                var vid = int.Parse(
+                    match.Groups["vid"].Value,
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture);
+                var pid = int.Parse(
+                    match.Groups["pid"].Value,
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture);
                 return new UsbPortDescriptor(vid, pid);
             }
         }
