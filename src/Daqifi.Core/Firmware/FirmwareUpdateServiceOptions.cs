@@ -198,22 +198,29 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(HidConnectRetryDelay, nameof(HidConnectRetryDelay));
         ValidatePositive(FlashWriteRetryDelay, nameof(FlashWriteRetryDelay));
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
-        ValidatePositive(PostReconnectReadinessTimeout, nameof(PostReconnectReadinessTimeout));
-        ValidatePositive(PostReconnectReadinessRetryDelay, nameof(PostReconnectReadinessRetryDelay));
 
-        // The whole JumpToApp step is wrapped by JumpingToApplicationTimeout,
-        // so a probe budget that meets or exceeds it would always be cut off
-        // by the outer state-timeout — surfacing a generic JumpingToApp error
-        // instead of the readiness-specific message. Reject the configuration
-        // up front so misconfigurations fail fast.
-        if (PostReconnectReadinessProbe is not null &&
-            PostReconnectReadinessTimeout >= JumpingToApplicationTimeout)
+        // The readiness options only matter when a probe is configured —
+        // gate every readiness validation behind that, both the positive
+        // checks and the cross-property constraint, so callers that don't
+        // use the probe never have to think about these timeouts.
+        if (PostReconnectReadinessProbe is not null)
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(PostReconnectReadinessTimeout),
-                PostReconnectReadinessTimeout,
-                $"{nameof(PostReconnectReadinessTimeout)} must be strictly less than {nameof(JumpingToApplicationTimeout)} when {nameof(PostReconnectReadinessProbe)} is set, " +
-                "otherwise the outer state-timeout fires first and masks the readiness-specific timeout.");
+            ValidatePositive(PostReconnectReadinessTimeout, nameof(PostReconnectReadinessTimeout));
+            ValidatePositive(PostReconnectReadinessRetryDelay, nameof(PostReconnectReadinessRetryDelay));
+
+            // The whole JumpToApp step is wrapped by JumpingToApplicationTimeout,
+            // so a probe budget that meets or exceeds it would always be cut off
+            // by the outer state-timeout — surfacing a generic JumpingToApp error
+            // instead of the readiness-specific message. Reject the configuration
+            // up front so misconfigurations fail fast.
+            if (PostReconnectReadinessTimeout >= JumpingToApplicationTimeout)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(PostReconnectReadinessTimeout),
+                    PostReconnectReadinessTimeout,
+                    $"{nameof(PostReconnectReadinessTimeout)} must be strictly less than {nameof(JumpingToApplicationTimeout)} when {nameof(PostReconnectReadinessProbe)} is set, " +
+                    "otherwise the outer state-timeout fires first and masks the readiness-specific timeout.");
+            }
         }
 
         if (HidConnectRetryCount < 1)
