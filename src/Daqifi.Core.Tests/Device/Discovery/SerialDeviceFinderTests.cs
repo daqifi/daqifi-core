@@ -105,17 +105,18 @@ public class SerialDeviceFinderTests
         //
         // The fake provider classifies every port as a CH340 (non-DAQiFi)
         // and tracks GetDescriptor calls. After DiscoverAsync, every
-        // platform-listed port should have been classified once and zero
-        // devices returned — proving the filter ran AND that the port-
-        // probe path was never reached.
-        var classifierCallCount = 0;
+        // injected port should have been classified once and zero devices
+        // returned — proving the filter ran AND that the port-probe path
+        // was never reached. Inject a deterministic 3-port list so the
+        // test exercises the classifier path even on CI hosts with no
+        // real serial ports.
         var fakeProvider = new RecordingUsbPortDescriptorProvider(_ =>
-        {
-            Interlocked.Increment(ref classifierCallCount);
-            return new UsbPortDescriptor(0x1A86, 0x7523); // CH340, not DAQiFi
-        });
+            new UsbPortDescriptor(0x1A86, 0x7523)); // CH340, not DAQiFi
 
-        using var finder = new SerialDeviceFinder(9600, fakeProvider);
+        using var finder = new SerialDeviceFinder(
+            9600,
+            fakeProvider,
+            portNameProvider: () => new[] { "COM1", "COM2", "COM3" });
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -123,6 +124,7 @@ public class SerialDeviceFinderTests
         stopwatch.Stop();
 
         Assert.Empty(devices);
+        Assert.Equal(3, fakeProvider.CallCount);
         // If any port were probed, the test would take seconds per port
         // (DeviceWakeUpDelayMs + ResponseTimeoutMs); should be well under
         // 500ms for the classifier-only path even on a many-port system.
