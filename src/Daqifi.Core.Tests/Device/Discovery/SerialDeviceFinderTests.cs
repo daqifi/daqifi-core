@@ -150,6 +150,22 @@ public class SerialDeviceFinderTests
         Assert.NotNull(devices);
     }
 
+    [Fact]
+    public async Task DiscoverAsync_WithThrowingDescriptorProvider_DoesNotAbortDiscovery()
+    {
+        // A custom IUsbPortDescriptorProvider that throws must NEVER take
+        // down the whole discovery pass — fall through to legacy probing
+        // for the port and continue with the rest of the list.
+        var fakeProvider = new RecordingUsbPortDescriptorProvider(_ =>
+            throw new InvalidOperationException("simulated provider failure"));
+
+        using var finder = new SerialDeviceFinder(9600, fakeProvider);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        var devices = await finder.DiscoverAsync(cts.Token);
+        Assert.NotNull(devices);
+    }
+
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
     {
         private readonly Func<string, UsbPortDescriptor?> _classifier;

@@ -349,7 +349,20 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     {
         foreach (var port in ports)
         {
-            var descriptor = _usbPortDescriptorProvider.GetDescriptor(port);
+            UsbPortDescriptor? descriptor;
+            try
+            {
+                descriptor = _usbPortDescriptorProvider.GetDescriptor(port);
+            }
+            catch
+            {
+                // A misbehaving descriptor provider must never block discovery.
+                // The shipped providers already swallow their own errors, but
+                // a custom IUsbPortDescriptorProvider could throw — fall back
+                // to legacy probing rather than aborting the whole scan.
+                descriptor = null;
+            }
+
             if (descriptor == null)
             {
                 // No classification available — preserve legacy behavior
