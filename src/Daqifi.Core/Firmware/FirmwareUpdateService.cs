@@ -844,7 +844,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}). " +
+                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
                     "The serial transport reopened but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.");
             }
 
@@ -865,7 +865,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
                     throw new TimeoutException(
-                        $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}). " +
+                        $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
                         "The readiness probe ignored cancellation and returned after the deadline.");
                 }
 
@@ -884,7 +884,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}). " +
+                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
                     "The readiness probe was canceled by the timeout while running.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -902,7 +902,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}).");
+                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}).");
             }
         }
     }
