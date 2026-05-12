@@ -47,8 +47,16 @@ public class CsvExporter
             || options.Delimiter == "\r"
             || options.Delimiter == "\n")
         {
+            // Format the bad value as a code point so a stray '\r' or '\n'
+            // in the delimiter doesn't break the exception message into
+            // multiple log lines.
+            var got = options.Delimiter == null
+                ? "null"
+                : options.Delimiter.Length == 0
+                    ? "empty"
+                    : $"U+{(int)options.Delimiter[0]:X4}";
             throw new ArgumentException(
-                $"Delimiter must be a single character that is not a newline or double-quote (got '{options.Delimiter}').",
+                $"Delimiter must be a single character that is not a newline or double-quote (got {got}).",
                 $"{nameof(options)}.{nameof(CsvExportOptions.Delimiter)}");
         }
 
