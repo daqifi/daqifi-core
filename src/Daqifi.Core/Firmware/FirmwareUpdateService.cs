@@ -154,12 +154,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     }
 
     /// <inheritdoc />
+#pragma warning disable CA1068
     public async Task UpdateWifiModuleAsync(
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        bool skipVersionCheck = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool skipVersionCheck = false)
+#pragma warning restore CA1068
     {
         ArgumentNullException.ThrowIfNull(device);
 

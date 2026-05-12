@@ -44,12 +44,18 @@ public interface IFirmwareUpdateService
     /// call so the device isn't queried twice — see issue #143 for the
     /// motivating callsite.
     /// </param>
+    // skipVersionCheck added AFTER cancellationToken (technically violates
+    // CA1068 "CancellationToken should be last") to avoid breaking source
+    // compat for any existing positional caller passing CancellationToken
+    // as the 4th argument. Additivity wins over strict style here.
+#pragma warning disable CA1068
     Task UpdateWifiModuleAsync(
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        bool skipVersionCheck = false,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool skipVersionCheck = false);
+#pragma warning restore CA1068
 
     /// <summary>
     /// Probes the device for its current WiFi chip info and looks up the
