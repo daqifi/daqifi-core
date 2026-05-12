@@ -35,5 +35,13 @@
     <InternalsVisibleTo Include="Daqifi.Core.Tests" />
   </ItemGroup>
 
+  <!-- Windows-only USB descriptor lookup via WMI for SerialDeviceFinder
+       VID/PID port filtering. The package adds nothing for Linux/macOS;
+       the runtime platform check in WindowsUsbPortDescriptorProvider
+       returns null on those platforms anyway. -->
+  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <PackageReference Include="System.Management" Version="10.0.7" />
+  </ItemGroup>
+
 
 </Project>

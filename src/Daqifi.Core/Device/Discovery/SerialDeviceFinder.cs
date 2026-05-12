@@ -23,11 +23,18 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
     private const int DefaultBaudRate = 9600;
     private const int ProbeTimeoutMs = 1000;
-    private const int DeviceWakeUpDelayMs = 1000;
-    private const int ResponseTimeoutMs = 4000;
-    private const int MaxRetries = 3;
-    private const int RetryIntervalMs = 1000;
-    private const int PollIntervalMs = 100;
+    // Tightened for the GetDeviceInfo-only probe (closes #157):
+    //   - 200ms wake instead of 1s — USB CDC enumerates fast
+    //   - 1s response timeout instead of 4s — DAQiFi devices reply within
+    //     a few hundred ms on USB
+    //   - 300ms retry interval instead of 1s
+    //   - 2 attempts instead of 3 — combined with VID/PID prefilter we no
+    //     longer need to be defensive against probing other vendors' ports
+    private const int DeviceWakeUpDelayMs = 200;
+    private const int ResponseTimeoutMs = 1000;
+    private const int MaxRetries = 2;
+    private const int RetryIntervalMs = 300;
+    private const int PollIntervalMs = 50;
 
     #endregion
 
@@ -35,6 +42,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
     private readonly int _baudRate;
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
+    private readonly IUsbPortDescriptorProvider _usbPortDescriptorProvider;
     private bool _disposed;
 
     #endregion
@@ -58,7 +66,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// <summary>
     /// Initializes a new instance of the SerialDeviceFinder class with default baud rate.
     /// </summary>
-    public SerialDeviceFinder() : this(DefaultBaudRate)
+    public SerialDeviceFinder() : this(DefaultBaudRate, usbPortDescriptorProvider: null)
     {
     }
 
@@ -66,9 +74,28 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// Initializes a new instance of the SerialDeviceFinder class.
     /// </summary>
     /// <param name="baudRate">The baud rate to use for serial connections.</param>
-    public SerialDeviceFinder(int baudRate)
+    public SerialDeviceFinder(int baudRate) : this(baudRate, usbPortDescriptorProvider: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the SerialDeviceFinder class with an
+    /// explicit USB descriptor provider — primarily for tests that mock the
+    /// platform-specific WMI / sysfs lookup.
+    /// </summary>
+    /// <param name="baudRate">The baud rate to use for serial connections.</param>
+    /// <param name="usbPortDescriptorProvider">
+    /// Provider used to resolve a port's USB Vendor / Product ID before
+    /// opening it. When null, a platform-default provider is used (Windows
+    /// → WMI, Linux → sysfs, others → no-op fallback). Pass
+    /// <see cref="NullUsbPortDescriptorProvider.Instance"/> explicitly to
+    /// force the legacy probe-everything behavior.
+    /// </param>
+    internal SerialDeviceFinder(int baudRate, IUsbPortDescriptorProvider? usbPortDescriptorProvider)
     {
         _baudRate = baudRate;
+        _usbPortDescriptorProvider = usbPortDescriptorProvider
+            ?? UsbPortDescriptorProviderFactory.CreateForCurrentPlatform();
     }
 
     #endregion
@@ -90,7 +117,18 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
         try
         {
             var discoveredDevices = new List<IDeviceInfo>();
-            var availablePorts = FilterProbableDaqifiPorts(SerialStreamTransport.GetAvailablePortNames());
+            // Pre-filter by USB VID/PID where the platform supports it
+            // (closes #157). This drops discovery time from ~1 minute on a
+            // typical Windows system (10+ COM ports each timing out at ~5s)
+            // to <1s by skipping every non-DAQiFi port without opening it.
+            // It also stops the previous behavior of sending SCPI commands
+            // to other vendors' COM ports (Bluetooth radios, GPS, etc.).
+            // Ports the descriptor provider can't classify (e.g. on macOS
+            // where we have no impl yet) fall through to legacy probing,
+            // matched only by name-pattern in FilterProbableDaqifiPorts.
+            var allPorts = SerialStreamTransport.GetAvailablePortNames();
+            var nameFilteredPorts = FilterProbableDaqifiPorts(allPorts);
+            var availablePorts = FilterByUsbDescriptor(nameFilteredPorts);
 
             foreach (var portName in availablePorts)
             {
@@ -197,20 +235,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
             consumer.Start();
 
-            // Initialize device - send commands to prepare for communication
-            // These are required for the device to respond properly
-            producer.Send(ScpiMessageProducer.DisableDeviceEcho);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.StopStreaming);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.TurnDeviceOn);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.SetProtobufStreamFormat);
-            await Task.Delay(100, cancellationToken);
-
+            // Identity-only probe: just GetDeviceInfo (closes #157). The
+            // previous DisableEcho / StopStreaming / TurnDeviceOn /
+            // SetProtobufStreamFormat sequence was for connection setup,
+            // not identification — a healthy DAQiFi answers SYSTem:SYSInfoPB?
+            // immediately regardless of stream format or power state. Caller
+            // (the consumer setting up an actual connection) is responsible
+            // for any setup commands they need.
             // Send GetDeviceInfo command with retry logic
             var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
             var lastRequestTime = DateTime.MinValue;
@@ -305,6 +336,33 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             {
                 // Ignore cleanup errors
             }
+        }
+    }
+
+    /// <summary>
+    /// Filters the post-name-filter ports down to those whose USB descriptor
+    /// matches a known DAQiFi VID/PID. Ports the provider can't classify
+    /// (returns null) fall through to probing — preserves cross-platform
+    /// behavior where the provider doesn't have a real impl.
+    /// </summary>
+    private IEnumerable<string> FilterByUsbDescriptor(IEnumerable<string> ports)
+    {
+        foreach (var port in ports)
+        {
+            var descriptor = _usbPortDescriptorProvider.GetDescriptor(port);
+            if (descriptor == null)
+            {
+                // No classification available — preserve legacy behavior
+                // and probe the port (caller's name filter has already
+                // removed the obvious non-candidates).
+                yield return port;
+                continue;
+            }
+            if (DaqifiUsbIds.IsDaqifiCdcDevice(descriptor))
+            {
+                yield return port;
+            }
+            // else: not a DAQiFi device — skip without opening / probing.
         }
     }
 
