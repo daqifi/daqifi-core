@@ -637,7 +637,6 @@ public class FirmwareUpdateServiceTests
                 device,
                 firmwareDir,
                 progress: null,
-                cancellationToken: CancellationToken.None,
                 skipVersionCheck: true);
         }
         finally

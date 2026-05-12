@@ -48,8 +48,8 @@ public interface IFirmwareUpdateService
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        bool skipVersionCheck = false);
+        bool skipVersionCheck = false,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Probes the device for its current WiFi chip info and looks up the

@@ -158,8 +158,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        bool skipVersionCheck = false)
+        bool skipVersionCheck = false,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(device);
 
