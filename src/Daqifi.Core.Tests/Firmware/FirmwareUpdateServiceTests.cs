@@ -650,6 +650,93 @@ public class FirmwareUpdateServiceTests
         Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
     }
 
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_ReentrantCallFromUpdateProgressCallback_DoesNotDeadlock()
+    {
+        // Closes a Qodo finding on PR #198: UpdateWifiModuleAsync holds
+        // _operationLock while synchronously firing progress.Report().
+        // A handler that calls back into CheckWifiFirmwareStatusAsync
+        // would deadlock waiting for the same lock the update flow owns
+        // (SemaphoreSlim is not re-entrant). The AsyncLocal _isInsideOperation
+        // flag detects this case and skips the second acquisition.
+        //
+        // The test invokes CheckWifiFirmwareStatusAsync from inside a
+        // progress callback fired by UpdateWifiModuleAsync. Without the
+        // re-entrancy guard, this hangs until xunit's per-test budget
+        // kills it. With the guard, the inner call returns quickly and
+        // the update completes normally.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 6, 1, null, 0),
+            TagName = "19.6.1",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM13", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        WifiFirmwareStatus? reentrantStatus = null;
+        var reentryAttempted = false;
+
+        // Progress handler that re-enters CheckWifiFirmwareStatusAsync
+        // exactly once (on the first event) — mirrors a UI consumer
+        // that might want to refresh status display when an update
+        // transitions state.
+        var progress = new SyncProgress<FirmwareUpdateProgress>(_ =>
+        {
+            if (reentryAttempted)
+            {
+                return;
+            }
+            reentryAttempted = true;
+            reentrantStatus = service.CheckWifiFirmwareStatusAsync(device).GetAwaiter().GetResult();
+        });
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.True(reentryAttempted, "Progress callback never fired — test setup wrong.");
+        Assert.NotNull(reentrantStatus);
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+    }
+
+    private sealed class SyncProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _handler;
+        public SyncProgress(Action<T> handler) => _handler = handler;
+        public void Report(T value) => _handler(value);
+    }
+
     private static FirmwareUpdateServiceOptions CreateFastOptions()
     {
         return new FirmwareUpdateServiceOptions

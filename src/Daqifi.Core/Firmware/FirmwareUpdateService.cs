@@ -75,6 +75,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         };
 
     private readonly SemaphoreSlim _operationLock = new(1, 1);
+
+    // Async-context flag set true while the current logical flow holds
+    // _operationLock. CheckWifiFirmwareStatusAsync uses this to detect
+    // re-entrancy from progress / state-change callbacks fired by an
+    // in-flight UpdateFirmwareAsync / UpdateWifiModuleAsync (which run
+    // synchronously while the lock is held). Without this guard the
+    // status probe would deadlock waiting for the lock its own caller
+    // holds, since SemaphoreSlim is not re-entrant. AsyncLocal flows
+    // through await resumptions on different threads.
+    private readonly AsyncLocal<bool> _isInsideOperation = new();
     private readonly IHidTransport _hidTransport;
     private readonly IExternalProcessRunner _externalProcessRunner;
     private readonly ILogger<FirmwareUpdateService> _logger;
@@ -196,13 +206,28 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         // Acquired without the RunExclusiveAsync state check — a status probe
         // is read-only and should be available to UI even when an update is
         // in flight (it just waits for the in-flight I/O to release the lock).
+        //
+        // Reentrancy guard: an update fires progress / state-change callbacks
+        // synchronously while it holds _operationLock. If a callback handler
+        // calls back into CheckWifiFirmwareStatusAsync, WaitAsync would
+        // deadlock waiting for the same lock the caller's flow already owns
+        // (SemaphoreSlim is not re-entrant). The AsyncLocal flag detects
+        // this case and skips the second acquisition; we're already in a
+        // serialized device-I/O context.
+        if (_isInsideOperation.Value)
+        {
+            return await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
+        }
+
         await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _isInsideOperation.Value = true;
         try
         {
             return await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
+            _isInsideOperation.Value = false;
             _operationLock.Release();
         }
     }
@@ -214,6 +239,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         ThrowIfDisposed();
 
         await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _isInsideOperation.Value = true;
         try
         {
             ResetIfTerminalState();
@@ -231,6 +257,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
         finally
         {
+            _isInsideOperation.Value = false;
             _operationLock.Release();
         }
     }
