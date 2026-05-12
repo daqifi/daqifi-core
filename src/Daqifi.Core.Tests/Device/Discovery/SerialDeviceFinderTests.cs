@@ -173,15 +173,19 @@ public class SerialDeviceFinderTests
         var fakeProvider = new RecordingUsbPortDescriptorProvider(_ =>
             throw new InvalidOperationException("simulated provider failure"));
 
+        // Use an obviously-invalid port name so SerialPort.Open() fails
+        // immediately on every platform — never touches a real device, even
+        // if the host happens to expose a high-numbered COM port (COM999 etc.
+        // can exist on some Windows setups with virtual serial drivers).
         using var finder = new SerialDeviceFinder(
             9600,
             fakeProvider,
-            portNameProvider: () => new[] { "COM999" });
+            portNameProvider: () => new[] { "MOCK_PORT_DOES_NOT_EXIST" });
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
-        // Probe path may exceed 200ms (legacy fallback engages on COM999 then
-        // fails to open). OCE is acceptable; what matters is that the throwing
-        // provider was actually called and didn't propagate.
+        // Probe path is short (legacy fallback fails to open immediately on
+        // the bogus port name). OCE is still acceptable; what matters is that
+        // the throwing provider was actually called and didn't propagate.
         try
         {
             var devices = await finder.DiscoverAsync(cts.Token);
