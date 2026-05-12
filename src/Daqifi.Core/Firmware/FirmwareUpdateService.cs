@@ -852,8 +852,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
-                    "The serial transport reopened but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
+                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
+                    "The transport reconnected but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
                     lastProbeException);
             }
 
@@ -883,8 +883,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
-                    "The readiness probe was canceled by the timeout while running.",
+                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
+                    "The wait for the readiness probe was canceled by the timeout — note the probe may ignore cancellation and continue running in the background.",
                     lastProbeException);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -903,7 +903,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}).",
+                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}).",
                     lastProbeException);
             }
         }

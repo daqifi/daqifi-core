@@ -525,7 +525,9 @@ public class FirmwareUpdateServiceTests
             probeCallCount++;
             return Task.FromResult(probeCallCount >= 3);
         };
-        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(2);
+        // Readiness budget must be strictly less than JumpingToApplicationTimeout
+        // (CreateFastOptions uses 2s) — the probe succeeds within 50ms anyway.
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(1);
         options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
 
         var service = new FirmwareUpdateService(
@@ -646,6 +648,31 @@ public class FirmwareUpdateServiceTests
         }
 
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+    }
+
+    [Fact]
+    public void Constructor_ProbeWithReadinessTimeoutGteJumpToApp_Throws()
+    {
+        // The whole JumpToApp step is bounded by JumpingToApplicationTimeout
+        // via the outer state-timeout. If the readiness budget meets or
+        // exceeds it, the outer timeout fires first and surfaces a generic
+        // JumpingToApp error instead of the readiness-specific one. Validate()
+        // must reject the misconfiguration up front.
+        var options = CreateFastOptions();
+        options.PostReconnectReadinessProbe = (_, _) => Task.FromResult(true);
+        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(2);
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(2);
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]),
+            options));
+
+        Assert.Equal(nameof(FirmwareUpdateServiceOptions.PostReconnectReadinessTimeout), ex.ParamName);
     }
 
     private static FirmwareUpdateServiceOptions CreateFastOptions()

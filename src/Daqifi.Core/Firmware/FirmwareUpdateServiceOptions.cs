@@ -201,6 +201,21 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(PostReconnectReadinessTimeout, nameof(PostReconnectReadinessTimeout));
         ValidatePositive(PostReconnectReadinessRetryDelay, nameof(PostReconnectReadinessRetryDelay));
 
+        // The whole JumpToApp step is wrapped by JumpingToApplicationTimeout,
+        // so a probe budget that meets or exceeds it would always be cut off
+        // by the outer state-timeout — surfacing a generic JumpingToApp error
+        // instead of the readiness-specific message. Reject the configuration
+        // up front so misconfigurations fail fast.
+        if (PostReconnectReadinessProbe is not null &&
+            PostReconnectReadinessTimeout >= JumpingToApplicationTimeout)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(PostReconnectReadinessTimeout),
+                PostReconnectReadinessTimeout,
+                $"{nameof(PostReconnectReadinessTimeout)} must be strictly less than {nameof(JumpingToApplicationTimeout)} when {nameof(PostReconnectReadinessProbe)} is set, " +
+                "otherwise the outer state-timeout fires first and masks the readiness-specific timeout.");
+        }
+
         if (HidConnectRetryCount < 1)
         {
             throw new ArgumentOutOfRangeException(
