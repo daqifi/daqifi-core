@@ -1098,7 +1098,11 @@ public class FirmwareUpdateServiceTests
             if (_remainingTransientFailures > 0)
             {
                 _remainingTransientFailures--;
-                throw new InvalidOperationException("Simulated transient post-reboot failure.");
+                // Faulted task (not sync throw) more accurately simulates how
+                // a real async method surfaces failure — caller's await sees a
+                // genuinely-async exception path.
+                return Task.FromException<LanChipInfo?>(
+                    new InvalidOperationException("Simulated transient post-reboot failure."));
             }
             return Task.FromResult(_chipInfo);
         }
