@@ -128,30 +128,26 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // matched only by name-pattern in FilterProbableDaqifiPorts.
             var allPorts = SerialStreamTransport.GetAvailablePortNames();
             var nameFilteredPorts = FilterProbableDaqifiPorts(allPorts);
-            var availablePorts = FilterByUsbDescriptor(nameFilteredPorts);
+            var availablePorts = FilterByUsbDescriptor(nameFilteredPorts).ToList();
 
-            foreach (var portName in availablePorts)
+            // Probe candidate ports in parallel (issue #157). Each SerialPort
+            // is its own physical resource so concurrent opens are safe; the
+            // VID/PID pre-filter typically leaves only 0-1 candidates anyway,
+            // but the legacy fallback (null descriptor) can still surface
+            // multiple unclassifiable ports — probing them sequentially adds
+            // ~1.2s per port (DeviceWakeUpDelayMs + ResponseTimeoutMs).
+            var probeTasks = availablePorts
+                .Select(portName => ProbeSafelyAsync(portName, cancellationToken))
+                .ToList();
+
+            var probeResults = await Task.WhenAll(probeTasks);
+
+            foreach (var deviceInfo in probeResults)
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-
-                try
+                if (deviceInfo != null)
                 {
-                    var deviceInfo = await TryGetDeviceInfoAsync(portName, cancellationToken);
-                    if (deviceInfo != null)
-                    {
-                        discoveredDevices.Add(deviceInfo);
-                        OnDeviceDiscovered(deviceInfo);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception)
-                {
-                    // Skip ports that fail to open or respond
-                    // This is normal as not all serial ports are DAQiFi devices
+                    discoveredDevices.Add(deviceInfo);
+                    OnDeviceDiscovered(deviceInfo);
                 }
             }
 
@@ -183,6 +179,32 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// Attempts to probe a serial port and retrieve device information.
     /// Opens the port, sends GetDeviceInfo command, and waits for a status response.
     /// </summary>
+    /// <param name="portName">The serial port name.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Device info if a DAQiFi device responds, null otherwise. Swallows
+    /// non-cancellation exceptions so a single failing port doesn't tear down the
+    /// whole concurrent probe pass; cancellation propagates so Task.WhenAll
+    /// short-circuits when the caller's token is canceled.</returns>
+    private async Task<IDeviceInfo?> ProbeSafelyAsync(string portName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await TryGetDeviceInfoAsync(portName, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller asked to stop — let WhenAll observe the cancellation.
+            return null;
+        }
+        catch
+        {
+            // Probe failure (port locked, no response, IO error, etc.) is
+            // expected for non-DAQiFi serial devices — keep the rest of the
+            // concurrent probe set going and return no device for this port.
+            return null;
+        }
+    }
+
     /// <param name="portName">The serial port name.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Device info if a DAQiFi device responds, null otherwise.</returns>
