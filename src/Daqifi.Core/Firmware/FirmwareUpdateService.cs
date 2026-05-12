@@ -833,6 +833,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             cancellationToken, timeoutCts.Token);
         var linkedToken = linkedCts.Token;
 
+        // Capture the most recent probe-thrown exception so a TimeoutException
+        // can carry the underlying cause as InnerException. Without this,
+        // deterministic probe failures (e.g. transport says it's open but
+        // the device never responds to status queries) report only as
+        // "timed out" — losing the actual error context unless Debug logs
+        // are on.
+        Exception? lastProbeException = null;
+
         var attempt = 0;
         while (true)
         {
@@ -845,7 +853,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             {
                 throw new TimeoutException(
                     $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
-                    "The serial transport reopened but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.");
+                    "The serial transport reopened but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
+                    lastProbeException);
             }
 
             try
@@ -855,8 +864,6 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 // otherwise hang or return after the budget elapses. When
                 // the deadline fires, WaitAsync throws OperationCanceledException
                 // immediately — we don't keep waiting for the rogue probe.
-                // (Stronger than a post-await re-check: that would still
-                // wait for the probe to return; this short-circuits.)
                 var isReady = await probe(device, linkedToken)
                     .WaitAsync(linkedToken)
                     .ConfigureAwait(false);
@@ -877,10 +884,12 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             {
                 throw new TimeoutException(
                     $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
-                    "The readiness probe was canceled by the timeout while running.");
+                    "The readiness probe was canceled by the timeout while running.",
+                    lastProbeException);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                lastProbeException = ex;
                 _logger.LogDebug(
                     ex,
                     "Application-ready probe threw on attempt {Attempt}; treating as not-ready and retrying.",
@@ -894,7 +903,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}).");
+                    $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}).",
+                    lastProbeException);
             }
         }
     }
