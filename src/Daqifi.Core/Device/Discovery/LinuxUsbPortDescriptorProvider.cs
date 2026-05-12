@@ -33,7 +33,14 @@ internal sealed class LinuxUsbPortDescriptorProvider : IUsbPortDescriptorProvide
         // Bound the depth to keep this defensive against unexpected layouts.
         try
         {
-            var current = System.IO.Path.GetFullPath(sysfsRoot);
+            // /sys/class/tty/<base>/device is a symlink into the actual USB
+            // device tree (e.g. /sys/devices/pci.../usb1/.../1-1.2). Walking
+            // parents of the unresolved logical path lands back in /sys/class
+            // and never reaches the node that holds idVendor/idProduct, so
+            // resolve to the physical target before traversal.
+            var dirInfo = new System.IO.DirectoryInfo(sysfsRoot);
+            var resolved = dirInfo.ResolveLinkTarget(returnFinalTarget: true);
+            var current = (resolved ?? dirInfo).FullName;
             for (var i = 0; i < 8; i++)
             {
                 var vendorPath = System.IO.Path.Combine(current, "idVendor");
