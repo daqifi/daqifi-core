@@ -219,26 +219,32 @@ namespace Daqifi.Core.Device
         /// Disconnects from the device.
         /// </summary>
         /// <remarks>
-        /// Waits up to 5 seconds to acquire <c>_textExchangeLock</c> before
+        /// Waits up to 1 second to acquire <c>_textExchangeLock</c> before
         /// tearing down the consumer / producer / transport. This prevents
         /// a race where an in-flight <see cref="ExecuteTextCommandAsync"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
         /// anyway — a stuck text exchange must not block teardown forever.
+        /// The 1s budget is the longest delay any normal text exchange
+        /// can hold the lock for (responseTimeoutMs default + safety
+        /// margin); callers wanting non-blocking disconnect should drive
+        /// this off a Task.Run.
         /// </remarks>
         public void Disconnect()
         {
             _isDisconnecting = true;
-            // Best-effort coordination with ExecuteTextCommandAsync. We do
-            // NOT release this lock — Dispose() disposes the semaphore
-            // shortly after, and any in-flight text exchange will see
-            // _isDisconnecting on its own validation path or take the
-            // ObjectDisposedException catch in its Release().
+            // Best-effort coordination with ExecuteTextCommandAsync —
+            // acquire the lock so we don't tear the transport out from
+            // under an in-flight text exchange. The lock IS released in
+            // the finally below when acquired (so a future Connect()
+            // followed by ExecuteTextCommandAsync isn't blocked); a
+            // stuck exchange that holds past the timeout drops to the
+            // _isDisconnecting validation path inside the exchange.
             var lockAcquired = false;
             try
             {
-                lockAcquired = _textExchangeLock.Wait(TimeSpan.FromSeconds(5));
+                lockAcquired = _textExchangeLock.Wait(TimeSpan.FromSeconds(1));
             }
             catch (ObjectDisposedException)
             {
@@ -484,7 +490,11 @@ namespace Daqifi.Core.Device
                 };
 
                 textConsumer.Start();
-                await Task.Delay(50, cancellationToken);
+                // ConfigureAwait(false): the lock is held across this delay,
+                // so resuming on a captured sync context (e.g. UI thread)
+                // would let a sync Disconnect() call from that same thread
+                // deadlock waiting for the lock we hold.
+                await Task.Delay(50, cancellationToken).ConfigureAwait(false);
 
                 Trace.WriteLine($"[ExecuteTextCommandAsync] Text consumer started at {sw.ElapsedMilliseconds}ms");
 
@@ -504,7 +514,10 @@ namespace Daqifi.Core.Device
                 while (DateTime.UtcNow - startTime < maxWait)
                 {
                     var previousCount = collectedLines.Count;
-                    await Task.Delay(50, cancellationToken);
+                    // ConfigureAwait(false): see textConsumer.Start above —
+                    // we still hold _textExchangeLock and must not resume on
+                    // a captured sync context.
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
                     if (collectedLines.Count > previousCount)
                     {
                         lastMessageTime = DateTime.UtcNow;
