@@ -231,6 +231,102 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
+    public void ProtobufMessageParser_ParseMessages_LegitimateMultiKbFrame_NotCorruptedByGapGate()
+    {
+        // Closes #189 Bug 1. The gap gate previously fired whenever
+        // missingPayload > MaxPartialFrameGapBytes regardless of how many
+        // body bytes had already arrived. A legitimate multi-KB frame
+        // arriving across multiple reads (e.g. a fat initial-status frame
+        // on a transport that returns smaller chunks) would be misclassified
+        // as garbage mid-frame: the parser would advance into the real body
+        // and corrupt it. The fix gates the suspicion check on
+        // availableBodyBytes <= 1 — once 2+ body bytes are buffered, the
+        // field-tag check has already structurally validated the start.
+        //
+        // Construct a real frame whose declared length leaves a gap larger
+        // than MaxPartialFrameGapBytes (1024) and feed only the prefix +
+        // a couple of body bytes. The parser must NOT advance into the
+        // body — it must wait for the rest.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // Build a real frame ~2KB with HostFirmwareRev padded to push the
+        // body past the gap threshold. WriteDelimitedTo prepends the varint
+        // length prefix.
+        var msg = new DaqifiOutMessage
+        {
+            MsgTimeStamp = 99,
+            DeviceFwRev = new string('x', 2000),
+        };
+        using var stream = new MemoryStream();
+        msg.WriteDelimitedTo(stream);
+        var fullFrame = stream.ToArray();
+        Assert.True(fullFrame.Length > 1100,
+            "Test precondition: frame must exceed MaxPartialFrameGapBytes (1024) so the gap gate would fire on a one-shot read.");
+
+        // Feed only prefix + first 4 body bytes — body is partially present
+        // (more than 1 byte, so gap gate must NOT fire), but not complete.
+        var prefixPlusFour = fullFrame.Take(GetVarintLength(fullFrame) + 4).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(prefixPlusFour, out var consumedBytes).ToList();
+
+        // Assert: parser waits — no message parsed, no bytes advanced.
+        // Callers retain the buffer for the next read; corrupting it here
+        // (advancing into the body) would lose the frame forever.
+        Assert.Empty(messages);
+        Assert.Equal(0, consumedBytes);
+    }
+
+    [Theory]
+    [InlineData((byte)0x83)] // continuation bit set, wire type 3 (deprecated SGROUP)
+    [InlineData((byte)0x84)] // continuation bit set, wire type 4 (deprecated EGROUP)
+    [InlineData((byte)0x86)] // continuation bit set, wire type 6 (undefined)
+    [InlineData((byte)0x87)] // continuation bit set, wire type 7 (undefined)
+    public void ProtobufMessageParser_ParseMessages_GarbageWithContinuationBit_StillRejected(byte garbageBodyByte)
+    {
+        // Closes #189 Bug 2. IsPlausibleFieldTagByte previously early-
+        // returned true for any byte with the continuation bit (0x80) set,
+        // bypassing wire-type validation. Wire type lives in the low 3 bits
+        // of the first byte regardless of multi-byte tags, so impossible
+        // wire types (3,4,6,7) MUST be rejected even on continuation bytes.
+        //
+        // Construct a frame with: a plausible-but-bogus length prefix +
+        // a body byte whose continuation bit is set AND whose low 3 bits
+        // form an impossible wire type. Without the fix, the parser
+        // accepts the body byte and stalls waiting for the bogus declared
+        // length to arrive. With the fix, the field-tag gate fires and
+        // the parser advances past the garbage.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // Length prefix: 0x10 = 16 bytes (well under MaxPartialFrameGapBytes
+        // so the gap gate doesn't fire on its own — we want to isolate the
+        // wire-type check).
+        var data = new byte[] { 0x10, garbageBodyByte };
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert: parser advances past the bogus prefix instead of waiting
+        // for 16 never-coming bytes.
+        Assert.Empty(messages);
+        Assert.True(consumedBytes >= 1,
+            $"Expected parser to advance past garbage prefix, got consumedBytes={consumedBytes}");
+    }
+
+    private static int GetVarintLength(byte[] buffer)
+    {
+        for (var i = 0; i < buffer.Length && i < 5; i++)
+        {
+            if ((buffer[i] & 0x80) == 0) return i + 1;
+        }
+        throw new InvalidOperationException("Malformed varint in test fixture");
+    }
+
+    [Fact]
     public void ProtobufMessageParser_ParseMessages_ReturnsCorrectMessageType()
     {
         // Arrange

@@ -108,11 +108,24 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
                 // Neither gate advances into a real frame's prefix or payload: only
                 // into bytes already identified as implausible. Callers that trim
                 // consumedBytes from their buffer never lose recoverable data.
-                var missingPayload = messageLength - (remainingData.Length - prefixBytes);
-                var firstBodyByteIsGarbage = remainingData.Length > prefixBytes
+                var availableBodyBytes = remainingData.Length - prefixBytes;
+                var missingPayload = messageLength - availableBodyBytes;
+                var firstBodyByteIsGarbage = availableBodyBytes > 0
                     && !IsPlausibleFieldTagByte(remainingData[prefixBytes]);
 
-                if (missingPayload > MaxPartialFrameGapBytes || firstBodyByteIsGarbage)
+                // Gap gate ONLY applies in the pure-prefix-no-body case
+                // (≤1 body byte arrived). Once 2+ body bytes are buffered,
+                // the field-tag gate above has already structurally validated
+                // the start of the frame; a large declared length at that
+                // point is just a multi-chunk read of a legitimate frame
+                // (e.g. a multi-KB initial-status frame on a transport that
+                // returns smaller reads). Without this guard, the parser
+                // would treat the partial-but-real frame as garbage and
+                // skip into its body, corrupting it.
+                var gapIsSuspicious = availableBodyBytes <= 1
+                    && missingPayload > MaxPartialFrameGapBytes;
+
+                if (gapIsSuspicious || firstBodyByteIsGarbage)
                 {
                     currentIndex++;
                     consumedBytes = currentIndex;
@@ -146,29 +159,32 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
     /// Returns true if <paramref name="b"/> could plausibly be the first byte of a
     /// real DaqifiOutMessage body (a protobuf field tag). Used by the partial-frame
     /// wait path to reject garbage whose varint prefix happens to decode to a
-    /// plausible-looking length. Multi-byte tags (continuation bit set) can't be
-    /// fully validated from a single byte, so they pass this check.
+    /// plausible-looking length. Multi-byte tags (continuation bit set) can't have
+    /// their full field number validated from a single byte, but the wire type
+    /// always lives in the low 3 bits of the first byte regardless — so impossible
+    /// wire types are rejected even on continuation bytes.
     /// </summary>
     private static bool IsPlausibleFieldTagByte(byte b)
     {
-        // Continuation bit set → multi-byte tag. We can't fully validate without
-        // more bytes (which we may not have yet); don't reject on that alone.
-        if ((b & 0x80) != 0)
-        {
-            return true;
-        }
-
-        // Single-byte tag: low 3 bits are wire type, next 4 bits (within the low 7)
-        // are the field number. Valid wire types are VARINT(0), I64(1), LEN(2),
-        // I32(5). Wire types 3 (SGROUP) and 4 (EGROUP) are deprecated group types
-        // that DaqifiOutMessage does not use; 6/7 are undefined. Field number 0
-        // is reserved and never appears in a real message.
+        // Wire type lives in the low 3 bits regardless of whether the field
+        // number spans multiple bytes. Valid wire types are VARINT(0), I64(1),
+        // LEN(2), I32(5). Wire types 3 (SGROUP) and 4 (EGROUP) are deprecated
+        // group types that DaqifiOutMessage does not use; 6/7 are undefined.
         var wireType = b & 0x07;
         if (wireType is 3 or 4 or 6 or 7)
         {
             return false;
         }
 
+        // Continuation bit set → multi-byte tag. The field number spans more
+        // bytes which we may not have yet; accept once wire type passed.
+        if ((b & 0x80) != 0)
+        {
+            return true;
+        }
+
+        // Single-byte tag: bits 6..3 are the field number. Field number 0 is
+        // reserved and never appears in a real message.
         var fieldNumber = (b >> 3) & 0x0F;
         return fieldNumber != 0;
     }
