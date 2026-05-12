@@ -179,14 +179,16 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var names = files.Select(f => f.FileName).ToList();
             Assert.Equal(2, names.Count);
             Assert.Contains("normal.bin", names);
-            // The parser strips the "Daqifi/" prefix case-insensitively
-            // (StringComparison.OrdinalIgnoreCase), so mirror that here —
-            // a case-sensitive StartsWith would falsely fail if a future
-            // test case used "daqifi/" or "DAQIFI/".
+            // Mirror production normalization in SdCardFileListParser:
+            //  1. strip Daqifi/ prefix case-insensitively
+            //  2. apply Path.GetFileName so any nested path collapses to its basename
+            // Doing only step 1 would falsely fail on a future "Daqifi/sub/file.bin"
+            // test case, where production returns just "file.bin".
             const string daqifiPrefix = "Daqifi/";
             var expected = filename.StartsWith(daqifiPrefix, StringComparison.OrdinalIgnoreCase)
                 ? filename.Substring(daqifiPrefix.Length)
                 : filename;
+            expected = Path.GetFileName(expected);
             Assert.Contains(expected, names);
         }
 
