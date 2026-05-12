@@ -123,14 +123,19 @@ namespace Daqifi.Core.Device.SdCard
         // "error" / "Errors" pass through.
         private static bool IsErrorResponseLine(string line)
         {
-            if (line.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+            // Defensive Trim — current callers already pre-trim, but a future
+            // reuse with raw CRLF input must still classify "ERROR\r" as an
+            // error line rather than letting the trailing '\r' disqualify it
+            // (mirrors IsNonResultLine in DaqifiStreamingDevice).
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
                 return true;
-            if (line.Length >= 5
-                && line.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+            if (trimmed.Length >= 5
+                && trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
             {
-                if (line.Length == 5)
+                if (trimmed.Length == 5)
                     return true;
-                var next = line[5];
+                var next = trimmed[5];
                 if (next == ':' || next == ' ' || next == '!' || next == '\t')
                     return true;
             }

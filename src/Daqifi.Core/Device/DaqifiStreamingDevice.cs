@@ -759,7 +759,10 @@ namespace Daqifi.Core.Device
         //     SCPI ("ERROR: -100, ...") and firmware ("Error !!", "Error ...") patterns.
         private static bool IsNonResultLine(string line)
         {
-            var trimmed = line.TrimStart();
+            // Trim both ends — bare "ERROR\r" from a CRLF line ending would
+            // otherwise leave the '\r' as trimmed[5] and fall through the
+            // delimiter switch below.
+            var trimmed = line.Trim();
             if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
                 return true;
             // Must be followed by an SCPI delimiter (':', ' ', '!', '\t')
