@@ -1,3 +1,5 @@
+using Daqifi.Core.Device;
+
 namespace Daqifi.Core.Firmware;
 
 /// <summary>
@@ -120,6 +122,34 @@ public sealed class FirmwareUpdateServiceOptions
     public string? WifiPortOverride { get; set; }
 
     /// <summary>
+    /// Optional callback that returns true once the device is ready to
+    /// answer normal application commands after PIC32 firmware update +
+    /// reconnect (closes #145). The serial transport can re-enumerate
+    /// well before the application firmware is actually ready to respond
+    /// to protobuf status queries — without this probe, the next steps
+    /// in a downstream flow (LAN chip-info, WiFi prep) hit a half-started
+    /// device and have to retry. When set, the firmware service polls
+    /// the probe with bounded retry after each PIC32 reconnect; if it
+    /// never returns true within <see cref="PostReconnectReadinessTimeout"/>,
+    /// the update transitions to Failed with a clear timeout exception
+    /// rather than silently handing back a half-ready device. When null,
+    /// reconnect succeeds as soon as the serial port reopens (legacy
+    /// behavior).
+    /// </summary>
+    public Func<IStreamingDevice, CancellationToken, Task<bool>>? PostReconnectReadinessProbe { get; set; }
+
+    /// <summary>
+    /// Wall-clock budget for the post-reconnect readiness probe. Default
+    /// 30s covers a slow PIC32 boot and downstream-firmware initialization.
+    /// </summary>
+    public TimeSpan PostReconnectReadinessTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Delay between readiness-probe attempts (cancellation-aware).
+    /// </summary>
+    public TimeSpan PostReconnectReadinessRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
     /// Gets the configured timeout for a given firmware update state.
     /// </summary>
     /// <param name="state">The target state.</param>
@@ -159,6 +189,8 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(HidConnectRetryDelay, nameof(HidConnectRetryDelay));
         ValidatePositive(FlashWriteRetryDelay, nameof(FlashWriteRetryDelay));
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
+        ValidatePositive(PostReconnectReadinessTimeout, nameof(PostReconnectReadinessTimeout));
+        ValidatePositive(PostReconnectReadinessRetryDelay, nameof(PostReconnectReadinessRetryDelay));
 
         if (HidConnectRetryCount < 1)
         {

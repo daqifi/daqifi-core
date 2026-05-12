@@ -491,6 +491,163 @@ public class FirmwareUpdateServiceTests
         Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
     }
 
+    [Fact]
+    public async Task UpdateFirmwareAsync_PostReconnectReadinessProbe_AwaitedBeforeComplete()
+    {
+        // Closes #145: serial reconnect succeeds before the application
+        // firmware is ready to answer protobuf status queries. The
+        // optional readiness probe gives Core a way to wait for true
+        // application readiness — when set, no caller needs to
+        // reimplement that retry loop.
+        //
+        // The probe here returns false on the first 2 attempts and true
+        // on the 3rd, simulating a slow PIC32 application boot. Without
+        // the wait, the update would Complete immediately after serial
+        // reopens; with the wait, Complete is held back until the probe
+        // succeeds.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var probeCallCount = 0;
+        var options = CreateFastOptions();
+        options.PostReconnectReadinessProbe = (_, _) =>
+        {
+            probeCallCount++;
+            return Task.FromResult(probeCallCount >= 3);
+        };
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(2);
+        options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(3, probeCallCount);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_PostReconnectReadinessProbe_TimeoutFailsTheUpdate()
+    {
+        // When the application never becomes ready within the configured
+        // budget, the update must transition to Failed with a clear
+        // timeout message — NOT silently complete and hand back a
+        // half-ready device. That's the entire reason for #145.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var options = CreateFastOptions();
+        // Probe always returns false → never ready → must time out
+        options.PostReconnectReadinessProbe = (_, _) => Task.FromResult(false);
+        options.PostReconnectReadinessTimeout = TimeSpan.FromMilliseconds(150);
+        options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException ex;
+        try
+        {
+            ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        var inner = Assert.IsType<TimeoutException>(ex.InnerException);
+        Assert.Contains("application-ready", inner.Message);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_NoPostReconnectProbe_PreservesLegacyBehavior()
+    {
+        // No probe configured == legacy behavior: Complete fires as
+        // soon as serial reopens. Belt-and-suspenders test that the
+        // new code path is fully opt-in.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var options = CreateFastOptions();
+        // No PostReconnectReadinessProbe set - legacy path
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+    }
+
     private static FirmwareUpdateServiceOptions CreateFastOptions()
     {
         return new FirmwareUpdateServiceOptions

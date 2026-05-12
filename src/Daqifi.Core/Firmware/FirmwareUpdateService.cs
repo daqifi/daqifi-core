@@ -806,6 +806,86 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
         await SafeDisconnectHidAsync().ConfigureAwait(false);
         await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
+
+        // Application-readiness probe (closes #145). Serial transport
+        // re-enumeration succeeds well before the PIC32 application
+        // firmware is actually ready to answer protobuf status queries;
+        // if a downstream flow (LAN chip info, WiFi prep) starts before
+        // the app is up, those queries fail and callers reimplement
+        // their own retry. The probe is opt-in via options — when null,
+        // the legacy "serial reopened == done" semantics apply.
+        if (_options.PostReconnectReadinessProbe is { } probe)
+        {
+            await WaitForApplicationReadyAsync(device, probe, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task WaitForApplicationReadyAsync(
+        IStreamingDevice device,
+        Func<IStreamingDevice, CancellationToken, Task<bool>> probe,
+        CancellationToken cancellationToken)
+    {
+        var totalTimeout = _options.PostReconnectReadinessTimeout;
+        var retryDelay = _options.PostReconnectReadinessRetryDelay;
+
+        using var timeoutCts = new CancellationTokenSource(totalTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, timeoutCts.Token);
+        var linkedToken = linkedCts.Token;
+
+        var attempt = 0;
+        while (true)
+        {
+            attempt++;
+            try
+            {
+                linkedToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}). " +
+                    "The serial transport reopened but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.");
+            }
+
+            try
+            {
+                if (await probe(device, linkedToken).ConfigureAwait(false))
+                {
+                    if (attempt > 1)
+                    {
+                        _logger.LogDebug(
+                            "Device became application-ready on probe attempt {Attempt}.",
+                            attempt);
+                    }
+                    return;
+                }
+                _logger.LogDebug("Application-ready probe returned false on attempt {Attempt}; will retry.", attempt);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}). " +
+                    "The readiness probe was canceled by the timeout while running.");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Application-ready probe threw on attempt {Attempt}; treating as not-ready and retrying.",
+                    attempt);
+            }
+
+            try
+            {
+                await Task.Delay(retryDelay, linkedToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}).");
+            }
+        }
     }
 
     private async Task WaitForSerialReconnectAsync(
