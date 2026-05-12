@@ -903,7 +903,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}).",
+                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
+                    "The transport reconnected but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
                     lastProbeException);
             }
         }
