@@ -251,8 +251,8 @@ public class ProtobufMessageParserTests
         // Arrange
         var parser = new ProtobufMessageParser();
 
-        // Build a real frame ~2KB with HostFirmwareRev padded to push the
-        // body past the gap threshold. WriteDelimitedTo prepends the varint
+        // Build a real frame ~2KB with DeviceFwRev padded to push the body
+        // past the gap threshold. WriteDelimitedTo prepends the varint
         // length prefix.
         var msg = new DaqifiOutMessage
         {
