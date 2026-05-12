@@ -117,13 +117,18 @@ namespace Daqifi.Core.Device.SdCard
         }
 
         /// <summary>
-        /// Returns true if the line is a SCPI error response — either the
-        /// canonical <c>**ERROR</c> marker or a bare <c>ERROR</c> token, in
-        /// each case followed by a SCPI delimiter (<c>:</c>, space, <c>!</c>,
-        /// tab) or end of line. Trims both ends so a bare <c>"ERROR\r"</c>
-        /// from CRLF line endings still classifies. Plain filenames whose
-        /// basename starts with <c>error</c> / <c>Errors</c> pass through
-        /// unmatched (closes #190).
+        /// Returns true if the line is a non-result error/status line that
+        /// SD listing parsers should drop. Matches both SCPI error responses
+        /// (canonical <c>**ERROR</c> marker, bare <c>ERROR</c> token followed
+        /// by a SCPI delimiter <c>:</c> / space / tab / end-of-line) and
+        /// firmware status text (<c>Error !! ...</c> with space, or the
+        /// no-space <c>Error!!</c> form). A double-<c>!</c> is required when
+        /// no other delimiter is present so legitimate filenames like
+        /// <c>error!log.bin</c> aren't dropped — single <c>!</c> alone is
+        /// ambiguous between error-status and filename. Trims both ends so
+        /// a bare <c>"ERROR\r"</c> from CRLF line endings still classifies.
+        /// Plain filenames whose basename starts with <c>error</c> /
+        /// <c>Errors</c> pass through unmatched (closes #190).
         /// </summary>
         /// <remarks>
         /// Shared with <c>DaqifiStreamingDevice.IsNonResultLine</c> so any
@@ -145,7 +150,14 @@ namespace Daqifi.Core.Device.SdCard
             if (trimmed.Length == prefix.Length)
                 return true;
             var next = trimmed[prefix.Length];
-            return next == ':' || next == ' ' || next == '!' || next == '\t';
+            if (next == ':' || next == ' ' || next == '\t')
+                return true;
+            // Single '!' is ambiguous (could be a filename like "error!log.bin").
+            // Require '!!' so we still catch firmware "Error!!" status text but
+            // let plain filenames pass through.
+            return next == '!'
+                && trimmed.Length > prefix.Length + 1
+                && trimmed[prefix.Length + 1] == '!';
         }
     }
 }

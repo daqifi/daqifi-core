@@ -133,6 +133,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         [InlineData("**Error: bad")]
         [InlineData("ERROR: -100, Bad command")]
         [InlineData("Error !! Generic firmware status")]
+        [InlineData("Error!! No space firmware status")]
         [InlineData("ERROR")]
         [InlineData("error\tsomething")]
         public async Task GetSdCardFilesAsync_RealErrorLinesStillSkipped(string errorLine)
@@ -152,6 +153,36 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             Assert.Single(files);
             Assert.Equal("normal.bin", files[0].FileName);
+        }
+
+        [Theory]
+        [InlineData("error!log.bin")]
+        [InlineData("Daqifi/error!log.bin")]
+        [InlineData("Erroneous!data.bin")]
+        public async Task GetSdCardFilesAsync_FilenamesWithSingleBangSurvive(string filename)
+        {
+            // Regression: a single '!' immediately after "error" is ambiguous
+            // (could be a filename like "error!log.bin"). The classifier must
+            // require '!!' to treat as an error/status line so legitimate
+            // filenames aren't dropped from listings. Filename validation
+            // already permits '!' in SD filenames.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/normal.bin",
+                filename,
+            };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            var names = files.Select(f => f.FileName).ToList();
+            Assert.Equal(2, names.Count);
+            Assert.Contains("normal.bin", names);
+            // filename may or may not have the Daqifi/ prefix stripped depending
+            // on the parser's path handling; just confirm it survived.
+            var expected = filename.StartsWith("Daqifi/") ? filename.Substring("Daqifi/".Length) : filename;
+            Assert.Contains(expected, names);
         }
 
         [Fact]
