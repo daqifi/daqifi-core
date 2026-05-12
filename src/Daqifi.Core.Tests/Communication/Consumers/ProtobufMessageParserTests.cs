@@ -302,6 +302,14 @@ public class ProtobufMessageParserTests
         msg.WriteDelimitedTo(stream);
         var fullFrame = stream.ToArray();
 
+        // Sanity-check the regression precondition: this test is meaningless
+        // unless the frame body would have triggered the old gap gate. The
+        // sibling LegitimateMultiKbFrame test uses the same threshold; if the
+        // fixture message ever shrinks below it, the regression silently
+        // de-scopes — fail loudly here instead.
+        Assert.True(fullFrame.Length > 1100,
+            $"Test fixture too small to exercise the gap gate (got {fullFrame.Length}, expected > 1100). Increase DeviceFwRev length.");
+
         // Feed prefix + exactly 1 body byte. The first body byte of a real
         // DaqifiOutMessage is a valid field tag (passes IsPlausibleFieldTagByte).
         var prefixPlusOne = fullFrame.Take(GetVarintLength(fullFrame) + 1).ToArray();
