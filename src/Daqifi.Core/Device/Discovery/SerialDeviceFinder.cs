@@ -193,8 +193,9 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Caller asked to stop — let WhenAll observe the cancellation.
-            return null;
+            // Caller asked to stop — propagate so Task.WhenAll observes the
+            // cancellation and short-circuits the rest of the probe set.
+            throw;
         }
         catch
         {
