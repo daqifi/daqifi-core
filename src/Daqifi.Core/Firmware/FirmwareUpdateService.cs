@@ -880,12 +880,28 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 }
                 _logger.LogDebug("Application-ready probe returned false on attempt {Attempt}; will retry.", attempt);
             }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new TimeoutException(
-                    $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
-                    "The wait for the readiness probe was canceled by the timeout — note the probe may ignore cancellation and continue running in the background.",
-                    lastProbeException);
+                // Two cases reach here:
+                // 1. The wait deadline fired (timeoutCts canceled) — surface
+                //    as TimeoutException so callers see the readiness budget.
+                // 2. The probe itself threw OperationCanceledException for
+                //    some unrelated reason (its own internal CTS, etc). That
+                //    must NOT crash the update loop — treat it as a probe
+                //    failure and retry, same as any other thrown exception.
+                if (timeoutCts.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"Device did not become application-ready within {totalTimeout} (attempt {attempt}). " +
+                        "The wait for the readiness probe was canceled by the timeout — note the probe may ignore cancellation and continue running in the background.",
+                        lastProbeException ?? ex);
+                }
+
+                lastProbeException = ex;
+                _logger.LogDebug(
+                    ex,
+                    "Application-ready probe was canceled on attempt {Attempt}; treating as not-ready and retrying.",
+                    attempt);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

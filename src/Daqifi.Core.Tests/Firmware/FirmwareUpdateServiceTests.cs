@@ -607,6 +607,63 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_PostReconnectProbeThrowsOwnOCE_RetriesAndCompletes()
+    {
+        // The probe may legitimately throw OperationCanceledException on its
+        // own (e.g. its internal CTS expired) without our timeoutCts firing.
+        // That must NOT crash the update loop — it should be treated as a
+        // probe failure and retried, just like any other thrown exception.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var probeCallCount = 0;
+        var options = CreateFastOptions();
+        options.PostReconnectReadinessProbe = (_, _) =>
+        {
+            probeCallCount++;
+            // First two attempts: probe throws its own OCE (e.g. internal CTS).
+            // Third attempt: probe returns ready.
+            return probeCallCount < 3
+                ? Task.FromException<bool>(new OperationCanceledException("probe-internal-cancel"))
+                : Task.FromResult(true);
+        };
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(1);
+        options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(3, probeCallCount);
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_NoPostReconnectProbe_PreservesLegacyBehavior()
     {
         // No probe configured == legacy behavior: Complete fires as
