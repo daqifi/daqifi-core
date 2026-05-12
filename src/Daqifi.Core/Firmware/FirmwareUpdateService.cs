@@ -850,7 +850,26 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
             try
             {
-                if (await probe(device, linkedToken).ConfigureAwait(false))
+                var isReady = await probe(device, linkedToken).ConfigureAwait(false);
+
+                // Re-check the budget after the await: a probe that ignores
+                // its CancellationToken could otherwise return true after
+                // the timeout has elapsed and bypass the budget. Caller's
+                // CT propagates as OperationCanceledException out of this
+                // method (caught at the same handler below); only the
+                // timeout-CT case is reinterpreted as TimeoutException.
+                try
+                {
+                    linkedToken.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"Device did not become application-ready within {totalTimeout.TotalSeconds:F0}s after PIC32 reconnect (attempt {attempt}). " +
+                        "The readiness probe ignored cancellation and returned after the deadline.");
+                }
+
+                if (isReady)
                 {
                     if (attempt > 1)
                     {
