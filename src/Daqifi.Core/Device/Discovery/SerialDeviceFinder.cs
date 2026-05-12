@@ -35,6 +35,11 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private const int MaxRetries = 2;
     private const int RetryIntervalMs = 300;
     private const int PollIntervalMs = 50;
+    // Upper bound on concurrent SerialPort opens during a single discovery
+    // pass. Most OS serial stacks tolerate 4-8 simultaneous opens cleanly;
+    // beyond that, IO failures and slow opens stack up. Common case (with
+    // VID/PID classifier) leaves 0-1 candidates so this cap rarely engages.
+    private const int MaxParallelProbes = 4;
 
     #endregion
 
@@ -136,11 +141,44 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // but the legacy fallback (null descriptor) can still surface
             // multiple unclassifiable ports — probing them sequentially adds
             // ~1.2s per port (DeviceWakeUpDelayMs + ResponseTimeoutMs).
-            var probeTasks = availablePorts
-                .Select(portName => ProbeSafelyAsync(portName, cancellationToken))
-                .ToList();
+            //
+            // Cap concurrency at MaxParallelProbes so a 20-port system with
+            // a missing descriptor provider doesn't open 20 serial handles at
+            // once — most platforms throttle quietly above ~8 concurrent opens.
+            var maxConcurrency = Math.Max(1, Math.Min(MaxParallelProbes, availablePorts.Count));
+            using var probeGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
 
-            var probeResults = await Task.WhenAll(probeTasks);
+            var probeTasks = availablePorts.Select(async portName =>
+            {
+                await probeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    return await ProbeSafelyAsync(portName, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    probeGate.Release();
+                }
+            }).ToList();
+
+            // Catch OCE here so the DiscoveryCompleted event always fires
+            // (callers expect a "discovery pass terminated" signal regardless
+            // of how it ended). ProbeSafelyAsync rethrows OCE on caller
+            // cancellation so WhenAll short-circuits the rest of the set —
+            // we then settle for whatever probes already finished cleanly.
+            IDeviceInfo?[]? probeResults = null;
+            try
+            {
+                probeResults = await Task.WhenAll(probeTasks).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Drain any tasks that did finish successfully before cancellation.
+                probeResults = probeTasks
+                    .Where(t => t.Status == TaskStatus.RanToCompletion)
+                    .Select(t => t.Result)
+                    .ToArray();
+            }
 
             foreach (var deviceInfo in probeResults)
             {
