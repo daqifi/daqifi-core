@@ -716,9 +716,28 @@ public class FirmwareUpdateServiceTests
             reentrantStatus = service.CheckWifiFirmwareStatusAsync(device).GetAwaiter().GetResult();
         });
 
+        // Hard timeout via WaitAsync so a regression of the deadlock fails
+        // fast instead of stalling the whole xunit run waiting for the
+        // global per-test budget. The fast-options + ms-scale delays mean
+        // the happy path completes in well under a second; 30s is plenty
+        // of margin under heavy CI load while still being a clear "stuck".
         try
         {
-            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress)
+                .WaitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!reentryAttempted)
+        {
+            throw new Xunit.Sdk.XunitException(
+                "Test setup failed before reentrancy was attempted.");
+        }
+        catch (OperationCanceledException)
+        {
+            throw new Xunit.Sdk.XunitException(
+                "UpdateWifiModuleAsync did not complete within 30s — the "
+                + "AsyncLocal re-entrancy guard likely regressed and the "
+                + "inner CheckWifiFirmwareStatusAsync call is deadlocked.");
         }
         finally
         {
