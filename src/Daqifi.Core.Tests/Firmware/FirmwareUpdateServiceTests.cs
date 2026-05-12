@@ -730,6 +730,124 @@ public class FirmwareUpdateServiceTests
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
     }
 
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLanChipInfoFailsTransiently_RetriesUntilSuccess()
+    {
+        // Closes #144: post-PIC32-reboot the WiFi subsystem can lag the
+        // application by a few seconds, so the first chip-info query
+        // transiently fails. Without retry, the WiFi version decision
+        // would short-circuit and trigger an unnecessary multi-minute
+        // reflash. The retry budget covers the startup window.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            TagName = "19.5.4",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM14",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            },
+            transientFailuresBeforeSuccess: 2);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5); // Keep test fast
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.True(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLanChipInfoFailsAllAttempts_ReturnsChipInfoUnavailable()
+    {
+        // After exhausting LanChipInfoMaxAttempts the planning method must
+        // fall through to ChipInfoUnavailable, NOT hang or surface the
+        // raw exception. This preserves the "couldn't check, default to
+        // running update" semantics for genuinely-broken devices.
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM15",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            },
+            transientFailuresBeforeSuccess: 99);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_FirstAttemptSucceeds_DoesNotRetry()
+    {
+        // Steady-state path: no retry overhead when the first call works.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            TagName = "19.5.4",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM16",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            });
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(1, device.GetLanChipInfoCallCount);
+    }
+
     private sealed class SyncProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;
@@ -848,13 +966,17 @@ public class FirmwareUpdateServiceTests
     {
         private readonly LanChipInfo? _chipInfo;
         private ConnectionStatus _status = ConnectionStatus.Connected;
+        private int _remainingTransientFailures;
 
-        public FakeLanChipInfoStreamingDevice(string name, LanChipInfo? chipInfo)
+        public FakeLanChipInfoStreamingDevice(string name, LanChipInfo? chipInfo, int transientFailuresBeforeSuccess = 0)
         {
             Name = name;
             _chipInfo = chipInfo;
+            _remainingTransientFailures = transientFailuresBeforeSuccess;
             IsConnected = true;
         }
+
+        public int GetLanChipInfoCallCount { get; private set; }
 
         public string Name { get; }
         public IPAddress? IpAddress => null;
@@ -899,6 +1021,12 @@ public class FirmwareUpdateServiceTests
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
+            GetLanChipInfoCallCount++;
+            if (_remainingTransientFailures > 0)
+            {
+                _remainingTransientFailures--;
+                throw new InvalidOperationException("Simulated transient post-reboot failure.");
+            }
             return Task.FromResult(_chipInfo);
         }
     }

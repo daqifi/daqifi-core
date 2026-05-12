@@ -120,6 +120,24 @@ public sealed class FirmwareUpdateServiceOptions
     public string? WifiPortOverride { get; set; }
 
     /// <summary>
+    /// Total attempts (initial + retries) for LAN chip-info queries before
+    /// the WiFi version decision falls through to "couldn't check, proceed
+    /// with flash". Right after a PIC32 firmware update the application is
+    /// typically up while the WiFi subsystem is still finishing startup, so
+    /// the first chip-info query can transiently fail; bounded retry covers
+    /// that window so callers don't unnecessarily reflash up-to-date WiFi
+    /// firmware (closes #144). Default 3 attempts × 2s delay = up to 4s
+    /// wait in the worst case, which fits the observed startup window.
+    /// </summary>
+    public int LanChipInfoMaxAttempts { get; set; } = 3;
+
+    /// <summary>
+    /// Delay between LAN chip-info retry attempts (cancellation-aware).
+    /// Total worst-case wait = (LanChipInfoMaxAttempts - 1) * LanChipInfoRetryDelay.
+    /// </summary>
+    public TimeSpan LanChipInfoRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// Gets the configured timeout for a given firmware update state.
     /// </summary>
     /// <param name="state">The target state.</param>
@@ -175,6 +193,16 @@ public sealed class FirmwareUpdateServiceOptions
                 FlashWriteRetryCount,
                 "Flash write retry count must be at least 1.");
         }
+
+        if (LanChipInfoMaxAttempts < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(LanChipInfoMaxAttempts),
+                LanChipInfoMaxAttempts,
+                "LAN chip-info max attempts must be at least 1.");
+        }
+
+        ValidatePositive(LanChipInfoRetryDelay, nameof(LanChipInfoRetryDelay));
 
         if (BootloaderVendorId < 0 || BootloaderVendorId > 0xFFFF)
         {
