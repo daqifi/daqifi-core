@@ -166,15 +166,22 @@ public class SerialDeviceFinderTests
         // A custom IUsbPortDescriptorProvider that throws must NEVER take
         // down the whole discovery pass — fall through to legacy probing
         // for the port and continue with the rest of the list.
+        //
+        // Inject a fixed port list so the throwing provider IS invoked even
+        // on CI hosts with zero real serial ports — otherwise the test would
+        // pass vacuously without exercising the exception-handling path.
         var fakeProvider = new RecordingUsbPortDescriptorProvider(_ =>
             throw new InvalidOperationException("simulated provider failure"));
 
-        using var finder = new SerialDeviceFinder(9600, fakeProvider);
+        using var finder = new SerialDeviceFinder(
+            9600,
+            fakeProvider,
+            portNameProvider: () => new[] { "COM999" });
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
-        // Same caveat as the null-descriptor test: probe path may exceed
-        // 200ms on machines with real ports. OCE is acceptable here too
-        // — what matters is that the throwing provider didn't propagate.
+        // Probe path may exceed 200ms (legacy fallback engages on COM999 then
+        // fails to open). OCE is acceptable; what matters is that the throwing
+        // provider was actually called and didn't propagate.
         try
         {
             var devices = await finder.DiscoverAsync(cts.Token);
@@ -184,13 +191,22 @@ public class SerialDeviceFinderTests
         {
             // Probe ran (provider throw was caught and treated as null).
         }
+
+        Assert.True(fakeProvider.CallCount > 0,
+            "Throwing descriptor provider was never invoked — the exception-handling path is not exercised by this test.");
     }
 
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
     {
         private readonly Func<string, UsbPortDescriptor?> _classifier;
+        private int _callCount;
         public RecordingUsbPortDescriptorProvider(Func<string, UsbPortDescriptor?> classifier)
             => _classifier = classifier;
-        public UsbPortDescriptor? GetDescriptor(string portName) => _classifier(portName);
+        public int CallCount => Volatile.Read(ref _callCount);
+        public UsbPortDescriptor? GetDescriptor(string portName)
+        {
+            Interlocked.Increment(ref _callCount);
+            return _classifier(portName);
+        }
     }
 }

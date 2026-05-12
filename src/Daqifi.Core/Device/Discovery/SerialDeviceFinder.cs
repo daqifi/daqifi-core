@@ -48,6 +48,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private readonly int _baudRate;
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private readonly IUsbPortDescriptorProvider _usbPortDescriptorProvider;
+    private readonly Func<string[]>? _portNameProvider;
     private bool _disposed;
 
     #endregion
@@ -96,11 +97,21 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// <see cref="NullUsbPortDescriptorProvider.Instance"/> explicitly to
     /// force the legacy probe-everything behavior.
     /// </param>
-    internal SerialDeviceFinder(int baudRate, IUsbPortDescriptorProvider? usbPortDescriptorProvider)
+    /// <param name="portNameProvider">
+    /// Test seam: when non-null, supplies the candidate port-name list in
+    /// place of <see cref="SerialStreamTransport.GetAvailablePortNames"/>.
+    /// Lets unit tests deterministically exercise the descriptor / probe
+    /// path on hosts (CI containers) that have no real serial ports.
+    /// </param>
+    internal SerialDeviceFinder(
+        int baudRate,
+        IUsbPortDescriptorProvider? usbPortDescriptorProvider,
+        Func<string[]>? portNameProvider = null)
     {
         _baudRate = baudRate;
         _usbPortDescriptorProvider = usbPortDescriptorProvider
             ?? UsbPortDescriptorProviderFactory.CreateForCurrentPlatform();
+        _portNameProvider = portNameProvider;
     }
 
     #endregion
@@ -131,7 +142,8 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // Ports the descriptor provider can't classify (e.g. on macOS
             // where we have no impl yet) fall through to legacy probing,
             // matched only by name-pattern in FilterProbableDaqifiPorts.
-            var allPorts = SerialStreamTransport.GetAvailablePortNames();
+            var allPorts = _portNameProvider?.Invoke()
+                ?? SerialStreamTransport.GetAvailablePortNames();
             var nameFilteredPorts = FilterProbableDaqifiPorts(allPorts);
             var availablePorts = FilterByUsbDescriptor(nameFilteredPorts).ToList();
 
