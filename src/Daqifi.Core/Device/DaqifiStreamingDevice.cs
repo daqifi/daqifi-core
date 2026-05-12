@@ -762,8 +762,9 @@ namespace Daqifi.Core.Device
             var trimmed = line.TrimStart();
             if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
                 return true;
-            // Must be followed by a non-letter so plain filenames like
-            // "error_log.csv" (which TrimStart leaves intact) don't match.
+            // Must be followed by an SCPI delimiter (':', ' ', '!', '\t')
+            // or end of line, so plain filenames like "error_log.csv"
+            // (which TrimStart leaves intact) don't match.
             if (trimmed.Length >= 5
                 && trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
             {

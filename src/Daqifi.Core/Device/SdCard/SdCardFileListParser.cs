@@ -46,8 +46,9 @@ namespace Daqifi.Core.Device.SdCard
                 // "Errors_summary.bin" emitted without the Daqifi/
                 // directory prefix would also match (closes #190 second
                 // location — IsNonResultLine in DaqifiStreamingDevice
-                // had the same bug). Require a non-letter follower so
-                // ordinary filenames pass through.
+                // had the same bug). Match `ERROR` only when followed
+                // by an SCPI delimiter (':', ' ', '!', '\t') or end of
+                // line so ordinary filenames pass through.
                 if (IsErrorResponseLine(path))
                 {
                     continue;
@@ -117,8 +118,9 @@ namespace Daqifi.Core.Device.SdCard
 
         // Mirrors DaqifiStreamingDevice.IsNonResultLine (the LIST? response
         // classifier). Match `**ERROR` (the canonical SCPI marker) or
-        // `ERROR` followed by a non-letter so legit filenames whose basename
-        // starts with "error" / "Errors" pass through.
+        // `ERROR` followed by an SCPI delimiter (':', ' ', '!', '\t') or
+        // end of line, so legit filenames whose basename starts with
+        // "error" / "Errors" pass through.
         private static bool IsErrorResponseLine(string line)
         {
             if (line.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
