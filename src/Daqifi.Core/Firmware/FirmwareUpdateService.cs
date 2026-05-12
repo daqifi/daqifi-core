@@ -158,7 +158,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool skipVersionCheck = false)
     {
         ArgumentNullException.ThrowIfNull(device);
 
@@ -174,8 +175,19 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
 
         await RunExclusiveAsync(
-            ct => RunWifiUpdateAsync(device, firmwarePath, progress, ct),
+            ct => RunWifiUpdateAsync(device, firmwarePath, progress, skipVersionCheck, ct),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<WifiFirmwareStatus> CheckWifiFirmwareStatusAsync(
+        IStreamingDevice device,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        ThrowIfDisposed();
+
+        return await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RunExclusiveAsync(
@@ -330,13 +342,15 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress,
+        bool skipVersionCheck,
         CancellationToken cancellationToken)
     {
         const long totalBytes = 100;
 
         try
         {
-            if (await IsWifiFirmwareUpToDateAsync(device, progress, cancellationToken).ConfigureAwait(false))
+            if (!skipVersionCheck
+                && await IsWifiFirmwareUpToDateAsync(device, progress, cancellationToken).ConfigureAwait(false))
             {
                 return;
             }
@@ -433,9 +447,49 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IProgress<FirmwareUpdateProgress>? progress,
         CancellationToken cancellationToken)
     {
+        // Internal callsite: in addition to deciding the boolean, we must
+        // transition to Complete + report 100% progress so the caller's
+        // single UpdateWifiModuleAsync(...) call observes the same end-state
+        // as a successful flash. CheckWifiFirmwareStatusAsync (the public
+        // planning API) does not have that side effect — its callers own
+        // their own logging / UI transitions.
+        var status = await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
+
+        switch (status.Reason)
+        {
+            case WifiFirmwareStatusReason.UpdateAvailable:
+                _logger.LogInformation(
+                    "WiFi firmware update available: device has {DeviceVersion}, latest is {LatestVersion}.",
+                    status.CurrentChipInfo!.FwVersion,
+                    status.LatestRelease!.TagName);
+                return false;
+
+            case WifiFirmwareStatusReason.UpToDate:
+                var message = $"WiFi firmware is already up to date (device: {status.CurrentChipInfo!.FwVersion}, latest: {status.LatestRelease!.TagName}).";
+                _logger.LogInformation(message);
+                TransitionToState(FirmwareUpdateState.Complete, message);
+                ReportProgress(progress, FirmwareUpdateState.Complete, 100, message, 100, 100);
+                return true;
+
+            default:
+                // DeviceDoesNotSupportLanQuery, ChipInfoUnavailable,
+                // LatestReleaseUnavailable, VersionUnparseable — proceed
+                // with the flash conservatively.
+                return false;
+        }
+    }
+
+    private async Task<WifiFirmwareStatus> CheckWifiFirmwareStatusCoreAsync(
+        IStreamingDevice device,
+        CancellationToken cancellationToken)
+    {
         if (device is not ILanChipInfoProvider lanChipInfoProvider)
         {
-            return false;
+            return new WifiFirmwareStatus
+            {
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery,
+            };
         }
 
         LanChipInfo? chipInfo;
@@ -445,13 +499,21 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Failed to query LAN chip info; proceeding with WiFi firmware update.");
-            return false;
+            _logger.LogDebug(ex, "Failed to query LAN chip info; reporting status as ChipInfoUnavailable.");
+            return new WifiFirmwareStatus
+            {
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.ChipInfoUnavailable,
+            };
         }
 
         if (chipInfo == null)
         {
-            return false;
+            return new WifiFirmwareStatus
+            {
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.ChipInfoUnavailable,
+            };
         }
 
         FirmwareReleaseInfo? latestWifi;
@@ -463,29 +525,45 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Failed to query latest WiFi firmware release; proceeding with update.");
-            return false;
+            _logger.LogDebug(ex, "Failed to query latest WiFi firmware release; reporting status as LatestReleaseUnavailable.");
+            return new WifiFirmwareStatus
+            {
+                CurrentChipInfo = chipInfo,
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+            };
         }
 
         if (latestWifi == null)
         {
-            return false;
+            return new WifiFirmwareStatus
+            {
+                CurrentChipInfo = chipInfo,
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+            };
         }
 
-        if (!IsWifiVersionCurrent(chipInfo.FwVersion, latestWifi.TagName))
+        if (!FirmwareVersion.TryParse(chipInfo.FwVersion, out _) ||
+            !FirmwareVersion.TryParse(latestWifi.TagName, out _))
         {
-            _logger.LogInformation(
-                "WiFi firmware update available: device has {DeviceVersion}, latest is {LatestVersion}.",
-                chipInfo.FwVersion,
-                latestWifi.TagName);
-            return false;
+            return new WifiFirmwareStatus
+            {
+                CurrentChipInfo = chipInfo,
+                LatestRelease = latestWifi,
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.VersionUnparseable,
+            };
         }
 
-        var message = $"WiFi firmware is already up to date (device: {chipInfo.FwVersion}, latest: {latestWifi.TagName}).";
-        _logger.LogInformation(message);
-        TransitionToState(FirmwareUpdateState.Complete, message);
-        ReportProgress(progress, FirmwareUpdateState.Complete, 100, message, 100, 100);
-        return true;
+        var isCurrent = IsWifiVersionCurrent(chipInfo.FwVersion, latestWifi.TagName);
+        return new WifiFirmwareStatus
+        {
+            CurrentChipInfo = chipInfo,
+            LatestRelease = latestWifi,
+            IsUpToDate = isCurrent,
+            Reason = isCurrent ? WifiFirmwareStatusReason.UpToDate : WifiFirmwareStatusReason.UpdateAvailable,
+        };
     }
 
     private static bool IsWifiVersionCurrent(string deviceVersion, string latestTagName)

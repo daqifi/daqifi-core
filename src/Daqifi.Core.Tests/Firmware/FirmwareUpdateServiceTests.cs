@@ -491,6 +491,166 @@ public class FirmwareUpdateServiceTests
         Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
     }
 
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenVersionMatches_ReturnsUpToDate()
+    {
+        // Closes #143: callers can now make the version decision themselves
+        // without triggering UpdateWifiModuleAsync's hidden internal probe.
+        // This test asserts the new public planning method returns the
+        // expected status object and DOES NOT mutate service state.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            TagName = "19.5.4",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM9", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.True(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
+        Assert.NotNull(status.CurrentChipInfo);
+        Assert.Equal("19.5.4", status.CurrentChipInfo!.FwVersion);
+        Assert.NotNull(status.LatestRelease);
+        Assert.Equal("19.5.4", status.LatestRelease!.TagName);
+
+        // The planning method must NOT mutate service state (the internal
+        // IsWifiFirmwareUpToDateAsync transitions to Complete on its
+        // hit-path; CheckWifiFirmwareStatusAsync must not, so callers can
+        // call it freely without locking out a subsequent flash.
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenVersionOlder_ReturnsUpdateAvailable()
+    {
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 6, 1, null, 0),
+            TagName = "19.6.1",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM10", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.UpdateAvailable, status.Reason);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenDeviceDoesNotSupportLanQuery_ReturnsDeviceDoesNotSupportLanQuery()
+    {
+        var device = new FakeStreamingDevice("COM11");
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery, status.Reason);
+        Assert.Null(status.CurrentChipInfo);
+        Assert.Null(status.LatestRelease);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WithSkipVersionCheck_BypassesProbeAndAlwaysFlashes()
+    {
+        // The motivating case for #143: caller already made the version
+        // decision (via CheckWifiFirmwareStatusAsync). Pass skipVersionCheck:true
+        // so Core does NOT re-probe the device — even when the device's
+        // current version equals the latest, the flash flow runs.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            TagName = "19.5.4",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM12", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4", // Matches latest — would normally short-circuit
+            BuildDate = "Jan  8 2019"
+        });
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(
+                device,
+                firmwareDir,
+                progress: null,
+                cancellationToken: CancellationToken.None,
+                skipVersionCheck: true);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        // Even though device version matched latest, flash ran because
+        // skipVersionCheck bypassed the probe.
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Contains("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
+    }
+
     private static FirmwareUpdateServiceOptions CreateFastOptions()
     {
         return new FirmwareUpdateServiceOptions
