@@ -19,6 +19,13 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
         @"VID_(?<vid>[0-9A-F]{4}).*PID_(?<pid>[0-9A-F]{4})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // SerialPort.GetPortNames() returns "COM<n>" on Windows, but defend
+    // against malformed input reaching the WMI query string by validating
+    // the shape and rejecting anything that could close out the WQL literal.
+    private static readonly Regex PortNameRegex = new(
+        @"^COM\d+$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     public UsbPortDescriptor? GetDescriptor(string portName)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -41,9 +48,12 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
 
     private static UsbPortDescriptor? QueryWmi(string portName)
     {
+        // Reject anything that doesn't match COM<n> shape — the WQL string is
+        // built by interpolation, so a stray quote would corrupt the query.
+        if (!PortNameRegex.IsMatch(portName))
+            return null;
+
         // Match COM-port entities by Caption suffix, e.g. "USB Serial Device (COM9)".
-        // Avoids enumerating every PnP device on the system. Use a parameterized
-        // LIKE pattern; no user input crosses the WMI boundary.
         using var searcher = new System.Management.ManagementObjectSearcher(
             $"SELECT DeviceID FROM Win32_PnPEntity WHERE Caption LIKE '%({portName})%'");
         foreach (var entity in searcher.Get())
