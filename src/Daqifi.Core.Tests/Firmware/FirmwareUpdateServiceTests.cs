@@ -730,6 +730,197 @@ public class FirmwareUpdateServiceTests
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
     }
 
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLanChipInfoFailsTransiently_RetriesUntilSuccess()
+    {
+        // Closes #144: post-PIC32-reboot the WiFi subsystem can lag the
+        // application by a few seconds, so the first chip-info query
+        // transiently fails. Without retry, the WiFi version decision
+        // would short-circuit and trigger an unnecessary multi-minute
+        // reflash. The retry budget covers the startup window.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            TagName = "19.5.4",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM14",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            },
+            transientFailuresBeforeSuccess: 2);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5); // Keep test fast
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.True(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLanChipInfoFailsAllAttempts_ReturnsChipInfoUnavailable()
+    {
+        // After exhausting LanChipInfoMaxAttempts the planning method must
+        // fall through to ChipInfoUnavailable, NOT hang or surface the
+        // raw exception. This preserves the "couldn't check, default to
+        // running update" semantics for genuinely-broken devices.
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM15",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            },
+            transientFailuresBeforeSuccess: 99);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_TotalTimeoutHit_ShortCircuitsToChipInfoUnavailable()
+    {
+        // Closes a Qodo follow-up on PR #199: per-attempt query timeouts
+        // compound with retry delays, so a high MaxAttempts × non-trivial
+        // per-attempt latency could block far beyond the configured retry
+        // budget while holding _operationLock. The total-timeout cap caps
+        // wall-clock time independent of attempt counts.
+        //
+        // The fake's per-attempt latency is the Task.Delay below; with
+        // 200ms latency × 10 max attempts × 100ms retry delay, a naive
+        // implementation would block ~2.9s. The 100ms total timeout
+        // forces an early ChipInfoUnavailable return after the first
+        // attempt's latency exceeds the budget.
+        var device = new SlowFakeLanChipInfoStreamingDevice(
+            "COM17",
+            attemptLatency: TimeSpan.FromMilliseconds(200));
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 10;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(100);
+        options.LanChipInfoTotalTimeout = TimeSpan.FromMilliseconds(100);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+        stopwatch.Stop();
+
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
+        // Should bail well before attempting all 10 × (200ms + 100ms) = 3s.
+        // Allowing 1500ms for CI variance / xunit overhead.
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromMilliseconds(1500),
+            $"Probe took {stopwatch.ElapsedMilliseconds}ms, expected <1500ms with TotalTimeout=100ms.");
+    }
+
+    private sealed class SlowFakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
+    {
+        private readonly TimeSpan _attemptLatency;
+        public SlowFakeLanChipInfoStreamingDevice(string name, TimeSpan attemptLatency)
+        {
+            Name = name;
+            _attemptLatency = attemptLatency;
+            IsConnected = true;
+        }
+        public string Name { get; }
+        public IPAddress? IpAddress => null;
+        public bool IsConnected { get; private set; }
+        public ConnectionStatus Status => ConnectionStatus.Connected;
+        public int StreamingFrequency { get; set; }
+        public bool IsStreaming { get; private set; }
+        public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
+        public void Connect() => IsConnected = true;
+        public void Disconnect() => IsConnected = false;
+        public void Send<T>(IOutboundMessage<T> message) { }
+        public void StartStreaming() => IsStreaming = true;
+        public void StopStreaming() => IsStreaming = false;
+        public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(_attemptLatency, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_FirstAttemptSucceeds_DoesNotRetry()
+    {
+        // Steady-state path: no retry overhead when the first call works.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 5, 4, null, 0),
+            TagName = "19.5.4",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM16",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            });
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(1, device.GetLanChipInfoCallCount);
+    }
+
     private sealed class SyncProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;
@@ -848,13 +1039,17 @@ public class FirmwareUpdateServiceTests
     {
         private readonly LanChipInfo? _chipInfo;
         private ConnectionStatus _status = ConnectionStatus.Connected;
+        private int _remainingTransientFailures;
 
-        public FakeLanChipInfoStreamingDevice(string name, LanChipInfo? chipInfo)
+        public FakeLanChipInfoStreamingDevice(string name, LanChipInfo? chipInfo, int transientFailuresBeforeSuccess = 0)
         {
             Name = name;
             _chipInfo = chipInfo;
+            _remainingTransientFailures = transientFailuresBeforeSuccess;
             IsConnected = true;
         }
+
+        public int GetLanChipInfoCallCount { get; private set; }
 
         public string Name { get; }
         public IPAddress? IpAddress => null;
@@ -899,6 +1094,16 @@ public class FirmwareUpdateServiceTests
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
+            GetLanChipInfoCallCount++;
+            if (_remainingTransientFailures > 0)
+            {
+                _remainingTransientFailures--;
+                // Faulted task (not sync throw) more accurately simulates how
+                // a real async method surfaces failure — caller's await sees a
+                // genuinely-async exception path.
+                return Task.FromException<LanChipInfo?>(
+                    new InvalidOperationException("Simulated transient post-reboot failure."));
+            }
             return Task.FromResult(_chipInfo);
         }
     }

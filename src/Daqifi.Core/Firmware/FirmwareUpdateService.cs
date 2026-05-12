@@ -536,21 +536,15 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             };
         }
 
-        LanChipInfo? chipInfo;
-        try
-        {
-            chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogDebug(ex, "Failed to query LAN chip info; reporting status as ChipInfoUnavailable.");
-            return new WifiFirmwareStatus
-            {
-                IsUpToDate = false,
-                Reason = WifiFirmwareStatusReason.ChipInfoUnavailable,
-            };
-        }
-
+        // Bounded retry for the LAN chip-info probe (closes #144). Right
+        // after a PIC32 firmware update the application is up while WiFi
+        // is still finishing startup, so the first chip-info query can
+        // transiently fail; without retry, the WiFi version decision
+        // would short-circuit to ChipInfoUnavailable and flow on to a
+        // multi-minute reflash of already-current WiFi firmware. The
+        // retry budget is bounded (LanChipInfoMaxAttempts × RetryDelay)
+        // and observes cancellation between attempts.
+        var chipInfo = await TryGetLanChipInfoWithRetryAsync(lanChipInfoProvider, cancellationToken).ConfigureAwait(false);
         if (chipInfo == null)
         {
             return new WifiFirmwareStatus
@@ -611,6 +605,102 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             IsUpToDate = isCurrent,
             Reason = isCurrent ? WifiFirmwareStatusReason.UpToDate : WifiFirmwareStatusReason.UpdateAvailable,
         };
+    }
+
+    private async Task<LanChipInfo?> TryGetLanChipInfoWithRetryAsync(
+        ILanChipInfoProvider lanChipInfoProvider,
+        CancellationToken cancellationToken)
+    {
+        var maxAttempts = Math.Max(1, _options.LanChipInfoMaxAttempts);
+        var retryDelay = _options.LanChipInfoRetryDelay;
+        var totalTimeout = _options.LanChipInfoTotalTimeout;
+
+        // Wall-clock budget guards against the pathological case where
+        // attempt-count × per-attempt-timeout + retry-delay sum vastly
+        // exceeds the configured retry budget (e.g., 3 × 2s device timeout
+        // + 2 × 2s delay = ~10s while _operationLock is held). Linking
+        // the caller's CT preserves cancellation semantics; the timeout
+        // CTS just adds a deadline.
+        using var timeoutCts = new CancellationTokenSource(totalTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, timeoutCts.Token);
+        var linkedToken = linkedCts.Token;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                linkedToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug(
+                    "LAN chip-info probe hit total timeout ({Timeout}) before attempt {Attempt}/{Max}.",
+                    totalTimeout,
+                    attempt,
+                    maxAttempts);
+                return null;
+            }
+
+            try
+            {
+                var chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(linkedToken).ConfigureAwait(false);
+                if (chipInfo != null)
+                {
+                    if (attempt > 1)
+                    {
+                        _logger.LogDebug(
+                            "LAN chip-info query succeeded on attempt {Attempt}/{Max}.",
+                            attempt,
+                            maxAttempts);
+                    }
+                    return chipInfo;
+                }
+                _logger.LogDebug(
+                    "LAN chip-info query returned null on attempt {Attempt}/{Max}.",
+                    attempt,
+                    maxAttempts);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug(
+                    "LAN chip-info probe hit total timeout ({Timeout}) during attempt {Attempt}/{Max}.",
+                    totalTimeout,
+                    attempt,
+                    maxAttempts);
+                return null;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "LAN chip-info query failed on attempt {Attempt}/{Max}.",
+                    attempt,
+                    maxAttempts);
+            }
+
+            if (attempt < maxAttempts)
+            {
+                try
+                {
+                    await Task.Delay(retryDelay, linkedToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogDebug(
+                        "LAN chip-info probe hit total timeout ({Timeout}) during retry delay after attempt {Attempt}/{Max}.",
+                        totalTimeout,
+                        attempt,
+                        maxAttempts);
+                    return null;
+                }
+            }
+        }
+
+        _logger.LogDebug(
+            "LAN chip-info query exhausted {Max} attempts; reporting status as ChipInfoUnavailable.",
+            maxAttempts);
+        return null;
     }
 
     private ExternalProcessRequest BuildWifiProcessRequest(
