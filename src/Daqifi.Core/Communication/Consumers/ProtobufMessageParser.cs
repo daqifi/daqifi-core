@@ -114,15 +114,17 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
                     && !IsPlausibleFieldTagByte(remainingData[prefixBytes]);
 
                 // Gap gate ONLY applies in the pure-prefix-no-body case
-                // (≤1 body byte arrived). Once 2+ body bytes are buffered,
-                // the field-tag gate above has already structurally validated
-                // the start of the frame; a large declared length at that
-                // point is just a multi-chunk read of a legitimate frame
-                // (e.g. a multi-KB initial-status frame on a transport that
-                // returns smaller reads). Without this guard, the parser
-                // would treat the partial-but-real frame as garbage and
-                // skip into its body, corrupting it.
-                var gapIsSuspicious = availableBodyBytes <= 1
+                // (no body bytes arrived). Once any body byte is buffered,
+                // the field-tag gate above provides positive evidence that
+                // the prefix really is a frame start; a large declared
+                // length at that point is just a multi-chunk read of a
+                // legitimate frame (e.g. a multi-KB initial-status frame
+                // on a transport that returns smaller reads). Including
+                // availableBodyBytes == 1 here would corrupt real frames
+                // whose first body byte arrives alone — a single-byte
+                // mistaken advance is unrecoverable because callers trim
+                // consumedBytes from their buffer.
+                var gapIsSuspicious = availableBodyBytes == 0
                     && missingPayload > MaxPartialFrameGapBytes;
 
                 if (gapIsSuspicious || firstBodyByteIsGarbage)

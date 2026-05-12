@@ -266,7 +266,7 @@ public class ProtobufMessageParserTests
             "Test precondition: frame must exceed MaxPartialFrameGapBytes (1024) so the gap gate would fire on a one-shot read.");
 
         // Feed only prefix + first 4 body bytes — body is partially present
-        // (more than 1 byte, so gap gate must NOT fire), but not complete.
+        // but not complete. Parser must wait, not advance into the real body.
         var prefixPlusFour = fullFrame.Take(GetVarintLength(fullFrame) + 4).ToArray();
 
         // Act
@@ -275,6 +275,41 @@ public class ProtobufMessageParserTests
         // Assert: parser waits — no message parsed, no bytes advanced.
         // Callers retain the buffer for the next read; corrupting it here
         // (advancing into the body) would lose the frame forever.
+        Assert.Empty(messages);
+        Assert.Equal(0, consumedBytes);
+    }
+
+    [Fact]
+    public void ProtobufMessageParser_ParseMessages_OneBodyByteOfMultiKbFrame_NotCorrupted()
+    {
+        // Edge case of #189 Bug 1: when EXACTLY one body byte of a real
+        // multi-KB frame has arrived (common with small chunked reads),
+        // the gap gate must not fire. The single body byte's field-tag
+        // check provides positive evidence the prefix is real; advancing
+        // even one byte here would unrecoverably corrupt the frame
+        // because StreamMessageConsumer trims consumedBytes from its
+        // buffer between reads.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        var msg = new DaqifiOutMessage
+        {
+            MsgTimeStamp = 99,
+            DeviceFwRev = new string('x', 2000),
+        };
+        using var stream = new MemoryStream();
+        msg.WriteDelimitedTo(stream);
+        var fullFrame = stream.ToArray();
+
+        // Feed prefix + exactly 1 body byte. The first body byte of a real
+        // DaqifiOutMessage is a valid field tag (passes IsPlausibleFieldTagByte).
+        var prefixPlusOne = fullFrame.Take(GetVarintLength(fullFrame) + 1).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(prefixPlusOne, out var consumedBytes).ToList();
+
+        // Assert: parser waits, does not advance into the legitimate body.
         Assert.Empty(messages);
         Assert.Equal(0, consumedBytes);
     }
