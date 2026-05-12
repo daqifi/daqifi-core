@@ -187,7 +187,22 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         ArgumentNullException.ThrowIfNull(device);
         ThrowIfDisposed();
 
-        return await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
+        // Serialize device I/O with UpdateFirmwareAsync / UpdateWifiModuleAsync.
+        // GetLanChipInfoAsync runs a SCPI text exchange on the same transport
+        // those updates use; a concurrent caller would interleave on the wire
+        // and either corrupt the consumer swap or get partial replies.
+        // Acquired without the RunExclusiveAsync state check — a status probe
+        // is read-only and should be available to UI even when an update is
+        // in flight (it just waits for the in-flight I/O to release the lock).
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     private async Task RunExclusiveAsync(
@@ -544,8 +559,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             };
         }
 
-        if (!FirmwareVersion.TryParse(chipInfo.FwVersion, out _) ||
-            !FirmwareVersion.TryParse(latestWifi.TagName, out _))
+        // Only the device-reported version needs parsing; latestWifi.Version
+        // is already a strongly-typed FirmwareVersion from FirmwareDownloadService.
+        // Re-parsing TagName would risk divergence from the canonical Version
+        // (different tag prefix conventions, etc.) and cost an extra parse.
+        if (!FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion))
         {
             return new WifiFirmwareStatus
             {
@@ -556,7 +574,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             };
         }
 
-        var isCurrent = IsWifiVersionCurrent(chipInfo.FwVersion, latestWifi.TagName);
+        var isCurrent = deviceVersion >= latestWifi.Version;
         return new WifiFirmwareStatus
         {
             CurrentChipInfo = chipInfo,
@@ -564,17 +582,6 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             IsUpToDate = isCurrent,
             Reason = isCurrent ? WifiFirmwareStatusReason.UpToDate : WifiFirmwareStatusReason.UpdateAvailable,
         };
-    }
-
-    private static bool IsWifiVersionCurrent(string deviceVersion, string latestTagName)
-    {
-        if (!FirmwareVersion.TryParse(deviceVersion, out var device) ||
-            !FirmwareVersion.TryParse(latestTagName, out var latest))
-        {
-            return false;
-        }
-
-        return device >= latest;
     }
 
     private ExternalProcessRequest BuildWifiProcessRequest(
