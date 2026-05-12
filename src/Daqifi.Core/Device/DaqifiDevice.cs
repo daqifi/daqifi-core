@@ -219,17 +219,20 @@ namespace Daqifi.Core.Device
         /// Disconnects from the device.
         /// </summary>
         /// <remarks>
-        /// Waits up to 1 second to acquire <c>_textExchangeLock</c> before
+        /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
         /// tearing down the consumer / producer / transport. This prevents
         /// a race where an in-flight <see cref="ExecuteTextCommandAsync"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
         /// anyway — a stuck text exchange must not block teardown forever.
-        /// The 1s budget is the longest delay any normal text exchange
-        /// can hold the lock for (responseTimeoutMs default + safety
-        /// margin); callers wanting non-blocking disconnect should drive
-        /// this off a Task.Run.
+        /// The 10s budget covers the worst-case ExecuteTextCommandAsync
+        /// hold time with default timeouts (StopSafely up to 1s + maxWait
+        /// of responseTimeoutMs*5 = 5s by default + safety margin) and
+        /// most custom-timeout callers; on timeout the in-flight exchange
+        /// sees <c>_isDisconnecting == true</c> via the post-acquisition
+        /// validation and bails out cleanly. Callers wanting non-blocking
+        /// disconnect should drive this off a Task.Run.
         /// </remarks>
         public void Disconnect()
         {
@@ -244,7 +247,7 @@ namespace Daqifi.Core.Device
             var lockAcquired = false;
             try
             {
-                lockAcquired = _textExchangeLock.Wait(TimeSpan.FromSeconds(1));
+                lockAcquired = _textExchangeLock.Wait(TimeSpan.FromSeconds(10));
             }
             catch (ObjectDisposedException)
             {
