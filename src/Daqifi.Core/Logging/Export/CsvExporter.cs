@@ -277,8 +277,15 @@ public class CsvExporter
     {
         if (formulaSafe && !string.IsNullOrEmpty(value))
         {
-            var leading = value.TrimStart(' ', '\t');
-            if (leading.Length > 0 && "=+-@".IndexOf(leading[0]) >= 0)
+            // Skip ALL Unicode whitespace, not just ' ' and '\t'. CSV
+            // formula-injection PoCs use NBSP (U+00A0), thin spaces, line
+            // separator (U+2028), etc. before '=' to evade trim-based
+            // checks; spreadsheets still treat the resulting cell as a
+            // formula. char.IsWhiteSpace covers the full Unicode set.
+            var i = 0;
+            while (i < value.Length && char.IsWhiteSpace(value[i]))
+                i++;
+            if (i < value.Length && "=+-@".IndexOf(value[i]) >= 0)
             {
                 value = "'" + value;
             }
