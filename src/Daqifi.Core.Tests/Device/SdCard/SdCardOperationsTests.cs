@@ -179,9 +179,14 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var names = files.Select(f => f.FileName).ToList();
             Assert.Equal(2, names.Count);
             Assert.Contains("normal.bin", names);
-            // filename may or may not have the Daqifi/ prefix stripped depending
-            // on the parser's path handling; just confirm it survived.
-            var expected = filename.StartsWith("Daqifi/") ? filename.Substring("Daqifi/".Length) : filename;
+            // The parser strips the "Daqifi/" prefix case-insensitively
+            // (StringComparison.OrdinalIgnoreCase), so mirror that here —
+            // a case-sensitive StartsWith would falsely fail if a future
+            // test case used "daqifi/" or "DAQIFI/".
+            const string daqifiPrefix = "Daqifi/";
+            var expected = filename.StartsWith(daqifiPrefix, StringComparison.OrdinalIgnoreCase)
+                ? filename.Substring(daqifiPrefix.Length)
+                : filename;
             Assert.Contains(expected, names);
         }
 
