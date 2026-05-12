@@ -69,6 +69,33 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_FilenamesStartingWithErrorAreNotMisclassified()
+        {
+            // Regression for #190: IsNonResultLine's prior bare "ERROR"
+            // prefix check false-positived on legit SD filenames whose
+            // basename starts with "error" (e.g. "error_log.csv"). The
+            // permissive classifier dropped them from the parsed file
+            // list. Tightened to require ERROR followed by `:`/` `/`!`/
+            // tab so ordinary filenames pass through.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/error_log.csv",
+                "Daqifi/Errors_summary.bin",
+                "Daqifi/normal.bin",
+            };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            var names = files.Select(f => f.FileName).ToList();
+            Assert.Contains("error_log.csv", names);
+            Assert.Contains("Errors_summary.bin", names);
+            Assert.Contains("normal.bin", names);
+            Assert.Equal(3, files.Count);
+        }
+
+        [Fact]
         public async Task GetSdCardFilesAsync_RestoresLanInterface()
         {
             // Arrange

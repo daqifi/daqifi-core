@@ -749,12 +749,29 @@ namespace Daqifi.Core.Device
         // Permissive: any line that looks like a device error or status message,
         // including firmware text such as "Error !! ...". Used to recognize that
         // the parser would yield no result, without polluting LastScpiError with
-        // non-SCPI text.
+        // non-SCPI text. Closes #190 — bare "ERROR" prefix false-positives on
+        // legit SD filenames that happen to start with "error" (e.g.
+        // "error_log.csv"), which would mask the file from GetSdCardFilesAsync's
+        // returned list. Tightened to require ERROR followed by ":", " " (firmware
+        // pattern "Error !!"), or "*" (the "**ERROR" SCPI marker, also matched by
+        // IsScpiErrorLine).
         private static bool IsNonResultLine(string line)
         {
             var trimmed = line.TrimStart();
-            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
-                || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
+            if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+                return true;
+            // Must be followed by a non-letter so plain filenames like
+            // "error_log.csv" (which TrimStart leaves intact) don't match.
+            if (trimmed.Length >= 5
+                && trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                if (trimmed.Length == 5)
+                    return true;
+                var next = trimmed[5];
+                if (next == ':' || next == ' ' || next == '!' || next == '\t')
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>
