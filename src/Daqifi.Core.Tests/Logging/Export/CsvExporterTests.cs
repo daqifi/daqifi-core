@@ -600,6 +600,22 @@ public class CsvExporterTests
         Assert.Contains("' =DevA:SN001:Channel1", header);
     }
 
+    [Theory]
+    [InlineData("\u00A0")] // NBSP
+    [InlineData("\u2003")] // EM SPACE
+    public async Task Export_UnicodeWhitespacePrefixedFormulaChar_StillNeutralized(string whitespace)
+    {
+        // Trim-based formula-injection mitigations that only strip ' '
+        // and '\t' miss CSV PoCs that prepend NBSP / EM SPACE / line
+        // separator before '='. char.IsWhiteSpace covers the full
+        // Unicode whitespace set so the leading apostrophe still lands.
+        var deviceName = whitespace + "=DevA";
+        var ch = new ChannelDescriptor(deviceName, "SN001", "Channel1", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("'" + deviceName + ":SN001:Channel1", header);
+    }
+
     // ── #193 data-row escaping (timestamps + values) ─────────────────────────
 
     [Fact]
