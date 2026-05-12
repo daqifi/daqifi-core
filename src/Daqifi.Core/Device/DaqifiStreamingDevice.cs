@@ -752,9 +752,11 @@ namespace Daqifi.Core.Device
         // non-SCPI text. Closes #190 — bare "ERROR" prefix false-positives on
         // legit SD filenames that happen to start with "error" (e.g.
         // "error_log.csv"), which would mask the file from GetSdCardFilesAsync's
-        // returned list. Tightened to require ERROR followed by ":", " " (firmware
-        // pattern "Error !!"), or "*" (the "**ERROR" SCPI marker, also matched by
-        // IsScpiErrorLine).
+        // returned list. Tightened to require either:
+        //   - the canonical "**ERROR" SCPI marker (also matched by IsScpiErrorLine), or
+        //   - "ERROR" exactly (length-5 line), or
+        //   - "ERROR" followed by ":" / " " / "!" / tab — covering both
+        //     SCPI ("ERROR: -100, ...") and firmware ("Error !!", "Error ...") patterns.
         private static bool IsNonResultLine(string line)
         {
             var trimmed = line.TrimStart();

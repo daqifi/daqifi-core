@@ -40,9 +40,15 @@ namespace Daqifi.Core.Device.SdCard
 
                 var path = line.Trim();
 
-                // Skip SCPI error responses: "**ERROR: -200, ..." or "ERROR: -200, ..."
-                if (path.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+                // Skip SCPI error responses: "**ERROR: -200, ..." or
+                // "ERROR: -200, ...". Bare "ERROR" prefix can't be used
+                // here because filenames like "error_log.csv" /
+                // "Errors_summary.bin" emitted without the Daqifi/
+                // directory prefix would also match (closes #190 second
+                // location — IsNonResultLine in DaqifiStreamingDevice
+                // had the same bug). Require a non-letter follower so
+                // ordinary filenames pass through.
+                if (IsErrorResponseLine(path))
                 {
                     continue;
                 }
@@ -107,6 +113,26 @@ namespace Daqifi.Core.Device.SdCard
             }
 
             return null;
+        }
+
+        // Mirrors DaqifiStreamingDevice.IsNonResultLine (the LIST? response
+        // classifier). Match `**ERROR` (the canonical SCPI marker) or
+        // `ERROR` followed by a non-letter so legit filenames whose basename
+        // starts with "error" / "Errors" pass through.
+        private static bool IsErrorResponseLine(string line)
+        {
+            if (line.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (line.Length >= 5
+                && line.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                if (line.Length == 5)
+                    return true;
+                var next = line[5];
+                if (next == ':' || next == ' ' || next == '!' || next == '\t')
+                    return true;
+            }
+            return false;
         }
     }
 }
