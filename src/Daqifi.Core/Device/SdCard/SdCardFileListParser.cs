@@ -117,12 +117,13 @@ namespace Daqifi.Core.Device.SdCard
         }
 
         /// <summary>
-        /// Returns true if the line is a SCPI error response (<c>**ERROR</c>
-        /// canonical marker, or <c>ERROR</c> followed by a SCPI delimiter
-        /// '<c>:</c>', '<c> </c>', '<c>!</c>', '<c>\t</c>', or end of line).
-        /// Trims both ends so a bare <c>"ERROR\r"</c> from CRLF line endings
-        /// still classifies. Plain filenames whose basename starts with
-        /// <c>error</c> / <c>Errors</c> pass through unmatched (closes #190).
+        /// Returns true if the line is a SCPI error response — either the
+        /// canonical <c>**ERROR</c> marker or a bare <c>ERROR</c> token, in
+        /// each case followed by a SCPI delimiter (<c>:</c>, space, <c>!</c>,
+        /// tab) or end of line. Trims both ends so a bare <c>"ERROR\r"</c>
+        /// from CRLF line endings still classifies. Plain filenames whose
+        /// basename starts with <c>error</c> / <c>Errors</c> pass through
+        /// unmatched (closes #190).
         /// </summary>
         /// <remarks>
         /// Shared with <c>DaqifiStreamingDevice.IsNonResultLine</c> so any
@@ -132,18 +133,19 @@ namespace Daqifi.Core.Device.SdCard
         internal static bool IsErrorResponseLine(string line)
         {
             var trimmed = line.Trim();
-            if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+            return MatchesErrorPrefix(trimmed, "**ERROR")
+                   || MatchesErrorPrefix(trimmed, "ERROR");
+        }
+
+        private static bool MatchesErrorPrefix(string trimmed, string prefix)
+        {
+            if (trimmed.Length < prefix.Length
+                || !trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (trimmed.Length == prefix.Length)
                 return true;
-            if (trimmed.Length >= 5
-                && trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
-            {
-                if (trimmed.Length == 5)
-                    return true;
-                var next = trimmed[5];
-                if (next == ':' || next == ' ' || next == '!' || next == '\t')
-                    return true;
-            }
-            return false;
+            var next = trimmed[prefix.Length];
+            return next == ':' || next == ' ' || next == '!' || next == '\t';
         }
     }
 }
