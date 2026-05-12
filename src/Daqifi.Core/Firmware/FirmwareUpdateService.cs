@@ -828,6 +828,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         var totalTimeout = _options.PostReconnectReadinessTimeout;
         var retryDelay = _options.PostReconnectReadinessRetryDelay;
 
+        // Surface the wait at Information level so observers tailing the
+        // log can distinguish "stuck" from "deliberately polling". The
+        // wait can take up to PostReconnectReadinessTimeout (default 30s);
+        // without this, the JumpingToApp state appears hung beyond the
+        // initial transport reopen.
+        _logger.LogInformation(
+            "Waiting up to {Timeout} for device to become application-ready (post-reconnect readiness probe).",
+            totalTimeout);
+        var waitStart = DateTime.UtcNow;
+
         using var timeoutCts = new CancellationTokenSource(totalTimeout);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken, timeoutCts.Token);
@@ -879,12 +889,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
                 if (isReady)
                 {
-                    if (probesExecuted > 1)
-                    {
-                        _logger.LogDebug(
-                            "Device became application-ready on probe attempt {Attempt}.",
-                            probesExecuted);
-                    }
+                    var elapsed = DateTime.UtcNow - waitStart;
+                    _logger.LogInformation(
+                        "Device became application-ready after {Elapsed} on probe attempt {Attempt}.",
+                        elapsed,
+                        probesExecuted);
                     return;
                 }
                 _logger.LogDebug("Application-ready probe returned false on attempt {Attempt}; will retry.", probesExecuted);
