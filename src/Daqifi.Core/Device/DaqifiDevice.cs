@@ -80,6 +80,25 @@ namespace Daqifi.Core.Device
         private bool _isDisconnecting;
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
+
+        // Serializes ExecuteTextCommandAsync calls device-wide (closes #186).
+        // Multiple callers — e.g. concurrent GetSdCardFilesAsync /
+        // DrainErrorQueueAsync / GetSystemInfoAsync — would otherwise race the
+        // protobuf-consumer pause/swap/restart sequence on the same stream and
+        // either intermix SCPI bytes on the wire or interleave reply lines
+        // between callers' returned lists. SemaphoreSlim chosen over Lock
+        // because the method is async; counter is (1, 1) for mutual exclusion.
+        private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
+
+        // Thread that currently holds _textExchangeLock, or null when free.
+        // Lets ExecuteTextCommandAsync detect a same-thread re-entrant call
+        // (a setupAction that itself calls back into ExecuteTextCommandAsync)
+        // and throw InvalidOperationException instead of deadlocking on
+        // _textExchangeLock.WaitAsync(). Same safety guarantee — the
+        // re-entrant call would corrupt the consumer swap; better failure
+        // mode for callers (clean exception, stack trace) than a hung
+        // process (closes #186 follow-up).
+        private int? _textExchangeOwnerThreadId;
         
         /// <summary>
         /// Gets the current connection status of the device.
@@ -328,26 +347,53 @@ namespace Daqifi.Core.Device
             if (completionTimeoutMs <= 0)
                 throw new ArgumentOutOfRangeException(nameof(completionTimeoutMs), completionTimeoutMs, "Timeout must be positive.");
 
-            var sw = Stopwatch.StartNew();
-
-            if (!IsConnected)
-            {
-                throw new InvalidOperationException("Device is not connected.");
-            }
-
-            if (_transport == null)
-            {
-                throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
-            }
-
             cancellationToken.ThrowIfCancellationRequested();
 
-            var collectedLines = new List<string>();
-            var stream = _transport.Stream;
-            int? originalReadTimeout = null;
+            // Same-thread re-entrancy detection: a setupAction that calls
+            // ExecuteTextCommandAsync on the same device would corrupt the
+            // consumer swap mid-flight. Surface as a clean exception rather
+            // than wedging on _textExchangeLock.WaitAsync() forever.
+            var currentTid = Environment.CurrentManagedThreadId;
+            if (_textExchangeOwnerThreadId == currentTid)
+            {
+                throw new InvalidOperationException(
+                    "ExecuteTextCommandAsync is not re-entrant on the same device; "
+                    + "do not call it from inside a setupAction callback.");
+            }
 
+            await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            _textExchangeOwnerThreadId = currentTid;
             try
             {
+                // All validation runs INSIDE the lock so a competing thread
+                // calling DisconnectAsync() / Dispose() while we're blocked
+                // on WaitAsync() doesn't leave us with a stale _transport /
+                // _messageConsumer reference (closes the TOCTOU window
+                // documented in #186).
+                if (_disposed || _isDisconnecting)
+                {
+                    throw new InvalidOperationException(
+                        "ExecuteTextCommandAsync cannot run while the device is "
+                        + "disposing or disconnecting.");
+                }
+
+                if (!IsConnected)
+                {
+                    throw new InvalidOperationException("Device is not connected.");
+                }
+
+                if (_transport == null)
+                {
+                    throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
+                }
+
+                var sw = Stopwatch.StartNew();
+                var collectedLines = new List<string>();
+                var stream = _transport.Stream;
+                int? originalReadTimeout = null;
+
+                try
+                {
                 if (stream.CanTimeout)
                 {
                     try
@@ -468,7 +514,13 @@ namespace Daqifi.Core.Device
                 Trace.WriteLine($"[ExecuteTextCommandAsync] Total elapsed: {sw.ElapsedMilliseconds}ms");
             }
 
-            return collectedLines;
+                return collectedLines;
+            }
+            finally
+            {
+                _textExchangeOwnerThreadId = null;
+                _textExchangeLock.Release();
+            }
         }
 
         /// <summary>
@@ -595,6 +647,7 @@ namespace Daqifi.Core.Device
                 _messageConsumer?.Dispose();
                 _messageProducer?.Dispose();
                 _transport?.Dispose();
+                _textExchangeLock.Dispose();
                 _disposed = true;
             }
         }
