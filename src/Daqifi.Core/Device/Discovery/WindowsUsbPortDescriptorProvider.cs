@@ -54,9 +54,13 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
             return null;
 
         // Match COM-port entities by Caption suffix, e.g. "USB Serial Device (COM9)".
+        // Restricting to PNPClass='Ports' skips the rest of the device tree
+        // and shrinks WMI's enumeration cost; the result collection itself
+        // owns native handles and must be disposed.
         using var searcher = new System.Management.ManagementObjectSearcher(
-            $"SELECT DeviceID FROM Win32_PnPEntity WHERE Caption LIKE '%({portName})%'");
-        foreach (var entity in searcher.Get())
+            $"SELECT DeviceID FROM Win32_PnPEntity WHERE PNPClass = 'Ports' AND Caption LIKE '%({portName})%'");
+        using var results = searcher.Get();
+        foreach (var entity in results)
         {
             using (entity)
             {
