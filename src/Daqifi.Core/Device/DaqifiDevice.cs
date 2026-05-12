@@ -90,15 +90,16 @@ namespace Daqifi.Core.Device
         // because the method is async; counter is (1, 1) for mutual exclusion.
         private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
 
-        // Thread that currently holds _textExchangeLock, or null when free.
-        // Lets ExecuteTextCommandAsync detect a same-thread re-entrant call
-        // (a setupAction that itself calls back into ExecuteTextCommandAsync)
-        // and throw InvalidOperationException instead of deadlocking on
-        // _textExchangeLock.WaitAsync(). Same safety guarantee — the
-        // re-entrant call would corrupt the consumer swap; better failure
-        // mode for callers (clean exception, stack trace) than a hung
-        // process (closes #186 follow-up).
-        private int? _textExchangeOwnerThreadId;
+        // Async-context flag that tracks whether the current logical flow
+        // already holds _textExchangeLock. AsyncLocal flows across await
+        // resumptions on different threads, so a setupAction that re-enters
+        // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
+        // detected and surfaced as InvalidOperationException — instead of
+        // wedging on _textExchangeLock.WaitAsync() (the re-entrant call
+        // would corrupt the consumer swap mid-flight). Plain
+        // Environment.CurrentManagedThreadId capture wouldn't work — the
+        // value seen before await may not match the value seen after.
+        private readonly AsyncLocal<bool> _isInsideTextExchange = new();
         
         /// <summary>
         /// Gets the current connection status of the device.
@@ -217,9 +218,33 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Disconnects from the device.
         /// </summary>
+        /// <remarks>
+        /// Waits up to 5 seconds to acquire <c>_textExchangeLock</c> before
+        /// tearing down the consumer / producer / transport. This prevents
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync"/>
+        /// is mid-swap (text consumer running on the stream, protobuf
+        /// consumer not yet restarted) and Disconnect rips the transport
+        /// out from under it. If the wait times out, Disconnect proceeds
+        /// anyway — a stuck text exchange must not block teardown forever.
+        /// </remarks>
         public void Disconnect()
         {
             _isDisconnecting = true;
+            // Best-effort coordination with ExecuteTextCommandAsync. We do
+            // NOT release this lock — Dispose() disposes the semaphore
+            // shortly after, and any in-flight text exchange will see
+            // _isDisconnecting on its own validation path or take the
+            // ObjectDisposedException catch in its Release().
+            var lockAcquired = false;
+            try
+            {
+                lockAcquired = _textExchangeLock.Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disconnect called after Dispose — nothing to coordinate.
+            }
+
             try
             {
                 // Unsubscribe from message consumer events
@@ -241,6 +266,16 @@ namespace Daqifi.Core.Device
                 State = DeviceState.Disconnected;
                 _isInitialized = false;
                 _isDisconnecting = false;
+                if (lockAcquired)
+                {
+                    try
+                    {
+                        _textExchangeLock.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
             }
         }
 
@@ -349,12 +384,14 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Same-thread re-entrancy detection: a setupAction that calls
+            // Async-context re-entrancy detection: a setupAction that calls
             // ExecuteTextCommandAsync on the same device would corrupt the
             // consumer swap mid-flight. Surface as a clean exception rather
             // than wedging on _textExchangeLock.WaitAsync() forever.
-            var currentTid = Environment.CurrentManagedThreadId;
-            if (_textExchangeOwnerThreadId == currentTid)
+            // AsyncLocal flows across await thread hops so this catches
+            // re-entry even when the inner call resumes on a different
+            // thread than the outer call.
+            if (_isInsideTextExchange.Value)
             {
                 throw new InvalidOperationException(
                     "ExecuteTextCommandAsync is not re-entrant on the same device; "
@@ -362,7 +399,7 @@ namespace Daqifi.Core.Device
             }
 
             await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-            _textExchangeOwnerThreadId = currentTid;
+            _isInsideTextExchange.Value = true;
             try
             {
                 // All validation runs INSIDE the lock so a competing thread
@@ -518,8 +555,20 @@ namespace Daqifi.Core.Device
             }
             finally
             {
-                _textExchangeOwnerThreadId = null;
-                _textExchangeLock.Release();
+                _isInsideTextExchange.Value = false;
+                // Release can race with Dispose() — Dispose acquires the lock
+                // before disposing it, but if that acquisition timed out and
+                // Dispose proceeded anyway, our SemaphoreSlim handle is now
+                // gone. Treat that as a benign teardown signal rather than
+                // surfacing it from the finally and masking the original
+                // exception (if any) from the try body.
+                try
+                {
+                    _textExchangeLock.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
             }
         }
 
