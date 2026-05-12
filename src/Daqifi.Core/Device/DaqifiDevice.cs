@@ -398,7 +398,20 @@ namespace Daqifi.Core.Device
                     + "do not call it from inside a setupAction callback.");
             }
 
-            await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispose() raced ahead of us and disposed the semaphore.
+                // Surface the same clean failure as the post-acquisition
+                // _disposed check below, instead of leaking a low-level
+                // teardown exception to callers.
+                throw new InvalidOperationException(
+                    "ExecuteTextCommandAsync cannot run because the device is disposed.");
+            }
+
             _isInsideTextExchange.Value = true;
             try
             {
