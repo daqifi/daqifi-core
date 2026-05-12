@@ -48,6 +48,11 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
 
     private static UsbPortDescriptor? QueryWmi(string portName)
     {
+        // Bail explicitly on null/whitespace rather than relying on the
+        // outer try/catch to swallow an NRE from the regex match.
+        if (string.IsNullOrWhiteSpace(portName))
+            return null;
+
         // Reject anything that doesn't match COM<n> shape — the WQL string is
         // built by interpolation, so a stray quote would corrupt the query.
         if (!PortNameRegex.IsMatch(portName))
