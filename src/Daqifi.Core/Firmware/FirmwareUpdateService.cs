@@ -850,24 +850,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
             try
             {
-                var isReady = await probe(device, linkedToken).ConfigureAwait(false);
-
-                // Re-check the budget after the await: a probe that ignores
-                // its CancellationToken could otherwise return true after
-                // the timeout has elapsed and bypass the budget. Caller's
-                // CT propagates as OperationCanceledException out of this
-                // method (caught at the same handler below); only the
-                // timeout-CT case is reinterpreted as TimeoutException.
-                try
-                {
-                    linkedToken.ThrowIfCancellationRequested();
-                }
-                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                {
-                    throw new TimeoutException(
-                        $"Device did not become application-ready within {totalTimeout} after PIC32 reconnect (attempt {attempt}). " +
-                        "The readiness probe ignored cancellation and returned after the deadline.");
-                }
+                // WaitAsync(linkedToken) enforces the timeout deadline even
+                // when the probe ignores its own CancellationToken and would
+                // otherwise hang or return after the budget elapses. When
+                // the deadline fires, WaitAsync throws OperationCanceledException
+                // immediately — we don't keep waiting for the rogue probe.
+                // (Stronger than a post-await re-check: that would still
+                // wait for the probe to return; this short-circuits.)
+                var isReady = await probe(device, linkedToken)
+                    .WaitAsync(linkedToken)
+                    .ConfigureAwait(false);
 
                 if (isReady)
                 {
