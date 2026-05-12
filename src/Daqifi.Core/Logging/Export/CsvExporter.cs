@@ -293,15 +293,29 @@ public class CsvExporter
 
         var delimChar = delimiter[0];
         var mustQuote = false;
-        for (var i = 0; i < value.Length; i++)
+
+        // Quote fields with leading or trailing whitespace — many CSV
+        // parsers (Excel, Google Sheets, pandas with default options) trim
+        // unquoted whitespace and silently lose it. Quoting preserves the
+        // exact value through round-trip.
+        if (value.Length > 0 && (char.IsWhiteSpace(value[0]) || char.IsWhiteSpace(value[^1])))
         {
-            var c = value[i];
-            if (c == delimChar || c == '"' || c == '\r' || c == '\n')
+            mustQuote = true;
+        }
+
+        if (!mustQuote)
+        {
+            for (var i = 0; i < value.Length; i++)
             {
-                mustQuote = true;
-                break;
+                var c = value[i];
+                if (c == delimChar || c == '"' || c == '\r' || c == '\n')
+                {
+                    mustQuote = true;
+                    break;
+                }
             }
         }
+
         if (mustQuote)
         {
             return "\"" + value.Replace("\"", "\"\"") + "\"";

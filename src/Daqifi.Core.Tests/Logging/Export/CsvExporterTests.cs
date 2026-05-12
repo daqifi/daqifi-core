@@ -616,6 +616,19 @@ public class CsvExporterTests
         Assert.Contains("'" + deviceName + ":SN001:Channel1", header);
     }
 
+    [Fact]
+    public async Task Export_LeadingTrailingWhitespaceInDeviceName_QuotesField()
+    {
+        // Excel, Google Sheets, and pandas trim unquoted leading/trailing
+        // whitespace in CSV fields; quoting preserves the exact value
+        // through round-trip parsing.
+        var deviceName = "  DevA  ";
+        var ch = new ChannelDescriptor(deviceName, "SN001", "Channel1", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("\"  DevA  :SN001:Channel1\"", header);
+    }
+
     // ── #193 data-row escaping (timestamps + values) ─────────────────────────
 
     [Fact]
