@@ -812,6 +812,79 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_TotalTimeoutHit_ShortCircuitsToChipInfoUnavailable()
+    {
+        // Closes a Qodo follow-up on PR #199: per-attempt query timeouts
+        // compound with retry delays, so a high MaxAttempts × non-trivial
+        // per-attempt latency could block far beyond the configured retry
+        // budget while holding _operationLock. The total-timeout cap caps
+        // wall-clock time independent of attempt counts.
+        //
+        // The fake's per-attempt latency is the Task.Delay below; with
+        // 200ms latency × 10 max attempts × 100ms retry delay, a naive
+        // implementation would block ~2.9s. The 100ms total timeout
+        // forces an early ChipInfoUnavailable return after the first
+        // attempt's latency exceeds the budget.
+        var device = new SlowFakeLanChipInfoStreamingDevice(
+            "COM17",
+            attemptLatency: TimeSpan.FromMilliseconds(200));
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 10;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(100);
+        options.LanChipInfoTotalTimeout = TimeSpan.FromMilliseconds(100);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+        stopwatch.Stop();
+
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
+        // Should bail well before attempting all 10 × (200ms + 100ms) = 3s.
+        // Allowing 1500ms for CI variance / xunit overhead.
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromMilliseconds(1500),
+            $"Probe took {stopwatch.ElapsedMilliseconds}ms, expected <1500ms with TotalTimeout=100ms.");
+    }
+
+    private sealed class SlowFakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
+    {
+        private readonly TimeSpan _attemptLatency;
+        public SlowFakeLanChipInfoStreamingDevice(string name, TimeSpan attemptLatency)
+        {
+            Name = name;
+            _attemptLatency = attemptLatency;
+            IsConnected = true;
+        }
+        public string Name { get; }
+        public IPAddress? IpAddress => null;
+        public bool IsConnected { get; private set; }
+        public ConnectionStatus Status => ConnectionStatus.Connected;
+        public int StreamingFrequency { get; set; }
+        public bool IsStreaming { get; private set; }
+        public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
+        public void Connect() => IsConnected = true;
+        public void Disconnect() => IsConnected = false;
+        public void Send<T>(IOutboundMessage<T> message) { }
+        public void StartStreaming() => IsStreaming = true;
+        public void StopStreaming() => IsStreaming = false;
+        public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(_attemptLatency, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+    }
+
+    [Fact]
     public async Task CheckWifiFirmwareStatusAsync_FirstAttemptSucceeds_DoesNotRetry()
     {
         // Steady-state path: no retry overhead when the first call works.

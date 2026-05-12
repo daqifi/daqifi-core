@@ -126,16 +126,35 @@ public sealed class FirmwareUpdateServiceOptions
     /// typically up while the WiFi subsystem is still finishing startup, so
     /// the first chip-info query can transiently fail; bounded retry covers
     /// that window so callers don't unnecessarily reflash up-to-date WiFi
-    /// firmware (closes #144). Default 3 attempts × 2s delay = up to 4s
-    /// wait in the worst case, which fits the observed startup window.
+    /// firmware (closes #144).
     /// </summary>
+    /// <remarks>
+    /// Each attempt also incurs the per-attempt timeout from the device
+    /// implementation (e.g., <c>DaqifiStreamingDevice.GetLanChipInfoAsync</c>
+    /// uses 2s). Total wall-clock budget is therefore
+    /// <c>sum(attempt durations) + (MaxAttempts-1) * RetryDelay</c>; with the
+    /// 2s device default, 3 attempts and 2s delay sum to ~10s in the worst
+    /// case. The retry loop holds <c>_operationLock</c>, so use
+    /// <see cref="LanChipInfoTotalTimeout"/> to cap the actual wall-clock
+    /// time independent of attempt counts.
+    /// </remarks>
     public int LanChipInfoMaxAttempts { get; set; } = 3;
 
     /// <summary>
     /// Delay between LAN chip-info retry attempts (cancellation-aware).
-    /// Total worst-case wait = (LanChipInfoMaxAttempts - 1) * LanChipInfoRetryDelay.
     /// </summary>
     public TimeSpan LanChipInfoRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Hard upper bound on wall-clock time spent in the LAN chip-info
+    /// probe (including per-attempt query timeouts and retry delays).
+    /// When exceeded, the loop short-circuits to ChipInfoUnavailable
+    /// regardless of remaining attempts. Prevents pathological multi-
+    /// attempt cases (e.g., 3 attempts × 2s device timeout + 2 × 2s delays
+    /// = ~10s) from stalling firmware flows or UI status probes that hold
+    /// the operation lock.
+    /// </summary>
+    public TimeSpan LanChipInfoTotalTimeout { get; set; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
     /// Gets the configured timeout for a given firmware update state.
@@ -203,6 +222,7 @@ public sealed class FirmwareUpdateServiceOptions
         }
 
         ValidatePositive(LanChipInfoRetryDelay, nameof(LanChipInfoRetryDelay));
+        ValidatePositive(LanChipInfoTotalTimeout, nameof(LanChipInfoTotalTimeout));
 
         if (BootloaderVendorId < 0 || BootloaderVendorId > 0xFFFF)
         {

@@ -613,14 +613,38 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     {
         var maxAttempts = Math.Max(1, _options.LanChipInfoMaxAttempts);
         var retryDelay = _options.LanChipInfoRetryDelay;
+        var totalTimeout = _options.LanChipInfoTotalTimeout;
+
+        // Wall-clock budget guards against the pathological case where
+        // attempt-count × per-attempt-timeout + retry-delay sum vastly
+        // exceeds the configured retry budget (e.g., 3 × 2s device timeout
+        // + 2 × 2s delay = ~10s while _operationLock is held). Linking
+        // the caller's CT preserves cancellation semantics; the timeout
+        // CTS just adds a deadline.
+        using var timeoutCts = new CancellationTokenSource(totalTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, timeoutCts.Token);
+        var linkedToken = linkedCts.Token;
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                linkedToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug(
+                    "LAN chip-info probe hit total timeout ({Timeout}) before attempt {Attempt}/{Max}.",
+                    totalTimeout,
+                    attempt,
+                    maxAttempts);
+                return null;
+            }
 
             try
             {
-                var chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(cancellationToken).ConfigureAwait(false);
+                var chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(linkedToken).ConfigureAwait(false);
                 if (chipInfo != null)
                 {
                     if (attempt > 1)
@@ -637,6 +661,15 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     attempt,
                     maxAttempts);
             }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug(
+                    "LAN chip-info probe hit total timeout ({Timeout}) during attempt {Attempt}/{Max}.",
+                    totalTimeout,
+                    attempt,
+                    maxAttempts);
+                return null;
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogDebug(
@@ -648,7 +681,19 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
             if (attempt < maxAttempts)
             {
-                await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await Task.Delay(retryDelay, linkedToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogDebug(
+                        "LAN chip-info probe hit total timeout ({Timeout}) during retry delay after attempt {Attempt}/{Max}.",
+                        totalTimeout,
+                        attempt,
+                        maxAttempts);
+                    return null;
+                }
             }
         }
 
