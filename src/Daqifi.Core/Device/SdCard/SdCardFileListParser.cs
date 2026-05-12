@@ -116,17 +116,21 @@ namespace Daqifi.Core.Device.SdCard
             return null;
         }
 
-        // Mirrors DaqifiStreamingDevice.IsNonResultLine (the LIST? response
-        // classifier). Match `**ERROR` (the canonical SCPI marker) or
-        // `ERROR` followed by an SCPI delimiter (':', ' ', '!', '\t') or
-        // end of line, so legit filenames whose basename starts with
-        // "error" / "Errors" pass through.
-        private static bool IsErrorResponseLine(string line)
+        /// <summary>
+        /// Returns true if the line is a SCPI error response (<c>**ERROR</c>
+        /// canonical marker, or <c>ERROR</c> followed by a SCPI delimiter
+        /// '<c>:</c>', '<c> </c>', '<c>!</c>', '<c>\t</c>', or end of line).
+        /// Trims both ends so a bare <c>"ERROR\r"</c> from CRLF line endings
+        /// still classifies. Plain filenames whose basename starts with
+        /// <c>error</c> / <c>Errors</c> pass through unmatched (closes #190).
+        /// </summary>
+        /// <remarks>
+        /// Shared with <c>DaqifiStreamingDevice.IsNonResultLine</c> so any
+        /// future delimiter / trim refinement stays consistent across both
+        /// SD-response classification paths.
+        /// </remarks>
+        internal static bool IsErrorResponseLine(string line)
         {
-            // Defensive Trim — current callers already pre-trim, but a future
-            // reuse with raw CRLF input must still classify "ERROR\r" as an
-            // error line rather than letting the trailing '\r' disqualify it
-            // (mirrors IsNonResultLine in DaqifiStreamingDevice).
             var trimmed = line.Trim();
             if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
                 return true;

@@ -749,35 +749,13 @@ namespace Daqifi.Core.Device
         // Permissive: any line that looks like a device error or status message,
         // including firmware text such as "Error !! ...". Used to recognize that
         // the parser would yield no result, without polluting LastScpiError with
-        // non-SCPI text. Closes #190 — bare "ERROR" prefix false-positives on
-        // legit SD filenames that happen to start with "error" (e.g.
-        // "error_log.csv"), which would mask the file from GetSdCardFilesAsync's
-        // returned list. Tightened to require either:
-        //   - the canonical "**ERROR" SCPI marker (also matched by IsScpiErrorLine), or
-        //   - "ERROR" exactly (length-5 line), or
-        //   - "ERROR" followed by ":" / " " / "!" / tab — covering both
-        //     SCPI ("ERROR: -100, ...") and firmware ("Error !!", "Error ...") patterns.
+        // non-SCPI text. Delegates to SdCardFileListParser.IsErrorResponseLine
+        // so the SD-response classification rule (closes #190 — filenames
+        // starting with "error_" must NOT match) stays in lockstep across
+        // both call sites.
         private static bool IsNonResultLine(string line)
         {
-            // Trim both ends — bare "ERROR\r" from a CRLF line ending would
-            // otherwise leave the '\r' as trimmed[5] and fall through the
-            // delimiter switch below.
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
-                return true;
-            // Must be followed by an SCPI delimiter (':', ' ', '!', '\t')
-            // or end of line, so plain filenames like "error_log.csv"
-            // (which TrimStart leaves intact) don't match.
-            if (trimmed.Length >= 5
-                && trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
-            {
-                if (trimmed.Length == 5)
-                    return true;
-                var next = trimmed[5];
-                if (next == ':' || next == ' ' || next == '!' || next == '\t')
-                    return true;
-            }
-            return false;
+            return SdCardFileListParser.IsErrorResponseLine(line);
         }
 
         /// <summary>
