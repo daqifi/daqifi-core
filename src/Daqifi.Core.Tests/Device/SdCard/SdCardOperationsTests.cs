@@ -179,16 +179,20 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var names = files.Select(f => f.FileName).ToList();
             Assert.Equal(2, names.Count);
             Assert.Contains("normal.bin", names);
-            // Mirror production normalization in SdCardFileListParser:
-            //  1. strip Daqifi/ prefix case-insensitively
-            //  2. apply Path.GetFileName so any nested path collapses to its basename
-            // Doing only step 1 would falsely fail on a future "Daqifi/sub/file.bin"
-            // test case, where production returns just "file.bin".
+            // Mirror production normalization: strip the Daqifi/ prefix then keep
+            // the basename. Split on '/' explicitly (not Path.GetFileName) — the
+            // device protocol uses forward slashes, and Path.GetFileName treats
+            // '\\' as a separator on Windows but not on Linux/macOS, which would
+            // make this expectation OS-dependent if a future case used '\\'.
             const string daqifiPrefix = "Daqifi/";
             var expected = filename.StartsWith(daqifiPrefix, StringComparison.OrdinalIgnoreCase)
                 ? filename.Substring(daqifiPrefix.Length)
                 : filename;
-            expected = Path.GetFileName(expected);
+            var lastSlash = expected.LastIndexOf('/');
+            if (lastSlash >= 0)
+            {
+                expected = expected.Substring(lastSlash + 1);
+            }
             Assert.Contains(expected, names);
         }
 
