@@ -136,6 +136,65 @@ public class TcpStreamTransportTests
         Assert.Contains("127.0.0.1:5000", disconnectedInfo);
     }
 
+    [Fact]
+    public void TcpStreamTransport_Constructor_WithLocalInterface_ExposesIt()
+    {
+        // Arrange & Act
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000, IPAddress.Loopback);
+
+        // Assert
+        Assert.Equal(IPAddress.Loopback, transport.LocalInterface);
+    }
+
+    [Fact]
+    public void TcpStreamTransport_Constructor_WithoutLocalInterface_LocalInterfaceIsNull()
+    {
+        // Arrange & Act
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
+
+        // Assert
+        Assert.Null(transport.LocalInterface);
+    }
+
+    [Fact]
+    public async Task TcpStreamTransport_ConnectAsync_WithUnassignedLocalInterface_ThrowsSocketException()
+    {
+        // Arrange - 192.0.2.1 is in TEST-NET-1 (RFC 5737) and is not assigned to any local
+        // interface, so binding the outbound socket to it must fail with EADDRNOTAVAIL.
+        // This proves the local-interface argument actually drives the socket bind.
+        var bogusLocal = IPAddress.Parse("192.0.2.1");
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 1, bogusLocal);
+
+        // Act & Assert
+        await Assert.ThrowsAsync<SocketException>(() => transport.ConnectAsync());
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
+    public async Task TcpStreamTransport_ConnectAsync_WithLoopbackLocalInterface_ConnectsAndReportsBoundLocal()
+    {
+        // Arrange - real listener on loopback so the connection actually completes
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port, IPAddress.Loopback);
+
+            // Act
+            await transport.ConnectAsync();
+
+            // Assert
+            Assert.True(transport.IsConnected);
+            Assert.Contains("127.0.0.1", transport.ConnectionInfo);
+            await transport.DisconnectAsync();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     // Integration test that requires a real server - marked as integration test
     [Fact(Skip = "Integration test - requires external server")]
     public async Task TcpStreamTransport_RealConnection_ShouldWorkEndToEnd()

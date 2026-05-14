@@ -11,6 +11,7 @@ namespace Daqifi.Core.Communication.Transport;
 public class TcpStreamTransport : IStreamTransport
 {
     private readonly IPEndPoint _endPoint;
+    private readonly IPAddress? _localInterface;
     private TcpClient? _tcpClient;
     private NetworkStream? _networkStream;
     private bool _disposed;
@@ -20,9 +21,15 @@ public class TcpStreamTransport : IStreamTransport
     /// </summary>
     /// <param name="ipAddress">The IP address to connect to.</param>
     /// <param name="port">The port to connect to.</param>
-    public TcpStreamTransport(IPAddress ipAddress, int port)
+    /// <param name="localInterface">
+    /// Optional local interface address to bind the outbound socket to. When supplied, the TCP
+    /// connection egresses on the specified NIC; required for multi-homed hosts where the OS
+    /// would otherwise pick the wrong interface for the route.
+    /// </param>
+    public TcpStreamTransport(IPAddress ipAddress, int port, IPAddress? localInterface = null)
     {
         _endPoint = new IPEndPoint(ipAddress, port);
+        _localInterface = localInterface;
     }
 
     /// <summary>
@@ -30,7 +37,12 @@ public class TcpStreamTransport : IStreamTransport
     /// </summary>
     /// <param name="host">The hostname to connect to.</param>
     /// <param name="port">The port to connect to.</param>
-    public TcpStreamTransport(string host, int port)
+    /// <param name="localInterface">
+    /// Optional local interface address to bind the outbound socket to. When supplied, the TCP
+    /// connection egresses on the specified NIC; required for multi-homed hosts where the OS
+    /// would otherwise pick the wrong interface for the route.
+    /// </param>
+    public TcpStreamTransport(string host, int port, IPAddress? localInterface = null)
     {
         if (IPAddress.TryParse(host, out var ipAddress))
         {
@@ -42,12 +54,18 @@ public class TcpStreamTransport : IStreamTransport
             _endPoint = new IPEndPoint(IPAddress.None, port);
             Hostname = host;
         }
+        _localInterface = localInterface;
     }
 
     /// <summary>
     /// Gets the hostname if provided instead of IP address.
     /// </summary>
     public string? Hostname { get; }
+
+    /// <summary>
+    /// Gets the local interface address the outbound socket will bind to, or null to let the OS choose.
+    /// </summary>
+    public IPAddress? LocalInterface => _localInterface;
 
     /// <summary>
     /// Gets the underlying stream for read/write operations.
@@ -126,7 +144,9 @@ public class TcpStreamTransport : IStreamTransport
                     }
                 }
 
-                _tcpClient = new TcpClient();
+                _tcpClient = _localInterface != null
+                    ? new TcpClient(new IPEndPoint(_localInterface, 0))
+                    : new TcpClient();
 
                 // Set timeouts from retry options or use defaults
                 var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;

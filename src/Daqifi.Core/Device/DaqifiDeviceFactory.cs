@@ -291,6 +291,8 @@ public static class DaqifiDeviceFactory
                 nameof(deviceInfo));
         }
 
+        ValidatePort(deviceInfo.Port.Value);
+
         var effectiveOptions = options ?? DeviceConnectionOptions.Default;
 
         // Use the device name from the discovery info if not overridden in options
@@ -306,11 +308,15 @@ public static class DaqifiDeviceFactory
             InitializeDevice = effectiveOptions.InitializeDevice
         };
 
-        return await ConnectTcpAsync(
+        // Honor LocalInterfaceAddress so multi-homed hosts egress on the NIC that
+        // discovered the device, not whichever NIC the OS routing table prefers.
+        var transport = new TcpStreamTransport(
             deviceInfo.IPAddress,
             deviceInfo.Port.Value,
-            modifiedOptions,
-            cancellationToken).ConfigureAwait(false);
+            deviceInfo.LocalInterfaceAddress);
+
+        return await ConnectWithTransportAsync(transport, modifiedOptions, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
