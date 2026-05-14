@@ -23,11 +23,23 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
     private const int DefaultBaudRate = 9600;
     private const int ProbeTimeoutMs = 1000;
-    private const int DeviceWakeUpDelayMs = 1000;
-    private const int ResponseTimeoutMs = 4000;
-    private const int MaxRetries = 3;
-    private const int RetryIntervalMs = 1000;
-    private const int PollIntervalMs = 100;
+    // Tightened for the GetDeviceInfo-only probe (closes #157):
+    //   - 200ms wake instead of 1s — USB CDC enumerates fast
+    //   - 1s response timeout instead of 4s — DAQiFi devices reply within
+    //     a few hundred ms on USB
+    //   - 300ms retry interval instead of 1s
+    //   - 2 attempts instead of 3 — combined with VID/PID prefilter we no
+    //     longer need to be defensive against probing other vendors' ports
+    private const int DeviceWakeUpDelayMs = 200;
+    private const int ResponseTimeoutMs = 1000;
+    private const int MaxRetries = 2;
+    private const int RetryIntervalMs = 300;
+    private const int PollIntervalMs = 50;
+    // Upper bound on concurrent SerialPort opens during a single discovery
+    // pass. Most OS serial stacks tolerate 4-8 simultaneous opens cleanly;
+    // beyond that, IO failures and slow opens stack up. Common case (with
+    // VID/PID classifier) leaves 0-1 candidates so this cap rarely engages.
+    private const int MaxParallelProbes = 4;
 
     #endregion
 
@@ -35,6 +47,8 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
     private readonly int _baudRate;
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
+    private readonly IUsbPortDescriptorProvider _usbPortDescriptorProvider;
+    private readonly Func<string[]>? _portNameProvider;
     private bool _disposed;
 
     #endregion
@@ -58,7 +72,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// <summary>
     /// Initializes a new instance of the SerialDeviceFinder class with default baud rate.
     /// </summary>
-    public SerialDeviceFinder() : this(DefaultBaudRate)
+    public SerialDeviceFinder() : this(DefaultBaudRate, usbPortDescriptorProvider: null)
     {
     }
 
@@ -66,9 +80,38 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// Initializes a new instance of the SerialDeviceFinder class.
     /// </summary>
     /// <param name="baudRate">The baud rate to use for serial connections.</param>
-    public SerialDeviceFinder(int baudRate)
+    public SerialDeviceFinder(int baudRate) : this(baudRate, usbPortDescriptorProvider: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the SerialDeviceFinder class with an
+    /// explicit USB descriptor provider — primarily for tests that mock the
+    /// platform-specific WMI / sysfs lookup.
+    /// </summary>
+    /// <param name="baudRate">The baud rate to use for serial connections.</param>
+    /// <param name="usbPortDescriptorProvider">
+    /// Provider used to resolve a port's USB Vendor / Product ID before
+    /// opening it. When null, a platform-default provider is used (Windows
+    /// → WMI, Linux → sysfs, others → no-op fallback). Pass
+    /// <see cref="NullUsbPortDescriptorProvider.Instance"/> explicitly to
+    /// force the legacy probe-everything behavior.
+    /// </param>
+    /// <param name="portNameProvider">
+    /// Test seam: when non-null, supplies the candidate port-name list in
+    /// place of <see cref="SerialStreamTransport.GetAvailablePortNames"/>.
+    /// Lets unit tests deterministically exercise the descriptor / probe
+    /// path on hosts (CI containers) that have no real serial ports.
+    /// </param>
+    internal SerialDeviceFinder(
+        int baudRate,
+        IUsbPortDescriptorProvider? usbPortDescriptorProvider,
+        Func<string[]>? portNameProvider = null)
     {
         _baudRate = baudRate;
+        _usbPortDescriptorProvider = usbPortDescriptorProvider
+            ?? UsbPortDescriptorProviderFactory.CreateForCurrentPlatform();
+        _portNameProvider = portNameProvider;
     }
 
     #endregion
@@ -90,30 +133,71 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
         try
         {
             var discoveredDevices = new List<IDeviceInfo>();
-            var availablePorts = FilterProbableDaqifiPorts(SerialStreamTransport.GetAvailablePortNames());
+            // Pre-filter by USB VID/PID where the platform supports it
+            // (closes #157). This drops discovery time from ~1 minute on a
+            // typical Windows system (10+ COM ports each timing out at ~5s)
+            // to <1s by skipping every non-DAQiFi port without opening it.
+            // It also stops the previous behavior of sending SCPI commands
+            // to other vendors' COM ports (Bluetooth radios, GPS, etc.).
+            // Ports the descriptor provider can't classify (e.g. on macOS
+            // where we have no impl yet) fall through to legacy probing,
+            // matched only by name-pattern in FilterProbableDaqifiPorts.
+            var allPorts = _portNameProvider?.Invoke()
+                ?? SerialStreamTransport.GetAvailablePortNames();
+            var nameFilteredPorts = FilterProbableDaqifiPorts(allPorts);
+            var availablePorts = FilterByUsbDescriptor(nameFilteredPorts).ToList();
 
-            foreach (var portName in availablePorts)
+            // Probe candidate ports in parallel (issue #157). Each SerialPort
+            // is its own physical resource so concurrent opens are safe; the
+            // VID/PID pre-filter typically leaves only 0-1 candidates anyway,
+            // but the legacy fallback (null descriptor) can still surface
+            // multiple unclassifiable ports — probing them sequentially adds
+            // ~1.2s per port (DeviceWakeUpDelayMs + ResponseTimeoutMs).
+            //
+            // Cap concurrency at MaxParallelProbes so a 20-port system with
+            // a missing descriptor provider doesn't open 20 serial handles at
+            // once — most platforms throttle quietly above ~8 concurrent opens.
+            var maxConcurrency = Math.Max(1, Math.Min(MaxParallelProbes, availablePorts.Count));
+            using var probeGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+
+            var probeTasks = availablePorts.Select(async portName =>
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-
+                await probeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    var deviceInfo = await TryGetDeviceInfoAsync(portName, cancellationToken);
-                    if (deviceInfo != null)
-                    {
-                        discoveredDevices.Add(deviceInfo);
-                        OnDeviceDiscovered(deviceInfo);
-                    }
+                    return await ProbeSafelyAsync(portName, cancellationToken).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                finally
                 {
-                    break;
+                    probeGate.Release();
                 }
-                catch (Exception)
+            }).ToList();
+
+            // Catch OCE here so the DiscoveryCompleted event always fires
+            // (callers expect a "discovery pass terminated" signal regardless
+            // of how it ended). ProbeSafelyAsync rethrows OCE on caller
+            // cancellation so WhenAll short-circuits the rest of the set —
+            // we then settle for whatever probes already finished cleanly.
+            IDeviceInfo?[]? probeResults = null;
+            try
+            {
+                probeResults = await Task.WhenAll(probeTasks).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Drain any tasks that did finish successfully before cancellation.
+                probeResults = probeTasks
+                    .Where(t => t.Status == TaskStatus.RanToCompletion)
+                    .Select(t => t.Result)
+                    .ToArray();
+            }
+
+            foreach (var deviceInfo in probeResults)
+            {
+                if (deviceInfo != null)
                 {
-                    // Skip ports that fail to open or respond
-                    // This is normal as not all serial ports are DAQiFi devices
+                    discoveredDevices.Add(deviceInfo);
+                    OnDeviceDiscovered(deviceInfo);
                 }
             }
 
@@ -145,6 +229,33 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// Attempts to probe a serial port and retrieve device information.
     /// Opens the port, sends GetDeviceInfo command, and waits for a status response.
     /// </summary>
+    /// <param name="portName">The serial port name.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Device info if a DAQiFi device responds, null otherwise. Swallows
+    /// non-cancellation exceptions so a single failing port doesn't tear down the
+    /// whole concurrent probe pass; cancellation propagates so Task.WhenAll
+    /// short-circuits when the caller's token is canceled.</returns>
+    private async Task<IDeviceInfo?> ProbeSafelyAsync(string portName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await TryGetDeviceInfoAsync(portName, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller asked to stop — propagate so Task.WhenAll observes the
+            // cancellation and short-circuits the rest of the probe set.
+            throw;
+        }
+        catch
+        {
+            // Probe failure (port locked, no response, IO error, etc.) is
+            // expected for non-DAQiFi serial devices — keep the rest of the
+            // concurrent probe set going and return no device for this port.
+            return null;
+        }
+    }
+
     /// <param name="portName">The serial port name.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Device info if a DAQiFi device responds, null otherwise.</returns>
@@ -197,20 +308,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
             consumer.Start();
 
-            // Initialize device - send commands to prepare for communication
-            // These are required for the device to respond properly
-            producer.Send(ScpiMessageProducer.DisableDeviceEcho);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.StopStreaming);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.TurnDeviceOn);
-            await Task.Delay(100, cancellationToken);
-
-            producer.Send(ScpiMessageProducer.SetProtobufStreamFormat);
-            await Task.Delay(100, cancellationToken);
-
+            // Identity-only probe: just GetDeviceInfo (closes #157). The
+            // previous DisableEcho / StopStreaming / TurnDeviceOn /
+            // SetProtobufStreamFormat sequence was for connection setup,
+            // not identification — a healthy DAQiFi answers SYSTem:SYSInfoPB?
+            // immediately regardless of stream format or power state. Caller
+            // (the consumer setting up an actual connection) is responsible
+            // for any setup commands they need.
             // Send GetDeviceInfo command with retry logic
             var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
             var lastRequestTime = DateTime.MinValue;
@@ -305,6 +409,46 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             {
                 // Ignore cleanup errors
             }
+        }
+    }
+
+    /// <summary>
+    /// Filters the post-name-filter ports down to those whose USB descriptor
+    /// matches a known DAQiFi VID/PID. Ports the provider can't classify
+    /// (returns null) fall through to probing — preserves cross-platform
+    /// behavior where the provider doesn't have a real impl.
+    /// </summary>
+    private IEnumerable<string> FilterByUsbDescriptor(IEnumerable<string> ports)
+    {
+        foreach (var port in ports)
+        {
+            UsbPortDescriptor? descriptor;
+            try
+            {
+                descriptor = _usbPortDescriptorProvider.GetDescriptor(port);
+            }
+            catch
+            {
+                // A misbehaving descriptor provider must never block discovery.
+                // The shipped providers already swallow their own errors, but
+                // a custom IUsbPortDescriptorProvider could throw — fall back
+                // to legacy probing rather than aborting the whole scan.
+                descriptor = null;
+            }
+
+            if (descriptor == null)
+            {
+                // No classification available — preserve legacy behavior
+                // and probe the port (caller's name filter has already
+                // removed the obvious non-candidates).
+                yield return port;
+                continue;
+            }
+            if (DaqifiUsbIds.IsDaqifiCdcDevice(descriptor))
+            {
+                yield return port;
+            }
+            // else: not a DAQiFi device — skip without opening / probing.
         }
     }
 

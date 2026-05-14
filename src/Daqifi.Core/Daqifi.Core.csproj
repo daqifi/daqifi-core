@@ -35,5 +35,15 @@
     <InternalsVisibleTo Include="Daqifi.Core.Tests" />
   </ItemGroup>
 
+  <!-- USB descriptor lookup uses WMI on Windows. The package itself is
+       cross-platform metadata-only; only the WMI types execute, and the
+       runtime guard in WindowsUsbPortDescriptorProvider ensures it never
+       runs on non-Windows platforms. The reference is unconditional so
+       WindowsUsbPortDescriptorProvider.cs (compiled on every target)
+       can resolve System.Management even during a Linux/macOS build. -->
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="10.0.7" />
+  </ItemGroup>
+
 
 </Project>
