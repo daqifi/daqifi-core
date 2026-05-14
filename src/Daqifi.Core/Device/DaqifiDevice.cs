@@ -80,6 +80,26 @@ namespace Daqifi.Core.Device
         private bool _isDisconnecting;
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
+
+        // Serializes ExecuteTextCommandAsync calls device-wide (closes #186).
+        // Multiple callers — e.g. concurrent GetSdCardFilesAsync /
+        // DrainErrorQueueAsync / GetSystemInfoAsync — would otherwise race the
+        // protobuf-consumer pause/swap/restart sequence on the same stream and
+        // either intermix SCPI bytes on the wire or interleave reply lines
+        // between callers' returned lists. SemaphoreSlim chosen over Lock
+        // because the method is async; counter is (1, 1) for mutual exclusion.
+        private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
+
+        // Async-context flag that tracks whether the current logical flow
+        // already holds _textExchangeLock. AsyncLocal flows across await
+        // resumptions on different threads, so a setupAction that re-enters
+        // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
+        // detected and surfaced as InvalidOperationException — instead of
+        // wedging on _textExchangeLock.WaitAsync() (the re-entrant call
+        // would corrupt the consumer swap mid-flight). Plain
+        // Environment.CurrentManagedThreadId capture wouldn't work — the
+        // value seen before await may not match the value seen after.
+        private readonly AsyncLocal<bool> _isInsideTextExchange = new();
         
         /// <summary>
         /// Gets the current connection status of the device.
@@ -198,9 +218,42 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Disconnects from the device.
         /// </summary>
+        /// <remarks>
+        /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
+        /// tearing down the consumer / producer / transport. This prevents
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync"/>
+        /// is mid-swap (text consumer running on the stream, protobuf
+        /// consumer not yet restarted) and Disconnect rips the transport
+        /// out from under it. If the wait times out, Disconnect proceeds
+        /// anyway — a stuck text exchange must not block teardown forever.
+        /// The 10s budget covers the worst-case ExecuteTextCommandAsync
+        /// hold time with default timeouts (StopSafely up to 1s + maxWait
+        /// of responseTimeoutMs*5 = 5s by default + safety margin) and
+        /// most custom-timeout callers; on timeout the in-flight exchange
+        /// sees <c>_isDisconnecting == true</c> via the post-acquisition
+        /// validation and bails out cleanly. Callers wanting non-blocking
+        /// disconnect should drive this off a Task.Run.
+        /// </remarks>
         public void Disconnect()
         {
             _isDisconnecting = true;
+            // Best-effort coordination with ExecuteTextCommandAsync —
+            // acquire the lock so we don't tear the transport out from
+            // under an in-flight text exchange. The lock IS released in
+            // the finally below when acquired (so a future Connect()
+            // followed by ExecuteTextCommandAsync isn't blocked); a
+            // stuck exchange that holds past the timeout drops to the
+            // _isDisconnecting validation path inside the exchange.
+            var lockAcquired = false;
+            try
+            {
+                lockAcquired = _textExchangeLock.Wait(TimeSpan.FromSeconds(10));
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disconnect called after Dispose — nothing to coordinate.
+            }
+
             try
             {
                 // Unsubscribe from message consumer events
@@ -222,6 +275,16 @@ namespace Daqifi.Core.Device
                 State = DeviceState.Disconnected;
                 _isInitialized = false;
                 _isDisconnecting = false;
+                if (lockAcquired)
+                {
+                    try
+                    {
+                        _textExchangeLock.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
             }
         }
 
@@ -328,147 +391,209 @@ namespace Daqifi.Core.Device
             if (completionTimeoutMs <= 0)
                 throw new ArgumentOutOfRangeException(nameof(completionTimeoutMs), completionTimeoutMs, "Timeout must be positive.");
 
-            var sw = Stopwatch.StartNew();
-
-            if (!IsConnected)
-            {
-                throw new InvalidOperationException("Device is not connected.");
-            }
-
-            if (_transport == null)
-            {
-                throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
-            }
-
             cancellationToken.ThrowIfCancellationRequested();
 
-            var collectedLines = new List<string>();
-            var stream = _transport.Stream;
-            int? originalReadTimeout = null;
+            // Async-context re-entrancy detection: a setupAction that calls
+            // ExecuteTextCommandAsync on the same device would corrupt the
+            // consumer swap mid-flight. Surface as a clean exception rather
+            // than wedging on _textExchangeLock.WaitAsync() forever.
+            // AsyncLocal flows across await thread hops so this catches
+            // re-entry even when the inner call resumes on a different
+            // thread than the outer call.
+            if (_isInsideTextExchange.Value)
+            {
+                throw new InvalidOperationException(
+                    "ExecuteTextCommandAsync is not re-entrant on the same device; "
+                    + "do not call it from inside a setupAction callback.");
+            }
 
             try
             {
-                if (stream.CanTimeout)
+                await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispose() raced ahead of us and disposed the semaphore.
+                // Surface the same clean failure as the post-acquisition
+                // _disposed check below, instead of leaking a low-level
+                // teardown exception to callers.
+                throw new InvalidOperationException(
+                    "ExecuteTextCommandAsync cannot run because the device is disposed.");
+            }
+
+            _isInsideTextExchange.Value = true;
+            try
+            {
+                // All validation runs INSIDE the lock so a competing thread
+                // calling DisconnectAsync() / Dispose() while we're blocked
+                // on WaitAsync() doesn't leave us with a stale _transport /
+                // _messageConsumer reference (closes the TOCTOU window
+                // documented in #186).
+                if (_disposed || _isDisconnecting)
                 {
-                    try
-                    {
-                        originalReadTimeout = stream.ReadTimeout;
-                        stream.ReadTimeout = Math.Min(500, Math.Max(100, responseTimeoutMs / 4));
-                    }
-                    catch
-                    {
-                        // Some streams may not allow setting read timeout; ignore.
-                        originalReadTimeout = null;
-                    }
+                    throw new InvalidOperationException(
+                        "ExecuteTextCommandAsync cannot run while the device is "
+                        + "disposing or disconnecting.");
                 }
 
-                // Stop the protobuf consumer so it doesn't compete for stream bytes.
-                // The serial transport sets ReadTimeout=500ms after connect, so the
-                // consumer thread's blocking Read will unblock within 500ms.
-                if (_messageConsumer != null)
+                if (!IsConnected)
                 {
-                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
-                    if (!stopped)
-                    {
-                        _messageConsumer.Stop();
-                    }
+                    throw new InvalidOperationException("Device is not connected.");
                 }
 
-                Trace.WriteLine($"[ExecuteTextCommandAsync] Protobuf consumer stopped at {sw.ElapsedMilliseconds}ms");
-
-                // Create a temporary text consumer on the same stream
-                using var textConsumer = new StreamMessageConsumer<string>(
-                    _transport.Stream,
-                    new LineBasedMessageParser());
-
-                textConsumer.MessageReceived += (_, e) =>
+                if (_transport == null)
                 {
-                    collectedLines.Add(e.Message.Data);
-                };
+                    throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
+                }
 
-                textConsumer.Start();
-                await Task.Delay(50, cancellationToken);
+                var sw = Stopwatch.StartNew();
+                var collectedLines = new List<string>();
+                var stream = _transport.Stream;
+                int? originalReadTimeout = null;
 
-                Trace.WriteLine($"[ExecuteTextCommandAsync] Text consumer started at {sw.ElapsedMilliseconds}ms");
-
-                // Execute the setup action (sends SCPI commands)
-                setupAction();
-
-                Trace.WriteLine($"[ExecuteTextCommandAsync] Setup action completed at {sw.ElapsedMilliseconds}ms");
-
-                // Wait for responses using a two-phase inactivity-based timeout:
-                // Phase 1: Wait up to responseTimeoutMs for the first response.
-                // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
-                var lastMessageTime = DateTime.UtcNow;
-                var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
-                var startTime = DateTime.UtcNow;
-                var hasReceivedAny = false;
-
-                while (DateTime.UtcNow - startTime < maxWait)
+                try
                 {
-                    var previousCount = collectedLines.Count;
-                    await Task.Delay(50, cancellationToken);
-                    if (collectedLines.Count > previousCount)
+                    if (stream.CanTimeout)
                     {
-                        lastMessageTime = DateTime.UtcNow;
-                        if (!hasReceivedAny)
+                        try
                         {
-                            hasReceivedAny = true;
-                            Trace.WriteLine($"[ExecuteTextCommandAsync] First response at {sw.ElapsedMilliseconds}ms");
+                            originalReadTimeout = stream.ReadTimeout;
+                            stream.ReadTimeout = Math.Min(500, Math.Max(100, responseTimeoutMs / 4));
+                        }
+                        catch
+                        {
+                            // Some streams may not allow setting read timeout; ignore.
+                            originalReadTimeout = null;
                         }
                     }
 
-                    var elapsed = DateTime.UtcNow - lastMessageTime;
+                    // Stop the protobuf consumer so it doesn't compete for stream bytes.
+                    // The serial transport sets ReadTimeout=500ms after connect, so the
+                    // consumer thread's blocking Read will unblock within 500ms.
+                    if (_messageConsumer != null)
+                    {
+                        _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                        var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
+                        if (!stopped)
+                        {
+                            _messageConsumer.Stop();
+                        }
+                    }
 
-                    if (hasReceivedAny)
+                    Trace.WriteLine($"[ExecuteTextCommandAsync] Protobuf consumer stopped at {sw.ElapsedMilliseconds}ms");
+
+                    // Create a temporary text consumer on the same stream
+                    using var textConsumer = new StreamMessageConsumer<string>(
+                        _transport.Stream,
+                        new LineBasedMessageParser());
+
+                    textConsumer.MessageReceived += (_, e) =>
                     {
-                        // Phase 2: short completion timeout after first data
-                        if (elapsed >= TimeSpan.FromMilliseconds(completionTimeoutMs))
+                        collectedLines.Add(e.Message.Data);
+                    };
+
+                    textConsumer.Start();
+                    // ConfigureAwait(false): the lock is held, so resuming on a captured
+                    // sync context (e.g. UI thread) would deadlock if that thread calls Disconnect().
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+
+                    Trace.WriteLine($"[ExecuteTextCommandAsync] Text consumer started at {sw.ElapsedMilliseconds}ms");
+
+                    // Execute the setup action (sends SCPI commands)
+                    setupAction();
+
+                    Trace.WriteLine($"[ExecuteTextCommandAsync] Setup action completed at {sw.ElapsedMilliseconds}ms");
+
+                    // Wait for responses using a two-phase inactivity-based timeout:
+                    // Phase 1: Wait up to responseTimeoutMs for the first response.
+                    // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
+                    var lastMessageTime = DateTime.UtcNow;
+                    var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
+                    var startTime = DateTime.UtcNow;
+                    var hasReceivedAny = false;
+
+                    while (DateTime.UtcNow - startTime < maxWait)
+                    {
+                        var previousCount = collectedLines.Count;
+                        await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                        if (collectedLines.Count > previousCount)
                         {
-                            break;
+                            lastMessageTime = DateTime.UtcNow;
+                            if (!hasReceivedAny)
+                            {
+                                hasReceivedAny = true;
+                                Trace.WriteLine($"[ExecuteTextCommandAsync] First response at {sw.ElapsedMilliseconds}ms");
+                            }
+                        }
+
+                        var elapsed = DateTime.UtcNow - lastMessageTime;
+
+                        if (hasReceivedAny)
+                        {
+                            // Phase 2: short completion timeout after first data
+                            if (elapsed >= TimeSpan.FromMilliseconds(completionTimeoutMs))
+                            {
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            // Phase 1: full initial timeout waiting for first data
+                            if (elapsed >= TimeSpan.FromMilliseconds(responseTimeoutMs))
+                            {
+                                break;
+                            }
                         }
                     }
-                    else
+
+                    Trace.WriteLine($"[ExecuteTextCommandAsync] Collection complete at {sw.ElapsedMilliseconds}ms, {collectedLines.Count} lines");
+
+                    // Stop the text consumer
+                    textConsumer.StopSafely();
+                }
+                finally
+                {
+                    if (originalReadTimeout.HasValue && stream.CanTimeout)
                     {
-                        // Phase 1: full initial timeout waiting for first data
-                        if (elapsed >= TimeSpan.FromMilliseconds(responseTimeoutMs))
+                        try
                         {
-                            break;
+                            stream.ReadTimeout = originalReadTimeout.Value;
+                        }
+                        catch
+                        {
+                            // Ignore failures when restoring timeout.
                         }
                     }
+
+                    // Restart the protobuf consumer
+                    if (_messageConsumer != null)
+                    {
+                        _messageConsumer.Start();
+                        _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                    }
+
+                    Trace.WriteLine($"[ExecuteTextCommandAsync] Total elapsed: {sw.ElapsedMilliseconds}ms");
                 }
 
-                Trace.WriteLine($"[ExecuteTextCommandAsync] Collection complete at {sw.ElapsedMilliseconds}ms, {collectedLines.Count} lines");
-
-                // Stop the text consumer
-                textConsumer.StopSafely();
+                return collectedLines;
             }
             finally
             {
-                if (originalReadTimeout.HasValue && stream.CanTimeout)
+                _isInsideTextExchange.Value = false;
+                // Release can race with Dispose() — Dispose acquires the lock
+                // before disposing it, but if that acquisition timed out and
+                // Dispose proceeded anyway, our SemaphoreSlim handle is now
+                // gone. Treat that as a benign teardown signal rather than
+                // surfacing it from the finally and masking the original
+                // exception (if any) from the try body.
+                try
                 {
-                    try
-                    {
-                        stream.ReadTimeout = originalReadTimeout.Value;
-                    }
-                    catch
-                    {
-                        // Ignore failures when restoring timeout.
-                    }
+                    _textExchangeLock.Release();
                 }
-
-                // Restart the protobuf consumer
-                if (_messageConsumer != null)
+                catch (ObjectDisposedException)
                 {
-                    _messageConsumer.Start();
-                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
-
-                Trace.WriteLine($"[ExecuteTextCommandAsync] Total elapsed: {sw.ElapsedMilliseconds}ms");
             }
-
-            return collectedLines;
         }
 
         /// <summary>
@@ -595,6 +720,7 @@ namespace Daqifi.Core.Device
                 _messageConsumer?.Dispose();
                 _messageProducer?.Dispose();
                 _transport?.Dispose();
+                _textExchangeLock.Dispose();
                 _disposed = true;
             }
         }
