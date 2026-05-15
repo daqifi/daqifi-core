@@ -120,6 +120,43 @@ public sealed class FirmwareUpdateServiceOptions
     public string? WifiPortOverride { get; set; }
 
     /// <summary>
+    /// Total attempts (initial + retries) for LAN chip-info queries before
+    /// the WiFi version decision falls through to "couldn't check, proceed
+    /// with flash". Right after a PIC32 firmware update the application is
+    /// typically up while the WiFi subsystem is still finishing startup, so
+    /// the first chip-info query can transiently fail; bounded retry covers
+    /// that window so callers don't unnecessarily reflash up-to-date WiFi
+    /// firmware (closes #144).
+    /// </summary>
+    /// <remarks>
+    /// Each attempt also incurs the per-attempt timeout from the device
+    /// implementation (e.g., <c>DaqifiStreamingDevice.GetLanChipInfoAsync</c>
+    /// uses 2s). Total wall-clock budget is therefore
+    /// <c>sum(attempt durations) + (MaxAttempts-1) * RetryDelay</c>; with the
+    /// 2s device default, 3 attempts and 2s delay sum to ~10s in the worst
+    /// case. The retry loop holds <c>_operationLock</c>, so use
+    /// <see cref="LanChipInfoTotalTimeout"/> to cap the actual wall-clock
+    /// time independent of attempt counts.
+    /// </remarks>
+    public int LanChipInfoMaxAttempts { get; set; } = 3;
+
+    /// <summary>
+    /// Delay between LAN chip-info retry attempts (cancellation-aware).
+    /// </summary>
+    public TimeSpan LanChipInfoRetryDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Hard upper bound on wall-clock time spent in the LAN chip-info
+    /// probe (including per-attempt query timeouts and retry delays).
+    /// When exceeded, the loop short-circuits to ChipInfoUnavailable
+    /// regardless of remaining attempts. Prevents pathological multi-
+    /// attempt cases (e.g., 3 attempts × 2s device timeout + 2 × 2s delays
+    /// = ~10s) from stalling firmware flows or UI status probes that hold
+    /// the operation lock.
+    /// </summary>
+    public TimeSpan LanChipInfoTotalTimeout { get; set; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>
     /// Gets the configured timeout for a given firmware update state.
     /// </summary>
     /// <param name="state">The target state.</param>
@@ -175,6 +212,17 @@ public sealed class FirmwareUpdateServiceOptions
                 FlashWriteRetryCount,
                 "Flash write retry count must be at least 1.");
         }
+
+        if (LanChipInfoMaxAttempts < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(LanChipInfoMaxAttempts),
+                LanChipInfoMaxAttempts,
+                "LAN chip-info max attempts must be at least 1.");
+        }
+
+        ValidatePositive(LanChipInfoRetryDelay, nameof(LanChipInfoRetryDelay));
+        ValidatePositive(LanChipInfoTotalTimeout, nameof(LanChipInfoTotalTimeout));
 
         if (BootloaderVendorId < 0 || BootloaderVendorId > 0xFFFF)
         {
