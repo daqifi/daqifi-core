@@ -1010,6 +1010,188 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
         await SafeDisconnectHidAsync().ConfigureAwait(false);
         await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
+
+        // Discard the race-winning serial handle from the USB CDC re-enumeration
+        // window. On macOS the first SerialPort.Open() that succeeds after a PIC32
+        // reset is typically a "shadow" handle: IsOpen==true, but the kernel
+        // device-node isn't fully wired yet — writes silently drop and reads see
+        // zero bytes. A fresh open after a brief settling delay yields a clean
+        // binding. Symptom without this step: SCPI Sends after reconnect appear
+        // to succeed but the device never responds (LEDs stay off, readiness
+        // probe returns null indefinitely until budget expires).
+        // Opt out by setting PostReconnectStaleHandleDelay = TimeSpan.Zero
+        // (callers on platforms where the first open is already clean).
+        if (_options.PostReconnectStaleHandleDelay > TimeSpan.Zero)
+        {
+            _logger.LogInformation(
+                "Discarding race-winning serial handle; closing and re-opening after {Delay} to obtain a clean USB CDC binding.",
+                _options.PostReconnectStaleHandleDelay);
+            device.Disconnect();
+            await Task.Delay(_options.PostReconnectStaleHandleDelay, cancellationToken).ConfigureAwait(false);
+            await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Wake the post-reset device. PIC32 application firmware boots
+        // dormant (LEDs off, WiFi subsystem unpowered, won't answer LAN
+        // queries) until SYSTem:POWer:STATe 1 is sent. InitializeAsync
+        // handles that plus the rest of the standard init sequence
+        // (echo off, stream format, etc.). Without this, callers writing
+        // a "natural" probe like GetLanChipInfoAsync would silently fail
+        // for tens of seconds because the device is still dormant.
+        // Skipped for non-DaqifiDevice transports (e.g. test fakes); they
+        // are responsible for their own readiness if needed.
+        if (device is DaqifiDevice initializableDevice)
+        {
+            _logger.LogInformation("Waking post-reset device via InitializeAsync.");
+            try
+            {
+                await initializableDevice.InitializeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Don't fail the firmware update outright — the readiness
+                // probe (if configured) is the source of truth for "ready".
+                // Surface the init failure as a warning so a probe timeout
+                // later isn't mysterious.
+                _logger.LogWarning(ex, "InitializeAsync after reconnect threw; continuing to readiness probe.");
+            }
+        }
+
+        // Application-readiness probe (closes #145). Serial transport
+        // re-enumeration succeeds well before the PIC32 application
+        // firmware is actually ready to answer protobuf status queries;
+        // if a downstream flow (LAN chip info, WiFi prep) starts before
+        // the app is up, those queries fail and callers reimplement
+        // their own retry. The probe is opt-in via options — when null,
+        // the legacy "serial reopened == done" semantics apply.
+        if (_options.PostReconnectReadinessProbe is { } probe)
+        {
+            await WaitForApplicationReadyAsync(device, probe, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task WaitForApplicationReadyAsync(
+        IStreamingDevice device,
+        Func<IStreamingDevice, CancellationToken, Task<bool>> probe,
+        CancellationToken cancellationToken)
+    {
+        var totalTimeout = _options.PostReconnectReadinessTimeout;
+        var retryDelay = _options.PostReconnectReadinessRetryDelay;
+
+        // Surface the wait at Information level so observers tailing the
+        // log can distinguish "stuck" from "deliberately polling". The
+        // wait can take up to PostReconnectReadinessTimeout (default 30s);
+        // without this, the JumpingToApp state appears hung beyond the
+        // initial transport reopen.
+        _logger.LogInformation(
+            "Waiting up to {Timeout} for device to become application-ready (post-reconnect readiness probe).",
+            totalTimeout);
+        var waitStart = DateTime.UtcNow;
+
+        using var timeoutCts = new CancellationTokenSource(totalTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, timeoutCts.Token);
+        var linkedToken = linkedCts.Token;
+
+        // Capture the most recent probe-thrown exception so a TimeoutException
+        // can carry the underlying cause as InnerException. Without this,
+        // deterministic probe failures (e.g. transport says it's open but
+        // the device never responds to status queries) report only as
+        // "timed out" — losing the actual error context unless Debug logs
+        // are on.
+        Exception? lastProbeException = null;
+
+        // Tracks how many probe invocations have actually run. Distinct from
+        // the loop iteration counter so the timeout messages don't claim
+        // "attempt N" when the timeout fired before a probe ever executed.
+        var probesExecuted = 0;
+        while (true)
+        {
+            try
+            {
+                linkedToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Device did not become application-ready within {totalTimeout} (probes executed: {probesExecuted}). " +
+                    "The transport reconnected but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
+                    lastProbeException);
+            }
+
+            try
+            {
+                probesExecuted++;
+                // WaitAsync(linkedToken) enforces the timeout deadline even
+                // when the probe ignores its own CancellationToken and would
+                // otherwise hang or return after the budget elapses. When
+                // the deadline fires, WaitAsync throws OperationCanceledException
+                // immediately — we don't keep waiting for the rogue probe.
+                var isReady = await probe(device, linkedToken)
+                    .WaitAsync(linkedToken)
+                    .ConfigureAwait(false);
+
+                // Successful probe invocation (true OR false) means the most
+                // recent attempt completed normally. Clear lastProbeException
+                // so a later timeout doesn't carry forward a stale exception
+                // from an earlier failed attempt as its InnerException.
+                lastProbeException = null;
+
+                if (isReady)
+                {
+                    var elapsed = DateTime.UtcNow - waitStart;
+                    _logger.LogInformation(
+                        "Device became application-ready after {Elapsed} on probe attempt {Attempt}.",
+                        elapsed,
+                        probesExecuted);
+                    return;
+                }
+                _logger.LogDebug("Application-ready probe returned false on attempt {Attempt}; will retry.", probesExecuted);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Two cases reach here:
+                // 1. The wait deadline fired (timeoutCts canceled) — surface
+                //    as TimeoutException so callers see the readiness budget.
+                // 2. The probe itself threw OperationCanceledException for
+                //    some unrelated reason (its own internal CTS, etc). That
+                //    must NOT crash the update loop — treat it as a probe
+                //    failure and retry, same as any other thrown exception.
+                if (timeoutCts.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"Device did not become application-ready within {totalTimeout} (probes executed: {probesExecuted}). " +
+                        "The wait for the readiness probe was canceled by the timeout — note the probe may ignore cancellation and continue running in the background.",
+                        lastProbeException ?? ex);
+                }
+
+                lastProbeException = ex;
+                _logger.LogDebug(
+                    ex,
+                    "Application-ready probe was canceled on attempt {Attempt}; treating as not-ready and retrying.",
+                    probesExecuted);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lastProbeException = ex;
+                _logger.LogDebug(
+                    ex,
+                    "Application-ready probe threw on attempt {Attempt}; treating as not-ready and retrying.",
+                    probesExecuted);
+            }
+
+            try
+            {
+                await Task.Delay(retryDelay, linkedToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Device did not become application-ready within {totalTimeout} (probes executed: {probesExecuted}). " +
+                    "The transport reconnected but the readiness probe never returned true; the device may still be initializing or the firmware may have failed to start.",
+                    lastProbeException);
+            }
+        }
     }
 
     private async Task WaitForSerialReconnectAsync(

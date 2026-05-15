@@ -1,3 +1,5 @@
+using Daqifi.Core.Device;
+
 namespace Daqifi.Core.Firmware;
 
 /// <summary>
@@ -120,6 +122,57 @@ public sealed class FirmwareUpdateServiceOptions
     public string? WifiPortOverride { get; set; }
 
     /// <summary>
+    /// Optional callback that returns true once the device is ready to
+    /// answer normal application commands after PIC32 firmware update +
+    /// reconnect (closes #145). The serial transport can re-enumerate
+    /// well before the application firmware is actually ready to respond
+    /// to protobuf status queries — without this probe, the next steps
+    /// in a downstream flow (LAN chip-info, WiFi prep) hit a half-started
+    /// device and have to retry. When set, the firmware service polls
+    /// the probe with bounded retry after each PIC32 reconnect; if it
+    /// never returns true within <see cref="PostReconnectReadinessTimeout"/>,
+    /// the update transitions to Failed with a clear timeout exception
+    /// rather than silently handing back a half-ready device. When null,
+    /// reconnect succeeds as soon as the serial port reopens (legacy
+    /// behavior).
+    /// </summary>
+    public Func<IStreamingDevice, CancellationToken, Task<bool>>? PostReconnectReadinessProbe { get; set; }
+
+    /// <summary>
+    /// Wall-clock budget for the post-reconnect readiness probe. Default
+    /// 30s covers a slow PIC32 boot and downstream-firmware initialization.
+    /// </summary>
+    /// <remarks>
+    /// This budget runs INSIDE the JumpingToApp state, so the effective
+    /// upper bound is <c>JumpingToApplicationTimeout - (serial reconnect
+    /// elapsed)</c>. With the defaults (45s state timeout, ~1-5s typical
+    /// reconnect, 30s readiness budget) the readiness probe gets its full
+    /// budget; if you raise this near or above the state timeout, the
+    /// outer state-timeout will fire first and callers will see a generic
+    /// JumpingToApp timeout instead of the readiness-specific message.
+    /// </remarks>
+    public TimeSpan PostReconnectReadinessTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Delay between readiness-probe attempts (cancellation-aware).
+    /// </summary>
+    public TimeSpan PostReconnectReadinessRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Settling delay between discarding the race-winning serial handle
+    /// and re-opening the port after a PIC32 reset (closes the macOS-USB-CDC
+    /// shadow-handle problem). After PIC32 firmware update completes the
+    /// device's USB CDC interface re-enumerates; on macOS the first
+    /// SerialPort.Open() that succeeds during that window is typically a
+    /// "shadow" handle — IsOpen==true but writes silently drop and reads
+    /// see zero bytes. Closing and re-opening after a brief delay yields
+    /// a clean kernel binding. Default 2s covers macOS-observed timing;
+    /// set to TimeSpan.Zero on platforms (notably Windows) where the
+    /// first open is already clean and the extra cycle is pure latency.
+    /// </summary>
+    public TimeSpan PostReconnectStaleHandleDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// Total attempts (initial + retries) for LAN chip-info queries before
     /// the WiFi version decision falls through to "couldn't check, proceed
     /// with flash". Right after a PIC32 firmware update the application is
@@ -196,6 +249,30 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(HidConnectRetryDelay, nameof(HidConnectRetryDelay));
         ValidatePositive(FlashWriteRetryDelay, nameof(FlashWriteRetryDelay));
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
+
+        // The readiness options only matter when a probe is configured —
+        // gate every readiness validation behind that, both the positive
+        // checks and the cross-property constraint, so callers that don't
+        // use the probe never have to think about these timeouts.
+        if (PostReconnectReadinessProbe is not null)
+        {
+            ValidatePositive(PostReconnectReadinessTimeout, nameof(PostReconnectReadinessTimeout));
+            ValidatePositive(PostReconnectReadinessRetryDelay, nameof(PostReconnectReadinessRetryDelay));
+
+            // The whole JumpToApp step is wrapped by JumpingToApplicationTimeout,
+            // so a probe budget that meets or exceeds it would always be cut off
+            // by the outer state-timeout — surfacing a generic JumpingToApp error
+            // instead of the readiness-specific message. Reject the configuration
+            // up front so misconfigurations fail fast.
+            if (PostReconnectReadinessTimeout >= JumpingToApplicationTimeout)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(PostReconnectReadinessTimeout),
+                    PostReconnectReadinessTimeout,
+                    $"{nameof(PostReconnectReadinessTimeout)} must be strictly less than {nameof(JumpingToApplicationTimeout)} when {nameof(PostReconnectReadinessProbe)} is set, " +
+                    "otherwise the outer state-timeout fires first and masks the readiness-specific timeout.");
+            }
+        }
 
         if (HidConnectRetryCount < 1)
         {
