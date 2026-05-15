@@ -6,24 +6,47 @@ namespace Daqifi.Core.Device.Discovery;
 
 /// <summary>
 /// Resolves USB VID/PID for serial ports via <c>ioreg</c> on macOS.
-/// Runs ioreg once and caches the full port map for the lifetime of the
-/// instance so repeated <see cref="GetDescriptor"/> calls don't re-invoke
-/// the process.
+/// Runs ioreg at most once per <see cref="CacheTtlMs"/> window so a single
+/// discovery pass (many <see cref="GetDescriptor"/> calls within ~1s) pays
+/// one ioreg invocation, while back-to-back passes always see fresh device
+/// state (a device plugged in between passes is detected on the next pass).
 /// </summary>
 internal sealed class MacOsUsbPortDescriptorProvider : IUsbPortDescriptorProvider
 {
     private const int IoregTimeoutMs = 5000;
 
-    private readonly Lazy<Dictionary<string, UsbPortDescriptor>> _cache =
-        new(BuildDescriptorMap);
+    // One ioreg invocation covers a full discovery pass (all ports probed
+    // within ~1.2s), but a subsequent pass always fetches fresh state.
+    // This matches the per-call freshness of the Windows/Linux providers
+    // while avoiding N redundant ioreg invocations per pass.
+    private const int CacheTtlMs = 2000;
+
+    private static readonly object CacheLock = new();
+    private static Dictionary<string, UsbPortDescriptor> _cachedMap = new();
+    private static long _cacheExpiresAtMs;
 
     public UsbPortDescriptor? GetDescriptor(string portName)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             return null;
 
-        _cache.Value.TryGetValue(portName, out var descriptor);
+        var map = GetOrRefreshMap();
+        map.TryGetValue(portName, out var descriptor);
         return descriptor;
+    }
+
+    private static Dictionary<string, UsbPortDescriptor> GetOrRefreshMap()
+    {
+        var nowMs = Environment.TickCount64;
+        lock (CacheLock)
+        {
+            if (nowMs < _cacheExpiresAtMs)
+                return _cachedMap;
+
+            _cachedMap = BuildDescriptorMap();
+            _cacheExpiresAtMs = nowMs + CacheTtlMs;
+            return _cachedMap;
+        }
     }
 
     private static Dictionary<string, UsbPortDescriptor> BuildDescriptorMap()

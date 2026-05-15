@@ -139,9 +139,8 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // to <1s by skipping every non-DAQiFi port without opening it.
             // It also stops the previous behavior of sending SCPI commands
             // to other vendors' COM ports (Bluetooth radios, GPS, etc.).
-            // Ports the descriptor provider can't classify (e.g. on macOS
-            // where we have no impl yet) fall through to legacy probing,
-            // matched only by name-pattern in FilterProbableDaqifiPorts.
+            // Ports the descriptor provider can't classify fall through to
+            // legacy probing, matched only by name-pattern in FilterProbableDaqifiPorts.
             var allPorts = _portNameProvider?.Invoke()
                 ?? SerialStreamTransport.GetAvailablePortNames();
             var nameFilteredPorts = FilterProbableDaqifiPorts(allPorts);
