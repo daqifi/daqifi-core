@@ -69,6 +69,134 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_FilenamesStartingWithErrorAreNotMisclassified()
+        {
+            // Regression for #190 covering BOTH bug locations:
+            //   - IsNonResultLine in DaqifiStreamingDevice (the LIST? response classifier)
+            //   - SdCardFileListParser.ParseFileList (the per-line parser; bare "ERROR" check)
+            // Pre-fix, both used a bare "ERROR" StartsWith check that
+            // false-positived on legit SD filenames. Tightened to require
+            // ERROR followed by ":"/" "/"!"/tab/end-of-line.
+            //
+            // Cover both path shapes the firmware may emit:
+            //   - prefixed: "Daqifi/error_log.csv"
+            //   - bare: "error_log.csv" (no Daqifi/ prefix)
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/error_log.csv",
+                "Daqifi/Errors_summary.bin",
+                "error_log.csv",
+                "Errors_summary.bin",
+                "ERROR_archive.bin",
+                "Daqifi/normal.bin",
+            };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            var names = files.Select(f => f.FileName).ToList();
+            Assert.Contains("error_log.csv", names);
+            Assert.Contains("Errors_summary.bin", names);
+            Assert.Contains("ERROR_archive.bin", names);
+            Assert.Contains("normal.bin", names);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_OnlyErrorPrefixedFilenames_AllSurvive()
+        {
+            // Edge case explicitly called out by Qodo on PR #195: a
+            // listing consisting SOLELY of error*-prefixed filenames
+            // (no normal.bin to act as a sanity anchor) must round-trip
+            // every entry. Pre-fix, the entire response would have parsed
+            // as zero files.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "error_log.csv",
+                "errors.bin",
+                "Erroneous_data.bin",
+            };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            Assert.Equal(3, files.Count);
+            var names = files.Select(f => f.FileName).ToList();
+            Assert.Contains("error_log.csv", names);
+            Assert.Contains("errors.bin", names);
+            Assert.Contains("Erroneous_data.bin", names);
+        }
+
+        [Theory]
+        [InlineData("**ERROR: -200, Execution error")]
+        [InlineData("**Error: bad")]
+        [InlineData("ERROR: -100, Bad command")]
+        [InlineData("Error !! Generic firmware status")]
+        [InlineData("Error!! No space firmware status")]
+        [InlineData("ERROR")]
+        [InlineData("error\tsomething")]
+        public async Task GetSdCardFilesAsync_RealErrorLinesStillSkipped(string errorLine)
+        {
+            // Confirm the tightening didn't go too far — real error
+            // lines still classify as non-result and don't end up
+            // misinterpreted as filenames.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/normal.bin",
+                errorLine,
+            };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            Assert.Single(files);
+            Assert.Equal("normal.bin", files[0].FileName);
+        }
+
+        [Theory]
+        [InlineData("error!log.bin")]
+        [InlineData("Daqifi/error!log.bin")]
+        [InlineData("Erroneous!data.bin")]
+        public async Task GetSdCardFilesAsync_FilenamesWithSingleBangSurvive(string filename)
+        {
+            // Regression: a single '!' immediately after "error" is ambiguous
+            // (could be a filename like "error!log.bin"). The classifier must
+            // require '!!' to treat as an error/status line so legitimate
+            // filenames aren't dropped from listings. Filename validation
+            // already permits '!' in SD filenames.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/normal.bin",
+                filename,
+            };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            var names = files.Select(f => f.FileName).ToList();
+            Assert.Equal(2, names.Count);
+            Assert.Contains("normal.bin", names);
+            // Mirror production normalization: strip the Daqifi/ prefix then keep
+            // the basename. Split on '/' explicitly (not Path.GetFileName) — the
+            // device protocol uses forward slashes, and Path.GetFileName treats
+            // '\\' as a separator on Windows but not on Linux/macOS, which would
+            // make this expectation OS-dependent if a future case used '\\'.
+            const string daqifiPrefix = "Daqifi/";
+            var expected = filename.StartsWith(daqifiPrefix, StringComparison.OrdinalIgnoreCase)
+                ? filename.Substring(daqifiPrefix.Length)
+                : filename;
+            var lastSlash = expected.LastIndexOf('/');
+            if (lastSlash >= 0)
+            {
+                expected = expected.Substring(lastSlash + 1);
+            }
+            Assert.Contains(expected, names);
+        }
+
+        [Fact]
         public async Task GetSdCardFilesAsync_RestoresLanInterface()
         {
             // Arrange

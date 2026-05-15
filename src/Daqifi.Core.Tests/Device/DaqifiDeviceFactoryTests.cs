@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
@@ -477,6 +478,47 @@ public class DaqifiDeviceFactoryTests
         // Act & Assert
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo, null, cts.Token));
+    }
+
+    [Fact]
+    public async Task ConnectFromDeviceInfoAsync_WiFiWithLocalInterface_BindsOutboundSocketToIt()
+    {
+        // Arrange - 192.0.2.1 is in TEST-NET-1 (RFC 5737) and is not assigned to any local
+        // interface. If the factory threads LocalInterfaceAddress into the TCP transport,
+        // the bind will fail with EADDRNOTAVAIL (SocketException) before connect is attempted.
+        // If the factory ignores LocalInterfaceAddress, the connection to 127.0.0.1 would
+        // proceed and fail with a different error (or succeed against the listener), so a
+        // SocketException at bind time is the signal that the wiring is correct.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var deviceInfo = new TestDeviceInfo
+            {
+                ConnectionType = ConnectionType.WiFi,
+                IPAddress = IPAddress.Loopback,
+                Port = port,
+                LocalInterfaceAddress = IPAddress.Parse("192.0.2.1")
+            };
+            var options = new DeviceConnectionOptions
+            {
+                ConnectionRetry = new ConnectionRetryOptions
+                {
+                    Enabled = false,
+                    ConnectionTimeout = TimeSpan.FromSeconds(1)
+                },
+                InitializeDevice = false
+            };
+
+            // Act & Assert
+            await Assert.ThrowsAsync<SocketException>(
+                () => DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo, options));
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 
     #endregion

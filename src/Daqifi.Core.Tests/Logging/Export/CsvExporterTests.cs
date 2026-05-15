@@ -136,15 +136,20 @@ public class CsvExporterTests
     // ── Invalid ticks fallback ───────────────────────────────────────────────
 
     [Fact]
-    public async Task Export_ZeroTicks_WritesInvalidToken()
+    public async Task Export_ZeroTicks_FormatsAsDateTimeMinValue()
     {
+        // ticks==0 is DateTime.MinValue (0001-01-01 00:00:00) — a legal
+        // DateTime value. Pre-fix, FormatTimestamp's `ticks <= 0` check
+        // rejected it as INVALID; post-fix, only negative ticks are
+        // invalid and the formatter renders the absolute timestamp.
         var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(0L, Ch1.Key, 1.0)]);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions());
 
-        Assert.StartsWith("INVALID(0),", lines[1]);
+        Assert.StartsWith("0001-01-01T00:00:00", lines[1]);
+        Assert.DoesNotContain("INVALID", lines[1]);
     }
 
     [Fact]
@@ -173,15 +178,18 @@ public class CsvExporterTests
     }
 
     [Fact]
-    public async Task Export_RelativeTime_InvalidTicks_StillWritesInvalidToken()
+    public async Task Export_RelativeTime_NegativeTicks_StillWritesInvalidToken()
     {
+        // Use a genuinely invalid tick value (negative). Post-fix,
+        // ticks==0 is now valid and would format as "0.000" relative
+        // seconds, so the prior INVALID(0) expectation no longer holds.
         var source = new InMemorySampleSource(
             [Ch1],
-            [new SampleRow(0L, Ch1.Key, 1.0)]);
+            [new SampleRow(-1L, Ch1.Key, 1.0)]);
 
         var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true });
 
-        Assert.StartsWith("INVALID(0),", lines[1]);
+        Assert.StartsWith("INVALID(-1),", lines[1]);
     }
 
     // ── Timestamp bucketing ──────────────────────────────────────────────────
@@ -527,5 +535,154 @@ public class CsvExporterTests
         // This test is a compile-time guarantee — it always passes if the project builds.
         var _ = new CsvExporter();
         Assert.NotNull(_);
+    }
+
+    // ── #191 progress finalization on no-op export ───────────────────────────
+
+    [Fact]
+    public async Task Export_NoChannels_StillReports100ProgressOnCompletion()
+    {
+        var source = new InMemorySampleSource([], []);
+        var report = new ListProgress<int>();
+        var sw = new StringWriter();
+
+        await new CsvExporter().ExportAsync(source, sw, new CsvExportOptions(), report);
+
+        Assert.Contains(100, report.Reports);
+    }
+
+    private sealed class ListProgress<T> : IProgress<T>
+    {
+        public List<T> Reports { get; } = new();
+        public void Report(T value) => Reports.Add(value);
+    }
+
+    // ── #193 CSV header escaping ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task Export_ChannelNameContainingDelimiter_QuotesHeaderField()
+    {
+        var ch = new ChannelDescriptor("DevA", "SN001", "name,with,commas", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("\"DevA:SN001:name,with,commas\"", header);
+    }
+
+    [Fact]
+    public async Task Export_ChannelNameContainingQuote_DoublesAndQuotesField()
+    {
+        var ch = new ChannelDescriptor("DevA", "SN001", "name\"with\"quote", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("\"DevA:SN001:name\"\"with\"\"quote\"", header);
+    }
+
+    [Fact]
+    public async Task Export_DeviceNameStartingWithFormulaChar_GetsLeadingApostrophe()
+    {
+        // Channel keys starting with =/+/-/@ would be evaluated as
+        // formulas by Excel/LibreOffice/Sheets. The mitigation prefixes
+        // a literal ' to force text mode.
+        var ch = new ChannelDescriptor("=DevA", "SN001", "Channel1", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("'=DevA:SN001:Channel1", header);
+    }
+
+    [Fact]
+    public async Task Export_WhitespacePrefixedFormulaChar_StillNeutralized()
+    {
+        // " =SUM(A1)" — leading whitespace bypasses a naive value[0]
+        // check but spreadsheets still interpret it as a formula.
+        var ch = new ChannelDescriptor(" =DevA", "SN001", "Channel1", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("' =DevA:SN001:Channel1", header);
+    }
+
+    [Theory]
+    [InlineData("\u00A0")] // NBSP
+    [InlineData("\u2003")] // EM SPACE
+    public async Task Export_UnicodeWhitespacePrefixedFormulaChar_StillNeutralized(string whitespace)
+    {
+        // Trim-based formula-injection mitigations that only strip ' '
+        // and '\t' miss CSV PoCs that prepend NBSP / EM SPACE / line
+        // separator before '='. char.IsWhiteSpace covers the full
+        // Unicode whitespace set so the leading apostrophe still lands.
+        var deviceName = whitespace + "=DevA";
+        var ch = new ChannelDescriptor(deviceName, "SN001", "Channel1", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("'" + deviceName + ":SN001:Channel1", header);
+    }
+
+    [Fact]
+    public async Task Export_LeadingTrailingWhitespaceInDeviceName_QuotesField()
+    {
+        // Excel, Google Sheets, and pandas trim unquoted leading/trailing
+        // whitespace in CSV fields; quoting preserves the exact value
+        // through round-trip parsing.
+        var deviceName = "  DevA  ";
+        var ch = new ChannelDescriptor(deviceName, "SN001", "Channel1", ChannelType.Analog);
+        var source = new InMemorySampleSource([ch], [new SampleRow(T0, ch.Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+        Assert.Contains("\"  DevA  :SN001:Channel1\"", header);
+    }
+
+    // ── #193 data-row escaping (timestamps + values) ─────────────────────────
+
+    [Fact]
+    public async Task Export_ColonDelimiter_QuotesIsoTimestamp()
+    {
+        // ISO 8601 absolute timestamps inherently contain ':'. With ':'
+        // chosen as the delimiter, the timestamp field must be RFC 4180
+        // quoted so it stays a single CSV field.
+        var source = new InMemorySampleSource([Ch1], [new SampleRow(T0, Ch1.Key, 1.0)]);
+        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { Delimiter = ":" });
+        // Body row: "2024-...":1
+        Assert.StartsWith("\"", lines[1]);
+        Assert.Contains("\":", lines[1]);
+    }
+
+    [Fact]
+    public async Task Export_DotDelimiter_QuotesRelativeTimestampAndValue()
+    {
+        var source = new InMemorySampleSource(
+            [Ch1],
+            [new SampleRow(T0, Ch1.Key, 0.5), new SampleRow(T0 + TimeSpan.TicksPerSecond, Ch1.Key, 1.5)]);
+        var (lines, _) = await ExportToLinesAsync(
+            source, new CsvExportOptions { Delimiter = ".", UseRelativeTime = true });
+        // Both relative timestamps and float values contain '.' so both
+        // get quoted under the '.' delimiter.
+        Assert.Equal("\"0.000\".\"0.5\"", lines[1]);
+        Assert.Equal("\"1.000\".\"1.5\"", lines[2]);
+    }
+
+    [Fact]
+    public async Task Export_NegativeValue_NotApostrophePrefixed()
+    {
+        // Regression: data fields use formulaSafe=false so negative
+        // numbers (whose leading '-' is a sign, not a formula char)
+        // aren't clobbered into "'-1.5".
+        var source = new InMemorySampleSource(
+            [Ch1],
+            [new SampleRow(T0, Ch1.Key, -1.5)]);
+        var (lines, _) = await ExportToLinesAsync(source, new CsvExportOptions { UseRelativeTime = true });
+        Assert.Equal("0.000,-1.5", lines[1]);
+    }
+
+    // ── #193 delimiter validation ────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(",,")]
+    [InlineData("\n")]
+    [InlineData("\r")]
+    [InlineData("\"")]
+    public async Task Export_InvalidDelimiter_ThrowsArgumentException(string bad)
+    {
+        var source = new InMemorySampleSource([Ch1], [new SampleRow(T0, Ch1.Key, 1.0)]);
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await ExportToLinesAsync(source, new CsvExportOptions { Delimiter = bad }));
     }
 }

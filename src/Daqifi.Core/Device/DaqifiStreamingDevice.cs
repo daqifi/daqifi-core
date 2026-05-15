@@ -749,12 +749,12 @@ namespace Daqifi.Core.Device
         // Permissive: any line that looks like a device error or status message,
         // including firmware text such as "Error !! ...". Used to recognize that
         // the parser would yield no result, without polluting LastScpiError with
-        // non-SCPI text.
+        // non-SCPI text. Shared classifier so the SD-response rule (closes #190
+        // — filenames starting with "error_" must NOT match) stays in lockstep
+        // across both call sites.
         private static bool IsNonResultLine(string line)
         {
-            var trimmed = line.TrimStart();
-            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
-                || trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase);
+            return ScpiResponseClassifier.IsErrorResponseLine(line);
         }
 
         /// <summary>
