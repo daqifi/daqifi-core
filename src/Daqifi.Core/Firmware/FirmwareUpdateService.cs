@@ -75,6 +75,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         };
 
     private readonly SemaphoreSlim _operationLock = new(1, 1);
+
+    // Async-context flag set true while the current logical flow holds
+    // _operationLock. CheckWifiFirmwareStatusAsync uses this to detect
+    // re-entrancy from progress / state-change callbacks fired by an
+    // in-flight UpdateFirmwareAsync / UpdateWifiModuleAsync (which run
+    // synchronously while the lock is held). Without this guard the
+    // status probe would deadlock waiting for the lock its own caller
+    // holds, since SemaphoreSlim is not re-entrant. AsyncLocal flows
+    // through await resumptions on different threads.
+    private readonly AsyncLocal<bool> _isInsideOperation = new();
     private readonly IHidTransport _hidTransport;
     private readonly IExternalProcessRunner _externalProcessRunner;
     private readonly ILogger<FirmwareUpdateService> _logger;
@@ -154,11 +164,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     }
 
     /// <inheritdoc />
+#pragma warning disable CA1068
     public async Task UpdateWifiModuleAsync(
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool skipVersionCheck = false)
+#pragma warning restore CA1068
     {
         ArgumentNullException.ThrowIfNull(device);
 
@@ -174,8 +187,49 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
 
         await RunExclusiveAsync(
-            ct => RunWifiUpdateAsync(device, firmwarePath, progress, ct),
+            ct => RunWifiUpdateAsync(device, firmwarePath, progress, skipVersionCheck, ct),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<WifiFirmwareStatus> CheckWifiFirmwareStatusAsync(
+        IStreamingDevice device,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        ThrowIfDisposed();
+
+        // Serialize device I/O with UpdateFirmwareAsync / UpdateWifiModuleAsync.
+        // GetLanChipInfoAsync runs a SCPI text exchange on the same transport
+        // those updates use; a concurrent caller would interleave on the wire
+        // and either corrupt the consumer swap or get partial replies.
+        // Acquired without the RunExclusiveAsync state check — a status probe
+        // is read-only and should be available to UI even when an update is
+        // in flight (it just waits for the in-flight I/O to release the lock).
+        //
+        // Reentrancy guard: an update fires progress / state-change callbacks
+        // synchronously while it holds _operationLock. If a callback handler
+        // calls back into CheckWifiFirmwareStatusAsync, WaitAsync would
+        // deadlock waiting for the same lock the caller's flow already owns
+        // (SemaphoreSlim is not re-entrant). The AsyncLocal flag detects
+        // this case and skips the second acquisition; we're already in a
+        // serialized device-I/O context.
+        if (_isInsideOperation.Value)
+        {
+            return await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
+        }
+
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _isInsideOperation.Value = true;
+        try
+        {
+            return await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _isInsideOperation.Value = false;
+            _operationLock.Release();
+        }
     }
 
     private async Task RunExclusiveAsync(
@@ -185,6 +239,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         ThrowIfDisposed();
 
         await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _isInsideOperation.Value = true;
         try
         {
             ResetIfTerminalState();
@@ -202,6 +257,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
         finally
         {
+            _isInsideOperation.Value = false;
             _operationLock.Release();
         }
     }
@@ -330,13 +386,15 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IStreamingDevice device,
         string firmwarePath,
         IProgress<FirmwareUpdateProgress>? progress,
+        bool skipVersionCheck,
         CancellationToken cancellationToken)
     {
         const long totalBytes = 100;
 
         try
         {
-            if (await IsWifiFirmwareUpToDateAsync(device, progress, cancellationToken).ConfigureAwait(false))
+            if (!skipVersionCheck
+                && await IsWifiFirmwareUpToDateAsync(device, progress, cancellationToken).ConfigureAwait(false))
             {
                 return;
             }
@@ -433,25 +491,67 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IProgress<FirmwareUpdateProgress>? progress,
         CancellationToken cancellationToken)
     {
+        // Internal callsite: in addition to deciding the boolean, we must
+        // transition to Complete + report 100% progress so the caller's
+        // single UpdateWifiModuleAsync(...) call observes the same end-state
+        // as a successful flash. CheckWifiFirmwareStatusAsync (the public
+        // planning API) does not have that side effect — its callers own
+        // their own logging / UI transitions.
+        var status = await CheckWifiFirmwareStatusCoreAsync(device, cancellationToken).ConfigureAwait(false);
+
+        switch (status.Reason)
+        {
+            case WifiFirmwareStatusReason.UpdateAvailable:
+                _logger.LogInformation(
+                    "WiFi firmware update available: device has {DeviceVersion}, latest is {LatestVersion}.",
+                    status.CurrentChipInfo!.FwVersion,
+                    status.LatestRelease!.TagName);
+                return false;
+
+            case WifiFirmwareStatusReason.UpToDate:
+                var message = $"WiFi firmware is already up to date (device: {status.CurrentChipInfo!.FwVersion}, latest: {status.LatestRelease!.TagName}).";
+                _logger.LogInformation(message);
+                TransitionToState(FirmwareUpdateState.Complete, message);
+                ReportProgress(progress, FirmwareUpdateState.Complete, 100, message, 100, 100);
+                return true;
+
+            default:
+                // DeviceDoesNotSupportLanQuery, ChipInfoUnavailable,
+                // LatestReleaseUnavailable, VersionUnparseable — proceed
+                // with the flash conservatively.
+                return false;
+        }
+    }
+
+    private async Task<WifiFirmwareStatus> CheckWifiFirmwareStatusCoreAsync(
+        IStreamingDevice device,
+        CancellationToken cancellationToken)
+    {
         if (device is not ILanChipInfoProvider lanChipInfoProvider)
         {
-            return false;
+            return new WifiFirmwareStatus
+            {
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery,
+            };
         }
 
-        LanChipInfo? chipInfo;
-        try
-        {
-            chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogDebug(ex, "Failed to query LAN chip info; proceeding with WiFi firmware update.");
-            return false;
-        }
-
+        // Bounded retry for the LAN chip-info probe (closes #144). Right
+        // after a PIC32 firmware update the application is up while WiFi
+        // is still finishing startup, so the first chip-info query can
+        // transiently fail; without retry, the WiFi version decision
+        // would short-circuit to ChipInfoUnavailable and flow on to a
+        // multi-minute reflash of already-current WiFi firmware. The
+        // retry budget is bounded (LanChipInfoMaxAttempts × RetryDelay)
+        // and observes cancellation between attempts.
+        var chipInfo = await TryGetLanChipInfoWithRetryAsync(lanChipInfoProvider, cancellationToken).ConfigureAwait(false);
         if (chipInfo == null)
         {
-            return false;
+            return new WifiFirmwareStatus
+            {
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.ChipInfoUnavailable,
+            };
         }
 
         FirmwareReleaseInfo? latestWifi;
@@ -463,40 +563,144 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Failed to query latest WiFi firmware release; proceeding with update.");
-            return false;
+            _logger.LogDebug(ex, "Failed to query latest WiFi firmware release; reporting status as LatestReleaseUnavailable.");
+            return new WifiFirmwareStatus
+            {
+                CurrentChipInfo = chipInfo,
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+            };
         }
 
         if (latestWifi == null)
         {
-            return false;
+            return new WifiFirmwareStatus
+            {
+                CurrentChipInfo = chipInfo,
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+            };
         }
 
-        if (!IsWifiVersionCurrent(chipInfo.FwVersion, latestWifi.TagName))
+        // Only the device-reported version needs parsing; latestWifi.Version
+        // is already a strongly-typed FirmwareVersion from FirmwareDownloadService.
+        // Re-parsing TagName would risk divergence from the canonical Version
+        // (different tag prefix conventions, etc.) and cost an extra parse.
+        if (!FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion))
         {
-            _logger.LogInformation(
-                "WiFi firmware update available: device has {DeviceVersion}, latest is {LatestVersion}.",
-                chipInfo.FwVersion,
-                latestWifi.TagName);
-            return false;
+            return new WifiFirmwareStatus
+            {
+                CurrentChipInfo = chipInfo,
+                LatestRelease = latestWifi,
+                IsUpToDate = false,
+                Reason = WifiFirmwareStatusReason.VersionUnparseable,
+            };
         }
 
-        var message = $"WiFi firmware is already up to date (device: {chipInfo.FwVersion}, latest: {latestWifi.TagName}).";
-        _logger.LogInformation(message);
-        TransitionToState(FirmwareUpdateState.Complete, message);
-        ReportProgress(progress, FirmwareUpdateState.Complete, 100, message, 100, 100);
-        return true;
+        var isCurrent = deviceVersion >= latestWifi.Version;
+        return new WifiFirmwareStatus
+        {
+            CurrentChipInfo = chipInfo,
+            LatestRelease = latestWifi,
+            IsUpToDate = isCurrent,
+            Reason = isCurrent ? WifiFirmwareStatusReason.UpToDate : WifiFirmwareStatusReason.UpdateAvailable,
+        };
     }
 
-    private static bool IsWifiVersionCurrent(string deviceVersion, string latestTagName)
+    private async Task<LanChipInfo?> TryGetLanChipInfoWithRetryAsync(
+        ILanChipInfoProvider lanChipInfoProvider,
+        CancellationToken cancellationToken)
     {
-        if (!FirmwareVersion.TryParse(deviceVersion, out var device) ||
-            !FirmwareVersion.TryParse(latestTagName, out var latest))
+        var maxAttempts = Math.Max(1, _options.LanChipInfoMaxAttempts);
+        var retryDelay = _options.LanChipInfoRetryDelay;
+        var totalTimeout = _options.LanChipInfoTotalTimeout;
+
+        // Wall-clock budget guards against the pathological case where
+        // attempt-count × per-attempt-timeout + retry-delay sum vastly
+        // exceeds the configured retry budget (e.g., 3 × 2s device timeout
+        // + 2 × 2s delay = ~10s while _operationLock is held). Linking
+        // the caller's CT preserves cancellation semantics; the timeout
+        // CTS just adds a deadline.
+        using var timeoutCts = new CancellationTokenSource(totalTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, timeoutCts.Token);
+        var linkedToken = linkedCts.Token;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            return false;
+            try
+            {
+                linkedToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug(
+                    "LAN chip-info probe hit total timeout ({Timeout}) before attempt {Attempt}/{Max}.",
+                    totalTimeout,
+                    attempt,
+                    maxAttempts);
+                return null;
+            }
+
+            try
+            {
+                var chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(linkedToken).ConfigureAwait(false);
+                if (chipInfo != null)
+                {
+                    if (attempt > 1)
+                    {
+                        _logger.LogDebug(
+                            "LAN chip-info query succeeded on attempt {Attempt}/{Max}.",
+                            attempt,
+                            maxAttempts);
+                    }
+                    return chipInfo;
+                }
+                _logger.LogDebug(
+                    "LAN chip-info query returned null on attempt {Attempt}/{Max}.",
+                    attempt,
+                    maxAttempts);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogDebug(
+                    "LAN chip-info probe hit total timeout ({Timeout}) during attempt {Attempt}/{Max}.",
+                    totalTimeout,
+                    attempt,
+                    maxAttempts);
+                return null;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "LAN chip-info query failed on attempt {Attempt}/{Max}.",
+                    attempt,
+                    maxAttempts);
+            }
+
+            if (attempt < maxAttempts)
+            {
+                try
+                {
+                    await Task.Delay(retryDelay, linkedToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogDebug(
+                        "LAN chip-info probe hit total timeout ({Timeout}) during retry delay after attempt {Attempt}/{Max}.",
+                        totalTimeout,
+                        attempt,
+                        maxAttempts);
+                    return null;
+                }
+            }
         }
 
-        return device >= latest;
+        _logger.LogDebug(
+            "LAN chip-info query exhausted {Max} attempts; reporting status as ChipInfoUnavailable.",
+            maxAttempts);
+        return null;
     }
 
     private ExternalProcessRequest BuildWifiProcessRequest(

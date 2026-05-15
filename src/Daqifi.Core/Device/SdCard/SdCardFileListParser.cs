@@ -40,9 +40,11 @@ namespace Daqifi.Core.Device.SdCard
 
                 var path = line.Trim();
 
-                // Skip SCPI error responses: "**ERROR: -200, ..." or "ERROR: -200, ..."
-                if (path.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+                // Skip SCPI error responses ("**ERROR: -200, ...", "ERROR: -200, ...")
+                // and firmware status text ("Error !! ..."). Classification rule lives
+                // in ScpiResponseClassifier so it stays consistent with
+                // DaqifiStreamingDevice.IsNonResultLine (closes #190).
+                if (ScpiResponseClassifier.IsErrorResponseLine(path))
                 {
                     continue;
                 }
