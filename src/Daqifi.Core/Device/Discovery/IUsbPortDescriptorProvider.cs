@@ -10,9 +10,10 @@ namespace Daqifi.Core.Device.Discovery;
 /// </summary>
 /// <remarks>
 /// Implementations are platform-specific: Windows uses WMI, Linux reads
-/// <c>/sys/class/tty</c>. Platforms without an implementation fall back to
-/// <see cref="NullUsbPortDescriptorProvider"/> which returns null for every
-/// port, preserving the legacy "probe every port" behavior.
+/// <c>/sys/class/tty</c>, macOS runs <c>ioreg</c>. Platforms without an
+/// implementation fall back to <see cref="NullUsbPortDescriptorProvider"/>
+/// which returns null for every port, preserving the legacy "probe every
+/// port" behavior.
 /// </remarks>
 public interface IUsbPortDescriptorProvider
 {

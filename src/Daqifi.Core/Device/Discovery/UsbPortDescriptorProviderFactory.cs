@@ -4,7 +4,7 @@ namespace Daqifi.Core.Device.Discovery;
 
 /// <summary>
 /// Picks the platform-appropriate <see cref="IUsbPortDescriptorProvider"/>:
-/// Windows → WMI, Linux → sysfs, others → null fallback (legacy probe-all).
+/// Windows → WMI, Linux → sysfs, macOS → ioreg, others → null fallback (legacy probe-all).
 /// </summary>
 internal static class UsbPortDescriptorProviderFactory
 {
@@ -23,6 +23,11 @@ internal static class UsbPortDescriptorProviderFactory
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
             return new LinuxUsbPortDescriptorProvider();
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return new MacOsUsbPortDescriptorProvider();
         }
 
         return NullUsbPortDescriptorProvider.Instance;
