@@ -1023,12 +1023,38 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         // (callers on platforms where the first open is already clean).
         if (_options.PostReconnectStaleHandleDelay > TimeSpan.Zero)
         {
-            _logger.LogDebug(
+            _logger.LogInformation(
                 "Discarding race-winning serial handle; closing and re-opening after {Delay} to obtain a clean USB CDC binding.",
                 _options.PostReconnectStaleHandleDelay);
             device.Disconnect();
             await Task.Delay(_options.PostReconnectStaleHandleDelay, cancellationToken).ConfigureAwait(false);
             await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Wake the post-reset device. PIC32 application firmware boots
+        // dormant (LEDs off, WiFi subsystem unpowered, won't answer LAN
+        // queries) until SYSTem:POWer:STATe 1 is sent. InitializeAsync
+        // handles that plus the rest of the standard init sequence
+        // (echo off, stream format, etc.). Without this, callers writing
+        // a "natural" probe like GetLanChipInfoAsync would silently fail
+        // for tens of seconds because the device is still dormant.
+        // Skipped for non-DaqifiDevice transports (e.g. test fakes); they
+        // are responsible for their own readiness if needed.
+        if (device is DaqifiDevice initializableDevice)
+        {
+            _logger.LogInformation("Waking post-reset device via InitializeAsync.");
+            try
+            {
+                await initializableDevice.InitializeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Don't fail the firmware update outright — the readiness
+                // probe (if configured) is the source of truth for "ready".
+                // Surface the init failure as a warning so a probe timeout
+                // later isn't mysterious.
+                _logger.LogWarning(ex, "InitializeAsync after reconnect threw; continuing to readiness probe.");
+            }
         }
 
         // Application-readiness probe (closes #145). Serial transport
