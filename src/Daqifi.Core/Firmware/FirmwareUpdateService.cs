@@ -1011,6 +1011,26 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         await SafeDisconnectHidAsync().ConfigureAwait(false);
         await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
 
+        // Discard the race-winning serial handle from the USB CDC re-enumeration
+        // window. On macOS the first SerialPort.Open() that succeeds after a PIC32
+        // reset is typically a "shadow" handle: IsOpen==true, but the kernel
+        // device-node isn't fully wired yet — writes silently drop and reads see
+        // zero bytes. A fresh open after a brief settling delay yields a clean
+        // binding. Symptom without this step: SCPI Sends after reconnect appear
+        // to succeed but the device never responds (LEDs stay off, readiness
+        // probe returns null indefinitely until budget expires).
+        // Opt out by setting PostReconnectStaleHandleDelay = TimeSpan.Zero
+        // (callers on platforms where the first open is already clean).
+        if (_options.PostReconnectStaleHandleDelay > TimeSpan.Zero)
+        {
+            _logger.LogDebug(
+                "Discarding race-winning serial handle; closing and re-opening after {Delay} to obtain a clean USB CDC binding.",
+                _options.PostReconnectStaleHandleDelay);
+            device.Disconnect();
+            await Task.Delay(_options.PostReconnectStaleHandleDelay, cancellationToken).ConfigureAwait(false);
+            await WaitForSerialReconnectAsync(device, cancellationToken).ConfigureAwait(false);
+        }
+
         // Application-readiness probe (closes #145). Serial transport
         // re-enumeration succeeds well before the PIC32 application
         // firmware is actually ready to answer protobuf status queries;

@@ -769,6 +769,108 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_PostReconnectStaleHandleDelay_TriggersExtraDisconnectReconnect()
+    {
+        // After PIC32 reset on macOS, the first SerialPort.Open() to succeed
+        // inside the USB CDC re-enum window is a "shadow" handle — open but
+        // bytes don't flow. The fix: close + brief settling delay + reopen
+        // to obtain a clean kernel binding. Validate the dance runs:
+        // expect TWO disconnect calls and TWO reconnect cycles inside
+        // JumpToApplicationAndReconnectAsync (the original after FORCEBOOT,
+        // plus the extra one introduced by the stale-handle workaround).
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var options = CreateFastOptions();
+        options.PostReconnectStaleHandleDelay = TimeSpan.FromMilliseconds(20);
+
+        var disconnectsBeforeUpdate = device.DisconnectCalls;
+        var connectAttemptsBeforeUpdate = device.ConnectAttempts;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        // Without the dance: 1 disconnect (FORCEBOOT) + 1 connect (reconnect after JumpToApp).
+        // With the dance:    2 disconnects (FORCEBOOT + stale-handle discard)
+        //                    + 2 connects (initial reconnect + clean re-open).
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(disconnectsBeforeUpdate + 2, device.DisconnectCalls);
+        Assert.Equal(connectAttemptsBeforeUpdate + 2, device.ConnectAttempts);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_PostReconnectStaleHandleDelayZero_SkipsExtraDisconnectReconnect()
+    {
+        // Opt-out path: setting PostReconnectStaleHandleDelay to Zero
+        // (e.g. on Windows where the first open is already clean) must
+        // skip the extra disconnect/reconnect cycle entirely.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x02]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x03]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var options = CreateFastOptions(); // CreateFastOptions sets this to Zero
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]),
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        // 1 FORCEBOOT disconnect + 1 reconnect; no stale-handle dance.
+        Assert.Equal(1, device.DisconnectCalls);
+        Assert.Equal(1, device.ConnectAttempts);
+    }
+
+    [Fact]
     public void Constructor_ProbeWithReadinessTimeoutGteJumpToApp_Throws()
     {
         // The whole JumpToApp step is bounded by JumpingToApplicationTimeout
@@ -1267,7 +1369,11 @@ public class FirmwareUpdateServiceTests
             PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5),
             HidConnectRetryDelay = TimeSpan.FromMilliseconds(5),
             FlashWriteRetryDelay = TimeSpan.FromMilliseconds(5),
-            WifiProcessTimeout = TimeSpan.FromSeconds(2)
+            WifiProcessTimeout = TimeSpan.FromSeconds(2),
+            // Disable the macOS USB CDC stale-handle settling delay for unit
+            // tests — FakeStreamingDevice doesn't reproduce the re-enum race,
+            // so the dance is pure latency that would blow the fast budgets.
+            PostReconnectStaleHandleDelay = TimeSpan.Zero
         };
     }
 

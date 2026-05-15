@@ -159,6 +159,20 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostReconnectReadinessRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
+    /// Settling delay between discarding the race-winning serial handle
+    /// and re-opening the port after a PIC32 reset (closes the macOS-USB-CDC
+    /// shadow-handle problem). After PIC32 firmware update completes the
+    /// device's USB CDC interface re-enumerates; on macOS the first
+    /// SerialPort.Open() that succeeds during that window is typically a
+    /// "shadow" handle — IsOpen==true but writes silently drop and reads
+    /// see zero bytes. Closing and re-opening after a brief delay yields
+    /// a clean kernel binding. Default 2s covers macOS-observed timing;
+    /// set to TimeSpan.Zero on platforms (notably Windows) where the
+    /// first open is already clean and the extra cycle is pure latency.
+    /// </summary>
+    public TimeSpan PostReconnectStaleHandleDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// Total attempts (initial + retries) for LAN chip-info queries before
     /// the WiFi version decision falls through to "couldn't check, proceed
     /// with flash". Right after a PIC32 firmware update the application is
