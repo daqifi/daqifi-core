@@ -266,6 +266,18 @@ namespace Daqifi.Core.Device
                 _messageConsumer?.StopSafely();
                 _messageProducer?.StopSafely();
 
+                // Null the producer/consumer so a subsequent Connect()
+                // rebuilds them against the transport's current Stream.
+                // SerialStreamTransport.Stream returns _serialPort.BaseStream,
+                // which is a new instance after Disconnect() → Connect()
+                // reopens the port; reusing the old producer/consumer would
+                // leave them bound to the previous (disposed) BaseStream
+                // and any Send() would silently no-op. Surfaced by PR #200's
+                // post-reconnect readiness probe (LAN chip-info returning
+                // null on every attempt because Send went to a dead stream).
+                _messageConsumer = null;
+                _messageProducer = null;
+
                 // Disconnect transport if available
                 _transport?.Disconnect();
             }

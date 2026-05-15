@@ -217,14 +217,106 @@ public class DaqifiDeviceWithTransportTests
         // Arrange
         using var transport = new MockStreamTransport();
         using var device = new DaqifiDevice("Mock Device", transport);
-        
+
         device.Connect();
         Assert.Equal(ConnectionStatus.Connected, device.Status);
-        
-        // Act - Simulate transport connection loss 
+
+        // Act - Simulate transport connection loss
         transport.SimulateConnectionLoss();
-        
+
         // Assert
         Assert.Equal(ConnectionStatus.Lost, device.Status);
+    }
+
+    [Fact]
+    public void DaqifiDevice_DisconnectThenConnect_SendsToCurrentTransportStream()
+    {
+        // Regression for the latent stale-stream bug surfaced by PR #200's
+        // post-reconnect readiness probe: SerialStreamTransport.Stream returns
+        // _serialPort.BaseStream, which is a fresh instance after a transport
+        // Disconnect → Connect. Pre-fix, DaqifiDevice.Disconnect left
+        // _messageProducer / _messageConsumer alive with references to the
+        // PREVIOUS BaseStream, and Connect's "if (_messageProducer == null)"
+        // guard skipped recreation — so any subsequent Send() wrote to the
+        // disposed stream and silently no-op'd, leaving the text consumer
+        // with zero bytes on the new stream. Fix nulls them in Disconnect so
+        // Connect rebuilds them against the transport's current Stream.
+        using var transport = new SwappingMockStreamTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        device.Connect();
+        Thread.Sleep(50); // MessageProducer background thread spin-up
+        device.Send(ScpiMessageProducer.GetDeviceInfo);
+        Thread.Sleep(200); // Allow the producer to flush
+        var firstStreamBytes = transport.CurrentStreamSnapshot();
+        Assert.NotEmpty(firstStreamBytes);
+
+        device.Disconnect();
+        transport.RotateStream();
+        device.Connect();
+        Thread.Sleep(50);
+        device.Send(ScpiMessageProducer.GetDeviceInfo);
+        Thread.Sleep(200);
+
+        // The send AFTER reconnect must land on the new stream — not on the
+        // first (now-disposed) stream we captured above.
+        var secondStreamBytes = transport.CurrentStreamSnapshot();
+        Assert.NotEmpty(secondStreamBytes);
+        Assert.NotSame(firstStreamBytes, secondStreamBytes);
+    }
+
+    // Mock transport that swaps to a fresh MemoryStream on RotateStream(),
+    // mirroring the real SerialStreamTransport whose Stream property returns
+    // _serialPort.BaseStream — a new instance after each Disconnect → Connect.
+    private class SwappingMockStreamTransport : IStreamTransport
+    {
+        private MemoryStream _stream = new();
+        private bool _isConnected;
+        private bool _disposed;
+
+        public Stream Stream => _disposed ? throw new ObjectDisposedException(nameof(SwappingMockStreamTransport)) : _stream;
+        public bool IsConnected => _isConnected && !_disposed;
+        public string ConnectionInfo => _disposed ? "Disposed" : (_isConnected ? "Swap: Connected" : "Swap: Disconnected");
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public void RotateStream()
+        {
+            var old = _stream;
+            _stream = new MemoryStream();
+            old.Dispose();
+        }
+
+        public byte[] CurrentStreamSnapshot() => _stream.ToArray();
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(SwappingMockStreamTransport));
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public void Connect() => ConnectAsync().Wait();
+        public void Disconnect() => DisconnectAsync().Wait();
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _isConnected = false;
+                _stream.Dispose();
+                _disposed = true;
+            }
+        }
     }
 }
