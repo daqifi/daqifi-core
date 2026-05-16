@@ -235,6 +235,22 @@ namespace Daqifi.Core.Device
                     throw new ArgumentOutOfRangeException(nameof(configuration), configuration.SecurityType, "Unsupported WiFi security type.");
             }
 
+            // Stage static IP fields (firmware writes these into the runtime
+            // WiFi settings that ApplyNetworkLan consumes). Skip any field the
+            // caller left null so DHCP-only callers see no behavior change.
+            if (configuration.StaticIP != null)
+            {
+                Send(ScpiMessageProducer.SetLanAddress(configuration.StaticIP));
+            }
+            if (configuration.SubnetMask != null)
+            {
+                Send(ScpiMessageProducer.SetLanMask(configuration.SubnetMask));
+            }
+            if (configuration.Gateway != null)
+            {
+                Send(ScpiMessageProducer.SetLanGateway(configuration.Gateway));
+            }
+
             // Apply configuration
             Send(ScpiMessageProducer.ApplyNetworkLan);
 
@@ -252,6 +268,9 @@ namespace Daqifi.Core.Device
             _networkConfiguration.SecurityType = configuration.SecurityType;
             _networkConfiguration.Ssid = configuration.Ssid;
             _networkConfiguration.Password = configuration.Password;
+            _networkConfiguration.StaticIP = configuration.StaticIP;
+            _networkConfiguration.SubnetMask = configuration.SubnetMask;
+            _networkConfiguration.Gateway = configuration.Gateway;
         }
 
         /// <summary>

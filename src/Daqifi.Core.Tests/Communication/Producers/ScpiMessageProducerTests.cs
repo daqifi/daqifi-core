@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Text;
 using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
@@ -233,6 +234,96 @@ public class ScpiMessageProducerTests
     {
         var message = ScpiMessageProducer.SetNetworkWifiPassword("password123");
         Assert.Equal("SYSTem:COMMunicate:LAN:PASs \"password123\"", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetLanAddress_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetLanAddress(IPAddress.Parse("192.168.1.42"));
+        Assert.Equal("SYSTem:COMMunicate:LAN:ADDRess \"192.168.1.42\"", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetLanAddress_NullAddress_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => ScpiMessageProducer.SetLanAddress(null!));
+    }
+
+    [Fact]
+    public void SetLanMask_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetLanMask(IPAddress.Parse("255.255.255.0"));
+        Assert.Equal("SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\"", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetLanMask_NullMask_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => ScpiMessageProducer.SetLanMask(null!));
+    }
+
+    [Fact]
+    public void SetLanGateway_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetLanGateway(IPAddress.Parse("192.168.1.1"));
+        Assert.Equal("SYSTem:COMMunicate:LAN:GATEway \"192.168.1.1\"", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetLanGateway_NullGateway_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => ScpiMessageProducer.SetLanGateway(null!));
+    }
+
+    [Fact]
+    public void GetLanAddress_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetLanAddress;
+        Assert.Equal("SYSTem:COMMunicate:LAN:ADDRess?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetLanMask_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetLanMask;
+        Assert.Equal("SYSTem:COMMunicate:LAN:MASK?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetLanGateway_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetLanGateway;
+        Assert.Equal("SYSTem:COMMunicate:LAN:GATEway?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetLanConfiguredAddress_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetLanConfiguredAddress;
+        Assert.Equal("SYSTem:COMMunicate:LAN:CONFigure:ADDRess?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetLanConfiguredMask_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetLanConfiguredMask;
+        Assert.Equal("SYSTem:COMMunicate:LAN:CONFigure:MASK?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetLanConfiguredGateway_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetLanConfiguredGateway;
+        Assert.Equal("SYSTem:COMMunicate:LAN:CONFigure:GATEway?", message.Data);
         AssertMessageFormat(message);
     }
 

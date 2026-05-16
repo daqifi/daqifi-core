@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using Daqifi.Core.Communication.Messages;
 
 namespace Daqifi.Core.Communication.Producers;
@@ -459,6 +460,111 @@ public class ScpiMessageProducer
         return new ScpiMessage($"SYSTem:COMMunicate:LAN:PASs \"{password}\"");
     }
         
+    /// <summary>
+    /// Creates a command message to set the static IP address for the LAN.
+    /// </summary>
+    /// <param name="address">The static IP address to assign to the device.</param>
+    /// <remarks>
+    /// The new value is staged into the device's runtime WiFi settings and takes
+    /// effect on the next <see cref="ApplyNetworkLan"/>. Persist across reboots
+    /// with <see cref="SaveNetworkLan"/>.
+    /// Command: SYSTem:COMMunicate:LAN:ADDRess "x.x.x.x"
+    /// </remarks>
+    public static IOutboundMessage<string> SetLanAddress(IPAddress address)
+    {
+        if (address == null)
+        {
+            throw new ArgumentNullException(nameof(address));
+        }
+
+        return new ScpiMessage($"SYSTem:COMMunicate:LAN:ADDRess \"{address}\"");
+    }
+
+    /// <summary>
+    /// Creates a command message to set the subnet mask for the LAN.
+    /// </summary>
+    /// <param name="mask">The subnet mask to assign to the device.</param>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:MASK "x.x.x.x"
+    /// </remarks>
+    public static IOutboundMessage<string> SetLanMask(IPAddress mask)
+    {
+        if (mask == null)
+        {
+            throw new ArgumentNullException(nameof(mask));
+        }
+
+        return new ScpiMessage($"SYSTem:COMMunicate:LAN:MASK \"{mask}\"");
+    }
+
+    /// <summary>
+    /// Creates a command message to set the default gateway for the LAN.
+    /// </summary>
+    /// <param name="gateway">The default gateway to assign to the device.</param>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:GATEway "x.x.x.x"
+    /// </remarks>
+    public static IOutboundMessage<string> SetLanGateway(IPAddress gateway)
+    {
+        if (gateway == null)
+        {
+            throw new ArgumentNullException(nameof(gateway));
+        }
+
+        return new ScpiMessage($"SYSTem:COMMunicate:LAN:GATEway \"{gateway}\"");
+    }
+
+    /// <summary>
+    /// Creates a query message to read the staged (pre-apply) LAN IP address.
+    /// </summary>
+    /// <remarks>
+    /// Returns the address currently in the device's runtime WiFi settings — the value
+    /// that <see cref="ApplyNetworkLan"/> would push next, which may differ from the
+    /// active address reported by <see cref="GetLanAddress"/>.
+    /// Command: SYSTem:COMMunicate:LAN:CONFigure:ADDRess?
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanConfiguredAddress => new ScpiMessage("SYSTem:COMMunicate:LAN:CONFigure:ADDRess?");
+
+    /// <summary>
+    /// Creates a query message to read the staged (pre-apply) LAN subnet mask.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:CONFigure:MASK?
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanConfiguredMask => new ScpiMessage("SYSTem:COMMunicate:LAN:CONFigure:MASK?");
+
+    /// <summary>
+    /// Creates a query message to read the staged (pre-apply) LAN default gateway.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:CONFigure:GATEway?
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanConfiguredGateway => new ScpiMessage("SYSTem:COMMunicate:LAN:CONFigure:GATEway?");
+
+    /// <summary>
+    /// Creates a query message to read the active LAN IP address.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:ADDRess?
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanAddress => new ScpiMessage("SYSTem:COMMunicate:LAN:ADDRess?");
+
+    /// <summary>
+    /// Creates a query message to read the active LAN subnet mask.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:MASK?
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanMask => new ScpiMessage("SYSTem:COMMunicate:LAN:MASK?");
+
+    /// <summary>
+    /// Creates a query message to read the active LAN default gateway.
+    /// </summary>
+    /// <remarks>
+    /// Command: SYSTem:COMMunicate:LAN:GATEway?
+    /// </remarks>
+    public static IOutboundMessage<string> GetLanGateway => new ScpiMessage("SYSTem:COMMunicate:LAN:GATEway?");
+
     /// <summary>
     /// Creates a command message to disable LAN communication.
     /// </summary>
