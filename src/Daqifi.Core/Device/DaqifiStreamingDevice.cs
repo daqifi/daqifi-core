@@ -235,6 +235,22 @@ namespace Daqifi.Core.Device
                     throw new ArgumentOutOfRangeException(nameof(configuration), configuration.SecurityType, "Unsupported WiFi security type.");
             }
 
+            // Stage static IP fields (firmware writes these into the runtime
+            // WiFi settings that ApplyNetworkLan consumes). Skip any field the
+            // caller left null so DHCP-only callers see no behavior change.
+            if (configuration.StaticIP != null)
+            {
+                Send(ScpiMessageProducer.SetLanAddress(configuration.StaticIP));
+            }
+            if (configuration.SubnetMask != null)
+            {
+                Send(ScpiMessageProducer.SetLanMask(configuration.SubnetMask));
+            }
+            if (configuration.Gateway != null)
+            {
+                Send(ScpiMessageProducer.SetLanGateway(configuration.Gateway));
+            }
+
             // Apply configuration
             Send(ScpiMessageProducer.ApplyNetworkLan);
 
@@ -247,11 +263,25 @@ namespace Daqifi.Core.Device
             // Save configuration to persist across restarts
             Send(ScpiMessageProducer.SaveNetworkLan);
 
-            // Update local configuration
+            // Update local configuration. Static IP fields use null = "leave
+            // unchanged" semantics, so only overwrite when the caller provided
+            // a value — otherwise we'd clobber the previously known static IP.
             _networkConfiguration.Mode = configuration.Mode;
             _networkConfiguration.SecurityType = configuration.SecurityType;
             _networkConfiguration.Ssid = configuration.Ssid;
             _networkConfiguration.Password = configuration.Password;
+            if (configuration.StaticIP != null)
+            {
+                _networkConfiguration.StaticIP = configuration.StaticIP;
+            }
+            if (configuration.SubnetMask != null)
+            {
+                _networkConfiguration.SubnetMask = configuration.SubnetMask;
+            }
+            if (configuration.Gateway != null)
+            {
+                _networkConfiguration.Gateway = configuration.Gateway;
+            }
         }
 
         /// <summary>

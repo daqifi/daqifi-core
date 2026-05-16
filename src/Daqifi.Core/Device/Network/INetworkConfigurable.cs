@@ -29,6 +29,7 @@ namespace Daqifi.Core.Device.Network
         /// <item><description>Sets the SSID</description></item>
         /// <item><description>Sets the security type</description></item>
         /// <item><description>Sets the password (if security is enabled)</description></item>
+        /// <item><description>Sets the static IP, subnet mask, and gateway (only those provided as non-null)</description></item>
         /// <item><description>Applies the LAN configuration</description></item>
         /// <item><description>Waits for the WiFi module to restart</description></item>
         /// <item><description>Re-enables the LAN interface</description></item>

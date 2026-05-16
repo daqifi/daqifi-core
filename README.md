@@ -12,7 +12,7 @@ The DAQiFi Core Library is a .NET library designed to simplify interaction with 
 - **Firmware Update Orchestration**: Programmatic PIC32 bootloader updates with state/progress reporting, timeout/retry handling, and cancellation support
 - **Transport Layer**: TCP, UDP, and Serial communication with async/await patterns
 - **Protocol Buffers**: Efficient binary message serialization for device communication
-- **Network Configuration**: Programmatic WiFi SSID/password/mode updates via `INetworkConfigurable`
+- **Network Configuration**: Programmatic WiFi SSID/password/mode and LAN static IP/subnet/gateway updates via `INetworkConfigurable`
 - **Cross-Platform**: Compatible with .NET 9.0 and .NET 10.0
 
 ## Getting Started
@@ -171,6 +171,24 @@ if (device is INetworkConfigurable networkDevice)
     };
     await networkDevice.UpdateNetworkConfigurationAsync(config);
 }
+```
+
+To assign a static LAN address, set `StaticIP` / `SubnetMask` / `Gateway` (IPv4 only). Leaving any of them `null` means "leave unchanged" so DHCP-only callers see no behavior change:
+
+```csharp
+using System.Net;
+using Daqifi.Core.Device.Network;
+
+var config = new NetworkConfiguration
+{
+    Ssid = "MyNetwork",
+    Password = "secret",
+    Mode = WifiMode.ExistingNetwork,
+    StaticIP = IPAddress.Parse("192.168.1.42"),
+    SubnetMask = IPAddress.Parse("255.255.255.0"),
+    Gateway = IPAddress.Parse("192.168.1.1"),
+};
+await networkDevice.UpdateNetworkConfigurationAsync(config);
 ```
 
 ### Firmware Update Orchestration
