@@ -51,6 +51,7 @@ public class SdCardSpaceParserTests
     [InlineData("1048576000,xyz")]        // non-numeric total
     [InlineData("-1,2097152000")]         // negative free
     [InlineData("1048576000,-1")]         // negative total
+    [InlineData("5000,1000")]             // free > total (corrupt metadata)
     [InlineData("**ERROR: -200, \"Execution error\"")] // SCPI error
     public void TryParse_Malformed_ReturnsFalse(string input)
     {

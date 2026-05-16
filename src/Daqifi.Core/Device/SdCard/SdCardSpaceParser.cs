@@ -42,7 +42,10 @@ public static class SdCardSpaceParser
             return false;
         }
 
-        if (free < 0 || total < 0)
+        // Reject negatives and any free > total — both indicate corrupt firmware
+        // metadata. Surfacing them as a parse failure forces the typed exception
+        // path rather than producing a negative UsedBytes downstream.
+        if (free < 0 || total < 0 || free > total)
         {
             return false;
         }

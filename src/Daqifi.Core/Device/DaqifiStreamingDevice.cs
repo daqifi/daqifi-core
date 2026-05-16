@@ -397,7 +397,7 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
@@ -406,6 +406,11 @@ namespace Daqifi.Core.Device
             if (!IsConnected)
             {
                 throw new InvalidOperationException("Device is not connected.");
+            }
+
+            if (_isLoggingToSdCard)
+            {
+                throw new InvalidOperationException("Cannot query SD card storage while logging to SD card.");
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -429,7 +434,10 @@ namespace Daqifi.Core.Device
                     Send(ScpiMessageProducer.GetSdSpace);
                 }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
 
-                if (ContainsScpiError(lines))
+                // Only retry transient SCPI errors. A "No SD Card Detected" line
+                // is non-transient — retrying just delays the typed exception and
+                // risks misclassification if the marker isn't repeated on retry.
+                if (ContainsScpiError(lines) && !ContainsNoSdCardMarker(lines))
                 {
                     for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
                     {
@@ -444,7 +452,7 @@ namespace Daqifi.Core.Device
                             Send(ScpiMessageProducer.GetSdSpace);
                         }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
 
-                        if (!ContainsScpiError(lines))
+                        if (!ContainsScpiError(lines) || ContainsNoSdCardMarker(lines))
                         {
                             break;
                         }
@@ -467,7 +475,7 @@ namespace Daqifi.Core.Device
             // Parser failed — translate the firmware response into a typed exception.
             var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
 
-            if (lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0))
+            if (ContainsNoSdCardMarker(lines))
             {
                 throw new SdCardNotPresentException(lines, lastScpiError);
             }
@@ -478,6 +486,11 @@ namespace Daqifi.Core.Device
                     : "The SD card storage query returned an unparseable response.",
                 lines,
                 lastScpiError);
+        }
+
+        private static bool ContainsNoSdCardMarker(IReadOnlyList<string> lines)
+        {
+            return lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         /// <summary>
