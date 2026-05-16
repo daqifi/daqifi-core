@@ -263,14 +263,25 @@ namespace Daqifi.Core.Device
             // Save configuration to persist across restarts
             Send(ScpiMessageProducer.SaveNetworkLan);
 
-            // Update local configuration
+            // Update local configuration. Static IP fields use null = "leave
+            // unchanged" semantics, so only overwrite when the caller provided
+            // a value — otherwise we'd clobber the previously known static IP.
             _networkConfiguration.Mode = configuration.Mode;
             _networkConfiguration.SecurityType = configuration.SecurityType;
             _networkConfiguration.Ssid = configuration.Ssid;
             _networkConfiguration.Password = configuration.Password;
-            _networkConfiguration.StaticIP = configuration.StaticIP;
-            _networkConfiguration.SubnetMask = configuration.SubnetMask;
-            _networkConfiguration.Gateway = configuration.Gateway;
+            if (configuration.StaticIP != null)
+            {
+                _networkConfiguration.StaticIP = configuration.StaticIP;
+            }
+            if (configuration.SubnetMask != null)
+            {
+                _networkConfiguration.SubnetMask = configuration.SubnetMask;
+            }
+            if (configuration.Gateway != null)
+            {
+                _networkConfiguration.Gateway = configuration.Gateway;
+            }
         }
 
         /// <summary>

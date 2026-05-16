@@ -1,5 +1,6 @@
 using System;
 using System.Net;
+using System.Net.Sockets;
 using Daqifi.Core.Communication.Messages;
 
 namespace Daqifi.Core.Communication.Producers;
@@ -472,11 +473,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetLanAddress(IPAddress address)
     {
-        if (address == null)
-        {
-            throw new ArgumentNullException(nameof(address));
-        }
-
+        RequireIPv4(address, nameof(address));
         return new ScpiMessage($"SYSTem:COMMunicate:LAN:ADDRess \"{address}\"");
     }
 
@@ -489,11 +486,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetLanMask(IPAddress mask)
     {
-        if (mask == null)
-        {
-            throw new ArgumentNullException(nameof(mask));
-        }
-
+        RequireIPv4(mask, nameof(mask));
         return new ScpiMessage($"SYSTem:COMMunicate:LAN:MASK \"{mask}\"");
     }
 
@@ -506,12 +499,26 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetLanGateway(IPAddress gateway)
     {
-        if (gateway == null)
+        RequireIPv4(gateway, nameof(gateway));
+        return new ScpiMessage($"SYSTem:COMMunicate:LAN:GATEway \"{gateway}\"");
+    }
+
+    // Firmware's LAN setters parse the payload via inet_addr (IPv4 dotted quad
+    // only — see SCPILAN.c's SCPI_LANAddrSetImpl). IPv6 inputs would stringify
+    // with colons and silently mis-set on the device, so reject them here.
+    private static void RequireIPv4(IPAddress address, string paramName)
+    {
+        if (address == null)
         {
-            throw new ArgumentNullException(nameof(gateway));
+            throw new ArgumentNullException(paramName);
         }
 
-        return new ScpiMessage($"SYSTem:COMMunicate:LAN:GATEway \"{gateway}\"");
+        if (address.AddressFamily != AddressFamily.InterNetwork)
+        {
+            throw new ArgumentException(
+                "Address must be IPv4 (AddressFamily.InterNetwork).",
+                paramName);
+        }
     }
 
     /// <summary>

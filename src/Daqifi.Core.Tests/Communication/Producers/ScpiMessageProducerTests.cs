@@ -252,6 +252,12 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
+    public void SetLanAddress_IPv6_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLanAddress(IPAddress.IPv6Loopback));
+    }
+
+    [Fact]
     public void SetLanMask_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.SetLanMask(IPAddress.Parse("255.255.255.0"));
@@ -266,6 +272,12 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
+    public void SetLanMask_IPv6_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLanMask(IPAddress.IPv6Loopback));
+    }
+
+    [Fact]
     public void SetLanGateway_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.SetLanGateway(IPAddress.Parse("192.168.1.1"));
@@ -277,6 +289,12 @@ public class ScpiMessageProducerTests
     public void SetLanGateway_NullGateway_Throws()
     {
         Assert.Throws<ArgumentNullException>(() => ScpiMessageProducer.SetLanGateway(null!));
+    }
+
+    [Fact]
+    public void SetLanGateway_IPv6_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLanGateway(IPAddress.IPv6Loopback));
     }
 
     [Fact]

@@ -182,6 +182,12 @@ namespace Daqifi.Core.Tests.Device.Network
             Assert.True(applyIndex > sentCommands.IndexOf("SYSTem:COMMunicate:LAN:ADDRess \"10.0.0.5\""));
             Assert.True(applyIndex > sentCommands.IndexOf("SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\""));
             Assert.True(applyIndex > sentCommands.IndexOf("SYSTem:COMMunicate:LAN:GATEway \"10.0.0.1\""));
+
+            // SAVE persists what APPLY pushed, so it must come after every static-IP setter too.
+            var saveIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:SAVE");
+            Assert.True(saveIndex > sentCommands.IndexOf("SYSTem:COMMunicate:LAN:ADDRess \"10.0.0.5\""));
+            Assert.True(saveIndex > sentCommands.IndexOf("SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\""));
+            Assert.True(saveIndex > sentCommands.IndexOf("SYSTem:COMMunicate:LAN:GATEway \"10.0.0.1\""));
         }
 
         [Fact]
@@ -231,6 +237,38 @@ namespace Daqifi.Core.Tests.Device.Network
             Assert.Contains("SYSTem:COMMunicate:LAN:ADDRess \"10.0.0.5\"", sentCommands);
             Assert.DoesNotContain(sentCommands, c => c.StartsWith("SYSTem:COMMunicate:LAN:MASK "));
             Assert.DoesNotContain(sentCommands, c => c.StartsWith("SYSTem:COMMunicate:LAN:GATEway "));
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_WithNullStaticFields_PreservesPreviouslyCachedValues()
+        {
+            // Arrange — first call seeds the cache with a known static IP.
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var originalStaticIP = IPAddress.Parse("10.0.0.5");
+            var originalSubnet = IPAddress.Parse("255.255.255.0");
+            var originalGateway = IPAddress.Parse("10.0.0.1");
+            await device.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "Net",
+                "Pass",
+                originalStaticIP,
+                originalSubnet,
+                originalGateway));
+
+            // Act — second call only changes WiFi settings; static IP fields are
+            // null which means "leave unchanged". The cache must not be cleared.
+            await device.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "OtherNet",
+                "OtherPass"));
+
+            // Assert
+            Assert.Equal(originalStaticIP, device.NetworkConfiguration.StaticIP);
+            Assert.Equal(originalSubnet, device.NetworkConfiguration.SubnetMask);
+            Assert.Equal(originalGateway, device.NetworkConfiguration.Gateway);
         }
 
         [Fact]
