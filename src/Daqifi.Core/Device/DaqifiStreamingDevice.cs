@@ -393,6 +393,94 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Retrieves the free and total byte counts of the device's SD card.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
+        /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
+        public async Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            Send(ScpiMessageProducer.StopStreaming);
+            IsStreaming = false;
+
+            IReadOnlyList<string> lines;
+            try
+            {
+                lines = await ExecuteTextCommandAsync(() =>
+                {
+                    PrepareSdInterface();
+
+                    // Allow the device firmware to complete the SPI bus switch
+                    // before querying the SD card. Without this delay, the device
+                    // can return SCPI error -200 (Execution error).
+                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+
+                    Send(ScpiMessageProducer.GetSdSpace);
+                }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                if (ContainsScpiError(lines))
+                {
+                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+
+                        lines = await ExecuteTextCommandAsync(() =>
+                        {
+                            PrepareSdInterface();
+                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                            Send(ScpiMessageProducer.GetSdSpace);
+                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                        if (!ContainsScpiError(lines))
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (IsConnected)
+                {
+                    PrepareLanInterface();
+                }
+            }
+
+            if (SdCardSpaceParser.TryParseLines(lines, out var storage))
+            {
+                return storage;
+            }
+
+            // Parser failed — translate the firmware response into a typed exception.
+            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
+
+            if (lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                throw new SdCardNotPresentException(lines, lastScpiError);
+            }
+
+            throw new SdCardOperationException(
+                lastScpiError != null
+                    ? "The SD card storage query failed: " + lastScpiError
+                    : "The SD card storage query returned an unparseable response.",
+                lines,
+                lastScpiError);
+        }
+
+        /// <summary>
         /// Starts logging data to the SD card.
         /// </summary>
         /// <param name="fileName">
