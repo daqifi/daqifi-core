@@ -87,17 +87,26 @@ More examples at [daqifi.com](https://daqifi.com).
 
 ### Connection options
 
+Pick whichever transport fits your setup — each snippet is a standalone, copy-paste-ready starting point.
+
+**TCP with a resilient retry preset** (5 retries, longer timeouts):
+
 ```csharp
-// TCP with resilient retry preset (5 retries, longer timeouts)
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
     "192.168.1.100", 9760, DeviceConnectionOptions.Resilient);
+```
 
-// Serial / USB
-using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");                // Windows
-using var device = await DaqifiDeviceFactory.ConnectSerialAsync("/dev/cu.usbmodem1");   // macOS
-using var device = await DaqifiDeviceFactory.ConnectSerialAsync("/dev/ttyACM0");        // Linux
+**Serial / USB:**
 
-// From a discovered device
+```csharp
+// Replace with your OS-specific port:
+//   Windows: "COM3"   •   macOS: "/dev/cu.usbmodem1"   •   Linux: "/dev/ttyACM0"
+using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");
+```
+
+**From a discovered device:**
+
+```csharp
 using var finder = new WiFiDeviceFinder();
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
 using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
@@ -150,7 +159,7 @@ using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
 
 ### Network configuration
 
-Devices implementing `INetworkConfigurable` accept programmatic WiFi and LAN configuration. Leave any field `null` to keep its current value — DHCP-only callers see no behavior change.
+Devices implementing `INetworkConfigurable` accept programmatic WiFi and LAN configuration. `Mode`, `Ssid`, and `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
 
 ```csharp
 using System.Net;
