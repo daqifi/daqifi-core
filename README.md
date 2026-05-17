@@ -1,82 +1,112 @@
-# DAQiFi Core Library
+# Daqifi.Core
 
-The DAQiFi Core Library is a .NET library designed to simplify interaction with DAQiFi devices. It provides a robust and intuitive API for discovering, connecting to, and communicating with DAQiFi hardware, making it an ideal choice for developers building applications that require data acquisition and device control.
+> **Revolutionizing the data collection experience with convenient, portable device connectivity.**
+>
+> The official cross-platform .NET SDK for DAQiFi wireless data acquisition devices.
 
-## Features
+[![NuGet](https://img.shields.io/nuget/v/Daqifi.Core?style=flat-square&logo=nuget)](https://www.nuget.org/packages/Daqifi.Core)
+[![Downloads](https://img.shields.io/nuget/dt/Daqifi.Core?style=flat-square)](https://www.nuget.org/packages/Daqifi.Core)
+[![Build](https://img.shields.io/github/actions/workflow/status/daqifi/daqifi-core/ci.yml?style=flat-square&label=build)](https://github.com/daqifi/daqifi-core/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/daqifi/daqifi-core?style=flat-square)](LICENSE)
+![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0-512BD4?style=flat-square&logo=dotnet)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)
 
-### ✅ Available Now
-- **Device Discovery**: Find DAQiFi devices connected via WiFi, USB/Serial, or HID bootloader mode
-- **Easy Connection**: Single-call device connection with `DaqifiDeviceFactory`
-- **Data Streaming**: Stream data from devices in real-time with event-driven API
-- **SD Card Operations**: List, download, delete, and format SD card files; start/stop SD logging over USB/Serial connections (not available over WiFi)
-- **Firmware Update Orchestration**: Programmatic PIC32 bootloader updates with state/progress reporting, timeout/retry handling, and cancellation support
-- **Transport Layer**: TCP, UDP, and Serial communication with async/await patterns
-- **Protocol Buffers**: Efficient binary message serialization for device communication
-- **Network Configuration**: Programmatic WiFi SSID/password/mode and LAN static IP/subnet/gateway updates via `INetworkConfigurable`
-- **Cross-Platform**: Compatible with .NET 9.0 and .NET 10.0
+**[daqifi.com](https://daqifi.com)** · **[DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop)** · **[Report an issue](https://github.com/daqifi/daqifi-core/issues)**
 
-## Getting Started
+---
 
-### Installation
+## What is Daqifi.Core?
+
+DAQiFi builds wireless data acquisition hardware designed to get out of the way so you can focus on the data, not the collection process.
+
+**Daqifi.Core is how you integrate that hardware into your own .NET applications** — custom dashboards, automated test rigs, research pipelines, production-monitoring tools. Discover devices, connect over WiFi or USB, stream samples in real time, configure networks, push firmware updates — all from one async, strongly-typed .NET API.
+
+Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
+
+## See it in 30 seconds
 
 ```shell
 dotnet add package Daqifi.Core
 ```
 
-### Quick Start: Connect and Stream
-
 ```csharp
 using Daqifi.Core.Device;
 using Daqifi.Core.Communication.Producers;
 
-// Connect to a device (handles transport, connection, and initialization)
+// Connect — transport and device initialization handled for you
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-// Subscribe to incoming data
-device.MessageReceived += (sender, e) =>
+// Subscribe to incoming samples
+device.MessageReceived += (_, e) =>
 {
-    if (e.Message.Data is DaqifiOutMessage message)
-    {
-        Console.WriteLine($"Timestamp: {message.MsgTimeStamp}");
-        Console.WriteLine($"Analog values: {string.Join(", ", message.AnalogInData)}");
-    }
+    if (e.Message.Data is DaqifiOutMessage msg)
+        Console.WriteLine($"{msg.MsgTimeStamp}: {string.Join(", ", msg.AnalogInData)}");
 };
 
-// Configure channels and start streaming
-device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // Enable first 2 channels (bitmask 0b11 = 3)
-device.Send(ScpiMessageProducer.StartStreaming(100)); // 100 Hz sample rate
-
-await Task.Delay(TimeSpan.FromSeconds(10)); // Stream for 10 seconds
-
-device.Send(ScpiMessageProducer.StopStreaming);
+// Enable analog channels via bitmask (0b11 = first 2 channels), then stream at 100 Hz
+device.Send(ScpiMessageProducer.EnableAdcChannels("3"));
+device.Send(ScpiMessageProducer.StartStreaming(100));
 ```
 
-### Connection Options
+A real, working program — no GUI required.
 
-**TCP with built-in retry presets:**
+## Common applications
+
+DAQiFi hardware is in the field for work like:
+
+- **Research labs** — moon regolith testing and similar materials studies
+- **Medical R&D** — prosthetic socket pressure testing
+- **Industrial monitoring** — wireless multi-channel sensing
+- **Engineering education** — SCPI command structure and LabVIEW compatibility
+- **Test automation** — scripted benchtop measurements
+
+More examples at [daqifi.com](https://daqifi.com).
+
+## Where Daqifi.Core fits
+
+| Layer | What it is |
+|---|---|
+| Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
+| **SDK** | **Daqifi.Core — this library** |
+| App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
+| Your code | Custom apps, dashboards, pipelines, test rigs |
+
+## What you can do
+
+| Capability | What it gives you |
+|---|---|
+| **Auto-discovery** | Find any DAQiFi on WiFi or USB in seconds — no IP hunting, no config files |
+| **One-line connect** | `DaqifiDeviceFactory.ConnectTcpAsync(...)` wraps transport setup and device init; retries are opt-in via `DeviceConnectionOptions` |
+| **Real-time streaming** | Event-driven async API; no polling loops to write |
+| **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
+| **Network configuration** | Push WiFi credentials and static LAN IPs from your app |
+| **Firmware updates** | PIC32 and WiFi-module flashing with progress and cancellation |
+| **Cross-platform** | .NET 9.0 and 10.0 on Windows, macOS, Linux |
+
+## Quick recipes
+
+### Connection options
+
 ```csharp
+// TCP with resilient retry preset (5 retries, longer timeouts)
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
-    "192.168.1.100",
-    9760,
-    DeviceConnectionOptions.Resilient); // 5 retries, longer timeouts
-```
+    "192.168.1.100", 9760, DeviceConnectionOptions.Resilient);
 
-**Serial/USB connection:**
-```csharp
-using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");             // Windows
-using var device = await DaqifiDeviceFactory.ConnectSerialAsync("/dev/cu.usbmodem1"); // macOS
-```
+// Serial / USB
+using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");                // Windows
+using var device = await DaqifiDeviceFactory.ConnectSerialAsync("/dev/cu.usbmodem1");   // macOS
+using var device = await DaqifiDeviceFactory.ConnectSerialAsync("/dev/ttyACM0");        // Linux
 
-**Connect from a discovery result:**
-```csharp
-using var wifiFinder = new WiFiDeviceFinder();
-var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
+// From a discovered device
+using var finder = new WiFiDeviceFinder();
+var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
 using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
 ```
 
-**Custom retry options:**
+### Custom retry options
+
 ```csharp
-using Daqifi.Core.Communication.Transport; // For ConnectionRetryOptions
+using Daqifi.Core.Communication.Transport;
 
 var options = new DeviceConnectionOptions
 {
@@ -91,144 +121,103 @@ var options = new DeviceConnectionOptions
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, options);
 ```
 
-### Quick Start: Device Discovery
+### Device discovery
 
 ```csharp
 using Daqifi.Core.Device.Discovery;
 
-// Discover WiFi devices on your network
+// WiFi — UDP broadcast on port 30303 by default
 using var wifiFinder = new WiFiDeviceFinder();
-wifiFinder.DeviceDiscovered += (sender, e) =>
-{
-    var device = e.DeviceInfo;
-    Console.WriteLine($"Found: {device.Name} at {device.IPAddress}");
-    Console.WriteLine($"  Serial: {device.SerialNumber}");
-    Console.WriteLine($"  Firmware: {device.FirmwareVersion}");
-};
+wifiFinder.DeviceDiscovered += (_, e) =>
+    Console.WriteLine($"Found: {e.DeviceInfo.Name} at {e.DeviceInfo.IPAddress}");
 
-var devices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
-Console.WriteLine($"Discovery complete. Found {devices.Count()} device(s)");
+var wifiDevices = await wifiFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 
-// Discover USB/Serial devices
+// USB / Serial
 using var serialFinder = new SerialDeviceFinder();
 var serialDevices = await serialFinder.DiscoverAsync();
-
-foreach (var device in serialDevices)
-{
-    Console.WriteLine($"Serial Port: {device.PortName}");
-}
 ```
 
-### Advanced Discovery Options
+Need fine-grained control? Pass a `CancellationToken` or override the discovery port:
 
 ```csharp
-// Use cancellation tokens for fine-grained control
 using var cts = new CancellationTokenSource();
 cts.CancelAfter(TimeSpan.FromSeconds(10));
+var devices = await wifiFinder.DiscoverAsync(cts.Token);
 
-try
-{
-    var devices = await wifiFinder.DiscoverAsync(cts.Token);
-}
-catch (OperationCanceledException)
-{
-    Console.WriteLine("Discovery was cancelled");
-}
-
-// Discover on custom UDP port (default is 30303)
 using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
-var customDevices = await customFinder.DiscoverAsync();
 ```
 
-### Supported Devices
+### Network configuration
 
-The library automatically detects DAQiFi hardware:
-- **Nyquist 1**: DAQiFi's data acquisition device
-- **Nyquist 3**: DAQiFi's advanced data acquisition device
-
-Both devices are identified by their part number in the discovery response.
-
-### Connection Types
-
-- **WiFi**: Network-connected devices discovered via UDP broadcast
-- **Serial**: USB-connected devices enumerated via serial ports
-- **HID**: Devices in bootloader mode (HidSharp backend)
-
-### Network Configuration
-
-Devices implementing `INetworkConfigurable` support programmatic WiFi setup:
+Devices implementing `INetworkConfigurable` accept programmatic WiFi and LAN configuration. Leave any field `null` to keep its current value — DHCP-only callers see no behavior change.
 
 ```csharp
+using System.Net;
 using Daqifi.Core.Device.Network;
 
 if (device is INetworkConfigurable networkDevice)
 {
     var config = new NetworkConfiguration
     {
-        Ssid = "MyNetwork",
-        Password = "secret",
-        Mode = WifiMode.ExistingNetwork
+        Ssid       = "MyNetwork",
+        Password   = "secret",
+        Mode       = WifiMode.ExistingNetwork,
+        StaticIP   = IPAddress.Parse("192.168.1.42"),
+        SubnetMask = IPAddress.Parse("255.255.255.0"),
+        Gateway    = IPAddress.Parse("192.168.1.1"),
     };
     await networkDevice.UpdateNetworkConfigurationAsync(config);
 }
 ```
 
-To assign a static LAN address, set `StaticIP` / `SubnetMask` / `Gateway` (IPv4 only). Leaving any of them `null` means "leave unchanged" so DHCP-only callers see no behavior change:
+### Firmware updates
 
-```csharp
-using System.Net;
-using Daqifi.Core.Device.Network;
+`IFirmwareUpdateService` orchestrates both PIC32 and WiFi-module flashing with explicit state transitions and `IProgress<FirmwareUpdateProgress>` for UI / CLI reporting.
 
-var config = new NetworkConfiguration
-{
-    Ssid = "MyNetwork",
-    Password = "secret",
-    Mode = WifiMode.ExistingNetwork,
-    StaticIP = IPAddress.Parse("192.168.1.42"),
-    SubnetMask = IPAddress.Parse("255.255.255.0"),
-    Gateway = IPAddress.Parse("192.168.1.1"),
-};
-await networkDevice.UpdateNetworkConfigurationAsync(config);
-```
+- `UpdateFirmwareAsync(...)` — PIC32 firmware flashing from a local Intel HEX file
+- `UpdateWifiModuleAsync(...)` — WiFi module flashing via an external tool runner. Automatically checks the device's current WiFi-chip firmware against the latest GitHub release and skips the flash if already up to date.
 
-### Firmware Update Orchestration
+> **Note:** The default WiFi flash tool config uses `winc_flash_tool.cmd` conventions. On macOS / Linux, supply a compatible executable and argument template via `FirmwareUpdateServiceOptions`.
 
-The core library exposes `IFirmwareUpdateService` for update orchestration:
+## Supported devices
 
-- `UpdateFirmwareAsync(...)` for PIC32 firmware flashing from a local Intel HEX file
-- `UpdateWifiModuleAsync(...)` for WiFi module flashing through an external tool runner
+| Device | Channels | Resolution | Range |
+|---|---|---|---|
+| **Nyquist 1** | 16 analog in | 12-bit | 0–5 V |
+| **Nyquist 3** | 8 analog in | 18-bit | ±10 V |
 
-`UpdateWifiModuleAsync` automatically queries the device's current WiFi chip firmware version via `ILanChipInfoProvider` and compares it against the latest GitHub release. If the device is already up to date, the flash is skipped and the service reports `Complete` immediately — no unnecessary reflashing.
+Both are auto-detected by part number during discovery.
 
-The service emits explicit state transitions and `IProgress<FirmwareUpdateProgress>` updates for UI/CLI telemetry.
+Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
-Note: the default WiFi flash tool configuration uses `winc_flash_tool.cmd` conventions. If you run on macOS/Linux, provide a compatible executable/script and argument template via `FirmwareUpdateServiceOptions`.
+## Connection types
 
-## Real-World Usage
-
-This library powers the [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) application and is designed for:
-- Custom data acquisition applications
-- Automated testing systems
-- Industrial monitoring solutions
-- Research and development tools
-- Any application requiring DAQiFi device integration
+- **WiFi** — discovered via UDP broadcast (port 30303)
+- **Serial** — USB-connected, enumerated as serial ports
+- **HID** — used during firmware updates (HidSharp backend)
 
 ## Requirements
 
-- .NET 9.0 or .NET 10.0
-- For WiFi discovery: UDP port 30303 must be accessible (firewall configuration may be required)
-- For Serial discovery: Appropriate USB drivers for your platform
-- Admin privileges may be required for firewall configuration on Windows
+- .NET 9.0 or .NET 10.0 on Windows, macOS, or Linux
+- WiFi discovery: UDP port 30303 reachable (firewall may need configuring; admin may be required on Windows)
+- Serial discovery: appropriate USB drivers for your platform
 
-## Publishing
+## Community & support
 
-This library follows semantic versioning (MAJOR.MINOR.PATCH):
-- MAJOR: Breaking changes
-- MINOR: New features (backwards compatible)
-- PATCH: Bug fixes
+- [Open an issue](https://github.com/daqifi/daqifi-core/issues) for bugs or feature requests
+- Reach the team via [daqifi.com](https://daqifi.com) for commercial integrations and custom hardware needs
 
-Releases are automated via GitHub Actions:
+## For maintainers
+
+This library follows semantic versioning. Releases are automated via GitHub Actions:
+
 1. Create a new GitHub Release
-2. Tag it with `vX.Y.Z` (e.g. `v1.0.0`)
-3. For pre-releases, use `-alpha.1`, `-beta.1`, `-rc.1` suffixes
-4. Publishing to NuGet happens automatically on release
+2. Tag it `vX.Y.Z` (pre-releases use `-alpha.1`, `-beta.1`, `-rc.1` suffixes)
+3. Publishing to NuGet happens automatically on release
+
+---
+
+<p align="center">
+  Built by <a href="https://daqifi.com">DAQiFi</a> · Licensed under <a href="LICENSE">MIT</a>
+</p>
