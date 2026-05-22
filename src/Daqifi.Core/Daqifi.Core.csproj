@@ -29,9 +29,9 @@
     <None Include="../../README.md" Pack="true" PackagePath="/" />
     <PackageReference Include="Google.Protobuf" Version="3.34.1" />
     <PackageReference Include="HidSharp" Version="2.6.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.203" PrivateAssets="All" />
-    <PackageReference Include="System.IO.Ports" Version="10.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300" PrivateAssets="All" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.8" />
     <InternalsVisibleTo Include="Daqifi.Core.Tests" />
   </ItemGroup>
 
@@ -42,7 +42,7 @@
        WindowsUsbPortDescriptorProvider.cs (compiled on every target)
        can resolve System.Management even during a Linux/macOS build. -->
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="10.0.7" />
+    <PackageReference Include="System.Management" Version="10.0.8" />
   </ItemGroup>
 
 
