@@ -1,4 +1,4 @@
-# Daqifi.Core
+# DAQiFi Core
 
 > **Revolutionizing the data collection experience with convenient, portable device connectivity.**
 >
@@ -15,11 +15,11 @@
 
 ---
 
-## What is Daqifi.Core?
+## What is DAQiFi Core?
 
 DAQiFi builds wireless data acquisition hardware designed to get out of the way so you can focus on the data, not the collection process.
 
-**Daqifi.Core is how you integrate that hardware into your own .NET applications** — custom dashboards, automated test rigs, research pipelines, production-monitoring tools. Discover devices, connect over WiFi or USB, stream samples in real time, configure networks, push firmware updates — all from one async, strongly-typed .NET API.
+**DAQiFi Core is how you integrate that hardware into your own .NET applications** — custom dashboards, automated test rigs, research pipelines, production-monitoring tools. Discover devices, connect over WiFi or USB, stream samples in real time, configure networks, push firmware updates — all from one async, strongly-typed .NET API.
 
 Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
 
@@ -62,12 +62,12 @@ DAQiFi hardware is in the field for work like:
 
 More examples at [daqifi.com](https://daqifi.com).
 
-## Where Daqifi.Core fits
+## Where DAQiFi Core fits
 
 | Layer | What it is |
 |---|---|
 | Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
-| **SDK** | **Daqifi.Core — this library** |
+| **SDK** | **DAQiFi Core — this library** |
 | App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
 | Your code | Custom apps, dashboards, pipelines, test rigs |
 
