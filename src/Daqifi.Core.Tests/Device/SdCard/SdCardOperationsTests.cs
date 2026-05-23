@@ -230,6 +230,49 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_HonorsCancellationDuringSettleDelay()
+        {
+            // Regression for #221: the SD interface settle wait used Thread.Sleep,
+            // which ignored the CancellationToken and blocked a thread-pool thread.
+            // After the fix the wait is await Task.Delay(..., ct), so cancelling
+            // mid-wait must propagate as OperationCanceledException promptly.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
+            device.Connect();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => device.GetSdCardFilesAsync(cts.Token));
+            stopwatch.Stop();
+
+            // SD_INTERFACE_SETTLE_DELAY_MS is 100ms; cancellation must fire before
+            // the delay completes. 80ms headroom for scheduler jitter on CI.
+            Assert.True(stopwatch.ElapsedMilliseconds < 80,
+                $"Expected cancellation before settle delay completed; took {stopwatch.ElapsedMilliseconds}ms.");
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_HonorsCancellationDuringSettleDelay()
+        {
+            // Regression for #221 — symmetric with GetSdCardFilesAsync above.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
+            device.Connect();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => device.DeleteSdCardFileAsync("data.bin", cts.Token));
+            stopwatch.Stop();
+
+            Assert.True(stopwatch.ElapsedMilliseconds < 80,
+                $"Expected cancellation before settle delay completed; took {stopwatch.ElapsedMilliseconds}ms.");
+        }
+
+        [Fact]
         public async Task StartSdCardLoggingAsync_SendsCorrectCommandSequence()
         {
             // Arrange
@@ -1238,6 +1281,20 @@ namespace Daqifi.Core.Tests.Device.SdCard
                     : new List<string>();
                 return Task.FromResult<IReadOnlyList<string>>(response);
             }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                await setupActionAsync(cancellationToken).ConfigureAwait(false);
+                ExecuteTextCommandCallCount++;
+                var response = ResponseSequence.Count > 0
+                    ? ResponseSequence.Dequeue()
+                    : new List<string>();
+                return response;
+            }
         }
 
         /// <summary>
@@ -1277,6 +1334,16 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 setupAction();
                 return Task.FromResult<IReadOnlyList<string>>(CannedTextResponse);
             }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                await setupActionAsync(cancellationToken).ConfigureAwait(false);
+                return CannedTextResponse;
+            }
         }
 
         /// <summary>
@@ -1314,6 +1381,16 @@ namespace Daqifi.Core.Tests.Device.SdCard
             {
                 setupAction();
                 return Task.FromResult<IReadOnlyList<string>>(CannedTextResponse);
+            }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                await setupActionAsync(cancellationToken).ConfigureAwait(false);
+                return CannedTextResponse;
             }
 
             protected override async Task ExecuteRawCaptureAsync(

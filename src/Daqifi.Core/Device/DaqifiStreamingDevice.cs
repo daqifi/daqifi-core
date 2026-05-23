@@ -340,14 +340,14 @@ namespace Daqifi.Core.Device
             IReadOnlyList<string> lines;
             try
             {
-                lines = await ExecuteTextCommandAsync(() =>
+                lines = await ExecuteTextCommandAsync(async ct =>
                 {
                     PrepareSdInterface();
 
                     // Allow the device firmware to complete the SPI bus switch
                     // before querying the SD card. Without this delay, the device
                     // can return SCPI error -200 (Execution error).
-                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
 
                     Send(ScpiMessageProducer.GetSdFileList);
                 }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
@@ -362,10 +362,10 @@ namespace Daqifi.Core.Device
 
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
 
-                        lines = await ExecuteTextCommandAsync(() =>
+                        lines = await ExecuteTextCommandAsync(async ct =>
                         {
                             PrepareSdInterface();
-                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
                             Send(ScpiMessageProducer.GetSdFileList);
                         }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
 
@@ -546,10 +546,10 @@ namespace Daqifi.Core.Device
             IReadOnlyList<string> lines;
             try
             {
-                lines = await ExecuteTextCommandAsync(() =>
+                lines = await ExecuteTextCommandAsync(async ct =>
                 {
                     PrepareSdInterface();
-                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
                     Send(ScpiMessageProducer.DeleteSdFile(fileName));
                     Send(ScpiMessageProducer.GetSdFileList);
                 }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
@@ -562,10 +562,10 @@ namespace Daqifi.Core.Device
 
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
 
-                        lines = await ExecuteTextCommandAsync(() =>
+                        lines = await ExecuteTextCommandAsync(async ct =>
                         {
                             PrepareSdInterface();
-                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
                             Send(ScpiMessageProducer.DeleteSdFile(fileName));
                             Send(ScpiMessageProducer.GetSdFileList);
                         }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
