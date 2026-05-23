@@ -477,7 +477,8 @@ public sealed class SdCardCsvFileParserTests
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
 
-        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        // ReadLineAsync surfaces cancellation as TaskCanceledException (a subclass of OperationCanceledException).
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
             await parser.ParseAsync(stream, "test.csv", ct: cts.Token);
         });

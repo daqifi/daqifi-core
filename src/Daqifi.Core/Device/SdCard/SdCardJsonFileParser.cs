@@ -42,10 +42,9 @@ public sealed class SdCardJsonFileParser
         var lines = new List<string>();
         using (var reader = new StreamReader(fileStream, leaveOpen: true))
         {
-            while (!reader.EndOfStream)
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
             {
-                ct.ThrowIfCancellationRequested();
-                var line = await reader.ReadLineAsync(ct);
                 if (!string.IsNullOrWhiteSpace(line))
                 {
                     lines.Add(line);

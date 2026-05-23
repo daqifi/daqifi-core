@@ -4,6 +4,7 @@
     <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <!-- Package Metadata -->
     <PackageId>Daqifi.Core</PackageId>
