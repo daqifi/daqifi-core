@@ -43,8 +43,8 @@ duration, or rate, pass them through:
 | `--duration=<seconds>` | `2` | Longer to surface slow leaks; shorter for tight iteration |
 | `--channels=<bitmask>` | `3` | Decimal bitmask, e.g. `255` for 8 channels |
 
-The binary picks net10.0 by default (preferred) but also runs on net9.0
-if needed (`-f net9.0`).
+The smoke-test project targets `net9.0` (the SDK's minimum). No `-f`
+flag needed.
 
 ## Interpreting exit codes
 

@@ -160,9 +160,6 @@ internal static class Program
             {
                 Console.WriteLine($"Step 4/6  Enabling ADC channels (bitmask={options.ChannelBitmask}) and starting stream at {options.StreamRateHz} Hz…");
                 device.Send(ScpiMessageProducer.EnableAdcChannels(options.ChannelBitmask));
-                // Small gap so the channel-enable lands before the start-stream command
-                // — some firmware revisions return -200 if these arrive in the same frame.
-                await Task.Delay(100).ConfigureAwait(false);
                 device.Send(ScpiMessageProducer.StartStreaming(options.StreamRateHz));
 
                 // ─── Step 5: stream for N seconds ───────────────────────────
@@ -236,12 +233,14 @@ internal static class Program
               -h, --help            Show this help.
 
             Exit codes:
-              0   success                 13  degraded samples
-              2   bad arguments           99  unexpected error
+              0   success
+              2   bad arguments
               10  no device found
               11  connect or init failed
               12  metadata missing or unknown device type
+              13  degraded samples (below ~50% expected throughput)
               20  no samples received
+              99  unexpected error
             """);
     }
 
