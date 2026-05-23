@@ -233,24 +233,25 @@ namespace Daqifi.Core.Tests.Device.SdCard
         public async Task GetSdCardFilesAsync_HonorsCancellationDuringSettleDelay()
         {
             // Regression for #221: the SD interface settle wait used Thread.Sleep,
-            // which ignored the CancellationToken and blocked a thread-pool thread.
-            // After the fix the wait is await Task.Delay(..., ct), so cancelling
-            // mid-wait must propagate as OperationCanceledException promptly.
+            // which ignored the CancellationToken. After the fix the wait is
+            // await Task.Delay(..., ct), so cancelling while the operation is
+            // suspended in the delay must propagate as OperationCanceledException.
             var device = new TestableSdCardStreamingDevice("TestDevice");
             device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
             device.Connect();
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+            using var cts = new CancellationTokenSource();
 
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => device.GetSdCardFilesAsync(cts.Token));
-            stopwatch.Stop();
+            // The sync portion of GetSdCardFilesAsync runs through the setup
+            // lambda's PrepareSdInterface and suspends at Task.Delay(..., ct).
+            // Once it returns a pending task, we cancel synchronously: Task.Delay
+            // observes the cancellation immediately. Under the old Thread.Sleep
+            // code the cancel would be ignored and the call would complete
+            // normally — no OperationCanceledException would be thrown.
+            var opTask = device.GetSdCardFilesAsync(cts.Token);
+            cts.Cancel();
 
-            // SD_INTERFACE_SETTLE_DELAY_MS is 100ms; cancellation must fire before
-            // the delay completes. 80ms headroom for scheduler jitter on CI.
-            Assert.True(stopwatch.ElapsedMilliseconds < 80,
-                $"Expected cancellation before settle delay completed; took {stopwatch.ElapsedMilliseconds}ms.");
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => opTask);
         }
 
         [Fact]
@@ -261,15 +262,11 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
             device.Connect();
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+            using var cts = new CancellationTokenSource();
+            var opTask = device.DeleteSdCardFileAsync("data.bin", cts.Token);
+            cts.Cancel();
 
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => device.DeleteSdCardFileAsync("data.bin", cts.Token));
-            stopwatch.Stop();
-
-            Assert.True(stopwatch.ElapsedMilliseconds < 80,
-                $"Expected cancellation before settle delay completed; took {stopwatch.ElapsedMilliseconds}ms.");
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => opTask);
         }
 
         [Fact]
