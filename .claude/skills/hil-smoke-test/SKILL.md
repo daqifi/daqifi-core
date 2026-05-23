@@ -17,7 +17,7 @@ state (no SD card writes, no network reconfig, no firmware updates).
 
 Your job here is **orchestration** — build, run the test, interpret the
 exit code, help diagnose failures. The actual test logic lives in
-[src/Daqifi.Core.SmokeTest/Program.cs](src/Daqifi.Core.SmokeTest/Program.cs)
+[src/Daqifi.Core.SmokeTest/Program.cs](../../../src/Daqifi.Core.SmokeTest/Program.cs)
 and is deterministic — do **not** reimplement it inline or instruct the
 user to copy-paste C# into a REPL. Always run the binary.
 

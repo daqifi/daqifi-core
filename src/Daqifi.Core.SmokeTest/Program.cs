@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Numerics;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
@@ -23,9 +25,8 @@ internal static class Program
     private const int DefaultBaudRate = 9600;
     private const int DefaultStreamRateHz = 100;
     private const int DefaultStreamDurationSeconds = 2;
-    private const string DefaultChannelBitmask = "3";
+    private const int DefaultChannelBitmask = 3;
     private const int DiscoveryTimeoutSeconds = 6;
-    private const int ConnectAttemptCount = 2;
 
     private static async Task<int> Main(string[] args)
     {
@@ -102,13 +103,16 @@ internal static class Program
         }
 
         // ─── Step 2: connect + initialize ───────────────────────────────────
+        // Always go through ConnectSerialAsync(port, baud) — ConnectFromDeviceInfoAsync's
+        // serial path drops baud back to the SDK default (9600), which would silently
+        // override the user's --baud when discovery succeeded at the requested rate.
         Console.WriteLine("Step 2/6  Connecting and initializing device…");
         DaqifiDevice device;
         try
         {
-            device = deviceInfo != null
-                ? await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(deviceInfo).ConfigureAwait(false)
-                : await DaqifiDeviceFactory.ConnectSerialAsync(options.PortName, options.BaudRate).ConfigureAwait(false);
+            var portName = deviceInfo?.PortName ?? options.PortName;
+            device = await DaqifiDeviceFactory.ConnectSerialAsync(portName, options.BaudRate)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -158,8 +162,8 @@ internal static class Program
             device.MessageReceived += OnMessage;
             try
             {
-                Console.WriteLine($"Step 4/6  Enabling ADC channels (bitmask={options.ChannelBitmask}) and starting stream at {options.StreamRateHz} Hz…");
-                device.Send(ScpiMessageProducer.EnableAdcChannels(options.ChannelBitmask));
+                Console.WriteLine($"Step 4/6  Enabling ADC channels (bitmask={options.ChannelBitmask}, {options.EnabledChannelCount} channels) and starting stream at {options.StreamRateHz} Hz…");
+                device.Send(ScpiMessageProducer.EnableAdcChannels(options.ChannelBitmaskScpi));
                 device.Send(ScpiMessageProducer.StartStreaming(options.StreamRateHz));
 
                 // ─── Step 5: stream for N seconds ───────────────────────────
@@ -183,7 +187,11 @@ internal static class Program
             // Tolerate ~50% of the theoretical max — USB CDC framing,
             // initial channel-enable latency, and the stop window all eat
             // into the count. A real broken stream produces zero, not half.
-            var expected = options.StreamRateHz * options.StreamDurationSeconds;
+            // AnalogInData carries one element per enabled channel per tick,
+            // so the expected count scales with channel count too.
+            var expected = options.StreamRateHz
+                * options.StreamDurationSeconds
+                * options.EnabledChannelCount;
             var minAcceptable = Math.Max(1, expected / 2);
 
             if (analogSampleCount == 0)
@@ -262,8 +270,11 @@ internal static class Program
         public int BaudRate { get; init; } = DefaultBaudRate;
         public int StreamRateHz { get; init; } = DefaultStreamRateHz;
         public int StreamDurationSeconds { get; init; } = DefaultStreamDurationSeconds;
-        public string ChannelBitmask { get; init; } = DefaultChannelBitmask;
+        public int ChannelBitmask { get; init; } = DefaultChannelBitmask;
         public bool ShowHelp { get; init; }
+
+        public int EnabledChannelCount => BitOperations.PopCount((uint)ChannelBitmask);
+        public string ChannelBitmaskScpi => ChannelBitmask.ToString(CultureInfo.InvariantCulture);
 
         public static Options Parse(string[] args)
         {
@@ -299,7 +310,7 @@ internal static class Program
                         duration = ParseInt(key, value, min: 1);
                         break;
                     case "--channels":
-                        channels = RequireValue(key, value);
+                        channels = ParseInt(key, value, min: 1);
                         break;
                     default:
                         throw new ArgumentException($"unknown argument '{arg}'");
