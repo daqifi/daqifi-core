@@ -8,7 +8,8 @@ namespace Daqifi.Core.Firmware;
 /// </summary>
 public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
 {
-    private const string DEFAULT_USER_AGENT = "DaqifiFirmwareUpdater/1.0";
+    private static readonly string DEFAULT_USER_AGENT =
+        $"DaqifiFirmwareUpdater/{typeof(GitHubFirmwareDownloadService).Assembly.GetName().Version}";
     private const int DOWNLOAD_BUFFER_SIZE = 8192;
 
     private readonly HttpClient _httpClient;
