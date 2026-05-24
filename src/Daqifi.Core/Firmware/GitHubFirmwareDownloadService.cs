@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Text.Json;
 
 namespace Daqifi.Core.Firmware;
@@ -8,8 +9,20 @@ namespace Daqifi.Core.Firmware;
 /// </summary>
 public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
 {
-    private const string DEFAULT_USER_AGENT = "DaqifiFirmwareUpdater/1.0";
+    private static readonly string DEFAULT_USER_AGENT = BuildDefaultUserAgent();
     private const int DOWNLOAD_BUFFER_SIZE = 8192;
+
+    private static string BuildDefaultUserAgent()
+    {
+        // Prefer InformationalVersion so prerelease SemVer suffixes (e.g. "1.0.0-beta.1")
+        // survive into GitHub API traffic for rate-limit/abuse investigations.
+        // AssemblyVersion is numeric-only and would truncate them.
+        var assembly = typeof(GitHubFirmwareDownloadService).Assembly;
+        var version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                      ?? assembly.GetName().Version?.ToString()
+                      ?? "unknown";
+        return $"DaqifiFirmwareUpdater/{version}";
+    }
 
     private readonly HttpClient _httpClient;
     private readonly string _firmwareRepoApiUrl;
