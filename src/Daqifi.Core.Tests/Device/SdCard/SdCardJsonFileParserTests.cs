@@ -316,8 +316,9 @@ public sealed class SdCardJsonFileParserTests
             FallbackTimestampFrequency = 100
         };
 
-        // Act & Assert — ParseAsync reads all lines upfront and throws when the token is already cancelled
-        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        // Act & Assert — ParseAsync reads all lines upfront and throws when the token is already cancelled.
+        // ReadLineAsync surfaces cancellation as TaskCanceledException (a subclass of OperationCanceledException).
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
             await parser.ParseAsync(stream, "test.json", options, cts.Token);
         });

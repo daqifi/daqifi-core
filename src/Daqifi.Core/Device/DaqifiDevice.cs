@@ -221,7 +221,7 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
         /// tearing down the consumer / producer / transport. This prevents
-        /// a race where an in-flight <see cref="ExecuteTextCommandAsync"/>
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
@@ -392,11 +392,50 @@ namespace Daqifi.Core.Device
         /// <returns>A list of text lines received from the device.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        protected virtual async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+        protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default)
+        {
+            return ExecuteTextCommandCoreAsync(
+                _ => { setupAction(); return Task.CompletedTask; },
+                responseTimeoutMs,
+                completionTimeoutMs,
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>
+        /// that accepts an async setup action so callers can <c>await</c> cancellable operations
+        /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
+        /// blocking the thread-pool thread.
+        /// </summary>
+        /// <param name="setupActionAsync">An async function that sends SCPI commands to the device while the text consumer is active. Receives the operation's cancellation token.</param>
+        /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
+        /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A list of text lines received from the device.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            Func<CancellationToken, Task> setupActionAsync,
+            int responseTimeoutMs = 1000,
+            int completionTimeoutMs = 250,
+            CancellationToken cancellationToken = default)
+        {
+            return ExecuteTextCommandCoreAsync(
+                setupActionAsync,
+                responseTimeoutMs,
+                completionTimeoutMs,
+                cancellationToken);
+        }
+
+        private async Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
+            Func<CancellationToken, Task> setupActionAsync,
+            int responseTimeoutMs,
+            int completionTimeoutMs,
+            CancellationToken cancellationToken)
         {
             if (responseTimeoutMs <= 0)
                 throw new ArgumentOutOfRangeException(nameof(responseTimeoutMs), responseTimeoutMs, "Timeout must be positive.");
@@ -511,8 +550,9 @@ namespace Daqifi.Core.Device
 
                     Trace.WriteLine($"[ExecuteTextCommandAsync] Text consumer started at {sw.ElapsedMilliseconds}ms");
 
-                    // Execute the setup action (sends SCPI commands)
-                    setupAction();
+                    // Execute the setup action (sends SCPI commands). ConfigureAwait(false)
+                    // matches the surrounding lock-protected awaits.
+                    await setupActionAsync(cancellationToken).ConfigureAwait(false);
 
                     Trace.WriteLine($"[ExecuteTextCommandAsync] Setup action completed at {sw.ElapsedMilliseconds}ms");
 
@@ -627,7 +667,7 @@ namespace Daqifi.Core.Device
         /// on hardware faults, or discard them if known-stale.
         /// </para>
         /// <para>
-        /// Each iteration uses <see cref="ExecuteTextCommandAsync"/>, which
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>, which
         /// pauses the protobuf consumer for the duration of the text exchange.
         /// Avoid calling this during active streaming or concurrently with
         /// other text commands.

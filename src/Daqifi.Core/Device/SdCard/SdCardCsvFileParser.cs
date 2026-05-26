@@ -50,10 +50,9 @@ public sealed class SdCardCsvFileParser
         var lines = new List<string>();
         using (var reader = new StreamReader(fileStream, leaveOpen: true))
         {
-            while (!reader.EndOfStream)
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
             {
-                ct.ThrowIfCancellationRequested();
-                var line = await reader.ReadLineAsync(ct);
                 if (!string.IsNullOrWhiteSpace(line))
                 {
                     lines.Add(line);
@@ -250,6 +249,7 @@ public sealed class SdCardCsvFileParser
         return lines.Count;  // No data found
     }
 
+#pragma warning disable CS1998 // Async iterator: yield return requires async; method has no real awaits.
     private static async IAsyncEnumerable<SdCardLogEntry> ParseCsvLines(
         List<string> lines,
         int dataStartIndex,
@@ -317,9 +317,8 @@ public sealed class SdCardCsvFileParser
 
         // Final progress report
         progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
-
-        await Task.CompletedTask; // keep the method async-compatible
     }
+#pragma warning restore CS1998
 
     /// <summary>
     /// Parses a firmware CSV data row with interleaved per-channel timestamp/value pairs.
@@ -473,9 +472,10 @@ public sealed class SdCardCsvFileParser
         return (long)(uint.MaxValue - previous) + current + 1;
     }
 
+#pragma warning disable CS1998 // Async iterator: yield break requires async; no real awaits.
     private static async IAsyncEnumerable<SdCardLogEntry> EmptySamples()
     {
-        await Task.CompletedTask;
         yield break;
     }
+#pragma warning restore CS1998
 }

@@ -42,10 +42,9 @@ public sealed class SdCardJsonFileParser
         var lines = new List<string>();
         using (var reader = new StreamReader(fileStream, leaveOpen: true))
         {
-            while (!reader.EndOfStream)
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
             {
-                ct.ThrowIfCancellationRequested();
-                var line = await reader.ReadLineAsync(ct);
                 if (!string.IsNullOrWhiteSpace(line))
                 {
                     lines.Add(line);
@@ -99,6 +98,7 @@ public sealed class SdCardJsonFileParser
         return await ParseAsync(fileStream, Path.GetFileName(filePath), options, ct);
     }
 
+#pragma warning disable CS1998 // Async iterator: yield return requires async; method has no real awaits.
     private static async IAsyncEnumerable<SdCardLogEntry> ParseJsonLines(
         List<string> lines,
         SdCardDeviceConfiguration config,
@@ -163,9 +163,8 @@ public sealed class SdCardJsonFileParser
 
         // Final progress report
         progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
-
-        await Task.CompletedTask; // keep the method async-compatible
     }
+#pragma warning restore CS1998
 
     private static (uint timestamp, IReadOnlyList<double> analog, uint digital)? TryParseJsonLine(string line)
     {
@@ -333,9 +332,10 @@ public sealed class SdCardJsonFileParser
         return (long)(uint.MaxValue - previous) + current + 1;
     }
 
+#pragma warning disable CS1998 // Async iterator: yield break requires async; no real awaits.
     private static async IAsyncEnumerable<SdCardLogEntry> EmptySamples()
     {
-        await Task.CompletedTask;
         yield break;
     }
+#pragma warning restore CS1998
 }

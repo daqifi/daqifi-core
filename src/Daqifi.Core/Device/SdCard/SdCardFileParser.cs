@@ -210,6 +210,7 @@ public sealed class SdCardFileParser
         return messages;
     }
 
+#pragma warning disable CS1998 // Async iterator: yield return requires async; method has no real awaits.
     /// <summary>
     /// Produces <see cref="SdCardLogEntry"/> samples from the parsed messages.
     /// </summary>
@@ -327,9 +328,8 @@ public sealed class SdCardFileParser
 
             yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps);
         }
-
-        await Task.CompletedTask; // keep the method async-compatible
     }
+#pragma warning restore CS1998
 
     /// <summary>
     /// Scales raw ADC integer values using calibration parameters from the device config.
