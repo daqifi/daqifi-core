@@ -1064,6 +1064,150 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
         #endregion
 
+        #region GetSdCardStorageAsync Tests
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_WhenDisconnected_Throws()
+        {
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.GetSdCardStorageAsync());
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_WhenConnected_SendsCorrectCommands()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "1024,4096" };
+            device.Connect();
+
+            await device.GetSdCardStorageAsync();
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // PrepareSdInterface
+            Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands);       // PrepareSdInterface
+            Assert.Contains("SYSTem:STORage:SD:SPACe?", sentCommands);         // GetSdSpace
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_ParsesResponseCorrectly()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "1048576000,2097152000" };
+            device.Connect();
+
+            var storage = await device.GetSdCardStorageAsync();
+
+            Assert.Equal(1_048_576_000L, storage.FreeBytes);
+            Assert.Equal(2_097_152_000L, storage.TotalBytes);
+            Assert.Equal(1_048_576_000L, storage.UsedBytes);
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_RestoresLanInterface()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "1024,4096" };
+            device.Connect();
+
+            await device.GetSdCardStorageAsync();
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);       // PrepareLanInterface
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // PrepareLanInterface
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_DefensivelySendsStopStreaming()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "1024,4096" };
+            device.Connect();
+            Assert.False(device.IsStreaming);
+
+            await device.GetSdCardStorageAsync();
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_WithScpiError_RetriesAndReturnsStorage()
+        {
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "1024,4096" });
+            device.Connect();
+
+            var storage = await device.GetSdCardStorageAsync();
+
+            Assert.Equal(1024L, storage.FreeBytes);
+            Assert.Equal(4096L, storage.TotalBytes);
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_WithPersistentScpiError_ThrowsSdCardOperationException()
+        {
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.GetSdCardStorageAsync());
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+            Assert.Contains("**ERROR", ex.LastScpiError);
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_WithNoSdCardDetected_ThrowsSdCardNotPresentException()
+        {
+            // The "No SD Card Detected" marker is non-transient, so the method must
+            // short-circuit on the first attempt instead of retrying.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string>
+            {
+                "Error !! No SD Card Detected",
+                "**ERROR: -200, \"Execution error\""
+            });
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardNotPresentException>(
+                () => device.GetSdCardStorageAsync());
+            Assert.Contains("**ERROR", ex.LastScpiError);
+            Assert.Equal(1, device.ExecuteTextCommandCallCount);
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_OnError_StillRestoresLanInterface()
+        {
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
+            device.Connect();
+
+            await Assert.ThrowsAsync<SdCardNotPresentException>(
+                () => device.GetSdCardStorageAsync());
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands);
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_WhenLogging_Throws()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+            await device.StartSdCardLoggingAsync("test.bin");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.GetSdCardStorageAsync());
+        }
+
+        #endregion
+
         #region DownloadSdCardFileAsync Tests
 
         [Fact]

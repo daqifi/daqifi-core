@@ -475,6 +475,14 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    [Fact]
+    public void GetSdSpace_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetSdSpace;
+        Assert.Equal("SYSTem:STORage:SD:SPACe?", message.Data);
+        AssertMessageFormat(message);
+    }
+
     [Theory]
     [InlineData(StreamInterface.Usb, 0)]
     [InlineData(StreamInterface.WiFi, 1)]
