@@ -351,6 +351,111 @@ The MCP is the wedge; the marketing is what turns the wedge into a position.
 
 ---
 
+## Firmware-aware constraints
+
+Items that aren't in the firmware README but ARE in `daqifi-nyquist-firmware`'s root `CLAUDE.md` / project memory. Tyler's RFC didn't cover these because they're firmware-team knowledge; the MCP needs to enforce them so the LLM doesn't trip them silently.
+
+### Quiescence rule — no SCPI during a benchmarked stream
+
+The firmware has a documented constraint (`CLAUDE.md` → "Quiescence Rule" + memory `feedback_no_scpi_during_benchmark`): **any SCPI query issued while a streaming session is in progress can throttle the encoder enough to corrupt the very measurement being collected.** Polling `STAT:QUES:COND?` at 1 Hz during a 3 kHz WiFi run silently turns `Wst=6500` (real drops) into `Wst=0` (the encoder yielded so often it didn't generate the drops). Out-of-band visibility (Saleae, Wireshark, PC iperf2 log) is the only safe inspection during a stream.
+
+This is the #1 footgun for an LLM driving the device. Without enforcement, an agent reasoning "I'll just check on the stream every few seconds" will trash benchmark integrity *and not know it*.
+
+**MCP enforcement:**
+
+- `DeviceRegistry` tracks `isStreaming` per handle (set by `start_streaming`, cleared by `stop_streaming` / disconnect / auto-stop).
+- A `RequiresQuiescence` attribute on tool methods causes the dispatcher to return a structured `quiescence_violation` error when called against a streaming handle. Default-on for every tool that issues SCPI; `stop_streaming` / `disconnect_device` / `get_stream_summary` / `read_stream_window` are the allowlisted exceptions (they read in-process ring-buffer state, not the device).
+- The error message tells the model exactly what to do: *"Cannot run `get_device_status` while `<handle>` is streaming — it would invalidate the measurement (see firmware quiescence rule). Use `get_stream_summary` for in-process state, or call `stop_streaming` first."*
+- Opt-out via `respectQuiescence: false` for tools that need to poll the device mid-stream for a legitimate reason (rare; mostly debugging). The opt-out is logged in the audit trail.
+
+This is one of those rules that's much cheaper to enforce mechanically in v0.1 than to retrofit after the first "but my numbers were clean!" support ticket.
+
+### Variant-aware defaults and capability-filtered tool surface
+
+NQ1, NQ2, NQ3 differ in ADC resolution, channel counts, available peripherals (DAC on NQ3 only), and sensible default `voltagePrecision`. Tyler's tool table is variant-neutral; without per-variant smarts, the LLM has to know the differences and the user has to spell them out.
+
+- `connect_device` caches a `BoardCapabilities` blob per handle (read from the firmware at connect time via `*IDN?` + `SYST:SYSInfoPB?`).
+- `start_streaming` etc. consult that blob and apply sane defaults:
+  - NQ1: `format=csv`, `voltagePrecision=4` (12-bit MC12bADC)
+  - NQ3: `format=csv`, `voltagePrecision=6` (18-bit AD7609)
+  - NQ2: `format=csv`, `voltagePrecision=7` (24-bit AD7173)
+- DAC tools (v0.2) are filtered out of `list_tools` when the connected handle is an NQ1, or return a structured `not_supported_on_this_variant` error rather than producing wedged state. Same pattern for any future variant-specific tools.
+- The capabilities are exposed as a resource (`daqifi://devices/{id}/capabilities`) — the authoritative answer to "what can this device do".
+
+The LLM gets to write *"start streaming"* and have it Just Work on whichever board is connected, instead of *"start streaming with the right format for whichever ADC you have"*.
+
+### ADC channel-enable: bitmask vs per-channel calls
+
+Subtle firmware-side perf trap: enabling channels one at a time via `ENABle:VOLTage:DC <ch>,1` triggers the firmware's frequency-cap recompute once per call. Enabling 16 channels individually causes 16 recomputes (each one walking the channel-config table). The firmware also exposes a bitmask SCPI form that enables N channels with one recompute.
+
+`configure_analog_channel` for a single channel is fine. But `set_active_channels(channels: int[])` should issue the bitmask form (one SCPI call) rather than looping over `configure_analog_channel`. The model thinks "set channels 0,3,4,7,12" once; the device sees one mask write, not five.
+
+Worth specifying in the tool contract so the v0.1 implementation doesn't accidentally do the looped form.
+
+### Credentials handling — no echo, no audit
+
+WiFi passwords passed to `configure_wifi` are accepted as inputs but **never** appear in tool responses, audit logs, or error messages. This is a direct response to a 2026-05-07 incident recorded in project memory: the project leaked a real Tesla AP password from `batch.sh` that echoed substituted env vars during a debug session.
+
+`ScpiAuditLog` (see below) masks any argument whose key name contains `pass`/`secret`/`key`/`token`, replacing the value with `***REDACTED***`. The masking is applied at log-emission time, not at input time — the password is still usable for the SCPI call.
+
+---
+
+## Cross-cutting infrastructure (v0.1 internal)
+
+### ScpiAuditLog
+
+Every SCPI command sent (with arguments masked for sensitive keys) and every response received is appended to a session-scoped audit log, retrievable via the resource `daqifi://session/audit`. This is what the model and the human read together when *"the WiFi configure didn't work"* and we need to retro-debug. Bounded (last 500 entries) to keep memory in check. The audit log also captures `quiescence_violation` opt-outs so we can see when the user explicitly bypassed the safety rail.
+
+### RateLimiter
+
+Per-handle rate limit (e.g. no more than 30 tool calls per second) prevents a runaway LLM loop from hammering the device. The firmware can handle bursts but we don't need the model to discover that the hard way — and rate-limit errors are a useful signal that the agent is in a degenerate loop.
+
+### Logging conventions
+
+Server writes structured logs (`Microsoft.Extensions.Logging`) to stderr — stdout is reserved for JSON-RPC and must stay clean. The MCP client (Claude Desktop, Cursor, Cline) typically tails stderr.
+
+---
+
+## Cross-cutting concern for daqifi-core
+
+`daqifi-core` already does most of what the MCP needs, but two small API additions would clean up the MCP layer and also benefit `daqifi-desktop`. Neither blocks v0.1; both are mentioned so they can be batched into a single follow-up PR if Tyler agrees.
+
+### 1. `Task<DeviceMetadata> GetMetadataAsync()` on `DaqifiDevice`
+
+The serial number, IP, part number, and firmware version arrive in the first protobuf info message after connect, but they aren't surfaced as typed properties until the consumer subscribes to events and processes the message. Today the MCP would have to:
+
+```csharp
+var tcs = new TaskCompletionSource<DeviceMetadata>();
+device.ChannelsPopulated += (s, e) => tcs.TrySetResult(BuildMetadata(device));
+device.Connect();
+var metadata = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+```
+
+A typed `GetMetadataAsync(CancellationToken)` that returns once the first protobuf info has been parsed (or throws on timeout) would replace that boilerplate with one line. Internal implementation can keep the event subscription pattern; the public surface is just cleaner.
+
+### 2. Public `ExecuteConfirmedAsync(command, drainErrorQueue = true)`
+
+`ExecuteTextCommandAsync` and `DrainErrorQueueAsync` are both `protected` instance methods on `DaqifiDevice`. The MCP's "send a SCPI command and tell me what errors it produced" wrapper needs both. Today we'd either (a) subclass `DaqifiDevice` just to expose them or (b) re-implement the SCPI text channel from scratch. Both are ugly.
+
+Proposed signature:
+
+```csharp
+public Task<ConfirmedScpiResult> ExecuteConfirmedAsync(
+    string command,
+    bool drainErrorQueue = true,
+    bool scrapeLogAfter = false,
+    CancellationToken ct = default);
+
+public record ConfirmedScpiResult(
+    string ResponseText,
+    IReadOnlyList<ScpiError> SyncErrors,
+    IReadOnlyList<string> AsyncLogLines);
+```
+
+This is the building block for the [structured error response contract](#structured-error-response-contract-all-scpi-tools--v01-work) above. `daqifi-desktop` would also benefit — it currently reproduces parts of this pattern for its own SCPI-console feature.
+
+---
+
 ## Open questions
 
 These need a decision before or during v0.1. Each is a candidate for a thread on the RFC PR.
