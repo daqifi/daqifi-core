@@ -159,13 +159,19 @@ Build this surface and *copy it from yourself* when competitors catch up.
 
 ### Prompts (the "recipes")
 
-These ship with v0.1 and **are the marketing**. Each one becomes a YouTube demo and a README snippet.
+**What a "recipe" is, mechanically:** an MCP server exposes three surfaces — tools (callable functions), resources (read-only URIs), and **prompts** (parameterized templates the server tells the client about). The MCP-aware client (Claude Desktop, Cursor, Cline) surfaces those prompts as a slash-command menu / suggestion list / parameter form. When the user picks one and fills in the parameters, the client expands the template into the LLM's context as a structured user-or-system message — the LLM then has both a known-good starting prompt AND the agent's normal tool access to act on it.
+
+So a "recipe" in this RFC = an MCP prompt that bundles a domain-specific task description with sensible defaults the user can override. The LLM doesn't have to *know* how to set up a thermocouple sweep — the recipe tells it the right tool sequence and the user only fills in *"how many channels, what threshold, where to log."*
+
+These ship with v0.1 and **are the marketing** — they're the difference between "another MCP server" and "the agent already knows how to run my lab." Each one becomes a YouTube demo and a README snippet:
 
 - `setup_thermocouple_sweep` — multi-channel temperature, sample rate, SD logging, threshold alerting
 - `battery_soak_test` — long-duration logging with hourly stat summaries
 - `vibration_capture_fft` — burst capture with frequency-domain analysis
 - `multi_channel_pressure_test` — the medical-R&D pattern called out in the README
 - `wifi_provision_new_device` — out-of-box onboarding via agent
+
+For the deferred "hosted recipe library" question (user-contributed recipes shared back to a public registry), see [Open Questions Q7](#q7-hosted-recipe-library).
 
 ### Safety model
 
@@ -313,6 +319,7 @@ Issues are enumerated in [`GITHUB_ISSUES.md`](GITHUB_ISSUES.md). Summary:
 - Python client package (`pip install daqifi`) with both async API and MCP-over-IPC option
 - LangChain / LlamaIndex tool wrappers (auto-generated from the MCP surface)
 - Cloud deployment story for fleet monitoring
+- **LabVIEW-as-client example library** — a small set of LabVIEW VIs that show how to invoke the DAQiFi MCP from inside a LabVIEW dataflow graph (see [§Q6](#q6-labview-interop) for the framing).  Narrow scope, no per-VI support burden.
 - Agent-managed recipe library (saved configurations, parameterized)
 
 ---
@@ -410,6 +417,47 @@ Per-handle rate limit (e.g. no more than 30 tool calls per second) prevents a ru
 
 Server writes structured logs (`Microsoft.Extensions.Logging`) to stderr — stdout is reserved for JSON-RPC and must stay clean. The MCP client (Claude Desktop, Cursor, Cline) typically tails stderr.
 
+### Telemetry (opt-in)
+
+Per [Q4 resolution](#q4-telemetry), the server can collect anonymous usage telemetry to help us learn what agents actually call and where pain points cluster. **Off by default.** Enable via `--telemetry` flag or `DAQIFI_MCP_TELEMETRY=1` env var.
+
+**What's collected per tool call:**
+
+| Field | Example | Why |
+|---|---|---|
+| `tool` | `"start_streaming"` | Which surfaces get used |
+| `mode` | `"control"` | Which safety posture users actually pick |
+| `outcome` | `"ok"` / `"scpi_error"` / `"quiescence_violation"` / `"timeout"` | Where failures cluster |
+| `error_code` | `-200` (SCPI) or `null` | Group similar failures |
+| `latency_ms` | `342` | Tail-latency outliers reveal device-side bottlenecks |
+| `server_version` | `"0.1.0"` | Cross-version regression detection |
+| `client_id` | `"claude-desktop/1.x"` (from MCP InitializeResult) | Which client ecosystems we serve |
+| `os` | `"linux"` / `"win"` / `"mac"` | Platform skew |
+| `device_variant` | `"NQ1"` / `"NQ2"` / `"NQ3"` | Variant-specific issue detection |
+| `session_id` | random UUID, server-process-scoped | Sequence reconstruction within a session |
+| `event_ts` | epoch ms | Time-bucketing for retention |
+
+**What's EXPLICITLY NOT collected:**
+
+- Tool *arguments* (channel numbers, frequencies, file paths, SCPI strings — too easy to leak research-sensitive setups)
+- Tool *responses* / SCPI response text
+- Device serials, MAC addresses, IP addresses, hostnames
+- WiFi SSIDs, passwords, any credential
+- File contents or filenames (the SD card might hold a customer's pre-clinical data)
+- The user's `client_id` beyond the tool name (no per-user identifier; `session_id` is server-process-scoped and resets each launch)
+
+**Wire shape:** batched HTTP POST to a daqifi.com endpoint (TBD with Tyler — likely a CloudFlare worker + bucket setup, cheap and easy). Batches of up to 100 events flushed every 60 s or on shutdown. Failed flushes drop silently (we don't degrade the user's session for telemetry).
+
+**Disclosure & inspection:**
+
+- README has a dedicated **Telemetry** section listing every field collected, where it goes, and how to disable
+- `--telemetry-dry-run` mode prints every event that *would* be sent to stderr instead of sending — lets a paranoid user (or a procurement reviewer) verify exactly what we collect before opting in
+- Server logs an `INFO` line on startup when telemetry is enabled: `Telemetry enabled — see README §Telemetry for details. Disable with --no-telemetry.`
+
+**Retention:** 90 days raw event-level; indefinite as anonymized aggregates (counts, percentiles). Public dashboard at some later date if/when the data is interesting enough to be community-useful.
+
+**Compliance:** the data shape is engineered specifically to fall below common compliance triggers — no identifiers, no contents, no metadata that could re-identify a specific user / lab / experiment. We don't sell, share with third parties, or use it for marketing personalization. Reviewers can verify all of this by reading the open-source server code and running `--telemetry-dry-run`.
+
 ---
 
 ## Cross-cutting concern for daqifi-core
@@ -454,16 +502,86 @@ This is the building block for the [structured error response contract](#structu
 
 ## Open questions
 
-These need a decision before or during v0.1. Each is a candidate for a thread on the RFC PR.
+Resolved on 2026-05-27 in discussion between Chris (hardware/firmware partner) and Claude. Tyler should override any of these in PR review if his view differs.
 
-1. **Buyer segmentation.** AI-native marketing pulls greenfield buyers. Migrators (existing LabVIEW shops) won't switch on the AI story alone. Do we accept that, or invest in migration tooling?
-2. **Pricing strategy.** Does the AI story support a higher ASP, a SaaS tier (managed recipes, hosted dashboard), or neither? This needs to be decided *before* the launch copy is written.
-3. **Agent action boundaries.** Is the default "control" mode the right safety posture, or do we ship "read-only" as default and require an opt-in flag for control? The conservative choice protects us from launch-week horror stories.
-4. **Telemetry.** Do we want anonymous usage telemetry from the MCP server to learn what agents actually call? If yes, opt-in only, and stated clearly in the README.
-5. **MCP stability contract.** What is our promise to users about tool name/schema stability? Suggest: tool *names* are stable from v0.1; tool *parameters* may add optional fields without notice; breaking changes bump major version.
-6. **LabVIEW interop.** Is there a story where the MCP can drive a LabVIEW VI as a tool call? Probably v0.3+, but flagging now because it could be a marketing weapon against NI.
-7. **Hosted recipe library vs. in-repo.** Recipes as MCP prompts ship in the binary. Do we also stand up a hosted directory where users contribute and rate recipes? Network effect potential, but support burden.
-8. **DAQiFi Desktop alignment.** Does Desktop adopt the MCP internally as its control layer, or stay separate? Adopting it would force a clean API and double as dogfooding, but adds scope.
+### Q1. Buyer segmentation
+
+> AI-native marketing pulls greenfield buyers. Migrators (existing LabVIEW shops) won't switch on the AI story alone. Do we accept that, or invest in migration tooling?
+
+**Answered (Chris, 2026-05-27):** Accept it; keep it light. NO native LabVIEW migration tool — the support burden of every customer's bespoke VI is permanent. Paid migration *assists* are fine on a per-engagement basis. For self-serve migration, LabVIEW users can lean on the DAQiFi MCP + Claude Code / their CLI of choice to walk them through translating VIs into MCP-driven workflows. We may publish examples eventually; not for v0.1.
+
+(Related: Q6 — different direction. We *will* think about letting LabVIEW be a *client* of the MCP. See below.)
+
+### Q2. Pricing strategy
+
+> Does the AI story support a higher ASP, a SaaS tier (managed recipes, hosted dashboard), or neither? This needs to be decided *before* the launch copy is written.
+
+**Answered (Chris, 2026-05-27):** MCP alone does not move pricing. A future SaaS offer (managed recipes, hosted dashboard, fleet management) likely would — defer that pricing decision until the SaaS scope is real.
+
+### Q3. Agent action boundaries
+
+> Is the default "control" mode the right safety posture, or do we ship "read-only" as default and require an opt-in flag for control?
+
+**Answered (Chris, 2026-05-27):** `--mode=control` stays the default. Control is the most powerful feature and the whole pitch — making users opt in via a flag every time would kill the conversational magic in the launch demos. The destructive deny-list + per-call `confirm: true` + `--max-sample-rate-hz` / `--max-voltage-range` clamps are the mitigations; nothing in v0.1's control surface can permanently damage anything. Destructive ops (firmware update, SD format, factory reset) are all v0.2 and require admin mode + explicit per-call confirmation.
+
+`--mode=read-only` remains explicit for CI / automated contexts where absolute certainty of no state change matters.
+
+### Q4. Telemetry
+
+> Do we want anonymous usage telemetry from the MCP server to learn what agents actually call? If yes, opt-in only, and stated clearly in the README.
+
+**Answered (Chris, 2026-05-27):** Yes — telemetry is desired for product development and pain-point detection. **Strict opt-in** (off by default; user passes `--telemetry` or sets `DAQIFI_MCP_TELEMETRY=1`). README discloses exactly what's collected. See [§Telemetry (opt-in)](#telemetry-opt-in) below for the data shape and design.
+
+### Q5. MCP stability contract
+
+> What is our promise to users about tool name/schema stability?
+
+**Answered (Chris, 2026-05-27):** Tyler's framing is right, tightened as follows:
+
+- **Tool names** are stable from v0.1.0 onwards. Renaming a tool is a breaking change requiring a major-version bump.
+- **Parameters**: *optional* fields may be added freely at any version. *Required* fields may not be added later; if a new required field is needed, ship it as optional in vN and required in v(N+1) with a deprecation window.
+- **Tool removal** is the only "remove things" breaking change. Requires (a) one minor release with a `deprecated: true` schema flag + runtime warning, (b) next major bumps. Minimum **6 months** between deprecation announcement and removal — slow enough for a slow-moving lab user, fast enough that we don't carry dead code forever.
+- **`experimental: true`** schemas (e.g. `send_scpi` in v0.2) carry NO stability promise. Their behavior, parameters, and existence may change in any minor release. Clearly flagged in the tool description.
+- **Resource URIs** (`daqifi://...`) follow the same rules as tool names.
+
+This mirrors the gRPC / Anthropic API / MCP SDK stability conventions — proven, low-surprise.
+
+### Q6. LabVIEW interop
+
+> Is there a story where the MCP can drive a LabVIEW VI as a tool call? Probably v0.3+, but flagging now because it could be a marketing weapon against NI.
+
+**Answered (Chris, 2026-05-27):** **Inverted from the original question.** Instead of MCP-calls-out-to-LabVIEW (which carries permanent per-VI support burden), the more interesting direction is MCP-as-server-with-LabVIEW-as-client:
+
+- A LabVIEW user drops a `DAQiFi MCP Tool Call.vi` (or similar) into their dataflow graph
+- The VI internally opens a JSON-RPC connection to the DAQiFi MCP server (via stdio launch or local HTTP transport)
+- LabVIEW dataflow inputs/outputs marshal to/from MCP tool call params/results
+- LabVIEW users get programmatic device access without LabVIEW-side custom code, AND can keep using Claude / Cursor / Cline alongside
+
+This is much narrower: a small example library (a few VIs + a brief README) rather than a featureful product. No support burden because the LabVIEW side is just a JSON-RPC client — we don't own any customer VIs.
+
+Defer to v0.3+ at the earliest. For v0.1/v0.2, the marketing weapon is the published recipe + blog post showing *"I had Claude drive both DAQiFi and a legacy LabVIEW rig in the same conversation."*
+
+### Q7. Hosted recipe library
+
+> Recipes as MCP prompts ship in the binary. Do we also stand up a hosted directory where users contribute and rate recipes? Network effect potential, but support burden.
+
+**Answered (Chris, 2026-05-27):** Three-stage rollout based on actual demand:
+
+- **v0.1**: 5 in-binary recipes (Tyler's list). Discovery is "look in the MCP prompts list" + "read the README."
+- **v0.2** (only if contribution requests appear): add a `recipes/` directory in this repo; point users at GitHub Discussions for sharing. Free, no support burden, GitHub-native contribution flow. Track: how often does it get used?
+- **v0.3+** (only if `recipes/` proves itself): formalize a hosted directory (web app, search, ratings, parameterized prompts). Real eng cost + ongoing moderation burden — build it only when the flywheel has proven itself.
+
+Building a hosted library in v0.1 would be infrastructure for a community that doesn't exist yet.
+
+### Q8. DAQiFi Desktop alignment
+
+> Does Desktop adopt the MCP internally as its control layer, or stay separate?
+
+**Answered (Chris, 2026-05-27):** Stay separate for v0.1. Desktop and MCP both depend on `Daqifi.Core` directly; no coupling between them.
+
+In v0.2, consider piloting **one Desktop feature** on top of the MCP — the SCPI Console is the natural candidate, since it benefits from the same wiki-warn + structured-error contract + audit log we're building. Low risk (developer-tool surface, not core acquisition path), high signal (we learn whether the contracts hold up under a non-LLM client). Evaluate broader migration in v0.3+ based on that pilot.
+
+The "force a clean API" benefit Tyler cited is real, but we can get most of it from a single-feature pilot without committing the whole Desktop product to a contract we're still learning.
 
 ---
 
