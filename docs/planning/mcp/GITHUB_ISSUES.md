@@ -49,29 +49,36 @@ src/
 
 #### Implementation phases
 
-This epic is broken down into 12 implementation issues, designed to be worked roughly sequentially with some parallelism possible (see dependency graph at the bottom of this doc).
+This epic is broken down into 14 implementation issues, designed to be worked roughly sequentially with some parallelism possible (see dependency graph at the bottom of this doc).
 
 | Issue | Title | Effort | Depends on |
 |---|---|---|---|
 | #mcp-1 | Project scaffold + CI | 4h | — |
-| #mcp-2 | Discovery & connection tools | 6h | #mcp-1 |
+| #mcp-2 | Discovery & connection tools (+ capabilities caching) | 8h | #mcp-1 |
 | #mcp-3 | Device introspection tools | 3h | #mcp-2 |
-| #mcp-4 | Channel configuration tools | 5h | #mcp-2 |
-| #mcp-5 | Streaming infrastructure (ring buffer, summarizer) | 8h | #mcp-1 |
+| #mcp-4 | Channel configuration tools | 5h | #mcp-2, #mcp-13 |
+| #mcp-5 | Streaming infrastructure + quiescence gate | 11h | #mcp-1, #mcp-2 |
 | #mcp-6 | Streaming tools | 6h | #mcp-4, #mcp-5 |
-| #mcp-7 | SD card tools (non-destructive) | 5h | #mcp-2 |
-| #mcp-8 | Resources (daqifi://) | 4h | #mcp-3, #mcp-6 |
+| #mcp-7 | SD card tools (non-destructive) | 5h | #mcp-2, #mcp-13 |
+| #mcp-8 | Resources (daqifi://) | 5h | #mcp-3, #mcp-6, #mcp-14 |
 | #mcp-9 | Safety model | 5h | #mcp-1 |
 | #mcp-10 | Starter recipe prompts | 6h | #mcp-6, #mcp-7 |
 | #mcp-11 | Distribution (AOT, dotnet tool, npx) | 8h | all tool issues |
 | #mcp-12 | Documentation rewrite | 6h | #mcp-10, #mcp-11 |
+| #mcp-13 | Structured SCPI error contract (`ConfirmedScpiResult`) | 8h | #mcp-1 |
+| #mcp-14 | Cross-cutting infra (audit log, rate limiter, logging) | 10h | #mcp-1, #mcp-2 |
 
-**Total estimated effort:** ~66 hours (~4–6 calendar weeks part-time).
+**Total estimated effort:** ~90 hours (~6–8 calendar weeks part-time).
+
+**Separate from this epic (follow-up cleanup PR):** `Daqifi.Core` API additions (`GetMetadataAsync`, `ExecuteConfirmedAsync`) — see [RFC §Cross-cutting concern for daqifi-core](RFC.md#cross-cutting-concern-for-daqifi-core). Not blocking; reduces MCP boilerplate and also benefits `daqifi-desktop`. Filed separately from the MCP epic.
 
 #### Success criteria
 
 - [ ] `Daqifi.Mcp` project builds and produces an AOT binary per supported OS
 - [ ] Claude Desktop (or any STDIO-MCP client) can launch the server, discover a Nyquist device, configure 4 analog channels, start streaming, and retrieve a stream summary
+- [ ] All v0.1 tools return the structured `{success, response, errors[], warnings[]}` error shape (see #mcp-13)
+- [ ] Quiescence gate is enforced: tools that would issue SCPI against a streaming device return a structured `quiescence_violation` error rather than corrupting the stream (see #mcp-5)
+- [ ] Variant-aware capabilities: NQ1/NQ2/NQ3 differences are surfaced via `daqifi://devices/{id}/capabilities` and applied as sane defaults (see #mcp-2, #mcp-14)
 - [ ] All v0.1 tools have integration tests covering happy-path behavior
 - [ ] Safety modes (`read-only`, `control`, `admin`) gate destructive operations correctly
 - [ ] At least 5 recipe prompts ship and are demonstrable on real hardware
@@ -168,7 +175,8 @@ Implement the four foundational tools that let an agent find devices and open co
 
 - [ ] Implement `Tools/DiscoveryTools.cs` with the four tools above
 - [ ] `discover_devices` wraps `WiFiDeviceFinder` + `SerialDeviceFinder`, merges results, mints stable `device_id` (suggest `{transport}:{serial_or_address}`)
-- [ ] `connect_device` calls `ConnectFromDeviceInfoAsync()`, registers in `DeviceRegistry`
+- [ ] `connect_device` calls `ConnectFromDeviceInfoAsync()`, reads `*IDN?` + `SYST:SYSInfoPB?` to populate a `BoardCapabilities` blob, registers handle in `DeviceRegistry` with capabilities attached
+- [ ] Define `BoardCapabilities` record (`variant: NQ1|NQ2|NQ3`, `analog_channels`, `digital_channels`, `adc_bits`, `default_voltage_precision`, `has_dac`, etc.) — populated from firmware at connect time, not hard-coded per variant
 - [ ] `disconnect_device` removes from registry and disposes the device
 - [ ] `list_connected_devices` enumerates `DeviceRegistry`
 - [ ] All inputs validated; errors return MCP error responses with actionable messages
@@ -178,19 +186,21 @@ Implement the four foundational tools that let an agent find devices and open co
 
 - [ ] Agent can call `discover_devices` and receive a list of devices
 - [ ] Agent can call `connect_device` with a `device_id` from discovery and the device becomes connected
+- [ ] `BoardCapabilities` is populated correctly for NQ1 (12-bit, no DAC), NQ3 (18-bit, has DAC), NQ2 (24-bit) — variant detected from firmware response, not the caller
 - [ ] `list_connected_devices` reflects the connected state
 - [ ] `disconnect_device` cleans up cleanly; subsequent `list_connected_devices` reflects disconnection
 - [ ] Tool descriptions are written for agent ergonomics (clear, one-sentence purpose; parameter docs include units and examples)
-- [ ] Integration test passes against real hardware
+- [ ] Integration test passes against real hardware (skip-on-no-hardware when not available)
 
 ### Files to create
 
 - `src/Daqifi.Mcp/Tools/DiscoveryTools.cs`
+- `src/Daqifi.Mcp/Server/BoardCapabilities.cs`
 - `src/Daqifi.Mcp.Tests/Tools/DiscoveryToolsTests.cs`
 
 ### Estimated effort
 
-6 hours
+8 hours
 
 ### Dependencies
 
@@ -295,17 +305,17 @@ Implement tools that let an agent enumerate and configure analog/digital channel
 
 ---
 
-## #mcp-5: Streaming infrastructure (ring buffer + summarizer)
+## #mcp-5: Streaming infrastructure + quiescence gate
 
 ### Title
-MCP: Streaming infrastructure — ring buffer, summarizer, window reader
+MCP: Streaming infrastructure — ring buffer, summarizer, window reader, quiescence enforcement
 
 ### Labels
-`mcp`, `infrastructure`, `streaming`, `phase-3`
+`mcp`, `infrastructure`, `streaming`, `safety`, `phase-3`
 
 ### Objective
 
-Build the server-side infrastructure that lets agents reason about live waveform data without pulling raw samples into context. **This is the differentiating technical capability** of the v0.1 release.
+Build the server-side infrastructure that lets agents reason about live waveform data without pulling raw samples into context **and** enforce the firmware quiescence rule (no SCPI during a benchmarked stream — see [RFC §Quiescence rule](RFC.md#quiescence-rule--no-scpi-during-a-benchmarked-stream)). **This is the differentiating technical capability** of the v0.1 release, and the quiescence gate is the #1 footgun protection for an LLM driving the device.
 
 ### Components
 
@@ -313,6 +323,8 @@ Build the server-side infrastructure that lets agents reason about live waveform
 - `Streaming/StreamSummarizer.cs` — computes per-channel `{n, min, max, mean, rms, std, dominant_freq_hz, sparkline}` over a configurable window. Sparkline is a 40-char Unicode block-character string.
 - `Streaming/WindowReader.cs` — given `(start_s, end_s, max_points)`, returns decimated samples (decimation factor chosen to stay under `max_points`).
 - `Server/StreamRegistry.cs` — tracks active streams by `stream_id`.
+- `Safety/RequiresQuiescenceAttribute.cs` — marker attribute applied to tool methods that issue SCPI to the device.
+- `Safety/QuiescenceGate.cs` — dispatcher hook that consults `DeviceRegistry.IsStreaming(deviceId)` and rejects gated tool calls with a structured `quiescence_violation` error.
 
 ### Tasks
 
@@ -322,7 +334,10 @@ Build the server-side infrastructure that lets agents reason about live waveform
 - [ ] Implement `WindowReader` with server-side decimation (averaging buckets)
 - [ ] Implement `StreamRegistry` with stream lifecycle (start, stop, dispose)
 - [ ] Wire streaming subscription to `IDaqifiDevice` message events
-- [ ] Unit tests for ring buffer correctness, summarizer math (against a known sine wave), and window decimation
+- [ ] Extend `DeviceRegistry` (from #mcp-1) with `IsStreaming(deviceId): bool` — set by `start_streaming`, cleared by `stop_streaming` / disconnect / auto-stop
+- [ ] Implement `RequiresQuiescenceAttribute` and the dispatcher hook that rejects calls with a structured error containing actionable guidance (e.g. *"Cannot run `get_device_status` while `<handle>` is streaming — would invalidate the measurement. Use `get_stream_summary` for in-process state, or call `stop_streaming` first."*)
+- [ ] Support `respectQuiescence: false` opt-out parameter — logged in the audit trail (see #mcp-14) so opt-outs are visible
+- [ ] Unit tests for ring buffer correctness, summarizer math (against a known sine wave), window decimation, and quiescence gate (mocked DeviceRegistry)
 - [ ] Benchmark: 1000 Hz × 16 channels × 60 s ring buffer must stay under 50 MB RAM
 
 ### Acceptance criteria
@@ -330,6 +345,8 @@ Build the server-side infrastructure that lets agents reason about live waveform
 - [ ] Ring buffer correctly retains the last N seconds of samples per channel
 - [ ] Summarizer returns mathematically correct stats for a known input (sine wave: mean ≈ 0, rms ≈ amplitude/√2, dominant_freq matches input)
 - [ ] Window reader respects `max_points` cap and returns decimated data when input exceeds cap
+- [ ] Quiescence gate rejects a `[RequiresQuiescence]` tool call against a streaming device with a structured error; allowlisted in-process tools (`stop_streaming`, `disconnect_device`, `get_stream_summary`, `read_stream_window`) pass through
+- [ ] `respectQuiescence: false` opt-out works and is captured in audit log
 - [ ] All unit tests pass
 - [ ] Benchmark target met
 
@@ -339,15 +356,19 @@ Build the server-side infrastructure that lets agents reason about live waveform
 - `src/Daqifi.Mcp/Streaming/StreamSummarizer.cs`
 - `src/Daqifi.Mcp/Streaming/WindowReader.cs`
 - `src/Daqifi.Mcp/Server/StreamRegistry.cs`
+- `src/Daqifi.Mcp/Safety/RequiresQuiescenceAttribute.cs`
+- `src/Daqifi.Mcp/Safety/QuiescenceGate.cs`
 - `src/Daqifi.Mcp.Tests/Streaming/*Tests.cs`
+- `src/Daqifi.Mcp.Tests/Safety/QuiescenceGateTests.cs`
 
 ### Estimated effort
 
-8 hours
+11 hours
 
 ### Dependencies
 
 - #mcp-1 (Project scaffold)
+- #mcp-2 (DeviceRegistry needs to track per-handle streaming state)
 
 ---
 
@@ -706,31 +727,172 @@ Reposition the repository's README around the agent workflow, and ship a dedicat
 
 ---
 
+## #mcp-13: Structured SCPI error response contract
+
+### Title
+MCP: Implement structured SCPI error response contract (`ConfirmedScpiResult`)
+
+### Labels
+`mcp`, `infrastructure`, `error-contract`, `phase-2`
+
+### Objective
+
+Implement the uniform `{success, response, errors[], warnings[]}` response shape that every SCPI-issuing tool returns in v0.1. Without this, the LLM has to grep free text to know whether a command failed and misses asynchronous errors entirely. See [RFC §Structured error response contract](RFC.md#structured-error-response-contract-all-scpi-tools--v01-work).
+
+### Components
+
+- `Server/ConfirmedScpiResult.cs` — the result record + error/warning types
+- `Server/ConfirmedScpiExecutor.cs` — wraps `Daqifi.Core`'s text-channel SCPI execution with before/after error-queue drain, optional async log scrape, and readback validation
+
+### Tasks
+
+- [ ] Define `ConfirmedScpiResult` record: `{Success: bool, ResponseText: string, Errors: IReadOnlyList<ScpiError>, Warnings: IReadOnlyList<ScpiWarning>}`
+- [ ] Define `ScpiError` with `Source: "SCPI" | "LOG_E" | "READBACK"`, `Code: int?`, `Message: string`
+- [ ] Define `ScpiWarning` with `Code: string` (e.g. `UNDOCUMENTED_SCPI`), `Message: string`, optional `Suggestions: string[]`
+- [ ] Implement `ConfirmedScpiExecutor.ExecuteAsync(command, drainErrorQueue=true, scrapeLogAfter=false, readback=null, ct)`:
+  - drain `SYST:ERR?` before execution to establish a clean baseline
+  - send the command
+  - drain `SYST:ERR?` after execution; the delta becomes the synchronous errors
+  - if `scrapeLogAfter=true`, drain `SYST:LOG?` and capture any `[ERROR]` / `[WARN]` lines (note: this drains the buffer)
+  - if a readback validator is provided, run it; on timeout/failure, append a `READBACK` error
+  - `Success = false` iff any synchronous SCPI error or readback failure occurred (async log lines are warnings unless explicitly marked errors)
+- [ ] Defaults: typed tools opt in to `scrapeLogAfter=false` (avoid drain overhead per call); `send_scpi` (v0.2) defaults `scrapeLogAfter=true`
+- [ ] Bundle a snapshot of `daqifi-nyquist-firmware`'s `01-SCPI-Interface.md` wiki under `src/Daqifi.Mcp/Resources/scpi-wiki-snapshot.md` (text file) with a refresh script `scripts/refresh-scpi-wiki.sh`
+- [ ] CI step in `.github/workflows/ci.yml`: fail the build if `scpi-wiki-snapshot.md` is older than 30 days (use `git log -1 --format=%ct` on the file)
+- [ ] Unit tests covering: clean run, sync SCPI error, async LOG_E line, readback timeout, all three at once
+- [ ] Refactor existing typed-tool issue scaffolds (#mcp-4, #mcp-7) to return the structured shape — task list updated in those issues
+
+### Acceptance criteria
+
+- [ ] All SCPI-issuing tools return the documented response shape
+- [ ] A failing command surfaces all three error classes in one response when applicable
+- [ ] Async log scrape opt-in works and is destructive to the log buffer (documented behavior)
+- [ ] CI fails when the wiki snapshot is >30 days old
+- [ ] Snapshot date is exposed via a resource for runtime introspection (`daqifi://session/scpi-snapshot-info`)
+
+### Files to create
+
+- `src/Daqifi.Mcp/Server/ConfirmedScpiResult.cs`
+- `src/Daqifi.Mcp/Server/ConfirmedScpiExecutor.cs`
+- `src/Daqifi.Mcp/Resources/scpi-wiki-snapshot.md` (bundled snapshot)
+- `scripts/refresh-scpi-wiki.sh`
+- `src/Daqifi.Mcp.Tests/Server/ConfirmedScpiExecutorTests.cs`
+
+### Files to modify
+
+- `.github/workflows/ci.yml` (add freshness check)
+
+### Estimated effort
+
+8 hours
+
+### Dependencies
+
+- #mcp-1 (Project scaffold)
+
+### Notes
+
+- This issue exists in v0.1 specifically so the contract is established *before* tool implementations land. Tool issues #mcp-4, #mcp-6, #mcp-7 should be coded against `ConfirmedScpiResult` from day one.
+- The wiki snapshot bundled here is the foundation the v0.2 `send_scpi` hallucination-warn feature will read from. Refresh script + CI check should be in place before the snapshot is needed for warning lookups.
+
+---
+
+## #mcp-14: Cross-cutting infrastructure (audit, rate limit, logging)
+
+### Title
+MCP: Implement audit log, rate limiter, and structured logging conventions
+
+### Labels
+`mcp`, `infrastructure`, `safety`, `phase-3`
+
+### Objective
+
+Implement the three pieces of cross-cutting infrastructure that the MCP needs in v0.1 to be operable and debuggable: an audit log (every SCPI command + response, with credential redaction), a per-handle rate limiter (defends against runaway LLM loops), and disciplined stdout/stderr usage (stdout is JSON-RPC only). See [RFC §Cross-cutting infrastructure](RFC.md#cross-cutting-infrastructure-v01-internal).
+
+### Components
+
+- `Server/ScpiAuditLog.cs` — bounded session-scoped log of every SCPI command + response, with sensitive argument redaction
+- `Server/RateLimiter.cs` — token-bucket per-handle rate limiter
+- `Resources/SessionResources.cs` — exposes `daqifi://session/audit` and `daqifi://session/scpi-snapshot-info`
+- `Server/LoggingSetup.cs` — `Microsoft.Extensions.Logging` to stderr; stdout reserved for JSON-RPC
+
+### Tasks
+
+- [ ] Implement `ScpiAuditLog` with bounded capacity (default 2000 entries, configurable via `--audit-log-size`) — ring-buffer eviction
+- [ ] Each entry: `{timestamp, device_id, tool_name, scpi_command, response_summary, errors, warnings, opt_outs}`
+- [ ] Redaction: any argument key matching `/(?i)pass|secret|key|token/` has its value replaced with `***REDACTED***` at log emission time (not at input time — the password still works for the SCPI call)
+- [ ] Wire audit log into `ConfirmedScpiExecutor` (from #mcp-13) so every SCPI call is recorded
+- [ ] Implement `RateLimiter` with per-handle token bucket: default 30 tokens/sec, configurable via `--max-tool-calls-per-second`
+- [ ] Rate-limit exceeded returns a structured `rate_limit_exceeded` error with retry-after hint
+- [ ] Expose `daqifi://session/audit` resource (read-only, paginated)
+- [ ] Expose `daqifi://session/scpi-snapshot-info` resource (snapshot date, source URL, last-refresh attempt result)
+- [ ] Configure `Microsoft.Extensions.Logging` to write to stderr with structured JSON output
+- [ ] CI/test: assert that stdout contains only valid JSON-RPC framing — any errant `Console.WriteLine` causes test failure
+- [ ] Unit tests for audit log eviction, redaction patterns, rate limiter math
+
+### Acceptance criteria
+
+- [ ] Audit log captures the last N SCPI calls with arguments, response, and errors/warnings
+- [ ] Credentials are redacted in the audit log but still work in the actual SCPI call
+- [ ] Rate limiter blocks at the configured threshold and returns a structured error
+- [ ] No stray output corrupts the stdout JSON-RPC stream (test enforced)
+- [ ] `daqifi://session/audit` resource is readable from an MCP client
+- [ ] `quiescence_violation` opt-outs (from #mcp-5) appear in the audit log
+
+### Files to create
+
+- `src/Daqifi.Mcp/Server/ScpiAuditLog.cs`
+- `src/Daqifi.Mcp/Server/RateLimiter.cs`
+- `src/Daqifi.Mcp/Server/LoggingSetup.cs`
+- `src/Daqifi.Mcp/Resources/SessionResources.cs`
+- `src/Daqifi.Mcp.Tests/Server/ScpiAuditLogTests.cs`
+- `src/Daqifi.Mcp.Tests/Server/RateLimiterTests.cs`
+
+### Estimated effort
+
+10 hours
+
+### Dependencies
+
+- #mcp-1 (Project scaffold)
+- #mcp-2 (needs DeviceRegistry for per-handle state)
+
+---
+
 ## Dependency graph
 
 ```
-                           #mcp-1 (scaffold)
-                          /        |        \
-                #mcp-2 (discovery) #mcp-5 (stream infra)  #mcp-9 (safety)
-                  /    |    \              \
-        #mcp-3   #mcp-4  #mcp-7             \
-        (info) (channels) (SD)               \
-                 \              \             \
-                  +--- #mcp-6 (streaming tools)
-                              \
-                               +--- #mcp-8 (resources)
-                              \
-                               +--- #mcp-10 (prompts)
-                                            \
-                                             #mcp-11 (distribution)
-                                                       \
-                                                        #mcp-12 (docs)
+                              #mcp-1 (scaffold)
+                ┌──────────┬───┴──────┬─────────┬──────────┐
+                │          │          │         │          │
+            #mcp-2     #mcp-9     #mcp-13   #mcp-5 (needs #mcp-2 for IsStreaming)
+         (discovery+  (safety)   (error    
+          capabilities)          contract)  
+                │                    │
+   ┌────────┬───┴────┬────────┐      │
+   │        │        │        │      │
+ #mcp-3  #mcp-4   #mcp-7   #mcp-14  (#mcp-4/#mcp-7 also depend on #mcp-13)
+ (info) (channels) (SD)    (audit+
+                            ratelimit)
+                │                    │
+                └───┬──── #mcp-6 ────┘
+                    │ (streaming tools)
+                    ├──── #mcp-8 (resources)
+                    └──── #mcp-10 (prompts)
+                              │
+                          #mcp-11 (distribution)
+                              │
+                          #mcp-12 (docs)
 ```
 
-Issues #mcp-1, #mcp-5, and #mcp-9 can start in parallel.
-Issues #mcp-2/3/4/7 can be parallelized after #mcp-1.
-Issues #mcp-6/8/10 unblock once their dependencies land.
-Issues #mcp-11/12 finalize the release.
+Parallelism notes:
+- #mcp-1 unblocks everything else.
+- #mcp-2, #mcp-9, #mcp-13 can run in parallel right after #mcp-1.
+- #mcp-5 needs #mcp-2 (DeviceRegistry tracks `IsStreaming`).
+- #mcp-14 needs #mcp-2 (per-handle audit) and integrates with #mcp-13's executor.
+- #mcp-3/#mcp-4/#mcp-7 fan out after #mcp-2; #mcp-4/#mcp-7 also wait on #mcp-13 so they return the right error shape from day one.
+- #mcp-6/#mcp-8/#mcp-10 unblock once their dependencies land.
+- #mcp-11/#mcp-12 finalize the release.
 
 ---
 
@@ -743,6 +905,7 @@ Issues #mcp-11/12 finalize the release.
 - `streaming`
 - `sd-card`
 - `safety`
+- `error-contract`
 - `prompts`
 - `release`
 - `phase-1`, `phase-2`, `phase-3`, `phase-4`
