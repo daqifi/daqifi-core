@@ -194,12 +194,12 @@ Bake this in for v0.1. It becomes a marketing point ("agent-safe by design") and
 
 The risk being managed is twofold: (1) destructive operations the agent shouldn't issue without explicit user intent; (2) plausibly-correct-looking SCPI that the LLM hallucinated and that *appears* to succeed at the device because the firmware just returns an error string the agent ignores. Two-tier safety net + the structured-error contract handle both:
 
-**Tier 1: destructive deny-list (hard block)** — patterns refused unless the caller passes `allowDestructive: true` on that specific call. Initial list (case-insensitive on alpha; SCPI capital-letter abbreviation rules respected):
+**Tier 1: destructive deny-list (hard block)** — patterns refused unless the caller passes `confirmed: true` on that specific call. Initial list (case-insensitive on alpha; SCPI capital-letter abbreviation rules respected):
 
 - `SD:FORmat` / `SYST:STOR:SD:FORmat`
 - `SYST:FORceBoot` / `SYST:FORC*`
 - `*RST` (full system reset)
-- `SYST:REBoot` (deny unless `allowDestructive=true` — many legitimate uses)
+- `SYST:REBoot` (deny unless `confirmed=true` — many legitimate uses)
 - `CONF:DAC:SAVEcal` / `CONF:ADC:SAVEcal` (calibration NVM writes)
 - `LAN:FACReset`, `LAN:FWUpdate`
 
@@ -216,14 +216,10 @@ At dispatch time, if a raw command does NOT canonicalize to any published patter
   "errors": [],
   "warnings": [{
     "code": "UNDOCUMENTED_SCPI",
-    "message": "You CAN send this command, but 'SYST:FOO:BAR' doesn't match
-      any pattern in the published SCPI Interface wiki (snapshot 2026-05-27).
-      Re-check the syntax and consider whether you may have hallucinated the
-      command — LLMs sometimes invent plausible-looking SCPI that doesn't
-      exist on this firmware. If you have reason to believe the command is
-      real (e.g. an undocumented internal command, or newer than the
-      snapshot), proceed; otherwise consider one of the suggestions below
-      or call sendRawScpi with a verified pattern.",
+    "message": "'SYST:FOO:BAR' isn't in the SCPI wiki (snapshot 2026-05-27).
+      LLMs sometimes invent plausible-looking SCPI — verify the syntax before
+      trusting the device response. If you believe the command is real
+      (undocumented or post-snapshot) proceed; otherwise try a suggestion below.",
     "suggestions": ["SYST:FOO:BAZ", "SYST:FOO:BARQ?"]   // Damerau-Levenshtein ≤ 3
   }]
 }
@@ -231,13 +227,13 @@ At dispatch time, if a raw command does NOT canonicalize to any published patter
 
 **Why this exact phrasing matters:** "you may have hallucinated" is the key prompt. Without it, the LLM treats the warning as bureaucratic noise; with it, the model is invited to introspect on its own reliability for this specific command. The warning is non-blocking — the firmware's own response is the ground truth. The wiki may lag firmware (per the daqifi-nyquist-firmware CLAUDE.md: "When you add or modify SCPI commands, update the wiki same-day"), so an unmatched command isn't automatically wrong; it's a request for the LLM to double-check itself before reading too much into the response.
 
-**Wiki snapshot freshness:** bundled at build time via `scripts/refresh-scpi-wiki.sh`. CI checks the bundled snapshot isn't older than 30 days. Snapshot date exposed in the warning text so the user knows when it was last refreshed.
+**Wiki snapshot freshness:** the snapshot is bundled at build time via `scripts/refresh-scpi-wiki.sh` and the CI freshness check (snapshot must be ≤30 days old) both land in v0.1 under [#mcp-13](GITHUB_ISSUES.md#mcp-13) so the foundation is in place before v0.2 consumes it. Snapshot date is exposed in every warning so users can spot staleness even if CI is lenient.
 
 **Mode interaction** (per the safety modes above):
 - Server must be launched with `--allow-raw-scpi` regardless of mode
 - `read-only` → `send_scpi` blocked unconditionally even with `--allow-raw-scpi`
-- `control` → deny-list active; `allowDestructive=true` overrides on a per-call basis; wiki-warn always on
-- `admin` → same as control (deny-list does NOT auto-relax — `allowDestructive=true` per call is still required for destructive patterns; that's the explicit confirmation the RFC requires for admin-mode destructive tools)
+- `control` → deny-list active; `confirmed=true` overrides on a per-call basis; wiki-warn always on
+- `admin` → same as control (deny-list does NOT auto-relax — `confirmed=true` per call is still required for destructive patterns; that's the explicit confirmation the RFC requires for admin-mode destructive tools)
 
 #### Structured error response contract (all SCPI tools — v0.1 work)
 
