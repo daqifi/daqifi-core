@@ -138,7 +138,7 @@ Full reference is in the [appendix](#appendix-complete-tool-reference). Summary:
 | SD card (destructive) | `delete_sd_file`, `format_sd_card` | v0.2 |
 | Network | `configure_wifi`, `configure_static_ip` | v0.2 |
 | Firmware | `check_firmware_update`, `update_firmware` | v0.2 |
-| Escape hatch | `send_scpi` | v0.2 (behind `--allow-raw-scpi`) |
+| Escape hatch | `send_scpi` | v0.2 (design specced in [§Safety: send_scpi v0.2 design](#safety-send_scpi-v02-design)) |
 
 #### The streaming layer is the differentiator
 
@@ -188,6 +188,86 @@ Plus:
 
 Bake this in for v0.1. It becomes a marketing point ("agent-safe by design") and it is much harder to retrofit after the first incident.
 
+#### Safety: `send_scpi` v0.2 design
+
+`send_scpi` ships in v0.2 (see tool table above) and stays behind the `--allow-raw-scpi` startup flag. This subsection specs the design now so the v0.1 work on the structured-error contract (next subsection) lands a foundation the v0.2 implementation can plug straight into, and so reviewers can debate the safety model before we commit code.
+
+The risk being managed is twofold: (1) destructive operations the agent shouldn't issue without explicit user intent; (2) plausibly-correct-looking SCPI that the LLM hallucinated and that *appears* to succeed at the device because the firmware just returns an error string the agent ignores. Two-tier safety net + the structured-error contract handle both:
+
+**Tier 1: destructive deny-list (hard block)** — patterns refused unless the caller passes `allowDestructive: true` on that specific call. Initial list (case-insensitive on alpha; SCPI capital-letter abbreviation rules respected):
+
+- `SD:FORmat` / `SYST:STOR:SD:FORmat`
+- `SYST:FORceBoot` / `SYST:FORC*`
+- `*RST` (full system reset)
+- `SYST:REBoot` (deny unless `allowDestructive=true` — many legitimate uses)
+- `CONF:DAC:SAVEcal` / `CONF:ADC:SAVEcal` (calibration NVM writes)
+- `LAN:FACReset`, `LAN:FWUpdate`
+
+Extensible via `--deny-scpi-pattern <regex>` startup flag. The list is intentionally small — it covers "rm -rf" class operations, not every command that mutates state.
+
+**Tier 2: wiki-pattern warn (soft signal — hallucination check)** — at startup, parse a bundled snapshot of `01-SCPI-Interface.md` from the [`daqifi-nyquist-firmware.wiki`](https://github.com/daqifi/daqifi-nyquist-firmware/wiki/01-SCPI-Interface) repo, extract every published pattern, and pre-compute a canonical-form lookup table that respects the SCPI capital-letter abbreviation rules (`SYSTem:STReam:START` matches `SYST:STR:START`, `SYST:STR:STA`, `SYSTEM:STREAM:START`, etc.).
+
+At dispatch time, if a raw command does NOT canonicalize to any published pattern, the MCP returns a structured warning whose copy explicitly invites the LLM to self-check for hallucination:
+
+```jsonc
+{
+  "success": true,
+  "response": "<scpi response>",
+  "errors": [],
+  "warnings": [{
+    "code": "UNDOCUMENTED_SCPI",
+    "message": "You CAN send this command, but 'SYST:FOO:BAR' doesn't match
+      any pattern in the published SCPI Interface wiki (snapshot 2026-05-27).
+      Re-check the syntax and consider whether you may have hallucinated the
+      command — LLMs sometimes invent plausible-looking SCPI that doesn't
+      exist on this firmware. If you have reason to believe the command is
+      real (e.g. an undocumented internal command, or newer than the
+      snapshot), proceed; otherwise consider one of the suggestions below
+      or call sendRawScpi with a verified pattern.",
+    "suggestions": ["SYST:FOO:BAZ", "SYST:FOO:BARQ?"]   // Damerau-Levenshtein ≤ 3
+  }]
+}
+```
+
+**Why this exact phrasing matters:** "you may have hallucinated" is the key prompt. Without it, the LLM treats the warning as bureaucratic noise; with it, the model is invited to introspect on its own reliability for this specific command. The warning is non-blocking — the firmware's own response is the ground truth. The wiki may lag firmware (per the daqifi-nyquist-firmware CLAUDE.md: "When you add or modify SCPI commands, update the wiki same-day"), so an unmatched command isn't automatically wrong; it's a request for the LLM to double-check itself before reading too much into the response.
+
+**Wiki snapshot freshness:** bundled at build time via `scripts/refresh-scpi-wiki.sh`. CI checks the bundled snapshot isn't older than 30 days. Snapshot date exposed in the warning text so the user knows when it was last refreshed.
+
+**Mode interaction** (per the safety modes above):
+- Server must be launched with `--allow-raw-scpi` regardless of mode
+- `read-only` → `send_scpi` blocked unconditionally even with `--allow-raw-scpi`
+- `control` → deny-list active; `allowDestructive=true` overrides on a per-call basis; wiki-warn always on
+- `admin` → same as control (deny-list does NOT auto-relax — `allowDestructive=true` per call is still required for destructive patterns; that's the explicit confirmation the RFC requires for admin-mode destructive tools)
+
+#### Structured error response contract (all SCPI tools — v0.1 work)
+
+The error contract below applies to every typed SCPI tool in v0.1 (`configure_analog_channel`, `start_streaming`, `start_sd_logging`, etc.) as well as the deferred `send_scpi`. It's listed here because it's the foundation the `send_scpi` safety design plugs into, and because shipping typed-tool errors in this structured shape from v0.1 means we don't have a contract break when v0.2 lands.
+
+Every SCPI tool — typed and raw — returns errors in a uniform shape so the model never has to grep free text to know whether something failed. Three error surfaces are scraped per call:
+
+1. **Synchronous SCPI error queue (`SYST:ERR?`)** — drained BEFORE the command (clear baseline), then drained AFTER (return the delta). Catches `-101 Invalid character`, `-200 Execution error`, etc.
+
+2. **Asynchronous LOG_E buffer (`SYST:LOG?`)** — opt-in via `scrapeLogAfter` (default `true` for `send_scpi`, default `false` for typed tools to avoid log-buffer drain on every call). After the command, drain the log buffer and return any `[ERROR]` / `[WARN]` lines that appeared during the call window. Note `SYST:LOG?` is destructive (clears the buffer).
+
+3. **Readback failures** — for tools with a `ReadbackAsync` validator (e.g. `configure_wifi` → APPLY → poll `LAN:ADDR?` until non-zero or timeout), failure to validate within the timeout returns a `ReadbackFailedError`.
+
+Response shape:
+
+```jsonc
+{
+  "success": true,                         // false iff any class-1 error
+  "response": "<scpi response text>",      // raw text or parsed value
+  "errors": [
+    { "source": "SCPI",     "code": -113, "message": "Undefined header" },
+    { "source": "LOG_E",    "code": null, "message": "[WIFI] Connection lost" },
+    { "source": "READBACK", "code": null, "message": "LAN:ADDR? returned 0.0.0.0 after 20s" }
+  ],
+  "warnings": [ /* UNDOCUMENTED_SCPI etc. */ ]
+}
+```
+
+Rationale: a single SCPI command can affect multiple subsystems and generate errors that arrive asynchronously after the immediate response returns "OK". An MCP that returns only the immediate response would miss the `LOG_E` that fires 200 ms later when the WINC driver rejects the new SSID. The model can't act on errors it doesn't see.
+
 ### Distribution
 
 Three artifacts, one codebase, one CI job:
@@ -221,13 +301,15 @@ Issues are enumerated in [`GITHUB_ISSUES.md`](GITHUB_ISSUES.md). Summary:
 11. Distribution: AOT binary + `dotnet tool` + `npx` shim ([#mcp-11](GITHUB_ISSUES.md#mcp-11))
 12. Documentation: README rewrite + agent recipe guide ([#mcp-12](GITHUB_ISSUES.md#mcp-12))
 
-### v0.2 — Power features and gated ops (~3–4 weeks)
+### v0.2 — Power features and gated ops (target: fast-follow, ~3–4 weeks after v0.1)
+
+**Priority:** ship v0.2 quickly so the MCP itself becomes the primary harness for exercising new firmware features. The DAQiFi firmware team currently types every new SCPI command into a Python test harness within hours of landing it; with `send_scpi` available behind the v0.2 safety net, that workflow moves entirely to Claude + the MCP and stops requiring a custom Python script per feature.
 
 - `wait_for_condition` (event-style waiting for agents)
 - Destructive SD ops (`delete_sd_file`, `format_sd_card`) behind admin mode
 - Network reconfiguration (`configure_wifi`, `configure_static_ip`)
 - Firmware update tools (`check_firmware_update`, `update_firmware`)
-- `send_scpi` escape hatch behind `--allow-raw-scpi`
+- `send_scpi` escape hatch behind `--allow-raw-scpi` (design specced — see [§Safety: send_scpi v0.2 design](#safety-send_scpi-v02-design))
 - HTTP transport for hosted use cases
 
 ### v0.3+ — Ecosystem and platforms
