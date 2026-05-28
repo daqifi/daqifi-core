@@ -45,8 +45,8 @@ public class EndToEndTests
         var transportContent = mockTransport.GetWrittenContent();
         Assert.Contains("SYSTem:SYSInfoPB?", transportContent);
         Assert.Contains("SYSTem:REboot", transportContent);
-        Assert.Contains("SYSTem:StartStreamData 1000", transportContent);
-        Assert.Contains("SYSTem:StopStreamData", transportContent);
+        Assert.Contains("SYSTem:STReam:START 1000", transportContent);
+        Assert.Contains("SYSTem:STReam:STOP", transportContent);
     }
 
     [Fact]  

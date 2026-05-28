@@ -285,9 +285,9 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.bin\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STORage:SD:FILE \"mylog.bin\"", sentCommands[3]);
             Assert.Equal("SYSTem:STReam:FORmat 0", sentCommands[4]);
-            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
+            Assert.Equal("SYSTem:STReam:START 100", sentCommands[5]);
         }
 
         [Fact]
@@ -315,7 +315,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Contains("SYSTem:STORage:SD:LOGging \"custom_data.bin\"", sentCommands);
+            Assert.Contains("SYSTem:STORage:SD:FILE \"custom_data.bin\"", sentCommands);
         }
 
         [Fact]
@@ -330,7 +330,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
             Assert.Contains(".bin", loggingCommand);
@@ -366,7 +366,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
             Assert.Equal(4, sentCommands.Count);
-            Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
+            Assert.Equal("SYSTem:STReam:STOP", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 0", sentCommands[2]); // Restore USB
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[3]); // Re-enable LAN
@@ -387,7 +387,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert - stop command should still be sent defensively
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+            Assert.Contains("SYSTem:STReam:STOP", sentCommands);
         }
 
         [Fact]
@@ -438,7 +438,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
         }
@@ -455,7 +455,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
         }
@@ -492,9 +492,9 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.json\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STORage:SD:FILE \"mylog.json\"", sentCommands[3]);
             Assert.Equal("SYSTem:STReam:FORmat 1", sentCommands[4]);
-            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
+            Assert.Equal("SYSTem:STReam:START 100", sentCommands[5]);
         }
 
         [Fact]
@@ -513,9 +513,9 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.csv\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STORage:SD:FILE \"mylog.csv\"", sentCommands[3]);
             Assert.Equal("SYSTem:STReam:FORmat 2", sentCommands[4]);
-            Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
+            Assert.Equal("SYSTem:STReam:START 100", sentCommands[5]);
         }
 
         [Fact]
@@ -530,7 +530,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
             Assert.Contains(".json", loggingCommand);
@@ -549,7 +549,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
             Assert.Contains(".csv", loggingCommand);
@@ -962,7 +962,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             // Assert — defensive stop is always sent first (issue #118)
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
             Assert.Equal(3, sentCommands.Count);
-            Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
+            Assert.Equal("SYSTem:STReam:STOP", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
             Assert.Equal("SYSTem:STORage:SD:FORmat", sentCommands[2]);
         }
@@ -1007,7 +1007,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert — stop command should still be sent defensively
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+            Assert.Contains("SYSTem:STReam:STOP", sentCommands);
         }
 
         [Fact]
@@ -1024,7 +1024,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert — stop command should still be sent defensively
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+            Assert.Contains("SYSTem:STReam:STOP", sentCommands);
         }
 
         [Fact]
@@ -1043,7 +1043,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert — stop command should still be sent defensively
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+            Assert.Contains("SYSTem:STReam:STOP", sentCommands);
         }
 
         [Fact]
@@ -1059,7 +1059,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert — stop command should still be sent defensively
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Contains("SYSTem:StopStreamData", sentCommands);
+            Assert.Contains("SYSTem:STReam:STOP", sentCommands);
         }
 
         #endregion
@@ -1237,7 +1237,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert — stop streaming command should be sent before the download commands
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
+            Assert.Equal("SYSTem:STReam:STOP", sentCommands[0]);
         }
 
         #endregion

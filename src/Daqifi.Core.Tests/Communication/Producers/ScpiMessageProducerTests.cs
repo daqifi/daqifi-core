@@ -78,14 +78,6 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
-    public void GetSdLoggingState_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSdLoggingState;
-        Assert.Equal("SYSTem:STORage:SD:LOGging?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
     public void GetSdFileList_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.GetSdFileList;
@@ -105,7 +97,7 @@ public class ScpiMessageProducerTests
     public void SetSdLoggingFileName_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.SetSdLoggingFileName("log.bin");
-        Assert.Equal("SYSTem:STORage:SD:LOGging \"log.bin\"", message.Data);
+        Assert.Equal("SYSTem:STORage:SD:FILE \"log.bin\"", message.Data);
         AssertMessageFormat(message);
     }
 
@@ -113,7 +105,7 @@ public class ScpiMessageProducerTests
     public void StartStreaming_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.StartStreaming(100);
-        Assert.Equal("SYSTem:StartStreamData 100", message.Data);
+        Assert.Equal("SYSTem:STReam:START 100", message.Data);
         AssertMessageFormat(message);
     }
 
@@ -121,7 +113,7 @@ public class ScpiMessageProducerTests
     public void StopStreaming_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.StopStreaming;
-        Assert.Equal("SYSTem:StopStreamData", message.Data);
+        Assert.Equal("SYSTem:STReam:STOP", message.Data);
         AssertMessageFormat(message);
     }
 
@@ -389,7 +381,7 @@ public class ScpiMessageProducerTests
     public void SetUsbTransparencyMode_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.SetUsbTransparencyMode(1);
-        Assert.Equal("SYSTem:USB:SetTransparentMode 1", message.Data);
+        Assert.Equal("SYSTem:USB:TRANSparent:MODE 1", message.Data);
         AssertMessageFormat(message);
     }
 

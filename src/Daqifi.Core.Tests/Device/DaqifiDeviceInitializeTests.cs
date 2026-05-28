@@ -28,7 +28,7 @@ namespace Daqifi.Core.Tests.Device
             var sentData = device.DirectSentMessages.Select(m => m.Data).ToList();
 
             Assert.Contains(sentData, d => d.Contains("SYSTem:ECHO -1"));
-            Assert.Contains(sentData, d => d.Contains("SYSTem:StopStreamData"));
+            Assert.Contains(sentData, d => d.Contains("SYSTem:STReam:STOP"));
             Assert.Contains(sentData, d => d.Contains("SYSTem:POWer:STATe 1"));
             Assert.Contains(sentData, d => d.Contains("SYSTem:STReam:FORmat 0"));
             Assert.Contains(sentData, d => d.Contains("SYSTem:SYSInfoPB?"));
