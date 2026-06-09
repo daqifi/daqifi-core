@@ -7,8 +7,13 @@ namespace Daqifi.Core.Communication.Transport;
 /// </summary>
 public sealed class HidLibraryTransport : IHidTransport
 {
-    private static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan DefaultWriteTimeout = TimeSpan.FromSeconds(10);
+    // 30 s (was 10 s): a late bootloader flash op can leave the device's HID
+    // endpoint busy/NAKing well past 10 s, which surfaced here as
+    // "IOException: HID write failed" mid-programming (daqifi-desktop #575).
+    // The old synchronous desktop flasher used unbounded blocking HID I/O and
+    // tolerated this; restore headroom so a single attempt waits the op out.
+    private static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultWriteTimeout = TimeSpan.FromSeconds(30);
 
     private readonly IHidPlatform _hidPlatform;
     private readonly SemaphoreSlim _connectionLock = new(1, 1);

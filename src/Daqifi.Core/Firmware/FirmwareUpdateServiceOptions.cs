@@ -59,8 +59,10 @@ public sealed class FirmwareUpdateServiceOptions
 
     /// <summary>
     /// Timeout used for individual bootloader read operations.
+    /// 30 s (was 10 s): a late bootloader flash op can keep the device busy
+    /// past 10 s, which timed out mid-programming (daqifi-desktop #575).
     /// </summary>
-    public TimeSpan BootloaderResponseTimeout { get; set; } = TimeSpan.FromSeconds(10);
+    public TimeSpan BootloaderResponseTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Delay after sending SCPI FORCEBOOT before disconnecting serial.
