@@ -14,6 +14,13 @@ namespace Daqifi.Core.Device;
 /// This processor detects rollover and calculates accurate elapsed time.
 /// </para>
 /// <para>
+/// The tick period defaults to 20ns (50MHz) but should be set per device from the
+/// device-reported timestamp frequency (the <c>timestamp_freq</c> field of the protobuf
+/// system info message, surfaced as <see cref="DaqifiDevice.TimestampFrequency"/>) via
+/// <see cref="SetTimestampFrequency"/>. Devices without a configured frequency fall back
+/// to the processor-wide <see cref="TickPeriod"/>.
+/// </para>
+/// <para>
 /// A 10-second sanity check is applied to detected rollovers. If the calculated
 /// time between messages exceeds 10 seconds after rollover correction, the rollover
 /// is considered a false positive (likely caused by out-of-order messages).
@@ -31,6 +38,12 @@ public sealed class TimestampProcessor : ITimestampProcessor
     public const double DefaultTickPeriod = 20E-9;
 
     /// <summary>
+    /// Default timestamp clock frequency in Hz (50MHz), corresponding to
+    /// <see cref="DefaultTickPeriod"/>.
+    /// </summary>
+    public const uint DefaultTimestampFrequency = 50_000_000;
+
+    /// <summary>
     /// Maximum time in seconds between messages before a rollover is considered invalid.
     /// If a detected rollover would result in more than this time between messages,
     /// the rollover is treated as a false positive.
@@ -38,6 +51,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
     private const double MaxRolloverTimeBetweenMessages = 10.0;
 
     private readonly ConcurrentDictionary<string, DeviceTimestampState> _deviceStates = new();
+    private readonly ConcurrentDictionary<string, double> _deviceTickPeriods = new();
 
     /// <inheritdoc />
     public double TickPeriod { get; }
@@ -69,10 +83,34 @@ public sealed class TimestampProcessor : ITimestampProcessor
     }
 
     /// <inheritdoc />
+    public void SetTimestampFrequency(string deviceId, uint frequencyHz)
+    {
+        ArgumentNullException.ThrowIfNull(deviceId);
+
+        if (frequencyHz == 0)
+        {
+            // Unknown/unreported frequency (e.g., older firmware): revert to the fallback tick period
+            _deviceTickPeriods.TryRemove(deviceId, out _);
+            return;
+        }
+
+        _deviceTickPeriods[deviceId] = 1.0 / frequencyHz;
+    }
+
+    /// <inheritdoc />
+    public double GetTickPeriod(string deviceId)
+    {
+        ArgumentNullException.ThrowIfNull(deviceId);
+
+        return _deviceTickPeriods.TryGetValue(deviceId, out var tickPeriod) ? tickPeriod : TickPeriod;
+    }
+
+    /// <inheritdoc />
     public TimestampResult ProcessTimestamp(string deviceId, uint deviceTimestamp)
     {
         ArgumentNullException.ThrowIfNull(deviceId);
 
+        var tickPeriod = GetTickPeriod(deviceId);
         var state = _deviceStates.GetOrAdd(deviceId, _ => new DeviceTimestampState());
 
         lock (state.SyncLock)
@@ -104,7 +142,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
                 clockCyclesBetweenMessages = deviceTimestamp - previousDeviceTimestamp;
             }
 
-            var secondsBetweenMessages = clockCyclesBetweenMessages * TickPeriod;
+            var secondsBetweenMessages = clockCyclesBetweenMessages * tickPeriod;
 
             // Apply sanity check for false positive rollover detection
             // If we detected rollover but the time between messages is > 10 seconds,
@@ -113,7 +151,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
             {
                 // Recalculate as if no rollover occurred (going backwards in time)
                 clockCyclesBetweenMessages = previousDeviceTimestamp - deviceTimestamp;
-                secondsBetweenMessages = clockCyclesBetweenMessages * TickPeriod * -1;
+                secondsBetweenMessages = clockCyclesBetweenMessages * tickPeriod * -1;
             }
 
             var messageTimestamp = state.PreviousSystemTimestamp.AddSeconds(secondsBetweenMessages);
@@ -142,6 +180,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
     public void ResetAll()
     {
         _deviceStates.Clear();
+        _deviceTickPeriods.Clear();
     }
 
     /// <summary>

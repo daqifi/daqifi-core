@@ -445,6 +445,175 @@ public class TimestampProcessorTests
 
     #endregion
 
+    #region Device Timestamp Frequency Tests
+
+    [Fact]
+    public void DefaultTimestampFrequency_MatchesDefaultTickPeriod()
+    {
+        Assert.Equal(TimestampProcessor.DefaultTickPeriod, 1.0 / TimestampProcessor.DefaultTimestampFrequency);
+    }
+
+    [Fact]
+    public void SetTimestampFrequency_NonDefaultFrequency_ScalesElapsedTimeCorrectly()
+    {
+        // Arrange - a device whose timestamp timer runs at 10MHz instead of 50MHz
+        var processor = new TimestampProcessor();
+        const uint deviceFrequency = 10_000_000;
+        processor.SetTimestampFrequency(TestDeviceId, deviceFrequency);
+
+        // Act - 10 million cycles at 10MHz = exactly 1 second
+        processor.ProcessTimestamp(TestDeviceId, 0);
+        var result = processor.ProcessTimestamp(TestDeviceId, deviceFrequency);
+
+        // Assert - at the hardcoded 50MHz default this would (incorrectly) be 0.2 seconds
+        Assert.Equal(1.0, result.SecondsBetweenMessages, precision: 6);
+    }
+
+    [Fact]
+    public void SetTimestampFrequency_ZeroFrequency_RevertsToFallbackTickPeriod()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, 10_000_000);
+
+        // Act - zero means unknown/unreported (e.g., older firmware)
+        processor.SetTimestampFrequency(TestDeviceId, 0);
+
+        // Assert
+        Assert.Equal(TimestampProcessor.DefaultTickPeriod, processor.GetTickPeriod(TestDeviceId));
+    }
+
+    [Fact]
+    public void GetTickPeriod_NoFrequencySet_ReturnsFallbackTickPeriod()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+
+        // Act & Assert
+        Assert.Equal(processor.TickPeriod, processor.GetTickPeriod(TestDeviceId));
+    }
+
+    [Fact]
+    public void GetTickPeriod_FrequencySet_ReturnsReciprocalOfFrequency()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+        const uint deviceFrequency = 10_000_000;
+
+        // Act
+        processor.SetTimestampFrequency(TestDeviceId, deviceFrequency);
+
+        // Assert
+        Assert.Equal(1.0 / deviceFrequency, processor.GetTickPeriod(TestDeviceId));
+    }
+
+    [Fact]
+    public void SetTimestampFrequency_OnlyAffectsSpecifiedDevice()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+        const string device1 = "device-001";
+        const string device2 = "device-002";
+
+        // Act - device1 runs at 1MHz, device2 stays at the 50MHz default
+        processor.SetTimestampFrequency(device1, 1_000_000);
+
+        processor.ProcessTimestamp(device1, 0);
+        processor.ProcessTimestamp(device2, 0);
+        var result1 = processor.ProcessTimestamp(device1, 1_000_000);
+        var result2 = processor.ProcessTimestamp(device2, 1_000_000);
+
+        // Assert
+        Assert.Equal(1.0, result1.SecondsBetweenMessages, precision: 6);
+        Assert.Equal(1_000_000 * TimestampProcessor.DefaultTickPeriod, result2.SecondsBetweenMessages, precision: 6);
+    }
+
+    [Fact]
+    public void SetTimestampFrequency_MidStream_AppliesToSubsequentMessages()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.ProcessTimestamp(TestDeviceId, 0);
+        var beforeResult = processor.ProcessTimestamp(TestDeviceId, 1_000_000);
+
+        // Act - frequency arrives (e.g., system info response parsed after first messages)
+        processor.SetTimestampFrequency(TestDeviceId, 1_000_000);
+        var afterResult = processor.ProcessTimestamp(TestDeviceId, 2_000_000);
+
+        // Assert
+        Assert.Equal(1_000_000 * TimestampProcessor.DefaultTickPeriod, beforeResult.SecondsBetweenMessages, precision: 6);
+        Assert.Equal(1.0, afterResult.SecondsBetweenMessages, precision: 6);
+    }
+
+    [Fact]
+    public void SetTimestampFrequency_Rollover_UsesDeviceTickPeriod()
+    {
+        // Arrange - 10MHz device
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, 10_000_000);
+        const uint nearMax = uint.MaxValue - 5_000_000; // 0.5 seconds before max at 10MHz
+        const uint afterRollover = 5_000_000; // 0.5 seconds after rollover at 10MHz
+
+        // Act
+        processor.ProcessTimestamp(TestDeviceId, nearMax);
+        var result = processor.ProcessTimestamp(TestDeviceId, afterRollover);
+
+        // Assert - ~1 second total at 10MHz (would be ~0.2 seconds at the 50MHz default)
+        Assert.True(result.WasRollover);
+        Assert.InRange(result.SecondsBetweenMessages, 0.9, 1.1);
+    }
+
+    [Fact]
+    public void Reset_PreservesDeviceTimestampFrequency()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, 10_000_000);
+        processor.ProcessTimestamp(TestDeviceId, 1000);
+
+        // Act - new streaming session; the device's clock frequency hasn't changed
+        processor.Reset(TestDeviceId);
+
+        // Assert
+        Assert.Equal(1.0 / 10_000_000, processor.GetTickPeriod(TestDeviceId));
+    }
+
+    [Fact]
+    public void ResetAll_ClearsDeviceTimestampFrequencies()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, 10_000_000);
+
+        // Act
+        processor.ResetAll();
+
+        // Assert
+        Assert.Equal(TimestampProcessor.DefaultTickPeriod, processor.GetTickPeriod(TestDeviceId));
+    }
+
+    [Fact]
+    public void SetTimestampFrequency_NullDeviceId_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() => processor.SetTimestampFrequency(null!, 50_000_000));
+    }
+
+    [Fact]
+    public void GetTickPeriod_NullDeviceId_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() => processor.GetTickPeriod(null!));
+    }
+
+    #endregion
+
     #region Edge Case Tests
 
     [Fact]
