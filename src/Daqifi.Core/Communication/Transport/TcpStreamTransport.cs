@@ -109,6 +109,9 @@ public class TcpStreamTransport : IStreamTransport
     /// Establishes the TCP connection asynchronously.
     /// </summary>
     /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="TimeoutException">
+    /// Thrown when the connection attempt does not complete within the configured connection timeout.
+    /// </exception>
     public async Task ConnectAsync()
     {
         await ConnectAsync(null);
@@ -119,6 +122,10 @@ public class TcpStreamTransport : IStreamTransport
     /// </summary>
     /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
     /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="TimeoutException">
+    /// Thrown when the final connection attempt does not complete within
+    /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
+    /// </exception>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
     {
         ThrowIfDisposed();
@@ -159,7 +166,19 @@ public class TcpStreamTransport : IStreamTransport
                     ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
                     : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
 
-                await connectTask.WaitAsync(cts.Token);
+                try
+                {
+                    await connectTask.WaitAsync(cts.Token);
+                }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested)
+                {
+                    // The only cancellation source here is the timeout token, so surface the
+                    // failure as what it actually is — a connect timeout — rather than a
+                    // misleading TaskCanceledException (daqifi-desktop#517).
+                    throw new TimeoutException(
+                        $"TCP connect to {Hostname ?? _endPoint.Address.ToString()}:{_endPoint.Port} " +
+                        $"timed out after {options.ConnectionTimeout.TotalSeconds:0.###}s.");
+                }
 
                 _networkStream = _tcpClient.GetStream();
                 OnStatusChanged(true, null);

@@ -195,6 +195,34 @@ public class TcpStreamTransportTests
         }
     }
 
+    [Fact]
+    public async Task TcpStreamTransport_ConnectAsync_WhenConnectTimesOut_ThrowsTimeoutException()
+    {
+        // Arrange - 192.0.2.1 is in TEST-NET-1 (RFC 5737) and unroutable, so the TCP connect
+        // never completes and must exhaust the configured connection timeout. The timeout used
+        // to surface as TaskCanceledException (the WaitAsync cancellation token), which read
+        // like an app bug to consumers (daqifi-desktop#517) — it must be a TimeoutException.
+        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 9760);
+        TransportStatusEventArgs? capturedArgs = null;
+        transport.StatusChanged += (sender, args) => capturedArgs = args;
+        var options = new ConnectionRetryOptions
+        {
+            Enabled = false,
+            MaxAttempts = 1,
+            ConnectionTimeout = TimeSpan.FromMilliseconds(250)
+        };
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<TimeoutException>(() => transport.ConnectAsync(options));
+        Assert.Contains("192.0.2.1:9760", ex.Message);
+        Assert.False(transport.IsConnected);
+
+        // The status event must carry the translated exception too.
+        Assert.NotNull(capturedArgs);
+        Assert.False(capturedArgs.IsConnected);
+        Assert.IsType<TimeoutException>(capturedArgs.Error);
+    }
+
     // Integration test that requires a real server - marked as integration test
     [Fact(Skip = "Integration test - requires external server")]
     public async Task TcpStreamTransport_RealConnection_ShouldWorkEndToEnd()
