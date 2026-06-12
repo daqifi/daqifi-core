@@ -17,6 +17,13 @@ public class TcpStreamTransport : IStreamTransport
     private bool _disposed;
 
     /// <summary>
+    /// Test seam: substitutes the connect task so the timeout translation can be exercised
+    /// deterministically (e.g., with a never-completing task) instead of relying on real
+    /// network behavior. Never set in production code.
+    /// </summary>
+    internal Func<TcpClient, Task>? ConnectTaskFactory { get; set; }
+
+    /// <summary>
     /// Initializes a new instance of the TcpStreamTransport class.
     /// </summary>
     /// <param name="ipAddress">The IP address to connect to.</param>
@@ -109,6 +116,9 @@ public class TcpStreamTransport : IStreamTransport
     /// Establishes the TCP connection asynchronously.
     /// </summary>
     /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="TimeoutException">
+    /// Thrown when the connection attempt does not complete within the configured connection timeout.
+    /// </exception>
     public async Task ConnectAsync()
     {
         await ConnectAsync(null);
@@ -119,6 +129,10 @@ public class TcpStreamTransport : IStreamTransport
     /// </summary>
     /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
     /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="TimeoutException">
+    /// Thrown when the final connection attempt does not complete within
+    /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
+    /// </exception>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
     {
         ThrowIfDisposed();
@@ -155,11 +169,25 @@ public class TcpStreamTransport : IStreamTransport
 
                 // Add connection timeout to prevent long waits
                 using var cts = new CancellationTokenSource(options.ConnectionTimeout);
-                var connectTask = Hostname != null
-                    ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
-                    : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
+                var connectTask = ConnectTaskFactory != null
+                    ? ConnectTaskFactory(_tcpClient)
+                    : Hostname != null
+                        ? _tcpClient.ConnectAsync(Hostname, _endPoint.Port)
+                        : _tcpClient.ConnectAsync(_endPoint.Address, _endPoint.Port);
 
-                await connectTask.WaitAsync(cts.Token);
+                try
+                {
+                    await connectTask.WaitAsync(cts.Token);
+                }
+                catch (OperationCanceledException oce) when (cts.IsCancellationRequested)
+                {
+                    // The only cancellation source here is the timeout token, so surface the
+                    // failure as what it actually is — a connect timeout — rather than a
+                    // misleading TaskCanceledException (daqifi-desktop#517).
+                    throw new TimeoutException(
+                        $"TCP connect to {Hostname ?? _endPoint.Address.ToString()}:{_endPoint.Port} " +
+                        $"timed out after {options.ConnectionTimeout.TotalSeconds:0.###}s.", oce);
+                }
 
                 _networkStream = _tcpClient.GetStream();
                 OnStatusChanged(true, null);
