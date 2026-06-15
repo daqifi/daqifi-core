@@ -42,15 +42,72 @@ public class SerialStreamTransport : IStreamTransport
     }
 
     /// <summary>
+    /// Test seam: injects the underlying <see cref="SerialPort"/> so the closed-port
+    /// stream-access path (issue #238) can be exercised without real hardware — e.g. by
+    /// passing a constructed-but-unopened port whose <see cref="SerialPort.IsOpen"/> is
+    /// <c>false</c>. The transport takes ownership: any previously held port is disposed when
+    /// replaced or cleared, and the current port is disposed on <see cref="Dispose"/>. Never
+    /// used in production.
+    /// </summary>
+    /// <param name="serialPort">The serial port to use, or <c>null</c> to clear it.</param>
+    internal void SetSerialPortForTesting(SerialPort? serialPort)
+    {
+        if (ReferenceEquals(_serialPort, serialPort))
+        {
+            return;
+        }
+
+        _serialPort?.Dispose();
+        _serialPort = serialPort;
+    }
+
+    /// <summary>
     /// Gets the underlying stream for read/write operations.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when not connected.</exception>
+    /// <exception cref="ObjectDisposedException">Thrown when the transport has been disposed.</exception>
+    /// <exception cref="TransportNotConnectedException">
+    /// Thrown when the serial port is not open — either never connected, or closed mid-operation
+    /// by a device unplug or a DTR-triggered MCU reset that re-enumerated the COM port.
+    /// </exception>
     public Stream Stream
     {
         get
         {
             ThrowIfDisposed();
-            return _serialPort?.BaseStream ?? throw new InvalidOperationException("Transport is not connected.");
+
+            // Capture the field into a local so the check-then-access below is stable: a
+            // concurrent Disconnect()/Dispose() nulls _serialPort in a finally with no
+            // synchronization, which would otherwise turn the BaseStream dereference into a
+            // NullReferenceException instead of the intended typed signal.
+            var port = _serialPort;
+
+            // Guard on IsOpen (not just non-null) before touching BaseStream. When the port is
+            // non-null but closed — the device was unplugged, or a DTR-triggered MCU reset
+            // re-enumerated the COM port mid-connect — SerialPort.BaseStream's getter itself
+            // throws a raw InvalidOperationException ("The BaseStream is only available when the
+            // port is open.") that reads like an app bug. Surface a typed, transport-state
+            // exception instead so consumers can classify a dropped transport as a transient,
+            // environmental condition (issue #238; serial analog of #237).
+            if (port?.IsOpen != true)
+            {
+                throw new TransportNotConnectedException(
+                    $"Serial transport is not connected ({_portName}).");
+            }
+
+            try
+            {
+                return port.BaseStream;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The port can close between the IsOpen check above and this getter — the exact
+                // unplug / DTR-reset race #238 is about. SerialPort.BaseStream's only
+                // InvalidOperationException is the "only available when the port is open" case,
+                // so translate it to the typed signal (preserving the original as InnerException)
+                // rather than leaking the raw framework message.
+                throw new TransportNotConnectedException(
+                    $"Serial transport is not connected ({_portName}).", ex);
+            }
         }
     }
 

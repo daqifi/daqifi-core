@@ -10,6 +10,10 @@ public interface IStreamTransport : IDisposable
     /// <summary>
     /// Gets the underlying stream for read/write operations.
     /// </summary>
+    /// <exception cref="TransportNotConnectedException">
+    /// Thrown when the transport is not connected (e.g. never connected, or the underlying
+    /// connection was closed or dropped).
+    /// </exception>
     Stream Stream { get; }
 
     /// <summary>

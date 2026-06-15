@@ -497,6 +497,18 @@ namespace Daqifi.Core.Device
                     throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
                 }
 
+                // The device-level IsConnected check above is status-based and can still report
+                // Connected when the underlying transport has dropped (e.g. a serial port closed
+                // by an unplug or a DTR-triggered MCU reset mid-connect). Detect that here and
+                // fail with the typed transport-disconnected exception, rather than dereferencing
+                // Stream below and surfacing the framework's raw "BaseStream is only available
+                // when the port is open." message (issue #238).
+                if (!_transport.IsConnected)
+                {
+                    throw new TransportNotConnectedException(
+                        "Device transport is no longer connected.");
+                }
+
                 var sw = Stopwatch.StartNew();
                 var collectedLines = new List<string>();
                 var stream = _transport.Stream;

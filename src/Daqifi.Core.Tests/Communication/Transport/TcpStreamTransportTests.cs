@@ -35,9 +35,22 @@ public class TcpStreamTransportTests
     {
         // Arrange
         using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
-        
-        // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => transport.Stream);
+
+        // Act & Assert - ThrowsAny (assignability), mirroring how a consumer's
+        // catch (InvalidOperationException) still catches the now-derived typed exception.
+        Assert.ThrowsAny<InvalidOperationException>(() => transport.Stream);
+    }
+
+    [Fact]
+    public void TcpStreamTransport_Stream_WhenNotConnected_ThrowsTransportNotConnectedException()
+    {
+        // Arrange
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
+
+        // Act & Assert - the typed exception (uniform with the serial transport), which is
+        // still an InvalidOperationException so existing broad catches keep working.
+        var ex = Assert.Throws<TransportNotConnectedException>(() => transport.Stream);
+        Assert.IsAssignableFrom<InvalidOperationException>(ex);
     }
 
     [Fact]
