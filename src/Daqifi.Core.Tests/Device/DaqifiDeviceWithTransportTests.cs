@@ -144,6 +144,15 @@ public class DaqifiDeviceWithTransportTests
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, "Connection lost"));
         }
 
+        // Test helper: simulate a *silent* drop — the underlying transport closes without
+        // raising a status event, mirroring a serial port closed by an unplug or a
+        // DTR-triggered MCU reset mid-connect. The owning device keeps reporting Connected
+        // because it never received a StatusChanged(false) (issue #238).
+        public void SimulateSilentConnectionLoss()
+        {
+            _isConnected = false;
+        }
+
         public void Dispose()
         {
             if (!_disposed)
@@ -209,6 +218,33 @@ public class DaqifiDeviceWithTransportTests
         Assert.DoesNotContain(ConnectionStatus.Lost, statusChanges);
         Assert.Contains(ConnectionStatus.Disconnected, statusChanges);
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+    }
+
+    [Fact]
+    public async Task DaqifiDevice_ExecuteTextCommand_WhenTransportDroppedSilently_ThrowsTransportNotConnectedException()
+    {
+        // Arrange — the device believes it is still Connected (no StatusChanged was fired),
+        // but the underlying transport has silently dropped: the serial analog is a port closed
+        // by an unplug or a DTR-triggered MCU reset mid-connect, which raises no status event.
+        using var transport = new MockStreamTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+        device.Connect();
+        Assert.Equal(ConnectionStatus.Connected, device.Status);
+
+        transport.SimulateSilentConnectionLoss();
+
+        // Device still reports Connected (status-based), but the transport does not.
+        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.False(transport.IsConnected);
+
+        // Act & Assert — InitializeAsync drives ExecuteTextCommandCoreAsync, which must surface
+        // the typed transport-disconnected exception (still an InvalidOperationException for
+        // backward compatibility) rather than dereferencing Stream and leaking a raw framework
+        // message (issue #238).
+        var ex = await Assert.ThrowsAsync<TransportNotConnectedException>(
+            () => device.InitializeAsync());
+        Assert.IsAssignableFrom<InvalidOperationException>(ex);
+        Assert.Equal(DeviceState.Error, device.State);
     }
 
     [Fact]

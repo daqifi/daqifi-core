@@ -77,13 +77,18 @@ public class TcpStreamTransport : IStreamTransport
     /// <summary>
     /// Gets the underlying stream for read/write operations.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when not connected.</exception>
+    /// <exception cref="ObjectDisposedException">Thrown when the transport has been disposed.</exception>
+    /// <exception cref="TransportNotConnectedException">
+    /// Thrown when the TCP connection has not been established or has dropped.
+    /// </exception>
     public Stream Stream
     {
         get
         {
             ThrowIfDisposed();
-            return _networkStream ?? throw new InvalidOperationException("Transport is not connected.");
+            // Surface the same typed exception as the serial transport so consumers can
+            // classify a not-connected transport uniformly across transport types (issue #238).
+            return _networkStream ?? throw new TransportNotConnectedException("TCP transport is not connected.");
         }
     }
 

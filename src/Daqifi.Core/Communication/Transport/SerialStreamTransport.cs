@@ -42,15 +42,45 @@ public class SerialStreamTransport : IStreamTransport
     }
 
     /// <summary>
+    /// Test seam: injects the underlying <see cref="SerialPort"/> so the closed-port
+    /// stream-access path (issue #238) can be exercised without real hardware — e.g. by
+    /// passing a constructed-but-unopened port whose <see cref="SerialPort.IsOpen"/> is
+    /// <c>false</c>. The transport takes ownership and disposes it. Never used in production.
+    /// </summary>
+    /// <param name="serialPort">The serial port to use, or <c>null</c> to clear it.</param>
+    internal void SetSerialPortForTesting(SerialPort? serialPort)
+    {
+        _serialPort = serialPort;
+    }
+
+    /// <summary>
     /// Gets the underlying stream for read/write operations.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when not connected.</exception>
+    /// <exception cref="ObjectDisposedException">Thrown when the transport has been disposed.</exception>
+    /// <exception cref="TransportNotConnectedException">
+    /// Thrown when the serial port is not open — either never connected, or closed mid-operation
+    /// by a device unplug or a DTR-triggered MCU reset that re-enumerated the COM port.
+    /// </exception>
     public Stream Stream
     {
         get
         {
             ThrowIfDisposed();
-            return _serialPort?.BaseStream ?? throw new InvalidOperationException("Transport is not connected.");
+
+            // Guard on IsOpen (not just non-null) before touching BaseStream. When the port is
+            // non-null but closed — the device was unplugged, or a DTR-triggered MCU reset
+            // re-enumerated the COM port mid-connect — SerialPort.BaseStream's getter itself
+            // throws a raw InvalidOperationException ("The BaseStream is only available when the
+            // port is open.") that reads like an app bug. Surface a typed, transport-state
+            // exception instead so consumers can classify a dropped transport as a transient,
+            // environmental condition (issue #238; serial analog of #237).
+            if (_serialPort?.IsOpen != true)
+            {
+                throw new TransportNotConnectedException(
+                    $"Serial transport is not connected ({_portName}).");
+            }
+
+            return _serialPort.BaseStream;
         }
     }
 
