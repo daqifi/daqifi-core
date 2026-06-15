@@ -54,6 +54,31 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
+    public void SerialStreamTransport_SetSerialPortForTesting_TakesOwnershipAndDisposesPreviousPort()
+    {
+        // The seam documents that the transport takes ownership: a previously held port is
+        // disposed when replaced or cleared (qodo #240 review). Exercise every branch.
+        using var transport = new SerialStreamTransport("COM1");
+        var first = new DisposalTrackingSerialPort();
+        var second = new DisposalTrackingSerialPort();
+
+        transport.SetSerialPortForTesting(first);
+
+        // Re-assigning the same instance is a no-op and must NOT dispose it.
+        transport.SetSerialPortForTesting(first);
+        Assert.False(first.IsDisposed);
+
+        // Swapping in a different instance disposes the previous one.
+        transport.SetSerialPortForTesting(second);
+        Assert.True(first.IsDisposed);
+        Assert.False(second.IsDisposed);
+
+        // Clearing disposes the current one.
+        transport.SetSerialPortForTesting(null);
+        Assert.True(second.IsDisposed);
+    }
+
+    [Fact]
     public void SerialStreamTransport_Stream_WhenPortClosedMidOperation_ThrowsTypedException_NotRawBaseStreamMessage()
     {
         // Arrange - simulate the issue #238 scenario: the port is non-null but closed
@@ -212,9 +237,24 @@ public class SerialStreamTransportTests
         Assert.True(connectedArgs.IsConnected);
         
         await transport.DisconnectAsync();
-        
+
         Assert.False(transport.IsConnected);
         Assert.NotNull(disconnectedArgs);
         Assert.False(disconnectedArgs.IsConnected);
+    }
+
+    /// <summary>
+    /// A <see cref="SerialPort"/> that records whether it has been disposed, so tests can assert
+    /// the transport's ownership/disposal contract. Never opened.
+    /// </summary>
+    private sealed class DisposalTrackingSerialPort : SerialPort
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
+        }
     }
 }
