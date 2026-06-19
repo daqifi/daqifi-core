@@ -25,9 +25,7 @@ adding ad-hoc, per-feature checks:
 - The firmware capability framework ([#327](https://github.com/daqifi/daqifi-nyquist-firmware/issues/327))
   is itself a firmware-gated query (`CONFigure:CAPabilities:JSON?`, fw ≥ v3.5.0).
 
-Every SCPI command we add has a "first firmware that supports it" boundary, and sometimes
-a board-variant constraint. daqifi-core is the right place to own *what a given device can
-and cannot do*.
+daqifi-core is the right place to own *what a given device can and cannot do*.
 
 ### Context — firmware audit (living evidence)
 
@@ -38,24 +36,32 @@ client-relevant boundary, not the commit date.
 **Release timeline (tag → date):** v3.0.0b0 (2025-01-14) → v3.0.0b2 (2025-08-04) →
 v3.1.0b2 (2025-10-09) → v3.2.0 (2025-11-06) → v3.4.3 (2026-01-30) → v3.4.4 (2026-02-06) →
 v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → **v3.6.1**
-(HEAD, 2026-06-18; not yet a published git tag).
+(pending; HEAD as of 2026-06-18, not yet a published git tag).
 
 **Feature → first released firmware (× board variant):**
 
-| Feature (daqifi-core surface) | SCPI command | First released | Board | Firmware ref |
+| Feature (daqifi-core surface) | SCPI command | First released | Board / HW | Firmware ref |
 |---|---|---|---|---|
 | ADC / DIO / PWM / WiFi config / USB transparent | various | v3.0.0b0 (baseline) | all | #19 |
 | Streaming start/stop (legacy verbs) | `SYSTem:StartStreamData` / `StopStreamData` | v3.0.0b0 (baseline) | all | #19 |
 | **Analog output (DAC)** | `SOURce:VOLTage:LEVel`, `CONFigure:DAC:*` | **v3.2.0** | **NQ3 only** | [#117](https://github.com/daqifi/daqifi-nyquist-firmware/pull/117) |
 | SD card storage (list/get/delete/format) | `SYSTem:STORage:SD:*` | ≤ v3.4.3 (predates clean tag history) | needs SD HW | — |
-| **SD storage space query** | `SYSTem:STORage:SD:SPACe?` | **v3.4.6b1** | needs SD HW | [#202](https://github.com/daqifi/daqifi-nyquist-firmware/pull/202) |
+| SD storage space query | `SYSTem:STORage:SD:SPACe?` | v3.4.6b1 | needs SD HW | [#202](https://github.com/daqifi/daqifi-nyquist-firmware/pull/202) |
 | SD min-free threshold | `SYSTem:STORage:SD:MINFree` | v3.5.0 | needs SD HW | #502 |
 | SD logging filename | `SYSTem:STORage:SD:FILE` (hard rename of `SD:LOGging`, no alias) | v3.5.0 | needs SD HW | [#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323) |
 | Dynamic memory management | `SYSTem:MEMory:*` | v3.4.6b1 | all | #227 |
-| **Capability document** | `CONFigure:CAPabilities:JSON?` / `:APIVersion?` | **v3.5.0** | all | [#327](https://github.com/daqifi/daqifi-nyquist-firmware/issues/327)/#343 |
+| Capability document | `CONFigure:CAPabilities:JSON?` / `:APIVersion?` | v3.5.0 | all | [#327](https://github.com/daqifi/daqifi-nyquist-firmware/issues/327)/#343 |
 | WiFi associated-AP MAC | `SYSTem:COMMunicate:LAN:BSSID?` | v3.5.0 | WiFi | #516 |
 | WiFi throughput finder | `SYSTem:STReam:WIFI:FINd?` | v3.5.0 | WiFi | #521 |
 | In-firmware iperf2 | `SYSTem:WIFI:IPERF:*` | v3.5.0 | WiFi | #377 |
+
+> **Read this table through the v3.5.0 floor (Decision 1).** Every command daqifi-core
+> currently issues first shipped **at or before v3.5.0**. So on *supported* firmware there
+> is **no live firmware-version gate today** — the only differences left are *hardware*
+> capability (NQ3 for DAC, SD-card presence, WiFi presence), which is board-derived and
+> already handled by `DeviceCapabilities.FromDeviceType`. The version-gating layer below is
+> **forward-looking**: it earns its keep when we start consuming a command introduced
+> *after* the floor (v3.6.0+).
 
 **Breaking changes (behavior), by released version:**
 
@@ -64,27 +70,25 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → **v3.6
 - **v3.5.0** — **SD logging filename hard-renamed** `SYSTem:STORage:SD:LOGging "f"` →
   `SYSTem:STORage:SD:FILE "f"` with **no alias**
   ([#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323)). daqifi-core's
-  `SetSdLoggingFileName` still sends the old name, so on v3.5.0+ the device rejects it with
-  `-113 "Undefined header"` — and because logging is fire-and-forget, the failure is
-  **silent**. Fixed (ungated, hard floor) by core
-  [#253](https://github.com/daqifi/daqifi-core/pull/253).
+  `SetSdLoggingFileName` sent the old name, so on v3.5.0+ the device rejected it with
+  `-113 "Undefined header"` — silently, because logging is fire-and-forget. Fixed by core
+  [#253](https://github.com/daqifi/daqifi-core/pull/253) (now sends `SD:FILE`
+  unconditionally — correct under the floor).
 - **v3.5.0** — `CONFigure:ADC:CHANnel` / `ENAble:VOLTage:DC` are now **rejected while
   streaming** ([#527](https://github.com/daqifi/daqifi-nyquist-firmware/pull/527)). Stop
   streaming before toggling channels.
 - **v3.5.0** — the 1 kHz Type-2 muxed scan-rate cap was **removed**; Type-2 now obeys the
   transport cap ([#528](https://github.com/daqifi/daqifi-nyquist-firmware/pull/528)).
-- **v3.6.1** — `CONFigure:CAPabilities:JSON?` bounds were aligned to the actual setter
-  bounds ([#548](https://github.com/daqifi/daqifi-nyquist-firmware/pull/548)). Clients that
-  parsed the capability JSON to infer setter ranges may see different values.
+- **v3.6.1 (pending)** — `CONFigure:CAPabilities:JSON?` bounds were aligned to the actual
+  setter bounds ([#548](https://github.com/daqifi/daqifi-nyquist-firmware/pull/548)). Clients
+  that parse the capability JSON to infer setter ranges may see different values.
 
 **SCPI renames in v3.5.0 — compatibility is per-command, not per-release.** The #311
-stream-control consolidation *did* ship in **v3.5.0**, through follow-up PRs #322/#323/#324
-(only the umbrella commit #311 itself is unmerged and cosmetic). Three renames landed in the
-*same* release with *three different* compatibility outcomes — which is exactly why a
-"breaking renames" batch keyed on a release (the now-abandoned core
-[#168](https://github.com/daqifi/daqifi-core/pull/168)) doesn't model reality, and why the
-audit's key column is *"is the old name still accepted, and from which version?"*
-(seed data contributed on [#251](https://github.com/daqifi/daqifi-core/issues/251)):
+stream-control consolidation shipped in **v3.5.0** through follow-up PRs #322/#323/#324; only
+the umbrella commit #311 itself is unmerged. Three renames landed in the *same* release with
+*three different* compatibility outcomes — which is why a "breaking renames" batch keyed on a
+release (the now-closed core [#168](https://github.com/daqifi/daqifi-core/pull/168)) doesn't
+model reality (seed data contributed on [#251](https://github.com/daqifi/daqifi-core/issues/251)):
 
 | daqifi-core method | Old → New | Firmware handling | Breaking for core? |
 |---|---|---|---|
@@ -95,9 +99,15 @@ audit's key column is *"is the old name still accepted, and from which version?"
 
 Verified at the v3.5.0 tree: `STReam:START`, `StartStreamData`, `USB:TRANSparent:MODE`,
 `SetTransparentMode`, and `STORage:SD:FILE` are all present, while `STORage:SD:LOGging` is
-**gone** — confirming the alias-vs-hard-rename split. Core #253 also corroborated the `-113`
-behavior on hardware (old `SD:LOGging` → `-113 "Undefined header"`, new `SD:FILE` → OK),
-which is direct empirical support for the probe backstop below.
+**gone**. Core #253 corroborated the `-113` behavior on hardware (old `SD:LOGging` →
+`-113 "Undefined header"`, new `SD:FILE` → OK) — direct empirical support for the probe
+backstop below.
+
+> **We depend on firmware keeping the aliases.** Streaming/USB old names work everywhere
+> *because firmware chose to alias them*. #311 is marked a breaking refactor (`!`); if a
+> future cleanup ever drops the legacy aliases, our un-gated old names break. Track #311's
+> end-state. (When that day comes, the new names are safe to send unconditionally anyway,
+> since they exist on all supported — i.e. ≥ v3.5.0 — firmware.)
 
 ### Enabling fact: undefined-header is distinguishable on the wire
 
@@ -111,56 +121,60 @@ probe-and-detect backstop reliable.
 
 ## Decision
 
-Expose a **single stable consumer seam** — `device.Supports(DeviceFeature feature)` plus a
-few named flags on `DeviceCapabilities` — and back it with **three complementary data
-sources** that can be swapped/added without changing the consumer API:
+### Decision 1 — Minimum supported firmware is **v3.5.0**
 
-```
-          consumers (desktop, python-core)
-                     │
-            device.Supports(DeviceFeature.X)   ← STABLE; never compares versions
-                     │
-   ┌─────────────────┼───────────────────────────┐
- version table   capability doc (#327)      probe backstop
- (default /      (when APIVersion? >= 1,     (-113 on the command path
-  bootstrap /     fw >= v3.5.0)               -> FeatureNotSupportedException)
-  permanent fallback)
-```
+"Supported" = the baseline we build and test against, and the version at/above which all
+documented behavior holds. This is not a hard refusal to connect to older devices; it is the
+line below which we don't promise correctness. Rationale: v3.5.0 is the bench/reference
+firmware, it's where the SD-logging hard rename, the capability document, and the current
+streaming/SD command surface all settled, and core #253 already hard-requires it for SD
+logging.
 
-1. **Consumer seam (stable):** `device.Supports(DeviceFeature) → bool`, plus named flags
-   (`SupportsSdStorageQuery`, `SupportsAnalogOutput`, …). Consumers branch on these and
-   **never** parse `FirmwareVersion` themselves.
-2. **Interim data source — static version table** (`DeviceFeatureTable`): a list of
-   `(DeviceFeature, MinFirmwareVersion, Board[]?)` evaluated against the existing
-   [`FirmwareVersion`](../../src/Daqifi.Core/Firmware/FirmwareVersion.cs) parsed from
-   `DeviceMetadata.FirmwareVersion` and the detected `DeviceType`. This is the **UI
-   source-of-truth** — desktop disables controls up front, no round-trip.
-3. **Command-path backstop — typed `FeatureNotSupportedException`:** on the actual call, if
-   the response carries `**ERROR: -113`, throw
-   `FeatureNotSupportedException(feature, requiredVersion, actualVersion)` instead of the
-   generic error. Always correct even when the table is stale. This is the guard deferred
-   from PR [#214](https://github.com/daqifi/daqifi-core/pull/214); land it first on
-   `GetSdCardStorageAsync`.
-4. **Growth into #327:** when a device answers `CONFigure:CAPabilities:APIVersion?` ≥ 1
-   (fw ≥ v3.5.0), populate `DeviceCapabilities` from the live `CONFigure:CAPabilities:JSON?`
-   document instead of the table. The table stays as the **permanent bootstrap/fallback**
-   for firmware that predates the capability query (< v3.5.0). The consumer seam is
-   unchanged.
+**Consequence — this collapses most of the gating problem:**
 
-### Two gating modes
+- Every command daqifi-core issues today exists on all supported firmware → **no version
+  table entries are needed yet**. Don't build the table until we consume a post-v3.5.0
+  command.
+- The **version-selected-command** mode (send the old name on old firmware) is **unnecessary
+  and out of scope** — there is no supported firmware that needs the pre-rename names. Core
+  #253's unconditional `SD:FILE` is correct as-is.
+- The only *live* capability axis today is **board / hardware** (NQ3 → DAC; SD-card present;
+  WiFi present), which `DeviceCapabilities.FromDeviceType` already derives.
 
-`Supports(feature) → bool` covers most cases, but the v3.5.0 renames prove a second mode is
-required: when a command is *replaced* with no overlap window, a boolean can't say *which
-wire string to send*. The table therefore distinguishes:
+### Decision 2 — One stable consumer seam; gate on board + a single firmware floor
 
-- **Floor / capability gate** — the command either exists or it doesn't; below the floor →
-  `FeatureNotSupportedException`. (`SD:SPACe?`, DAC, capability doc.)
-- **Version-selected command** — the operation exists on both sides of a cutover but under
-  *different names with no alias window*; the seam resolves the wire string from the device
-  version. (`SetSdLoggingFileName`: emit `SD:LOGging` below v3.5.0, `SD:FILE` at/above.)
-- **Aliased rename — no gating** — old and new both accepted, so core keeps the old (or
-  prefers the new) name and needs *no* table entry. (`StartStreaming`,
-  `SetUsbTransparencyMode`.) Recorded only to document they were considered.
+Expose `device.Supports(DeviceFeature feature)` as the stable contract. Consumers branch on
+it and **never** compare firmware strings. Behind it, two live sources today and a
+forward-looking third:
+
+1. **Board / hardware capability (live)** — `FromDeviceType` already answers "is this NQ3?",
+   "does it have an SD card / WiFi?". DAC gating is *this*, not version gating.
+2. **Firmware floor + typed backstop (live, primary near-term work)** — a device below
+   v3.5.0, or any post-floor feature a device lacks, is surfaced as a typed
+   `FeatureNotSupportedException` instead of a generic error. The authoritative signal is the
+   firmware's `**ERROR: -113` on the command path; an optional up-front version check (using
+   the existing [`FirmwareVersion`](../../src/Daqifi.Core/Firmware/FirmwareVersion.cs)) can
+   pre-empt the round-trip for UI.
+3. **`DeviceFeature` version table (deferred)** — introduce only when we start consuming a
+   command newer than the floor. Same shape as below; empty today, so unbuilt today.
+4. **#327 capability document (later, non-blocking)** — when a device answers
+   `CONFigure:CAPabilities:APIVersion?` ≥ 1, populate `DeviceCapabilities` from the live
+   `CONFigure:CAPabilities:JSON?` document. The floor/board logic remains the bootstrap and
+   the fallback for anything that predates or omits the query. Note: #327 the *issue* is
+   closed, but the capability *commands* shipped in v3.5.0 and are maintained (#548), so this
+   is a real growth path — we just don't lean on "#327 the framework."
+
+### Evaluate `Supports` lazily — don't cache version-derived flags
+
+`DeviceMetadata.UpdateFromProtobuf` rebuilds `Capabilities` from `FromDeviceType(DeviceType)`
+when the **part number** arrives, but assigns `FirmwareVersion` in a *separate* branch (and
+`FromDeviceType` doesn't even see the version). A precomputed `SupportsX` bool would
+therefore be snapshotted before/without the firmware version and silently go stale. So:
+
+- `Supports(DeviceFeature)` **evaluates against the current metadata at call time** (board +
+  firmware version), rather than reading cached booleans.
+- Any convenience properties (`SupportsAnalogOutput`, …) **delegate** to `Supports(...)`;
+  nothing version-derived is stored. This keeps the two from ever diverging.
 
 ### Proposed API shape
 
@@ -169,99 +183,88 @@ namespace Daqifi.Core.Device;
 
 public enum DeviceFeature
 {
-    SdStorageQuery,      // SYSTem:STORage:SD:SPACe?        fw >= 3.4.6b1, needs SD
-    AnalogOutput,        // SOURce:VOLTage:LEVel / CONF:DAC fw >= 3.2.0,  NQ3 only
-    CapabilityDocument,  // CONFigure:CAPabilities:JSON?    fw >= 3.5.0
-    SdMinFreeThreshold,  // SYSTem:STORage:SD:MINFree       fw >= 3.5.0, needs SD
-    WifiBssidQuery,      // SYSTem:COMMunicate:LAN:BSSID?   fw >= 3.5.0, WiFi
-    // … grows as commands are added
+    AnalogOutput,        // SOURce:VOLTage:LEVel / CONF:DAC — board gate: NQ3 only
+    // Below the v3.5.0 floor, so universally present on supported firmware — listed for the
+    // typed-exception backstop against *below-floor* devices, not because they vary on
+    // supported firmware:
+    SdStorageQuery,      // SYSTem:STORage:SD:SPACe?   (fw v3.4.6b1)
+    CapabilityDocument,  // CONFigure:CAPabilities:JSON? (fw v3.5.0)
+    // … add post-v3.5.0 commands here as we consume them; that is when the table is built.
 }
 
-// New: Firmware/DeviceFeatureTable.cs — the swappable data source.
-internal sealed record FeatureRequirement(
-    DeviceFeature Feature,
-    FirmwareVersion MinVersion,
-    DeviceType[]? Boards = null);   // null = all boards
-
-// For hard renames with no alias window, the producer must pick the wire
-// string per device rather than gate a bool (the SD:FILE/SD:LOGging case):
-internal sealed record CommandRename(
-    FirmwareVersion CutoverVersion,
-    string LegacyCommand,    // sent when device <  CutoverVersion
-    string CurrentCommand);  // sent when device >= CutoverVersion
-
-// DeviceCapabilities gains the seam (delegating to the table today):
-public bool Supports(DeviceFeature feature);
-
-// New: Device/FeatureNotSupportedException.cs
+// Device/FeatureNotSupportedException.cs — the typed backstop.
 public sealed class FeatureNotSupportedException : Exception
 {
     public DeviceFeature Feature { get; }
-    public FirmwareVersion? RequiredVersion { get; }
+    public FirmwareVersion? RequiredVersion { get; }  // e.g. the v3.5.0 floor, or a feature min
     public string? ActualVersion { get; }
     public DeviceType? Board { get; }
 }
+
+// DeviceCapabilities seam — evaluated lazily against current board + firmware version.
+public bool Supports(DeviceFeature feature);
 ```
 
 Call-site pattern (e.g. `GetSdCardStorageAsync`):
 
 ```csharp
-// up-front gate (no round-trip) — also lets desktop disable the button
+// optional up-front gate (no round-trip) — lets desktop disable the control:
 if (!Capabilities.Supports(DeviceFeature.SdStorageQuery))
-    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, required, FirmwareVersion);
+    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinSupportedFirmware, FirmwareVersion);
 
-// … issue command … then the wire backstop catches stale-table cases:
+// … issue command … the wire backstop is the authoritative signal:
 if (ResponseHasUndefinedHeader(lines))   // **ERROR: -113
-    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, required, FirmwareVersion);
+    throw new FeatureNotSupportedException(DeviceFeature.SdStorageQuery, MinSupportedFirmware, FirmwareVersion);
 ```
 
-`DeviceCapabilities.FromDeviceType(...)` is extended to also take the firmware version (or a
-back-reference) so `Supports` can read both board and version. The existing `FirmwareVersion`
-semver/pre-release comparison already orders `3.4.6b1 < 3.4.6 < 3.5.0` correctly, so the
-table is a thin layer on top.
+(`CommandRename`/version-selected emit from earlier drafts is **dropped** — Decision 1 makes
+it unnecessary. Reintroduce only if the supported floor is ever lowered below a hard rename.)
 
 ## Alternatives considered
 
 | Option | Why not (alone) |
 |---|---|
-| **Version table only** | Brittle against betas/backports; needs per-release maintenance; a stale entry silently mis-gates. |
-| **Probe + detect only** | Needs a round-trip and can't gate UI up front; only knows after you try. |
-| **#327 capability doc only** | Only fw ≥ v3.5.0; the query is itself firmware-gated, so a version fallback is required regardless — it can't be the sole source. |
+| **No floor; full version table from day one** | Builds machinery to support arbitrarily-old firmware we don't test; the table is *empty* once the floor is at v3.5.0. Pure speculation cost. |
+| **Version table only** | Brittle against betas/backports; a stale entry silently mis-gates; can't prove the real device. |
+| **Probe + detect only** | Needs a round-trip and can't gate UI up front; only knows after you try. (But it's always correct — so it's the backstop, not the whole answer.) |
+| **#327 capability doc only** | Only fw ≥ v3.5.0; the query is itself firmware-gated, so a fallback is required regardless — it can't be the sole source. |
 
-The decision uses all three *together* precisely because each covers the others' weakness:
-the table gives cheap up-front UI gating, the probe gives correctness on the real call, and
-#327 (when present) gives authoritative self-description.
+The decision is: **a v3.5.0 floor + board-derived capability (both live) + the `-113` typed
+backstop (always correct), with the version table and #327 reader deferred until they earn
+their place.**
 
 ## Consequences
 
 **Positive**
-- One place owns device capability; consumers stop hand-rolling version checks.
+- The immediate surface shrinks to almost nothing: board gating already exists; the only new
+  code is the floor constant + the `-113` → `FeatureNotSupportedException` backstop.
 - Today's generic `SdCardOperationException` for old firmware becomes a clear, typed
   `FeatureNotSupportedException` carrying required-vs-actual version.
-- The data source can evolve (table → +probe → +#327) without churning the consumer API.
+- The seam is stable, so the deferred table and #327 reader slot in later without touching
+  consumers.
 
 **Negative / costs**
-- The version table is maintenance the team must keep current per firmware release (mitigated
-  by the probe backstop, which stays correct even when the table lags).
-- Two notions of "supported" (predicted by table vs. proven on the wire) can momentarily
-  disagree; the wire result is authoritative and wins.
+- A floor is a support commitment: pre-v3.5.0 devices get best-effort behavior and typed
+  "too old" errors, not guarantees. Acceptable, and explicit.
+- When we *do* consume a post-floor command, someone must add its `DeviceFeature` + min
+  version. The backstop keeps that honest (it's correct even if the entry is missing).
 
 **Follow-up implementation issues**
-1. `DeviceFeature` enum + `DeviceFeatureTable` + `DeviceCapabilities.Supports(...)` (feeds UI
-   gating).
-2. `FeatureNotSupportedException` + command-path backstop that parses the SCPI error code and
-   special-cases `-113`; land first on `GetSdCardStorageAsync` (the guard deferred from #214).
-3. **Version-selected commands** (`CommandRename`): convert `SetSdLoggingFileName` from the
-   hard floor that core [#253](https://github.com/daqifi/daqifi-core/pull/253) ships to a
-   version-selected emit (`SD:LOGging` below v3.5.0, `SD:FILE` at/above) once the mechanism
-   exists — the worst-case the #251 note flagged.
-4. **Remove dead code**: the `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?`
-   query never existed in the firmware SCPI table. Public-API removal, kept separate from the
-   #253 runtime fix.
-5. *(Later, non-blocking)* `CONFigure:CAPabilities:JSON?` reader that overrides the table when
-   fw ≥ v3.5.0 — the #327 growth path.
+1. **Define `MinSupportedFirmware = v3.5.0`** and a helper on the device to report whether the
+   connected firmware meets it (built on the existing `FirmwareVersion`); surface it once at
+   connect for UI.
+2. **`FeatureNotSupportedException` + command-path backstop** that parses the SCPI error code
+   and special-cases `-113`; land first on `GetSdCardStorageAsync` (the guard deferred from
+   [#214](https://github.com/daqifi/daqifi-core/pull/214)). *Primary near-term deliverable.*
+3. **Remove dead code**: the `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?` query
+   never existed in the firmware SCPI table. Public-API removal, separate from the #253 fix.
+4. *(Deferred — only when we consume a post-v3.5.0 command)* `DeviceFeature` version table +
+   lazy `Supports(...)`.
+5. *(Later, non-blocking)* `CONFigure:CAPabilities:JSON?` reader — the #327 growth path.
 
 ## Out of scope
 
-Implementing the full #327 capability-document reader. This ADR covers the investigation, the
-strategy decision, and the minimal version-gating layer + typed exception.
+The full #327 capability-document reader; the version table (until a post-floor command needs
+it); version-selected command emit (obviated by the floor). This ADR covers the
+investigation, the strategy decision, the v3.5.0 floor, and the minimal board-gate + typed
+`-113` backstop.
