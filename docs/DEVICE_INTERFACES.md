@@ -125,6 +125,43 @@ if (devices.Any())
 }
 ```
 
+### Continuous Discovery (Live Device Set)
+
+`IDeviceFinder.DiscoverAsync` is a single pass. For a UI that shows a live, self-updating
+list of devices, wrap a finder in a `ContinuousDeviceFinder`. It owns the scan cadence,
+keeps a deduplicated set across passes, raises `DeviceDiscovered` the first time each device
+appears, and raises `DeviceLost` once a device has been absent for a configurable number of
+consecutive passes:
+
+```csharp
+using Daqifi.Core.Device.Discovery;
+
+var continuous = new ContinuousDeviceFinder(
+    new WiFiDeviceFinder(),
+    new ContinuousDiscoveryOptions
+    {
+        PassTimeout = TimeSpan.FromSeconds(3), // listen window per pass
+        Interval = TimeSpan.FromSeconds(1),    // gap between passes
+        MissThreshold = 2                      // passes a device may be absent before "lost"
+    });
+
+continuous.DeviceDiscovered += (_, e) => devices.Add(e.DeviceInfo);     // bind to your UI list
+continuous.DeviceLost += (_, e) => devices.RemoveBySerial(e.DeviceInfo);
+continuous.ScanError += (_, e) => logger.LogWarning(e.Exception, "Discovery pass failed");
+
+continuous.Start();
+// ... later, when the view closes:
+await continuous.StopAsync();
+continuous.Dispose(); // also disposes the wrapped finder unless LeaveInnerFinderOpen is set
+```
+
+One instance wraps one finder, so it represents a single transport's cadence and live set.
+To track WiFi, Serial, and HID together, create one `ContinuousDeviceFinder` per transport —
+each with its own interval — and merge their events into a single collection. Devices are
+deduplicated per transport: the same physical unit seen over both WiFi and Serial appears as
+two distinct connection options. `continuous.Devices` returns a thread-safe snapshot of the
+current set at any time.
+
 ### Manual Device Connection (Advanced)
 
 For cases where you need more control over the connection process:
