@@ -17,11 +17,12 @@ public class ContinuousDiscoveryOptions
     public TimeSpan Interval { get; set; } = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Gets or sets the maximum duration of a single discovery pass, passed to the
-    /// wrapped finder's <see cref="IDeviceFinder.DiscoverAsync(TimeSpan)"/>. For
-    /// listen-based transports (WiFi) this is effectively the response-collection
-    /// window; probe-based transports (Serial/HID) typically return sooner. Default
-    /// is 3 seconds.
+    /// Gets or sets the maximum duration of a single discovery pass. Each pass runs the
+    /// wrapped finder under a cancellation token that is cancelled after this duration, so
+    /// the pass is bounded by the timeout and is also interrupted promptly when discovery is
+    /// stopped or disposed. For listen-based transports (WiFi) this is effectively the
+    /// response-collection window; probe-based transports (Serial/HID) typically return
+    /// sooner. Default is 3 seconds.
     /// </summary>
     public TimeSpan PassTimeout { get; set; } = TimeSpan.FromSeconds(3);
 

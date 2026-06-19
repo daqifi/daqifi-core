@@ -181,10 +181,12 @@ public class ContinuousDeviceFinder : IDisposable
     /// <exception cref="InvalidOperationException">The loop is already running.</exception>
     public void Start()
     {
-        ThrowIfDisposed();
-
+        // Check disposed inside the lock so a concurrent Dispose (which sets _disposed under
+        // the same lock) cannot slip in between the check and launching the loop.
         lock (_lifecycleLock)
         {
+            ThrowIfDisposed();
+
             if (_running)
             {
                 throw new InvalidOperationException("Continuous discovery is already running.");
@@ -198,7 +200,7 @@ public class ContinuousDeviceFinder : IDisposable
     }
 
     /// <summary>
-    /// Stops the continuous scan loop and waits for the in-flight pass to finish.
+    /// Stops the continuous scan loop and waits for it to stop, cancelling any in-flight pass.
     /// Safe to call when not running. Does not clear the live set.
     /// </summary>
     /// <returns>A task that completes once the loop has stopped.</returns>
@@ -333,7 +335,15 @@ public class ContinuousDeviceFinder : IDisposable
     {
         if (_identitySelector != null)
         {
-            return _identitySelector(device) ?? string.Empty;
+            var key = _identitySelector(device);
+
+            // A null/empty key would collapse every such device onto one dictionary entry,
+            // silently breaking dedup and DeviceLost. Fall back to the built-in per-transport
+            // identity rather than corrupting the live set.
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                return key;
+            }
         }
 
         return DefaultIdentity(device);
@@ -390,32 +400,40 @@ public class ContinuousDeviceFinder : IDisposable
 
     /// <summary>
     /// Runs discovery passes until cancellation, reconciling the live set after each pass.
+    /// Each pass runs under a cancellation token linked to the loop token and cancelled
+    /// after <see cref="ContinuousDiscoveryOptions.PassTimeout"/>, so the timeout bounds the
+    /// pass and a stop/dispose interrupts an in-flight pass promptly.
     /// </summary>
     private async Task ScanLoopAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            IReadOnlyCollection<IDeviceInfo> results;
-            try
-            {
-                var found = await _finder.DiscoverAsync(_passTimeout).ConfigureAwait(false);
-                results = found == null
-                    ? Array.Empty<IDeviceInfo>()
-                    : found as IReadOnlyCollection<IDeviceInfo> ?? found.ToList();
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                SafeScanError(ex);
-                if (!await DelayBetweenPassesAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    break;
-                }
+            IReadOnlyCollection<IDeviceInfo>? results = null;
 
-                continue;
+            using (var passCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                passCts.CancelAfter(_passTimeout);
+                try
+                {
+                    var found = await _finder.DiscoverAsync(passCts.Token).ConfigureAwait(false);
+                    results = found == null
+                        ? Array.Empty<IDeviceInfo>()
+                        : found as IReadOnlyCollection<IDeviceInfo> ?? found.ToList();
+                }
+                catch (OperationCanceledException)
+                {
+                    // Outer-token cancellation means stop/dispose — exit the loop. A pass-timeout
+                    // cancellation (a finder that throws rather than returning what it collected) is
+                    // treated as a skipped pass: leave results null so we don't fabricate losses.
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SafeScanError(ex);
+                }
             }
 
             if (cancellationToken.IsCancellationRequested)
@@ -425,13 +443,16 @@ public class ContinuousDeviceFinder : IDisposable
 
             // Backstop: Reconcile guards individual subscriber callbacks, but a custom
             // identity selector could also throw. Neither must terminate the loop.
-            try
+            if (results != null)
             {
-                Reconcile(results);
-            }
-            catch (Exception ex)
-            {
-                SafeScanError(ex);
+                try
+                {
+                    Reconcile(results);
+                }
+                catch (Exception ex)
+                {
+                    SafeScanError(ex);
+                }
             }
 
             if (!await DelayBetweenPassesAsync(cancellationToken).ConfigureAwait(false))
@@ -554,17 +575,19 @@ public class ContinuousDeviceFinder : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
-
         CancellationTokenSource? cts;
         Task? loopTask;
+
+        // Set _disposed under the lock so it cannot race with Start (which checks it under
+        // the same lock); also makes Dispose idempotent under concurrent calls.
         lock (_lifecycleLock)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
             cts = _cts;
             loopTask = _loopTask;
             _cts = null;
@@ -574,12 +597,14 @@ public class ContinuousDeviceFinder : IDisposable
 
         cts?.Cancel();
 
-        // Best-effort wait so the loop stops raising events before we return. The loop
-        // uses ConfigureAwait(false) throughout, so this cannot deadlock on a captured
-        // synchronization context. Bounded so Dispose never hangs on a stuck pass.
+        // Wait for the loop to stop before disposing the inner finder, so no pass is in-flight
+        // against a disposed finder. Cancelling the loop token also cancels the per-pass token,
+        // so a well-behaved finder returns promptly; the bound (scaled to PassTimeout) only
+        // guards against a finder that ignores cancellation, so Dispose can never hang. The loop
+        // uses ConfigureAwait(false) throughout, so the wait cannot deadlock on a captured context.
         try
         {
-            loopTask?.Wait(TimeSpan.FromSeconds(5));
+            loopTask?.Wait(_passTimeout);
         }
         catch
         {

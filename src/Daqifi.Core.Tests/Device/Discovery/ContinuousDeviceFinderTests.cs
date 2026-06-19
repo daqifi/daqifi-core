@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using Daqifi.Core.Device.Discovery;
 
@@ -321,6 +322,25 @@ public class ContinuousDeviceFinderTests
         Assert.Single(finder.Devices);
     }
 
+    [Fact]
+    public void Reconcile_NullIdentitySelectorResult_FallsBackToDefaultIdentity()
+    {
+        // A selector returning null must not collapse distinct devices onto one empty key;
+        // GetIdentity falls back to the default per-transport identity instead.
+        using var finder = NewFinder(new StubDeviceFinder(), identitySelector: _ => null!);
+        var discovered = new List<IDeviceInfo>();
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+
+        finder.Reconcile(new IDeviceInfo[]
+        {
+            Wifi("AA:BB:CC:DD:EE:01"),
+            Wifi("AA:BB:CC:DD:EE:02")
+        });
+
+        Assert.Equal(2, discovered.Count);
+        Assert.Equal(2, finder.Devices.Count);
+    }
+
     #endregion
 
     #region Lifecycle
@@ -466,11 +486,65 @@ public class ContinuousDeviceFinderTests
         await finder.StopAsync();
     }
 
+    [Fact]
+    public async Task StopAsync_CancelsInFlightPass_WithoutWaitingForPassTimeout()
+    {
+        // PassTimeout is huge; if the in-flight pass were not cancellable, StopAsync would block
+        // for ~30s. With cancellable passes it returns as soon as cancellation propagates.
+        var inner = new BlockingDeviceFinder();
+        using var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            PassTimeout = TimeSpan.FromSeconds(30),
+            Interval = TimeSpan.Zero
+        });
+
+        finder.Start();
+        await WaitUntil(() => inner.PassesStarted > 0);
+
+        var sw = Stopwatch.StartNew();
+        await finder.StopAsync();
+        sw.Stop();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"StopAsync took {sw.Elapsed}; expected prompt cancellation.");
+        Assert.False(finder.IsRunning);
+    }
+
+    [Fact]
+    public async Task Dispose_WithInFlightPass_StopsPromptlyAndDisposesInnerFinder()
+    {
+        var inner = new BlockingDeviceFinder();
+        var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            PassTimeout = TimeSpan.FromSeconds(30),
+            Interval = TimeSpan.Zero
+        });
+
+        finder.Start();
+        await WaitUntil(() => inner.PassesStarted > 0);
+
+        var sw = Stopwatch.StartNew();
+        finder.Dispose(); // must cancel the in-flight pass, not wait out the 30s PassTimeout
+        sw.Stop();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"Dispose took {sw.Elapsed}; expected prompt cancellation.");
+        Assert.True(inner.Disposed); // inner finder disposed only after the loop stopped
+    }
+
     private static async Task<T> AwaitSignal<T>(TaskCompletionSource<T> signal)
     {
         var completed = await Task.WhenAny(signal.Task, Task.Delay(WaitTimeout));
         Assert.True(completed == signal.Task, "Timed out waiting for the expected event.");
         return await signal.Task;
+    }
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        var sw = Stopwatch.StartNew();
+        while (!condition())
+        {
+            Assert.True(sw.Elapsed < WaitTimeout, "Timed out waiting for the expected condition.");
+            await Task.Delay(10);
+        }
     }
 
     #endregion
@@ -548,6 +622,42 @@ public class ContinuousDeviceFinderTests
 
             return Task.FromResult<IEnumerable<IDeviceInfo>>(next);
         }
+    }
+
+    /// <summary>
+    /// Finder whose pass blocks until its cancellation token fires, then returns an empty set.
+    /// Used to verify that Stop/Dispose cancel an in-flight pass instead of waiting out a large
+    /// <see cref="ContinuousDiscoveryOptions.PassTimeout"/>.
+    /// </summary>
+    private sealed class BlockingDeviceFinder : IDeviceFinder, IDisposable
+    {
+        private int _passesStarted;
+
+        public int PassesStarted => Volatile.Read(ref _passesStarted);
+        public bool Disposed { get; private set; }
+
+#pragma warning disable CS0067 // Events are part of the interface but unused by this fake.
+        public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
+        public event EventHandler? DiscoveryCompleted;
+#pragma warning restore CS0067
+
+        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _passesStarted);
+
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
+            {
+                await cancelled.Task.ConfigureAwait(false);
+            }
+
+            return Array.Empty<IDeviceInfo>();
+        }
+
+        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+            => DiscoverAsync(CancellationToken.None);
+
+        public void Dispose() => Disposed = true;
     }
 
     #endregion
