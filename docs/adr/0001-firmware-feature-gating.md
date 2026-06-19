@@ -50,6 +50,7 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → **v3.6
 | SD card storage (list/get/delete/format) | `SYSTem:STORage:SD:*` | ≤ v3.4.3 (predates clean tag history) | needs SD HW | — |
 | **SD storage space query** | `SYSTem:STORage:SD:SPACe?` | **v3.4.6b1** | needs SD HW | [#202](https://github.com/daqifi/daqifi-nyquist-firmware/pull/202) |
 | SD min-free threshold | `SYSTem:STORage:SD:MINFree` | v3.5.0 | needs SD HW | #502 |
+| SD logging filename | `SYSTem:STORage:SD:FILE` (hard rename of `SD:LOGging`, no alias) | v3.5.0 | needs SD HW | [#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323) |
 | Dynamic memory management | `SYSTem:MEMory:*` | v3.4.6b1 | all | #227 |
 | **Capability document** | `CONFigure:CAPabilities:JSON?` / `:APIVersion?` | **v3.5.0** | all | [#327](https://github.com/daqifi/daqifi-nyquist-firmware/issues/327)/#343 |
 | WiFi associated-AP MAC | `SYSTem:COMMunicate:LAN:BSSID?` | v3.5.0 | WiFi | #516 |
@@ -60,6 +61,13 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → **v3.6
 
 - **v3.2.0** — DAC commands are board-gated: issuing them on NQ1/NQ2 returns an error
   (firmware checks `BoardVariant != 3` in `SCPIDAC.c`).
+- **v3.5.0** — **SD logging filename hard-renamed** `SYSTem:STORage:SD:LOGging "f"` →
+  `SYSTem:STORage:SD:FILE "f"` with **no alias**
+  ([#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323)). daqifi-core's
+  `SetSdLoggingFileName` still sends the old name, so on v3.5.0+ the device rejects it with
+  `-113 "Undefined header"` — and because logging is fire-and-forget, the failure is
+  **silent**. Fixed (ungated, hard floor) by core
+  [#253](https://github.com/daqifi/daqifi-core/pull/253).
 - **v3.5.0** — `CONFigure:ADC:CHANnel` / `ENAble:VOLTage:DC` are now **rejected while
   streaming** ([#527](https://github.com/daqifi/daqifi-nyquist-firmware/pull/527)). Stop
   streaming before toggling channels.
@@ -69,14 +77,27 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → **v3.6
   bounds ([#548](https://github.com/daqifi/daqifi-nyquist-firmware/pull/548)). Clients that
   parsed the capability JSON to infer setter ranges may see different values.
 
-**Not yet released — do not gate against a version yet.** The stream-control namespace
-rename `SYSTem:STReam:START/STOP/DATA?`
-([#311](https://github.com/daqifi/daqifi-nyquist-firmware/pull/311)) lives only on firmware
-branch `refactor/311-scpi-stream-control` — unmerged, in no release tag (≤ v3.6.1).
-daqifi-core's producers correctly still send the legacy `SYSTem:StartStreamData` verbs, and
-PR [#168](https://github.com/daqifi/daqifi-core/pull/168) is correctly **held** pending the
-firmware merge. This is the canonical reason the version table must track *released tags*,
-not commit dates.
+**SCPI renames in v3.5.0 — compatibility is per-command, not per-release.** The #311
+stream-control consolidation *did* ship in **v3.5.0**, through follow-up PRs #322/#323/#324
+(only the umbrella commit #311 itself is unmerged and cosmetic). Three renames landed in the
+*same* release with *three different* compatibility outcomes — which is exactly why a
+"breaking renames" batch keyed on a release (the now-abandoned core
+[#168](https://github.com/daqifi/daqifi-core/pull/168)) doesn't model reality, and why the
+audit's key column is *"is the old name still accepted, and from which version?"*
+(seed data contributed on [#251](https://github.com/daqifi/daqifi-core/issues/251)):
+
+| daqifi-core method | Old → New | Firmware handling | Breaking for core? |
+|---|---|---|---|
+| `StartStreaming` / `StopStreaming` | `SYSTem:StartStreamData` / `StopStreamData` → `STReam:START` / `STOP` | both kept as **aliases** ([#324](https://github.com/daqifi/daqifi-nyquist-firmware/pull/324)) | no — old name works on all fw |
+| `SetUsbTransparencyMode` | `USB:SetTransparentMode` → `USB:TRANSparent:MODE` | both kept as **aliases** | no |
+| `SetSdLoggingFileName` | `STORage:SD:LOGging` → `STORage:SD:FILE` | **hard rename, no alias** ([#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323)) | **yes** — see above |
+| `GetSdLoggingState` | `STORage:SD:LOGging?` | **never existed in firmware** | dead code — remove |
+
+Verified at the v3.5.0 tree: `STReam:START`, `StartStreamData`, `USB:TRANSparent:MODE`,
+`SetTransparentMode`, and `STORage:SD:FILE` are all present, while `STORage:SD:LOGging` is
+**gone** — confirming the alias-vs-hard-rename split. Core #253 also corroborated the `-113`
+behavior on hardware (old `SD:LOGging` → `-113 "Undefined header"`, new `SD:FILE` → OK),
+which is direct empirical support for the probe backstop below.
 
 ### Enabling fact: undefined-header is distinguishable on the wire
 
@@ -126,6 +147,21 @@ sources** that can be swapped/added without changing the consumer API:
    for firmware that predates the capability query (< v3.5.0). The consumer seam is
    unchanged.
 
+### Two gating modes
+
+`Supports(feature) → bool` covers most cases, but the v3.5.0 renames prove a second mode is
+required: when a command is *replaced* with no overlap window, a boolean can't say *which
+wire string to send*. The table therefore distinguishes:
+
+- **Floor / capability gate** — the command either exists or it doesn't; below the floor →
+  `FeatureNotSupportedException`. (`SD:SPACe?`, DAC, capability doc.)
+- **Version-selected command** — the operation exists on both sides of a cutover but under
+  *different names with no alias window*; the seam resolves the wire string from the device
+  version. (`SetSdLoggingFileName`: emit `SD:LOGging` below v3.5.0, `SD:FILE` at/above.)
+- **Aliased rename — no gating** — old and new both accepted, so core keeps the old (or
+  prefers the new) name and needs *no* table entry. (`StartStreaming`,
+  `SetUsbTransparencyMode`.) Recorded only to document they were considered.
+
 ### Proposed API shape
 
 ```csharp
@@ -146,6 +182,13 @@ internal sealed record FeatureRequirement(
     DeviceFeature Feature,
     FirmwareVersion MinVersion,
     DeviceType[]? Boards = null);   // null = all boards
+
+// For hard renames with no alias window, the producer must pick the wire
+// string per device rather than gate a bool (the SD:FILE/SD:LOGging case):
+internal sealed record CommandRename(
+    FirmwareVersion CutoverVersion,
+    string LegacyCommand,    // sent when device <  CutoverVersion
+    string CurrentCommand);  // sent when device >= CutoverVersion
 
 // DeviceCapabilities gains the seam (delegating to the table today):
 public bool Supports(DeviceFeature feature);
@@ -208,7 +251,14 @@ the table gives cheap up-front UI gating, the probe gives correctness on the rea
    gating).
 2. `FeatureNotSupportedException` + command-path backstop that parses the SCPI error code and
    special-cases `-113`; land first on `GetSdCardStorageAsync` (the guard deferred from #214).
-3. *(Later, non-blocking)* `CONFigure:CAPabilities:JSON?` reader that overrides the table when
+3. **Version-selected commands** (`CommandRename`): convert `SetSdLoggingFileName` from the
+   hard floor that core [#253](https://github.com/daqifi/daqifi-core/pull/253) ships to a
+   version-selected emit (`SD:LOGging` below v3.5.0, `SD:FILE` at/above) once the mechanism
+   exists — the worst-case the #251 note flagged.
+4. **Remove dead code**: the `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?`
+   query never existed in the firmware SCPI table. Public-API removal, kept separate from the
+   #253 runtime fix.
+5. *(Later, non-blocking)* `CONFigure:CAPabilities:JSON?` reader that overrides the table when
    fw ≥ v3.5.0 — the #327 growth path.
 
 ## Out of scope
