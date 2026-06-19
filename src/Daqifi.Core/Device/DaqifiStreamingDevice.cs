@@ -114,14 +114,21 @@ namespace Daqifi.Core.Device
         /// consumer to receive nothing. Sending <c>SYSTem:STReam:INTerface 0</c> during USB
         /// initialization ensures data flows to the serial port.
         /// </remarks>
+        /// <param name="channelPopulationTimeout">
+        /// Maximum time to wait for the device to report its channel configuration before
+        /// failing. If <c>null</c>, the base implementation's default is used.
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
         /// <returns>A task representing the asynchronous initialization operation.</returns>
-        public override async Task InitializeAsync()
+        public override async Task InitializeAsync(
+            TimeSpan? channelPopulationTimeout = null,
+            CancellationToken cancellationToken = default)
         {
             // Capture pre-init state so we can skip the USB step on repeated calls
             // (base.InitializeAsync() guards with _isInitialized and returns early on repeats).
             var needsUsbInit = IsUsbConnection && State != DeviceState.Ready;
 
-            await base.InitializeAsync();
+            await base.InitializeAsync(channelPopulationTimeout, cancellationToken).ConfigureAwait(false);
 
             if (needsUsbInit)
             {
@@ -131,7 +138,7 @@ namespace Daqifi.Core.Device
                 var lines = await ExecuteTextCommandAsync(
                     () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
                     responseTimeoutMs: 500,
-                    cancellationToken: CancellationToken.None);
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 if (ContainsScpiError(lines))
                 {

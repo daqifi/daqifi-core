@@ -123,6 +123,76 @@ namespace Daqifi.Core.Tests.Device
             Assert.Equal(DeviceState.Error, device.State);
         }
 
+        [Fact]
+        public async Task InitializeAsync_WhenChannelsPopulate_ExposesPopulatedChannels()
+        {
+            // Arrange — device responds to GetDeviceInfo by populating channels
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert — initialization blocked until ChannelsPopulated fired, so the
+            // returned device is fully populated rather than empty
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(4, device.Channels.Count); // 2 analog + 2 digital
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenChannelsNeverPopulate_ThrowsTimeoutExceptionAndResends()
+        {
+            // Arrange — device never reports channel configuration
+            var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false);
+            device.Connect();
+
+            // Act & Assert — a clear timeout, not a silently-unpopulated device
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+            Assert.Equal(DeviceState.Error, device.State);
+            Assert.Empty(device.Channels);
+            // GetDeviceInfo is re-sent while waiting (initial request + at least one retry).
+            Assert.True(device.DeviceInfoRequestCount >= 2);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_OnReconnect_WaitsForFreshStatusInsteadOfStaleChannels()
+        {
+            // Arrange — first init populates channels; the instance is then reused across a
+            // reconnect (e.g. FirmwareUpdateService post-reset wake). Disconnect leaves the
+            // prior session's channels in place, so initialization must wait for a fresh
+            // status rather than short-circuiting on the stale channels.
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+            await device.InitializeAsync();
+            Assert.NotEmpty(device.Channels); // stale channels now linger
+
+            device.Disconnect();
+            device.Connect();
+
+            // The reconnected device does not report a fresh status.
+            device.PopulateChannelsOnDeviceInfo = false;
+
+            // Act & Assert — times out instead of returning stale channels.
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+            Assert.Equal(DeviceState.Error, device.State);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenCancelledDuringWait_ThrowsOperationCanceledException()
+        {
+            // Arrange — device never populates, so the wait loop is observing cancellation
+            var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false);
+            device.Connect();
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+            // Act & Assert
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => device.InitializeAsync(TimeSpan.FromSeconds(5), cts.Token));
+        }
+
         /// <summary>
         /// A testable DaqifiDevice that captures sent messages without needing a real transport.
         /// Overrides ExecuteTextCommandAsync to bypass transport requirements in unit tests.
@@ -136,13 +206,27 @@ namespace Daqifi.Core.Tests.Device
             /// </summary>
             public List<IOutboundMessage<string>> DirectSentMessages { get; } = new();
 
+            /// <summary>
+            /// Number of GetDeviceInfo (SYSInfoPB?) requests observed.
+            /// </summary>
+            public int DeviceInfoRequestCount { get; private set; }
+
+            /// <summary>
+            /// When true, a GetDeviceInfo request synchronously populates channels (simulating
+            /// the device's status response). Settable so tests can toggle the behavior between
+            /// initialization attempts.
+            /// </summary>
+            public bool PopulateChannelsOnDeviceInfo { get; set; }
+
             public TestableDaqifiDevice(
                 string name,
                 IPAddress? ipAddress = null,
-                IReadOnlyList<string>? textCommandResponse = null)
+                IReadOnlyList<string>? textCommandResponse = null,
+                bool populateChannelsOnDeviceInfo = true)
                 : base(name, ipAddress)
             {
                 _textCommandResponse = textCommandResponse ?? Array.Empty<string>();
+                PopulateChannelsOnDeviceInfo = populateChannelsOnDeviceInfo;
             }
 
             public override void Send<T>(IOutboundMessage<T> message)
@@ -150,6 +234,22 @@ namespace Daqifi.Core.Tests.Device
                 if (message is IOutboundMessage<string> stringMessage)
                 {
                     DirectSentMessages.Add(stringMessage);
+
+                    // Simulate the device responding to GetDeviceInfo (SYSInfoPB?) with a
+                    // protobuf status message that populates channels. The real flow does this
+                    // via the protobuf consumer, which has no backing transport in unit tests.
+                    if (stringMessage.Data.Contains("SYSInfoPB"))
+                    {
+                        DeviceInfoRequestCount++;
+                        if (PopulateChannelsOnDeviceInfo)
+                        {
+                            PopulateChannelsFromStatus(new DaqifiOutMessage
+                            {
+                                AnalogInPortNum = 2,
+                                DigitalPortNum = 2
+                            });
+                        }
+                    }
                 }
             }
 
