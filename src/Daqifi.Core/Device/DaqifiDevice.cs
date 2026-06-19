@@ -81,6 +81,21 @@ namespace Daqifi.Core.Device
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
 
+        /// <summary>
+        /// Default time <see cref="InitializeAsync"/> waits for the device to report its
+        /// channel configuration (via the <see cref="ChannelsPopulated"/> event) before
+        /// failing with a <see cref="TimeoutException"/>.
+        /// </summary>
+        private static readonly TimeSpan DefaultChannelPopulationTimeout = TimeSpan.FromSeconds(8);
+
+        /// <summary>
+        /// Interval at which <see cref="InitializeAsync"/> re-sends <c>GetDeviceInfo</c> while
+        /// waiting for the first status message. Serial/CDC devices can miss the initial
+        /// request while the port is still settling, so the request is repeated until
+        /// channels populate or the timeout elapses.
+        /// </summary>
+        private static readonly TimeSpan ChannelPopulationPollInterval = TimeSpan.FromSeconds(1);
+
         // Serializes ExecuteTextCommandAsync calls device-wide (closes #186).
         // Multiple callers — e.g. concurrent GetSdCardFilesAsync /
         // DrainErrorQueueAsync / GetSystemInfoAsync — would otherwise race the
@@ -792,6 +807,12 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Initializes the device by running the standard initialization sequence.
         /// </summary>
+        /// <param name="channelPopulationTimeout">
+        /// Maximum time to wait for the device to report its channel configuration (via the
+        /// <see cref="ChannelsPopulated"/> event) before failing. If <c>null</c>, a default of
+        /// 8 seconds is used.
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         /// <remarks>
         /// The initialization sequence includes:
@@ -799,11 +820,22 @@ namespace Daqifi.Core.Device
         /// 2. Stop any running streaming
         /// 3. Turn device on (if needed)
         /// 4. Set protobuf message format
-        /// 5. Query device info and capabilities
+        /// 5. Query device info and block until the device reports its channel configuration
         ///
-        /// Delays are added between commands to give the device time to process each request.
+        /// Rather than returning after a fixed delay, the method awaits the first
+        /// <see cref="ChannelsPopulated"/> event so callers receive a fully populated device.
+        /// Serial/CDC devices can take noticeably longer than the previous fixed wait to send
+        /// their first status message, so <c>GetDeviceInfo</c> is re-sent periodically until
+        /// channels populate or <paramref name="channelPopulationTimeout"/> elapses (which
+        /// surfaces a <see cref="TimeoutException"/>).
         /// </remarks>
-        public virtual async Task InitializeAsync()
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected, or the device returns a SCPI error during initialization.</exception>
+        /// <exception cref="TimeoutException">Thrown when the device does not report its channel configuration within <paramref name="channelPopulationTimeout"/>.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public virtual async Task InitializeAsync(
+            TimeSpan? channelPopulationTimeout = null,
+            CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
@@ -813,6 +845,20 @@ namespace Daqifi.Core.Device
             if (_isInitialized)
             {
                 return; // Already initialized
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Validate the effective timeout up front (outside the try) so an invalid
+            // configuration surfaces as ArgumentOutOfRangeException rather than a misleading
+            // TimeoutException that blames the device, and without flipping device state.
+            var effectiveChannelPopulationTimeout = channelPopulationTimeout ?? DefaultChannelPopulationTimeout;
+            if (effectiveChannelPopulationTimeout <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(channelPopulationTimeout),
+                    effectiveChannelPopulationTimeout,
+                    "Channel population timeout must be positive.");
             }
 
             State = DeviceState.Initializing;
@@ -825,9 +871,13 @@ namespace Daqifi.Core.Device
                     streamMessageHandler: OnStreamMessageReceived
                 );
 
-                // Wire up message consumer to route messages through protocol handler
+                // Wire up message consumer to route messages through protocol handler.
+                // Remove first so a retried initialization (e.g. after a prior timeout or
+                // cancellation that left the device connected) does not double-subscribe and
+                // process every inbound message twice; '-=' is a no-op when not subscribed.
                 if (_messageConsumer != null)
                 {
+                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
 
@@ -848,7 +898,7 @@ namespace Daqifi.Core.Device
                     Thread.Sleep(100);
 
                     Send(ScpiMessageProducer.SetProtobufStreamFormat);
-                }, responseTimeoutMs: 1000, cancellationToken: CancellationToken.None);
+                }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 // Surface any SCPI error that occurred during initialization so callers
                 // know the device is not in the expected state.
@@ -860,18 +910,149 @@ namespace Daqifi.Core.Device
                         $"Device returned a SCPI error during initialization: {errorLine.Trim()}");
                 }
 
-                // Query device info – expects a protobuf response, so use plain Send()
-                // now that the protobuf consumer is running again.
-                Send(ScpiMessageProducer.GetDeviceInfo);
-                await Task.Delay(500); // Longer delay to allow device info response
+                // Query device info and block until the device reports its channel
+                // configuration. This replaces the previous fixed delay, which returned an
+                // unpopulated device on serial/CDC connections whose first status message
+                // had not yet arrived.
+                await WaitForChannelsPopulatedAsync(
+                    effectiveChannelPopulationTimeout,
+                    cancellationToken).ConfigureAwait(false);
+
+                // Run any derived-class initialization (e.g. routing the stream to USB) as part of
+                // this try/catch so a failure there leaves the device in a consistent terminal state
+                // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
+                // so a failed init can be safely retried.
+                await OnDeviceInitializingAsync(cancellationToken).ConfigureAwait(false);
 
                 _isInitialized = true;
                 State = DeviceState.Ready;
+            }
+            catch (OperationCanceledException)
+            {
+                // Caller-initiated cancellation is not a device fault. Revert to a
+                // non-error state so upstream logic that treats Error as a hardware or
+                // connection failure isn't misled into reporting a phantom failure.
+                State = IsConnected ? DeviceState.Connected : DeviceState.Disconnected;
+                throw;
             }
             catch (Exception)
             {
                 State = DeviceState.Error;
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// When overridden in a derived class, performs additional device-specific initialization
+        /// after the device reports its channel configuration but before it is marked initialized
+        /// and ready.
+        /// </summary>
+        /// <remarks>
+        /// This runs inside <see cref="InitializeAsync"/>'s exception handling, so a failure here
+        /// leaves the device in a consistent terminal state — cancellation reverts to the connection
+        /// state and other faults set <see cref="DeviceState.Error"/> — rather than a falsely-ready
+        /// device, and the failed initialization can be retried. The base implementation does nothing.
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected virtual Task OnDeviceInitializingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        /// <summary>
+        /// Sends <c>GetDeviceInfo</c> and waits for the device to report its channel
+        /// configuration via the <see cref="ChannelsPopulated"/> event, re-sending the request
+        /// periodically until channels populate or the timeout elapses.
+        /// </summary>
+        /// <param name="timeout">Maximum time to wait before failing.</param>
+        /// <param name="cancellationToken">A cancellation token to observe.</param>
+        /// <returns>A task that completes once channels are populated.</returns>
+        /// <exception cref="TimeoutException">Thrown when no channels are populated within <paramref name="timeout"/>.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        private async Task WaitForChannelsPopulatedAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            var populatedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void OnChannelsPopulated(object? sender, ChannelsPopulatedEventArgs e)
+            {
+                // Only complete on a status that actually reported channels. A status with zero
+                // channels would otherwise satisfy the wait with an empty device — the exact
+                // outcome this method exists to prevent.
+                if (e.AnalogChannelCount + e.DigitalChannelCount > 0)
+                {
+                    populatedTcs.TrySetResult(true);
+                }
+            }
+
+            // Subscribe before sending so a fast response cannot fire the event in the
+            // window between Send() and subscription.
+            ChannelsPopulated += OnChannelsPopulated;
+            try
+            {
+                var stopwatch = Stopwatch.StartNew();
+
+                // Query device info – expects a protobuf response, so use plain Send()
+                // now that the protobuf consumer is running again.
+                Send(ScpiMessageProducer.GetDeviceInfo);
+
+                // If the response arrived synchronously (e.g. the consumer thread fired the
+                // event before we reached the wait loop), short-circuit. We gate on the
+                // completion source rather than _channels.Count so we only react to a status
+                // received after this init began — a prior session may have left stale
+                // channels behind (Disconnect does not clear them), and a fresh SYSInfoPB?
+                // response always repopulates them regardless.
+                if (populatedTcs.Task.IsCompleted)
+                {
+                    return;
+                }
+
+                while (true)
+                {
+                    var remaining = timeout - stopwatch.Elapsed;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        break;
+                    }
+
+                    var pollDelay = remaining < ChannelPopulationPollInterval
+                        ? remaining
+                        : ChannelPopulationPollInterval;
+
+                    var completed = await Task.WhenAny(
+                        populatedTcs.Task,
+                        Task.Delay(pollDelay, cancellationToken)).ConfigureAwait(false);
+
+                    if (completed == populatedTcs.Task)
+                    {
+                        return;
+                    }
+
+                    // The delay elapsed (or was canceled). Honor a result that arrived in the same
+                    // window as cancellation rather than discarding it, then surface cancellation
+                    // before re-requesting.
+                    if (populatedTcs.Task.IsCompleted)
+                    {
+                        return;
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    // Re-request device info: serial/CDC devices can miss the first request
+                    // while the port is still settling.
+                    Send(ScpiMessageProducer.GetDeviceInfo);
+                }
+
+                // The event may have fired right at the timeout boundary.
+                if (populatedTcs.Task.IsCompleted)
+                {
+                    return;
+                }
+
+                throw new TimeoutException(
+                    $"Device '{Name}' did not report its channel configuration within {timeout.TotalSeconds:0.#}s. "
+                    + "The device may be unresponsive or still initializing.");
+            }
+            finally
+            {
+                ChannelsPopulated -= OnChannelsPopulated;
             }
         }
 

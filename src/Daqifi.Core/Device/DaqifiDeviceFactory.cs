@@ -305,7 +305,8 @@ public static class DaqifiDeviceFactory
         {
             DeviceName = deviceName,
             ConnectionRetry = effectiveOptions.ConnectionRetry,
-            InitializeDevice = effectiveOptions.InitializeDevice
+            InitializeDevice = effectiveOptions.InitializeDevice,
+            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout
         };
 
         // Honor LocalInterfaceAddress so multi-homed hosts egress on the NIC that
@@ -346,7 +347,8 @@ public static class DaqifiDeviceFactory
         {
             DeviceName = deviceName,
             ConnectionRetry = effectiveOptions.ConnectionRetry,
-            InitializeDevice = effectiveOptions.InitializeDevice
+            InitializeDevice = effectiveOptions.InitializeDevice,
+            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout
         };
 
         return await ConnectSerialAsync(
@@ -399,7 +401,8 @@ public static class DaqifiDeviceFactory
             // Step 4: Initialize the device if requested
             if (options.InitializeDevice)
             {
-                await device.InitializeAsync().ConfigureAwait(false);
+                await device.InitializeAsync(options.ChannelPopulationTimeout, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             return device;
