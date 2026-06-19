@@ -497,6 +497,36 @@ namespace Daqifi.Core.Tests.Device
 
         #endregion
 
+        #region State preservation across status refresh
+
+        [Fact]
+        public void EnableState_SurvivesStatusRefresh_AndMaskStaysCorrect()
+        {
+            var device = CreateConnectedDevice(analogChannels: 4, digitalChannels: 4);
+            device.EnableChannel(AnalogChannelAt(device, 0));
+            device.EnableChannel(AnalogChannelAt(device, 1));
+            device.SentMessages.Clear();
+
+            // Simulate a later status refresh (e.g. reconnect / metadata re-query), which
+            // recreates the channel instances. Previously-enabled channels must remain enabled.
+            device.PopulateChannelsFromStatus(new DaqifiOutMessage
+            {
+                AnalogInPortNum = 4,
+                AnalogInRes = 65535,
+                DigitalPortNum = 4
+            });
+
+            Assert.True(AnalogChannelAt(device, 0).IsEnabled);
+            Assert.True(AnalogChannelAt(device, 1).IsEnabled);
+
+            // Enabling another channel still yields the full set-replace mask (0,1,2 => 1+2+4 = 7),
+            // not a mask that dropped the channels enabled before the refresh.
+            device.EnableChannel(AnalogChannelAt(device, 2));
+            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("7").Data, device.SentMessages.Last().Data);
+        }
+
+        #endregion
+
         #region Reboot
 
         [Fact]

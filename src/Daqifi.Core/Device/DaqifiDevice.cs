@@ -953,6 +953,19 @@ namespace Daqifi.Core.Device
             // half-cleared or torn list.
             lock (_channelsLock)
             {
+                // Capture the prior per-channel configuration before recreating instances.
+                // A status refresh (e.g. a later GetDeviceInfo on reconnect / metadata refresh)
+                // would otherwise reset every channel to IsEnabled=false, silently discarding
+                // the enable/direction/output state the device-level channel-management API
+                // computes its ADC mask and DIO state from. Keyed by (type, number) since the
+                // channel instances themselves are replaced.
+                var priorState = new Dictionary<(ChannelType, int), (bool IsEnabled, ChannelDirection Direction, bool OutputValue)>();
+                foreach (var existing in _channels)
+                {
+                    var outputValue = existing is IDigitalChannel digitalExisting && digitalExisting.OutputValue;
+                    priorState[(existing.Type, existing.ChannelNumber)] = (existing.IsEnabled, existing.Direction, outputValue);
+                }
+
                 // Clear existing channels before repopulating
                 _channels.Clear();
 
@@ -966,6 +979,23 @@ namespace Daqifi.Core.Device
                 if (message.DigitalPortNum > 0)
                 {
                     digitalCount = PopulateDigitalChannels(message);
+                }
+
+                // Reapply the captured state to the freshly created channels so configuration
+                // survives the refresh. Channels with no prior entry keep their defaults.
+                foreach (var channel in _channels)
+                {
+                    if (!priorState.TryGetValue((channel.Type, channel.ChannelNumber), out var state))
+                    {
+                        continue;
+                    }
+
+                    channel.IsEnabled = state.IsEnabled;
+                    channel.Direction = state.Direction;
+                    if (channel is IDigitalChannel digitalChannel)
+                    {
+                        digitalChannel.OutputValue = state.OutputValue;
+                    }
                 }
 
                 channelsSnapshot = _channels.ToArray();
