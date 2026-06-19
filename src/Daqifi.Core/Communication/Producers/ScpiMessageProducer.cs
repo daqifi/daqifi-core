@@ -209,6 +209,17 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetSdMaxFileSize => new ScpiMessage("SYSTem:STORage:SD:MAXSize?");
 
     /// <summary>
+    /// Creates a query message to get the free and total byte counts of the SD card.
+    /// </summary>
+    /// <remarks>
+    /// Returns a single line of the form <c>"free,total"</c>, where both values are
+    /// unsigned byte counts.
+    /// Command: SYSTem:STORage:SD:SPACe?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdSpace);
+    /// </remarks>
+    public static IOutboundMessage<string> GetSdSpace => new ScpiMessage("SYSTem:STORage:SD:SPACe?");
+
+    /// <summary>
     /// Creates a command message to run an SD card write speed benchmark.
     /// </summary>
     /// <param name="size">The size in bytes to benchmark.</param>
