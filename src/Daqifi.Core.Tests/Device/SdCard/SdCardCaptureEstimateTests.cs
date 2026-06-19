@@ -49,6 +49,18 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public void BytesPerSecond_WhenProductOverflowsLong_ClampsToMaxValue()
+        {
+            // frequency × channels × bytesPerSample overflows a long; the property clamps instead of
+            // wrapping to a negative value that would corrupt the warning decision.
+            var estimate = new SdCardCaptureEstimate(int.MaxValue, int.MaxValue, TimeSpan.FromSeconds(1), int.MaxValue);
+
+            Assert.Equal(long.MaxValue, estimate.BytesPerSecond);
+            // EstimatedBytes derives from the clamped rate and stays clamped (not wrapped negative).
+            Assert.Equal(long.MaxValue, estimate.EstimatedBytes);
+        }
+
+        [Fact]
         public void EstimatedBytes_WhenOverflowing_ClampsToMaxValue()
         {
             // An astronomically long capture at high rate would overflow a long; the property clamps instead.

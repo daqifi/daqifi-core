@@ -77,9 +77,24 @@ public sealed class SdCardCaptureEstimate
 
     /// <summary>
     /// Gets the estimated write rate in bytes per second:
-    /// <c>FrequencyHz × ChannelCount × BytesPerSamplePerChannel</c>.
+    /// <c>FrequencyHz × ChannelCount × BytesPerSamplePerChannel</c>, clamped to <see cref="long.MaxValue"/>
+    /// if the product would overflow. Clamping keeps the warning layer correct: an overflow that wrapped
+    /// negative would make a capture wrongly appear to fit and suppress the truncation ETA.
     /// </summary>
-    public long BytesPerSecond => (long)FrequencyHz * ChannelCount * BytesPerSamplePerChannel;
+    public long BytesPerSecond
+    {
+        get
+        {
+            try
+            {
+                return checked((long)FrequencyHz * ChannelCount * BytesPerSamplePerChannel);
+            }
+            catch (OverflowException)
+            {
+                return long.MaxValue;
+            }
+        }
+    }
 
     /// <summary>
     /// Gets the estimated total bytes the capture will write, clamped to <see cref="long.MaxValue"/> if it
