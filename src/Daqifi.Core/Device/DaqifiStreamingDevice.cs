@@ -103,9 +103,9 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Initializes the device with the standard SCPI sequence and, for USB/serial connections,
-        /// additionally sets the streaming interface to USB so data is routed to the serial consumer
-        /// rather than to a previously-configured WiFi destination.
+        /// For USB/serial connections, sets the streaming interface to USB so data is routed to the
+        /// serial consumer rather than to a previously-configured WiFi destination. Runs as part of
+        /// <see cref="DaqifiDevice.InitializeAsync"/> after the standard SCPI sequence.
         /// </summary>
         /// <remarks>
         /// The DAQiFi firmware persists the last configured stream interface across sessions.
@@ -113,31 +113,32 @@ namespace Daqifi.Core.Device
         /// it will continue sending data over WiFi even when connected via USB — causing the serial
         /// consumer to receive nothing. Sending <c>SYSTem:STReam:INTerface 0</c> during USB
         /// initialization ensures data flows to the serial port.
+        ///
+        /// This runs inside the base <see cref="DaqifiDevice.InitializeAsync"/> exception handling
+        /// (before the device is marked initialized/ready), so a cancellation or SCPI error here
+        /// leaves the device in a consistent state and re-initializable, rather than falsely Ready.
         /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
         /// <returns>A task representing the asynchronous initialization operation.</returns>
-        public override async Task InitializeAsync()
+        protected override async Task OnDeviceInitializingAsync(CancellationToken cancellationToken)
         {
-            // Capture pre-init state so we can skip the USB step on repeated calls
-            // (base.InitializeAsync() guards with _isInitialized and returns early on repeats).
-            var needsUsbInit = IsUsbConnection && State != DeviceState.Ready;
-
-            await base.InitializeAsync();
-
-            if (needsUsbInit)
+            if (!IsUsbConnection)
             {
-                // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
-                // command is sent in text mode (protobuf consumer temporarily stopped) and any
-                // SCPI error response is captured rather than garbling the protobuf stream.
-                var lines = await ExecuteTextCommandAsync(
-                    () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
-                    responseTimeoutMs: 500,
-                    cancellationToken: CancellationToken.None);
+                return;
+            }
 
-                if (ContainsScpiError(lines))
-                {
-                    throw new InvalidOperationException(
-                        "Device returned a SCPI error while setting stream interface to USB.");
-                }
+            // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
+            // command is sent in text mode (protobuf consumer temporarily stopped) and any
+            // SCPI error response is captured rather than garbling the protobuf stream.
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
+                responseTimeoutMs: 500,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (ContainsScpiError(lines))
+            {
+                throw new InvalidOperationException(
+                    "Device returned a SCPI error while setting stream interface to USB.");
             }
         }
 

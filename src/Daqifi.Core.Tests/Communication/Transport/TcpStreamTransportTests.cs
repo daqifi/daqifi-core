@@ -35,9 +35,22 @@ public class TcpStreamTransportTests
     {
         // Arrange
         using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
-        
-        // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => transport.Stream);
+
+        // Act & Assert - ThrowsAny (assignability), mirroring how a consumer's
+        // catch (InvalidOperationException) still catches the now-derived typed exception.
+        Assert.ThrowsAny<InvalidOperationException>(() => transport.Stream);
+    }
+
+    [Fact]
+    public void TcpStreamTransport_Stream_WhenNotConnected_ThrowsTransportNotConnectedException()
+    {
+        // Arrange
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
+
+        // Act & Assert - the typed exception (uniform with the serial transport), which is
+        // still an InvalidOperationException so existing broad catches keep working.
+        var ex = Assert.Throws<TransportNotConnectedException>(() => transport.Stream);
+        Assert.IsAssignableFrom<InvalidOperationException>(ex);
     }
 
     [Fact]
@@ -193,6 +206,37 @@ public class TcpStreamTransportTests
         {
             listener.Stop();
         }
+    }
+
+    [Fact]
+    public async Task TcpStreamTransport_ConnectAsync_WhenConnectTimesOut_ThrowsTimeoutException()
+    {
+        // Arrange - substitute a never-completing connect task (internal test seam), so the
+        // configured timeout is deterministically what fails the attempt — no dependency on how
+        // the host's network stack treats an unroutable address. The timeout used to surface as
+        // TaskCanceledException (the WaitAsync cancellation token), which read like an app bug
+        // to consumers (daqifi-desktop#517) — it must be a TimeoutException.
+        using var transport = new TcpStreamTransport(IPAddress.Parse("192.0.2.1"), 9760);
+        transport.ConnectTaskFactory = _ => Task.Delay(Timeout.Infinite);
+        TransportStatusEventArgs? capturedArgs = null;
+        transport.StatusChanged += (sender, args) => capturedArgs = args;
+        var options = new ConnectionRetryOptions
+        {
+            Enabled = false,
+            MaxAttempts = 1,
+            ConnectionTimeout = TimeSpan.FromMilliseconds(250)
+        };
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<TimeoutException>(() => transport.ConnectAsync(options));
+        Assert.Contains("192.0.2.1:9760", ex.Message);
+        Assert.IsAssignableFrom<OperationCanceledException>(ex.InnerException);
+        Assert.False(transport.IsConnected);
+
+        // The status event must carry the translated exception too.
+        Assert.NotNull(capturedArgs);
+        Assert.False(capturedArgs.IsConnected);
+        Assert.IsType<TimeoutException>(capturedArgs.Error);
     }
 
     // Integration test that requires a real server - marked as integration test
