@@ -79,14 +79,6 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
-    public void GetSdLoggingState_ReturnsCorrectCommand()
-    {
-        var message = ScpiMessageProducer.GetSdLoggingState;
-        Assert.Equal("SYSTem:STORage:SD:LOGging?", message.Data);
-        AssertMessageFormat(message);
-    }
-
-    [Fact]
     public void GetSdFileList_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.GetSdFileList;

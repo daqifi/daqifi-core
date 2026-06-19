@@ -109,15 +109,6 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> DisableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 0");
 
     /// <summary>
-    /// Creates a query message to get the current SD card logging state.
-    /// </summary>
-    /// <remarks>
-    /// Command: SYSTem:STORage:SD:LOGging?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdLoggingState);
-    /// </remarks>
-    public static IOutboundMessage<string> GetSdLoggingState => new ScpiMessage("SYSTem:STORage:SD:LOGging?");
-
-    /// <summary>
     /// Creates a query message to get the list of files on the SD card.
     /// </summary>
     /// <remarks>
