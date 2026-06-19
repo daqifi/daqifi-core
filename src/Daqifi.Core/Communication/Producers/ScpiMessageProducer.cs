@@ -129,7 +129,7 @@ public class ScpiMessageProducer
     /// <summary>
     /// Creates a query message to retrieve a specific file from the SD card.
     /// </summary>
-    /// <param name="fileName">The name of the file to retrieve. Must be enclosed in quotes.</param>
+    /// <param name="fileName">The name of the file to retrieve. Provide the bare name without surrounding quotes; they are added automatically.</param>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:GET "filename.bin"
     /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFile("data.bin"));
@@ -142,15 +142,17 @@ public class ScpiMessageProducer
     /// <summary>
     /// Creates a command message to set the logging file name on the SD card.
     /// </summary>
-    /// <param name="fileName">The name of the file to create or append to. Must be enclosed in quotes.</param>
+    /// <param name="fileName">The name of the file to create or append to. Provide the bare name without surrounding quotes; they are added automatically.</param>
     /// <remarks>
     /// The specified file will be created if it doesn't exist, or appended to if it already exists.
-    /// Command: SYSTem:STORage:SD:LOGging "filename.bin"
+    /// Command: SYSTem:STORage:SD:FILE "filename.bin"
+    /// Requires firmware v3.5.0 or newer; the command was renamed from
+    /// <c>SYSTem:STORage:SD:LOGging</c> and older firmware does not accept it (see daqifi-core#251).
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
     public static IOutboundMessage<string> SetSdLoggingFileName(string fileName)
     {
-        return new ScpiMessage($"SYSTem:STORage:SD:LOGging \"{fileName}\"");
+        return new ScpiMessage($"SYSTem:STORage:SD:FILE \"{fileName}\"");
     }
 
     /// <summary>

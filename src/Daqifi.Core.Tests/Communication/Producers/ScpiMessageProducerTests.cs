@@ -106,7 +106,7 @@ public class ScpiMessageProducerTests
     public void SetSdLoggingFileName_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.SetSdLoggingFileName("log.bin");
-        Assert.Equal("SYSTem:STORage:SD:LOGging \"log.bin\"", message.Data);
+        Assert.Equal("SYSTem:STORage:SD:FILE \"log.bin\"", message.Data);
         AssertMessageFormat(message);
     }
 
