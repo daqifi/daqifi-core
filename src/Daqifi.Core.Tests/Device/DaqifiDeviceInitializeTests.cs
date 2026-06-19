@@ -191,6 +191,89 @@ namespace Daqifi.Core.Tests.Device
             // Act & Assert
             await Assert.ThrowsAsync<OperationCanceledException>(
                 () => device.InitializeAsync(TimeSpan.FromSeconds(5), cts.Token));
+
+            // Caller-initiated cancellation is not a device fault — state must not flip to Error.
+            Assert.NotEqual(DeviceState.Error, device.State);
+            Assert.Equal(DeviceState.Connected, device.State);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenChannelsPopulateAsynchronously_CompletesViaWaitLoop()
+        {
+            // Arrange — channels arrive on a background thread after a delay (as on real hardware
+            // via the consumer thread), forcing the Task.WhenAny wait loop rather than the
+            // synchronous short-circuit.
+            var device = new TestableDaqifiDevice("TestDevice")
+            {
+                AsyncPopulationDelay = TimeSpan.FromMilliseconds(150)
+            };
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync(TimeSpan.FromSeconds(5));
+
+            // Assert
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(4, device.Channels.Count);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_StreamingUsb_Succeeds_SetsReadyAndRoutesToUsb()
+        {
+            // Arrange
+            var device = new TestableStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert — device is ready and the USB stream-interface command was sent
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(4, device.Channels.Count);
+            Assert.Contains(device.SentData, d => d.Contains("SYSTem:STReam:INTerface 0"));
+        }
+
+        [Fact]
+        public async Task InitializeAsync_StreamingUsb_WhenUsbStepReturnsScpiError_SetsErrorNotReady()
+        {
+            // Arrange — the USB SetStreamInterface step fails after base init populated channels
+            var device = new TestableStreamingDevice("TestDevice", UsbStepBehavior.ScpiError);
+            device.Connect();
+
+            // Act & Assert — failure in the override must not leave the device falsely Ready
+            await Assert.ThrowsAsync<InvalidOperationException>(() => device.InitializeAsync());
+            Assert.Equal(DeviceState.Error, device.State);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_StreamingUsb_WhenCancelledDuringUsbStep_RevertsToConnected()
+        {
+            // Arrange — cancellation hits the USB step after base init reached the channel wait
+            var device = new TestableStreamingDevice("TestDevice", UsbStepBehavior.Cancel);
+            device.Connect();
+
+            // Act & Assert — cancellation in the override is not a fault; state reverts, not Error,
+            // and not the falsely-Ready state the old override could leave behind.
+            await Assert.ThrowsAsync<OperationCanceledException>(() => device.InitializeAsync());
+            Assert.Equal(DeviceState.Connected, device.State);
+            Assert.NotEqual(DeviceState.Ready, device.State);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1000)]
+        public async Task InitializeAsync_WithNonPositiveTimeout_ThrowsArgumentOutOfRangeException(int timeoutMs)
+        {
+            // Arrange
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+
+            // Act & Assert — a misconfigured timeout is an argument error, not a device timeout
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+                () => device.InitializeAsync(TimeSpan.FromMilliseconds(timeoutMs)));
+
+            // Misconfiguration must not flip the device into an error state.
+            Assert.Equal(DeviceState.Connected, device.State);
         }
 
         /// <summary>
@@ -218,6 +301,14 @@ namespace Daqifi.Core.Tests.Device
             /// </summary>
             public bool PopulateChannelsOnDeviceInfo { get; set; }
 
+            /// <summary>
+            /// When set, channels populate asynchronously after this delay on a background thread
+            /// (simulating a status that arrives via the consumer thread) instead of synchronously
+            /// inside Send. This exercises the production Task.WhenAny wait loop rather than the
+            /// synchronous short-circuit.
+            /// </summary>
+            public TimeSpan? AsyncPopulationDelay { get; set; }
+
             public TestableDaqifiDevice(
                 string name,
                 IPAddress? ipAddress = null,
@@ -243,11 +334,26 @@ namespace Daqifi.Core.Tests.Device
                         DeviceInfoRequestCount++;
                         if (PopulateChannelsOnDeviceInfo)
                         {
-                            PopulateChannelsFromStatus(new DaqifiOutMessage
+                            if (AsyncPopulationDelay is { } delay)
                             {
-                                AnalogInPortNum = 2,
-                                DigitalPortNum = 2
-                            });
+                                _ = Task.Run(async () =>
+                                {
+                                    await Task.Delay(delay);
+                                    PopulateChannelsFromStatus(new DaqifiOutMessage
+                                    {
+                                        AnalogInPortNum = 2,
+                                        DigitalPortNum = 2
+                                    });
+                                });
+                            }
+                            else
+                            {
+                                PopulateChannelsFromStatus(new DaqifiOutMessage
+                                {
+                                    AnalogInPortNum = 2,
+                                    DigitalPortNum = 2
+                                });
+                            }
                         }
                     }
                 }
@@ -262,6 +368,80 @@ namespace Daqifi.Core.Tests.Device
                 // Run the setup action so that Send() calls inside it are captured
                 setupAction();
                 return Task.FromResult(_textCommandResponse);
+            }
+        }
+
+        /// <summary>
+        /// Outcome of the streaming device's USB SetStreamInterface step, used to exercise the
+        /// failure paths of the OnDeviceInitializingAsync hook.
+        /// </summary>
+        private enum UsbStepBehavior
+        {
+            Succeed,
+            ScpiError,
+            Cancel
+        }
+
+        /// <summary>
+        /// A testable DaqifiStreamingDevice (always USB) whose base init populates channels on
+        /// GetDeviceInfo and whose USB stream-interface step can be made to succeed, return a SCPI
+        /// error, or be canceled.
+        /// </summary>
+        private class TestableStreamingDevice : DaqifiStreamingDevice
+        {
+            private readonly UsbStepBehavior _usbStepBehavior;
+            private readonly List<string> _sent = new();
+
+            public IReadOnlyList<string> SentData => _sent;
+
+            public override bool IsUsbConnection => true;
+
+            public TestableStreamingDevice(string name, UsbStepBehavior usbStepBehavior = UsbStepBehavior.Succeed)
+                : base(name, (IPAddress?)null)
+            {
+                _usbStepBehavior = usbStepBehavior;
+            }
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    _sent.Add(stringMessage.Data);
+                    if (stringMessage.Data.Contains("SYSInfoPB"))
+                    {
+                        PopulateChannelsFromStatus(new DaqifiOutMessage
+                        {
+                            AnalogInPortNum = 2,
+                            DigitalPortNum = 2
+                        });
+                    }
+                }
+            }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                var before = _sent.Count;
+                setupAction();
+                var sentThisCall = _sent.Skip(before).ToList();
+                var isUsbStep = sentThisCall.Any(d => d.Contains("STReam:INTerface"));
+
+                if (isUsbStep)
+                {
+                    switch (_usbStepBehavior)
+                    {
+                        case UsbStepBehavior.ScpiError:
+                            return Task.FromResult<IReadOnlyList<string>>(
+                                new[] { "**ERROR: -200, \"Execution error\"\r\n" });
+                        case UsbStepBehavior.Cancel:
+                            throw new OperationCanceledException();
+                    }
+                }
+
+                return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
             }
         }
     }

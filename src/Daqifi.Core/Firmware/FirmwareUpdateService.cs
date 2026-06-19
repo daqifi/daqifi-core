@@ -1045,7 +1045,9 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             _logger.LogInformation("Waking post-reset device via InitializeAsync.");
             try
             {
-                await initializableDevice.InitializeAsync().ConfigureAwait(false);
+                // Pass the update's token so a cancel during the post-reset wake isn't ignored
+                // while InitializeAsync waits (up to ChannelPopulationTimeout) for channels.
+                await initializableDevice.InitializeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

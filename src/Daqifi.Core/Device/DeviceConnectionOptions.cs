@@ -30,7 +30,9 @@ public class DeviceConnectionOptions
     /// <summary>
     /// Gets or sets the maximum time device initialization waits for the device to report its
     /// channel configuration before failing with a <see cref="TimeoutException"/>.
-    /// Only applies when <see cref="InitializeDevice"/> is true. Default is 8 seconds.
+    /// Only applies when <see cref="InitializeDevice"/> is true. Must be positive; a non-positive
+    /// value causes initialization (and the connecting call) to throw
+    /// <see cref="ArgumentOutOfRangeException"/>. Default is 8 seconds.
     /// </summary>
     public TimeSpan ChannelPopulationTimeout { get; set; } = TimeSpan.FromSeconds(8);
 

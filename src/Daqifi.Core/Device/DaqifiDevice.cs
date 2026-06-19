@@ -829,6 +829,7 @@ namespace Daqifi.Core.Device
         /// channels populate or <paramref name="channelPopulationTimeout"/> elapses (which
         /// surfaces a <see cref="TimeoutException"/>).
         /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected, or the device returns a SCPI error during initialization.</exception>
         /// <exception cref="TimeoutException">Thrown when the device does not report its channel configuration within <paramref name="channelPopulationTimeout"/>.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
@@ -848,6 +849,18 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Validate the effective timeout up front (outside the try) so an invalid
+            // configuration surfaces as ArgumentOutOfRangeException rather than a misleading
+            // TimeoutException that blames the device, and without flipping device state.
+            var effectiveChannelPopulationTimeout = channelPopulationTimeout ?? DefaultChannelPopulationTimeout;
+            if (effectiveChannelPopulationTimeout <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(channelPopulationTimeout),
+                    effectiveChannelPopulationTimeout,
+                    "Channel population timeout must be positive.");
+            }
+
             State = DeviceState.Initializing;
 
             try
@@ -858,9 +871,13 @@ namespace Daqifi.Core.Device
                     streamMessageHandler: OnStreamMessageReceived
                 );
 
-                // Wire up message consumer to route messages through protocol handler
+                // Wire up message consumer to route messages through protocol handler.
+                // Remove first so a retried initialization (e.g. after a prior timeout or
+                // cancellation that left the device connected) does not double-subscribe and
+                // process every inbound message twice; '-=' is a no-op when not subscribed.
                 if (_messageConsumer != null)
                 {
+                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
 
@@ -898,11 +915,25 @@ namespace Daqifi.Core.Device
                 // unpopulated device on serial/CDC connections whose first status message
                 // had not yet arrived.
                 await WaitForChannelsPopulatedAsync(
-                    channelPopulationTimeout ?? DefaultChannelPopulationTimeout,
+                    effectiveChannelPopulationTimeout,
                     cancellationToken).ConfigureAwait(false);
+
+                // Run any derived-class initialization (e.g. routing the stream to USB) as part of
+                // this try/catch so a failure there leaves the device in a consistent terminal state
+                // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
+                // so a failed init can be safely retried.
+                await OnDeviceInitializingAsync(cancellationToken).ConfigureAwait(false);
 
                 _isInitialized = true;
                 State = DeviceState.Ready;
+            }
+            catch (OperationCanceledException)
+            {
+                // Caller-initiated cancellation is not a device fault. Revert to a
+                // non-error state so upstream logic that treats Error as a hardware or
+                // connection failure isn't misled into reporting a phantom failure.
+                State = IsConnected ? DeviceState.Connected : DeviceState.Disconnected;
+                throw;
             }
             catch (Exception)
             {
@@ -910,6 +941,21 @@ namespace Daqifi.Core.Device
                 throw;
             }
         }
+
+        /// <summary>
+        /// When overridden in a derived class, performs additional device-specific initialization
+        /// after the device reports its channel configuration but before it is marked initialized
+        /// and ready.
+        /// </summary>
+        /// <remarks>
+        /// This runs inside <see cref="InitializeAsync"/>'s exception handling, so a failure here
+        /// leaves the device in a consistent terminal state — cancellation reverts to the connection
+        /// state and other faults set <see cref="DeviceState.Error"/> — rather than a falsely-ready
+        /// device, and the failed initialization can be retried. The base implementation does nothing.
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        protected virtual Task OnDeviceInitializingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         /// <summary>
         /// Sends <c>GetDeviceInfo</c> and waits for the device to report its channel
@@ -925,7 +971,16 @@ namespace Daqifi.Core.Device
         {
             var populatedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            void OnChannelsPopulated(object? sender, ChannelsPopulatedEventArgs e) => populatedTcs.TrySetResult(true);
+            void OnChannelsPopulated(object? sender, ChannelsPopulatedEventArgs e)
+            {
+                // Only complete on a status that actually reported channels. A status with zero
+                // channels would otherwise satisfy the wait with an empty device — the exact
+                // outcome this method exists to prevent.
+                if (e.AnalogChannelCount + e.DigitalChannelCount > 0)
+                {
+                    populatedTcs.TrySetResult(true);
+                }
+            }
 
             // Subscribe before sending so a fast response cannot fire the event in the
             // window between Send() and subscription.
@@ -970,8 +1025,14 @@ namespace Daqifi.Core.Device
                         return;
                     }
 
-                    // The delay elapsed (or was canceled). Surface cancellation before
-                    // re-requesting.
+                    // The delay elapsed (or was canceled). Honor a result that arrived in the same
+                    // window as cancellation rather than discarding it, then surface cancellation
+                    // before re-requesting.
+                    if (populatedTcs.Task.IsCompleted)
+                    {
+                        return;
+                    }
+
                     cancellationToken.ThrowIfCancellationRequested();
 
                     // Re-request device info: serial/CDC devices can miss the first request
