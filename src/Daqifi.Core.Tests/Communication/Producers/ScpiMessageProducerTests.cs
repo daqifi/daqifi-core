@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net;
 using System.Text;
 using Daqifi.Core.Communication;
@@ -515,6 +516,63 @@ public class ScpiMessageProducerTests
     {
         var message = ScpiMessageProducer.ForceBootloader;
         Assert.Equal("SYSTem:FORceBoot", message.Data);
+    }
+
+    [Fact]
+    public void SetAnalogOutputVoltage_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0);
+        Assert.Equal("SOURce:VOLTage:LEVel 0,5", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetAnalogOutputVoltage_FormatsFractionalVoltageWithInvariantDecimalPoint()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            // A culture whose decimal separator is a comma must not corrupt the SCPI argument.
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            var message = ScpiMessageProducer.SetAnalogOutputVoltage(2, 2.5);
+            Assert.Equal("SOURce:VOLTage:LEVel 2,2.5", message.Data);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public void SetAnalogOutputVoltage_WithNegativeVoltage_FormatsLeadingMinus()
+    {
+        // Negative channel is rejected, but negative voltage is valid and must render correctly.
+        var message = ScpiMessageProducer.SetAnalogOutputVoltage(0, -3.3);
+        Assert.Equal("SOURce:VOLTage:LEVel 0,-3.3", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetAnalogOutputVoltage_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAnalogOutputVoltage(-1, 1.0));
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void SetAnalogOutputVoltage_WithNonFiniteVoltage_Throws(double voltage)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAnalogOutputVoltage(0, voltage));
+    }
+
+    [Fact]
+    public void UpdateDacOutputs_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.UpdateDacOutputs;
+        Assert.Equal("CONFigure:DAC:UPDATE", message.Data);
+        AssertMessageFormat(message);
     }
 
     private static void AssertMessageFormat(IOutboundMessage<string> message)

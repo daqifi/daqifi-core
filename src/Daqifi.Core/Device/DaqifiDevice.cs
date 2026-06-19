@@ -53,6 +53,25 @@ namespace Daqifi.Core.Device
         public IReadOnlyList<IChannel> Channels => _channels.AsReadOnly();
 
         /// <summary>
+        /// Returns a point-in-time snapshot of the channel collection, taken under the
+        /// channels lock so it is safe to enumerate even when a status message repopulates
+        /// the collection concurrently on the consumer thread.
+        /// </summary>
+        /// <remarks>
+        /// The public <see cref="Channels"/> property exposes a live view over the backing list;
+        /// callers that fold over channels off the consumer thread (e.g. the device-level
+        /// channel-management API) should use this snapshot instead to avoid a concurrent-mutation
+        /// <see cref="InvalidOperationException"/> or a torn read.
+        /// </remarks>
+        protected IReadOnlyList<IChannel> SnapshotChannels()
+        {
+            lock (_channelsLock)
+            {
+                return _channels.ToArray();
+            }
+        }
+
+        /// <summary>
         /// Gets the device's timestamp clock frequency in Hz.
         /// Populated from the <c>TimestampFreq</c> field of the status message.
         /// Used as the fallback frequency for SD card log file parsing when no
@@ -80,6 +99,11 @@ namespace Daqifi.Core.Device
         private bool _isDisconnecting;
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
+
+        // Guards structural access to _channels: the consumer thread repopulates it
+        // (Clear/Add in PopulateChannelsFromStatus) while caller threads fold over a
+        // snapshot via SnapshotChannels for the device-level channel-management API.
+        private readonly object _channelsLock = new();
 
         /// <summary>
         /// Default time <see cref="InitializeAsync"/> waits for the device to report its
@@ -1101,26 +1125,66 @@ namespace Daqifi.Core.Device
                 TimestampFrequency = message.TimestampFreq;
             }
 
-            // Clear existing channels before repopulating
-            _channels.Clear();
-
             var analogCount = 0;
             var digitalCount = 0;
+            IChannel[] channelsSnapshot;
 
-            // Populate analog input channels
-            if (message.AnalogInPortNum > 0)
+            // Repopulate under the channels lock so a caller folding over a snapshot on
+            // another thread (the device-level channel-management API) never observes a
+            // half-cleared or torn list.
+            lock (_channelsLock)
             {
-                analogCount = PopulateAnalogChannels(message);
+                // Capture the prior per-channel configuration before recreating instances.
+                // A status refresh (e.g. a later GetDeviceInfo on reconnect / metadata refresh)
+                // would otherwise reset every channel to IsEnabled=false, silently discarding
+                // the enable/direction/output state the device-level channel-management API
+                // computes its ADC mask and DIO state from. Keyed by (type, number) since the
+                // channel instances themselves are replaced.
+                var priorState = new Dictionary<(ChannelType, int), (bool IsEnabled, ChannelDirection Direction, bool OutputValue)>();
+                foreach (var existing in _channels)
+                {
+                    var outputValue = existing is IDigitalChannel digitalExisting && digitalExisting.OutputValue;
+                    priorState[(existing.Type, existing.ChannelNumber)] = (existing.IsEnabled, existing.Direction, outputValue);
+                }
+
+                // Clear existing channels before repopulating
+                _channels.Clear();
+
+                // Populate analog input channels
+                if (message.AnalogInPortNum > 0)
+                {
+                    analogCount = PopulateAnalogChannels(message);
+                }
+
+                // Populate digital channels
+                if (message.DigitalPortNum > 0)
+                {
+                    digitalCount = PopulateDigitalChannels(message);
+                }
+
+                // Reapply the captured state to the freshly created channels so configuration
+                // survives the refresh. Channels with no prior entry keep their defaults.
+                foreach (var channel in _channels)
+                {
+                    if (!priorState.TryGetValue((channel.Type, channel.ChannelNumber), out var state))
+                    {
+                        continue;
+                    }
+
+                    channel.IsEnabled = state.IsEnabled;
+                    channel.Direction = state.Direction;
+                    if (channel is IDigitalChannel digitalChannel)
+                    {
+                        digitalChannel.OutputValue = state.OutputValue;
+                    }
+                }
+
+                channelsSnapshot = _channels.ToArray();
             }
 
-            // Populate digital channels
-            if (message.DigitalPortNum > 0)
-            {
-                digitalCount = PopulateDigitalChannels(message);
-            }
-
-            // Raise the ChannelsPopulated event with a snapshot to prevent mutations affecting handlers
-            var channelsSnapshot = _channels.ToArray();
+            // Raise the ChannelsPopulated event with a snapshot to prevent mutations affecting
+            // handlers — and outside the lock so a handler that calls back into a channel method
+            // (which takes the same lock) cannot deadlock.
             ChannelsPopulated?.Invoke(this, new ChannelsPopulatedEventArgs(
                 Array.AsReadOnly(channelsSnapshot),
                 analogCount,
