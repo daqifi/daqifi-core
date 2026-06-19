@@ -144,12 +144,14 @@ public class ScpiMessageProducer
     /// <param name="fileName">The name of the file to create or append to. Must be enclosed in quotes.</param>
     /// <remarks>
     /// The specified file will be created if it doesn't exist, or appended to if it already exists.
-    /// Command: SYSTem:STORage:SD:LOGging "filename.bin"
+    /// Command: SYSTem:STORage:SD:FILE "filename.bin"
+    /// Requires firmware v3.5.0 or newer; the command was renamed from
+    /// <c>SYSTem:STORage:SD:LOGging</c> and older firmware does not accept it (see daqifi-core#251).
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
     public static IOutboundMessage<string> SetSdLoggingFileName(string fileName)
     {
-        return new ScpiMessage($"SYSTem:STORage:SD:LOGging \"{fileName}\"");
+        return new ScpiMessage($"SYSTem:STORage:SD:FILE \"{fileName}\"");
     }
 
     /// <summary>
