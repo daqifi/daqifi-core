@@ -1,3 +1,4 @@
+using Daqifi.Core.Channel;
 using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
@@ -8,6 +9,7 @@ using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -173,6 +175,283 @@ namespace Daqifi.Core.Device
 
             IsStreaming = false;
             Send(ScpiMessageProducer.StopStreaming);
+        }
+
+        /// <summary>
+        /// The maximum analog channel number that can be encoded in the ADC enable bitmask.
+        /// The mask is a 32-bit value (<c>1u &lt;&lt; ChannelNumber</c>), so channel numbers must be 0-31.
+        /// </summary>
+        private const int MaxAdcBitmaskChannel = 31;
+
+        /// <inheritdoc />
+        public void EnableChannel(IChannel channel)
+        {
+            ArgumentNullException.ThrowIfNull(channel);
+            SetChannelsEnabled(new[] { channel }, enabled: true);
+        }
+
+        /// <inheritdoc />
+        public void EnableChannels(IEnumerable<IChannel> channels)
+        {
+            ArgumentNullException.ThrowIfNull(channels);
+            SetChannelsEnabled(channels as IReadOnlyList<IChannel> ?? channels.ToList(), enabled: true);
+        }
+
+        /// <inheritdoc />
+        public void DisableChannel(IChannel channel)
+        {
+            ArgumentNullException.ThrowIfNull(channel);
+            SetChannelsEnabled(new[] { channel }, enabled: false);
+        }
+
+        /// <inheritdoc />
+        public void DisableAllChannels()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            foreach (var channel in SnapshotChannels())
+            {
+                channel.IsEnabled = false;
+            }
+
+            // Push the cleared state for whichever channel types this device actually has.
+            SendAdcEnableMask();
+            SendDioEnableState();
+        }
+
+        /// <inheritdoc />
+        public void SetDioDirection(IChannel channel, ChannelDirection direction)
+        {
+            // Argument validation precedes the connection (state) check so misuse surfaces
+            // the same exception type regardless of connection state.
+            ArgumentNullException.ThrowIfNull(channel);
+
+            if (channel.Type != ChannelType.Digital)
+            {
+                throw new ArgumentException("Direction can only be set on digital channels.", nameof(channel));
+            }
+
+            if (direction != ChannelDirection.Input && direction != ChannelDirection.Output)
+            {
+                throw new ArgumentOutOfRangeException(nameof(direction), direction, "Direction must be Input or Output.");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            EnsureChannelBelongs(channel);
+
+            channel.Direction = direction;
+            Send(ScpiMessageProducer.SetDioPortDirection(
+                channel.ChannelNumber,
+                direction == ChannelDirection.Output ? 1 : 0));
+        }
+
+        /// <inheritdoc />
+        public void SetDioValue(IChannel channel, bool value)
+        {
+            ArgumentNullException.ThrowIfNull(channel);
+
+            // Gate on Type (matching SetDioDirection) rather than the IDigitalChannel interface,
+            // so both DIO methods accept the same set of channels. The SCPI command only needs
+            // the channel number; OutputValue mirroring is best-effort local bookkeeping.
+            if (channel.Type != ChannelType.Digital)
+            {
+                throw new ArgumentException("A digital output value can only be set on digital channels.", nameof(channel));
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            EnsureChannelBelongs(channel);
+
+            if (channel is IDigitalChannel digitalChannel)
+            {
+                digitalChannel.OutputValue = value;
+            }
+
+            Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
+        }
+
+        /// <inheritdoc />
+        public void SetAnalogOutput(int channelNumber, double voltage)
+        {
+            if (channelNumber < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            // Analog-output (DAC) channels are addressed by number; they are not part of the
+            // populated Channels collection (PopulateChannelsFromStatus creates analog *input*
+            // channels only). Stage the level, then latch it.
+            Send(ScpiMessageProducer.SetAnalogOutputVoltage(channelNumber, voltage));
+            Send(ScpiMessageProducer.UpdateDacOutputs);
+        }
+
+        /// <inheritdoc />
+        public void Reboot()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.RebootDevice);
+
+            // The device drops its link while restarting, so tear down the local
+            // connection rather than leaving a stale one that reports Connected.
+            Disconnect();
+        }
+
+        /// <summary>
+        /// Sets the enabled state for a set of channels, then sends one device command per affected
+        /// channel type (the ADC enable bitmask for analog, the global DIO enable for digital).
+        /// Validation runs before any mutation so an invalid entry leaves device state untouched.
+        /// </summary>
+        private void SetChannelsEnabled(IReadOnlyList<IChannel> channels, bool enabled)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            // Validate everything up front so a bad entry can't leave a partially-applied state.
+            foreach (var channel in channels)
+            {
+                if (channel is null)
+                {
+                    throw new ArgumentException("The channel collection contains a null entry.", nameof(channels));
+                }
+
+                EnsureChannelBelongs(channel);
+            }
+
+            var touchedAnalog = false;
+            var touchedDigital = false;
+
+            foreach (var channel in channels)
+            {
+                channel.IsEnabled = enabled;
+
+                if (channel.Type == ChannelType.Analog)
+                {
+                    touchedAnalog = true;
+                }
+                else if (channel.Type == ChannelType.Digital)
+                {
+                    touchedDigital = true;
+                }
+            }
+
+            if (touchedAnalog)
+            {
+                SendAdcEnableMask();
+            }
+
+            if (touchedDigital)
+            {
+                SendDioEnableState();
+            }
+        }
+
+        /// <summary>
+        /// Recomputes the ADC enable bitmask over all currently-enabled analog channels and sends it.
+        /// Does nothing when the device has no analog channels. The firmware treats the value as a
+        /// set-replace, so the full mask of enabled analog channels is sent every time.
+        /// </summary>
+        private void SendAdcEnableMask()
+        {
+            uint mask = 0;
+            var hasAnalogChannels = false;
+
+            foreach (var channel in SnapshotChannels())
+            {
+                if (channel.Type != ChannelType.Analog)
+                {
+                    continue;
+                }
+
+                hasAnalogChannels = true;
+
+                if (!channel.IsEnabled)
+                {
+                    continue;
+                }
+
+                if (channel.ChannelNumber > MaxAdcBitmaskChannel)
+                {
+                    throw new InvalidOperationException(
+                        $"Analog channel number {channel.ChannelNumber} exceeds the maximum ({MaxAdcBitmaskChannel}) that can be encoded in the ADC enable bitmask.");
+                }
+
+                mask |= 1u << channel.ChannelNumber;
+            }
+
+            if (!hasAnalogChannels)
+            {
+                return;
+            }
+
+            Send(ScpiMessageProducer.EnableAdcChannels(mask.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        /// <summary>
+        /// Sends the global DIO enable command reflecting whether any digital channel is enabled.
+        /// Does nothing when the device has no digital channels. The firmware exposes only a global
+        /// DIO enable, so per-channel digital enabling is collapsed to this aggregate state.
+        /// </summary>
+        private void SendDioEnableState()
+        {
+            var hasDigitalChannels = false;
+            var anyEnabled = false;
+
+            foreach (var channel in SnapshotChannels())
+            {
+                if (channel.Type != ChannelType.Digital)
+                {
+                    continue;
+                }
+
+                hasDigitalChannels = true;
+
+                if (channel.IsEnabled)
+                {
+                    anyEnabled = true;
+                }
+            }
+
+            if (!hasDigitalChannels)
+            {
+                return;
+            }
+
+            Send(anyEnabled
+                ? ScpiMessageProducer.EnableDioPorts()
+                : ScpiMessageProducer.DisableDioPorts());
+        }
+
+        /// <summary>
+        /// Throws when the supplied channel is not part of this device's populated channel collection,
+        /// which would mean mutating it could not affect the device-level enable state.
+        /// </summary>
+        private void EnsureChannelBelongs(IChannel channel)
+        {
+            if (!SnapshotChannels().Contains(channel))
+            {
+                throw new ArgumentException("The specified channel does not belong to this device.", nameof(channel));
+            }
         }
 
         /// <summary>

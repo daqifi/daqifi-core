@@ -1,4 +1,5 @@
 using System.Net;
+using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
@@ -1300,6 +1301,14 @@ public class FirmwareUpdateServiceTests
         public void Send<T>(IOutboundMessage<T> message) { }
         public void StartStreaming() => IsStreaming = true;
         public void StopStreaming() => IsStreaming = false;
+        public void EnableChannel(IChannel channel) { }
+        public void EnableChannels(IEnumerable<IChannel> channels) { }
+        public void DisableChannel(IChannel channel) { }
+        public void DisableAllChannels() { }
+        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IChannel channel, bool value) { }
+        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void Reboot() => IsConnected = false;
         public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
             await Task.Delay(_attemptLatency, cancellationToken).ConfigureAwait(false);
@@ -1460,6 +1469,15 @@ public class FirmwareUpdateServiceTests
         {
             IsStreaming = false;
         }
+
+        public void EnableChannel(IChannel channel) { }
+        public void EnableChannels(IEnumerable<IChannel> channels) { }
+        public void DisableChannel(IChannel channel) { }
+        public void DisableAllChannels() { }
+        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IChannel channel, bool value) { }
+        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void Reboot() => Disconnect();
     }
 
     private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
@@ -1518,6 +1536,14 @@ public class FirmwareUpdateServiceTests
 
         public void StartStreaming() => IsStreaming = true;
         public void StopStreaming() => IsStreaming = false;
+        public void EnableChannel(IChannel channel) { }
+        public void EnableChannels(IEnumerable<IChannel> channels) { }
+        public void DisableChannel(IChannel channel) { }
+        public void DisableAllChannels() { }
+        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IChannel channel, bool value) { }
+        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void Reboot() => Disconnect();
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {

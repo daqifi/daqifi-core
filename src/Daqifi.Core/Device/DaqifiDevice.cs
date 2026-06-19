@@ -53,6 +53,25 @@ namespace Daqifi.Core.Device
         public IReadOnlyList<IChannel> Channels => _channels.AsReadOnly();
 
         /// <summary>
+        /// Returns a point-in-time snapshot of the channel collection, taken under the
+        /// channels lock so it is safe to enumerate even when a status message repopulates
+        /// the collection concurrently on the consumer thread.
+        /// </summary>
+        /// <remarks>
+        /// The public <see cref="Channels"/> property exposes a live view over the backing list;
+        /// callers that fold over channels off the consumer thread (e.g. the device-level
+        /// channel-management API) should use this snapshot instead to avoid a concurrent-mutation
+        /// <see cref="InvalidOperationException"/> or a torn read.
+        /// </remarks>
+        protected IReadOnlyList<IChannel> SnapshotChannels()
+        {
+            lock (_channelsLock)
+            {
+                return _channels.ToArray();
+            }
+        }
+
+        /// <summary>
         /// Gets the device's timestamp clock frequency in Hz.
         /// Populated from the <c>TimestampFreq</c> field of the status message.
         /// Used as the fallback frequency for SD card log file parsing when no
@@ -80,6 +99,11 @@ namespace Daqifi.Core.Device
         private bool _isDisconnecting;
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
+
+        // Guards structural access to _channels: the consumer thread repopulates it
+        // (Clear/Add in PopulateChannelsFromStatus) while caller threads fold over a
+        // snapshot via SnapshotChannels for the device-level channel-management API.
+        private readonly object _channelsLock = new();
 
         // Serializes ExecuteTextCommandAsync calls device-wide (closes #186).
         // Multiple callers — e.g. concurrent GetSdCardFilesAsync /
@@ -920,26 +944,36 @@ namespace Daqifi.Core.Device
                 TimestampFrequency = message.TimestampFreq;
             }
 
-            // Clear existing channels before repopulating
-            _channels.Clear();
-
             var analogCount = 0;
             var digitalCount = 0;
+            IChannel[] channelsSnapshot;
 
-            // Populate analog input channels
-            if (message.AnalogInPortNum > 0)
+            // Repopulate under the channels lock so a caller folding over a snapshot on
+            // another thread (the device-level channel-management API) never observes a
+            // half-cleared or torn list.
+            lock (_channelsLock)
             {
-                analogCount = PopulateAnalogChannels(message);
+                // Clear existing channels before repopulating
+                _channels.Clear();
+
+                // Populate analog input channels
+                if (message.AnalogInPortNum > 0)
+                {
+                    analogCount = PopulateAnalogChannels(message);
+                }
+
+                // Populate digital channels
+                if (message.DigitalPortNum > 0)
+                {
+                    digitalCount = PopulateDigitalChannels(message);
+                }
+
+                channelsSnapshot = _channels.ToArray();
             }
 
-            // Populate digital channels
-            if (message.DigitalPortNum > 0)
-            {
-                digitalCount = PopulateDigitalChannels(message);
-            }
-
-            // Raise the ChannelsPopulated event with a snapshot to prevent mutations affecting handlers
-            var channelsSnapshot = _channels.ToArray();
+            // Raise the ChannelsPopulated event with a snapshot to prevent mutations affecting
+            // handlers — and outside the lock so a handler that calls back into a channel method
+            // (which takes the same lock) cannot deadlock.
             ChannelsPopulated?.Invoke(this, new ChannelsPopulatedEventArgs(
                 Array.AsReadOnly(channelsSnapshot),
                 analogCount,
