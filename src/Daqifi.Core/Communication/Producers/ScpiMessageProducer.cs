@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using Daqifi.Core.Communication.Messages;
@@ -414,6 +415,46 @@ public class ScpiMessageProducer
     {
         return new ScpiMessage("DIO:PORt:ENAble 0");
     }
+
+    /// <summary>
+    /// Creates a command message to stage an analog output (DAC) voltage on a channel.
+    /// </summary>
+    /// <param name="channel">The analog output channel number.</param>
+    /// <param name="voltage">The output voltage, in volts.</param>
+    /// <remarks>
+    /// Analog output is available on NQ3 hardware only. The staged value is applied on
+    /// the next <see cref="UpdateDacOutputs"/>, allowing multiple channels to be updated
+    /// together. The voltage is formatted with an invariant decimal point so the command
+    /// is locale-independent.
+    /// Command: SOURce:VOLTage:LEVel channel,voltage
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0)); // Channel 0 to 5 V
+    /// </remarks>
+    public static IOutboundMessage<string> SetAnalogOutputVoltage(int channel, double voltage)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        if (!double.IsFinite(voltage))
+        {
+            // NaN/Infinity would render as "NaN"/"Infinity" — tokens the firmware cannot parse.
+            throw new ArgumentOutOfRangeException(nameof(voltage), voltage, "Voltage must be a finite number.");
+        }
+
+        return new ScpiMessage($"SOURce:VOLTage:LEVel {channel},{voltage.ToString(CultureInfo.InvariantCulture)}");
+    }
+
+    /// <summary>
+    /// Creates a command message to apply all staged analog output (DAC) voltages.
+    /// </summary>
+    /// <remarks>
+    /// Latches the values previously staged via <see cref="SetAnalogOutputVoltage"/> so they
+    /// take effect on the hardware. Analog output is available on NQ3 hardware only.
+    /// Command: CONFigure:DAC:UPDATE
+    /// Example: messageProducer.Send(ScpiMessageProducer.UpdateDacOutputs);
+    /// </remarks>
+    public static IOutboundMessage<string> UpdateDacOutputs => new ScpiMessage("CONFigure:DAC:UPDATE");
 
     /// <summary>
     /// Creates a command message to set the device to create its own WiFi network (Self-Hosted mode).

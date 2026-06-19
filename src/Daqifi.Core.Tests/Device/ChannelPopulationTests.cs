@@ -73,6 +73,39 @@ public class ChannelPopulationTests
         Assert.IsAssignableFrom<IReadOnlyList<IChannel>>(device.Channels);
     }
 
+    [Fact]
+    public void PopulateChannelsFromStatus_PreservesEnableDirectionAndOutputAcrossRepopulation()
+    {
+        // A later status refresh (e.g. reconnect / metadata re-query) recreates channel
+        // instances; previously-applied configuration must survive, keyed by (type, number),
+        // so the device-level channel API does not silently lose enable/direction/output state.
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535, DigitalPortNum = 2 };
+        device.PopulateChannelsFromStatus(message);
+
+        var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        analog0.IsEnabled = true;
+        var digital1 = (IDigitalChannel)device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+        digital1.IsEnabled = true;
+        digital1.Direction = ChannelDirection.Output;
+        digital1.OutputValue = true;
+
+        // Repopulate with the same shape — produces a fresh generation of channel instances.
+        device.PopulateChannelsFromStatus(message);
+
+        var newAnalog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        Assert.True(newAnalog0.IsEnabled);
+
+        var newDigital1 = (IDigitalChannel)device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+        Assert.True(newDigital1.IsEnabled);
+        Assert.Equal(ChannelDirection.Output, newDigital1.Direction);
+        Assert.True(newDigital1.OutputValue);
+
+        // A channel that was never configured keeps its defaults.
+        var newAnalog1 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 1);
+        Assert.False(newAnalog1.IsEnabled);
+    }
+
     #endregion
 
     #region Analog Channel Population
