@@ -73,6 +73,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         public IReadOnlyList<SdCardFileInfo> SdCardFiles => _sdCardFiles;
 
+        /// <inheritdoc />
+        public event EventHandler<LowSdSpaceWarningEventArgs>? LowSdSpaceWarning;
+
         private readonly NetworkConfiguration _networkConfiguration = new NetworkConfiguration();
 
         /// <summary>
@@ -771,6 +774,54 @@ namespace Daqifi.Core.Device
         private static bool ContainsNoSdCardMarker(IReadOnlyList<string> lines)
         {
             return lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        /// <inheritdoc />
+        public async Task<SdCardSpaceCheckResult> CheckSdCardSpaceAsync(
+            SdCardCaptureEstimate? plannedCapture = null,
+            long minimumFreeBytes = SdCardSpaceCheck.DefaultMinimumFreeBytes,
+            CancellationToken cancellationToken = default)
+        {
+            // Delegates connection / logging-state validation and the typed SD exceptions
+            // (no card, old firmware, unparseable response) to GetSdCardStorageAsync.
+            var storage = await GetSdCardStorageAsync(cancellationToken).ConfigureAwait(false);
+
+            var result = SdCardSpaceCheck.Evaluate(storage, plannedCapture, minimumFreeBytes);
+
+            // Advisory only — raise the warning but never block the caller from starting logging.
+            if (result.ShouldWarn)
+            {
+                OnLowSdSpaceWarning(new LowSdSpaceWarningEventArgs(result));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Raises the <see cref="LowSdSpaceWarning"/> event.
+        /// </summary>
+        /// <param name="e">The warning event arguments.</param>
+        protected virtual void OnLowSdSpaceWarning(LowSdSpaceWarningEventArgs e)
+        {
+            LowSdSpaceWarning?.Invoke(this, e);
+        }
+
+        /// <inheritdoc />
+        public void SetSdCardMinimumFreeSpace(long bytes)
+        {
+            // Argument validation precedes the connection (state) check so misuse surfaces the same
+            // exception type regardless of connection state (matches SetAnalogOutput / SetDioDirection).
+            if (bytes < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Minimum free space cannot be negative.");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
         }
 
         /// <summary>

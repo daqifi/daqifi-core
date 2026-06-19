@@ -222,6 +222,30 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetSdSpace => new ScpiMessage("SYSTem:STORage:SD:SPACe?");
 
     /// <summary>
+    /// Creates a command message to set the firmware-enforced minimum free-space floor on the SD card.
+    /// When the free space would drop below this threshold, the firmware refuses to start an SD-output
+    /// stream (responding with <c>-200 "Execution error"</c>) rather than silently truncating the capture.
+    /// </summary>
+    /// <param name="bytes">The minimum free space to keep available, in bytes. Use 0 to disable the gate
+    /// (the firmware default).</param>
+    /// <remarks>
+    /// First available on firmware v3.5.0 — at or below the v3.5.0 supported floor, so safe to send
+    /// unconditionally. The firmware gate is a safety mechanism; client software is responsible for the
+    /// user-facing low-space warning (see <see cref="Device.SdCard.SdCardSpaceCheck"/>).
+    /// Command: SYSTem:STORage:SD:MINFree bytes
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetSdMinFreeSpace(52428800)); // 50 MB floor
+    /// </remarks>
+    public static IOutboundMessage<string> SetSdMinFreeSpace(long bytes)
+    {
+        if (bytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Minimum free space cannot be negative.");
+        }
+
+        return new ScpiMessage($"SYSTem:STORage:SD:MINFree {bytes}");
+    }
+
+    /// <summary>
     /// Creates a command message to run an SD card write speed benchmark.
     /// </summary>
     /// <param name="size">The size in bytes to benchmark.</param>

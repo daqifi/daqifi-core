@@ -1208,6 +1208,121 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
         #endregion
 
+        #region CheckSdCardSpaceAsync Tests
+
+        [Fact]
+        public async Task CheckSdCardSpaceAsync_WhenNearlyFull_RaisesWarningAndReturnsResult()
+        {
+            // 50 MB free of a 4 GB card — below the 100 MB default floor.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "52428800,4294967296" };
+            device.Connect();
+
+            LowSdSpaceWarningEventArgs? raised = null;
+            device.LowSdSpaceWarning += (_, e) => raised = e;
+
+            var result = await device.CheckSdCardSpaceAsync();
+
+            Assert.True(result.ShouldWarn);
+            Assert.True(result.IsNearlyFull);
+            Assert.NotNull(raised);
+            Assert.Same(result, raised!.Result);
+        }
+
+        [Fact]
+        public async Task CheckSdCardSpaceAsync_WhenPlentyOfSpace_DoesNotRaiseWarning()
+        {
+            // ~3.7 GB free of a 4 GB card.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "4000000000,4294967296" };
+            device.Connect();
+
+            var raisedCount = 0;
+            device.LowSdSpaceWarning += (_, _) => raisedCount++;
+
+            var result = await device.CheckSdCardSpaceAsync();
+
+            Assert.False(result.ShouldWarn);
+            Assert.Equal(0, raisedCount);
+        }
+
+        [Fact]
+        public async Task CheckSdCardSpaceAsync_WithEstimateThatWontFit_RaisesWarning()
+        {
+            // 200 MB free; an 8 h capture at 8000 B/s (~220 MB) won't fit.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "209715200,4294967296" };
+            device.Connect();
+
+            LowSdSpaceWarningEventArgs? raised = null;
+            device.LowSdSpaceWarning += (_, e) => raised = e;
+
+            var estimate = new SdCardCaptureEstimate(1000, 4, TimeSpan.FromHours(8), bytesPerSamplePerChannel: 2);
+            var result = await device.CheckSdCardSpaceAsync(estimate);
+
+            Assert.True(result.IsInsufficientForCapture);
+            Assert.False(result.IsNearlyFull);
+            Assert.NotNull(raised);
+            Assert.NotNull(result.EstimatedTimeUntilFull);
+        }
+
+        [Fact]
+        public async Task CheckSdCardSpaceAsync_WhenDisconnected_Throws()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.CheckSdCardSpaceAsync());
+        }
+
+        [Fact]
+        public async Task CheckSdCardSpaceAsync_QueriesSdSpace()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "52428800,4294967296" };
+            device.Connect();
+
+            await device.CheckSdCardSpaceAsync();
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:SPACe?", sentCommands);
+        }
+
+        #endregion
+
+        #region SetSdCardMinimumFreeSpace Tests
+
+        [Fact]
+        public void SetSdCardMinimumFreeSpace_WhenConnected_SendsCommand()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            device.SetSdCardMinimumFreeSpace(52428800);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:MINFree 52428800", sentCommands);
+        }
+
+        [Fact]
+        public void SetSdCardMinimumFreeSpace_WhenDisconnected_Throws()
+        {
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            Assert.Throws<InvalidOperationException>(() => device.SetSdCardMinimumFreeSpace(52428800));
+        }
+
+        [Fact]
+        public void SetSdCardMinimumFreeSpace_WithNegativeValue_Throws()
+        {
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetSdCardMinimumFreeSpace(-1));
+        }
+
+        #endregion
+
         #region DownloadSdCardFileAsync Tests
 
         [Fact]
