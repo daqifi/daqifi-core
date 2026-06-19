@@ -285,7 +285,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.bin\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STORage:SD:FILE \"mylog.bin\"", sentCommands[3]);
             Assert.Equal("SYSTem:STReam:FORmat 0", sentCommands[4]);
             Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
         }
@@ -315,7 +315,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            Assert.Contains("SYSTem:STORage:SD:LOGging \"custom_data.bin\"", sentCommands);
+            Assert.Contains("SYSTem:STORage:SD:FILE \"custom_data.bin\"", sentCommands);
         }
 
         [Fact]
@@ -330,7 +330,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
             Assert.Contains(".bin", loggingCommand);
@@ -438,7 +438,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
         }
@@ -455,7 +455,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
         }
@@ -492,7 +492,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.json\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STORage:SD:FILE \"mylog.json\"", sentCommands[3]);
             Assert.Equal("SYSTem:STReam:FORmat 1", sentCommands[4]);
             Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
         }
@@ -513,7 +513,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
             Assert.Equal("SYSTem:STORage:SD:ENAble 1", sentCommands[1]);
             Assert.Equal("SYSTem:STReam:INTerface 2", sentCommands[2]);
-            Assert.Equal("SYSTem:STORage:SD:LOGging \"mylog.csv\"", sentCommands[3]);
+            Assert.Equal("SYSTem:STORage:SD:FILE \"mylog.csv\"", sentCommands[3]);
             Assert.Equal("SYSTem:STReam:FORmat 2", sentCommands[4]);
             Assert.Equal("SYSTem:StartStreamData 100", sentCommands[5]);
         }
@@ -530,7 +530,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
             Assert.Contains(".json", loggingCommand);
@@ -549,7 +549,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             // Assert
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:LOGging"));
+            var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
             Assert.NotNull(loggingCommand);
             Assert.Contains("log_", loggingCommand);
             Assert.Contains(".csv", loggingCommand);

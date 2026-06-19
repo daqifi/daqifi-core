@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using Daqifi.Core.Communication.Messages;
@@ -128,7 +129,7 @@ public class ScpiMessageProducer
     /// <summary>
     /// Creates a query message to retrieve a specific file from the SD card.
     /// </summary>
-    /// <param name="fileName">The name of the file to retrieve. Must be enclosed in quotes.</param>
+    /// <param name="fileName">The name of the file to retrieve. Provide the bare name without surrounding quotes; they are added automatically.</param>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:GET "filename.bin"
     /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFile("data.bin"));
@@ -141,15 +142,17 @@ public class ScpiMessageProducer
     /// <summary>
     /// Creates a command message to set the logging file name on the SD card.
     /// </summary>
-    /// <param name="fileName">The name of the file to create or append to. Must be enclosed in quotes.</param>
+    /// <param name="fileName">The name of the file to create or append to. Provide the bare name without surrounding quotes; they are added automatically.</param>
     /// <remarks>
     /// The specified file will be created if it doesn't exist, or appended to if it already exists.
-    /// Command: SYSTem:STORage:SD:LOGging "filename.bin"
+    /// Command: SYSTem:STORage:SD:FILE "filename.bin"
+    /// Requires firmware v3.5.0 or newer; the command was renamed from
+    /// <c>SYSTem:STORage:SD:LOGging</c> and older firmware does not accept it (see daqifi-core#251).
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
     public static IOutboundMessage<string> SetSdLoggingFileName(string fileName)
     {
-        return new ScpiMessage($"SYSTem:STORage:SD:LOGging \"{fileName}\"");
+        return new ScpiMessage($"SYSTem:STORage:SD:FILE \"{fileName}\"");
     }
 
     /// <summary>
@@ -414,6 +417,46 @@ public class ScpiMessageProducer
     {
         return new ScpiMessage("DIO:PORt:ENAble 0");
     }
+
+    /// <summary>
+    /// Creates a command message to stage an analog output (DAC) voltage on a channel.
+    /// </summary>
+    /// <param name="channel">The analog output channel number.</param>
+    /// <param name="voltage">The output voltage, in volts.</param>
+    /// <remarks>
+    /// Analog output is available on NQ3 hardware only. The staged value is applied on
+    /// the next <see cref="UpdateDacOutputs"/>, allowing multiple channels to be updated
+    /// together. The voltage is formatted with an invariant decimal point so the command
+    /// is locale-independent.
+    /// Command: SOURce:VOLTage:LEVel channel,voltage
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0)); // Channel 0 to 5 V
+    /// </remarks>
+    public static IOutboundMessage<string> SetAnalogOutputVoltage(int channel, double voltage)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        if (!double.IsFinite(voltage))
+        {
+            // NaN/Infinity would render as "NaN"/"Infinity" — tokens the firmware cannot parse.
+            throw new ArgumentOutOfRangeException(nameof(voltage), voltage, "Voltage must be a finite number.");
+        }
+
+        return new ScpiMessage($"SOURce:VOLTage:LEVel {channel},{voltage.ToString(CultureInfo.InvariantCulture)}");
+    }
+
+    /// <summary>
+    /// Creates a command message to apply all staged analog output (DAC) voltages.
+    /// </summary>
+    /// <remarks>
+    /// Latches the values previously staged via <see cref="SetAnalogOutputVoltage"/> so they
+    /// take effect on the hardware. Analog output is available on NQ3 hardware only.
+    /// Command: CONFigure:DAC:UPDATE
+    /// Example: messageProducer.Send(ScpiMessageProducer.UpdateDacOutputs);
+    /// </remarks>
+    public static IOutboundMessage<string> UpdateDacOutputs => new ScpiMessage("CONFigure:DAC:UPDATE");
 
     /// <summary>
     /// Creates a command message to set the device to create its own WiFi network (Self-Hosted mode).
