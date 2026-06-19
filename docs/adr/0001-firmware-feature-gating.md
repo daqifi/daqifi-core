@@ -1,7 +1,8 @@
 # ADR 0001: Firmware-version-aware feature gating
 
-- **Status:** Proposed (2026-06-19)
+- **Status:** Accepted (2026-06-19)
 - **Issue:** [#251](https://github.com/daqifi/daqifi-core/issues/251)
+- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal), [#256](https://github.com/daqifi/daqifi-core/issues/256) (deferred table + #327 reader)
 - **Supersedes:** —
 
 > **Note on the evidence section.** §"Context — firmware audit" below is a *living*
@@ -250,17 +251,16 @@ their place.**
   version. The backstop keeps that honest (it's correct even if the entry is missing).
 
 **Follow-up implementation issues**
-1. **Define `MinSupportedFirmware = v3.5.0`** and a helper on the device to report whether the
-   connected firmware meets it (built on the existing `FirmwareVersion`); surface it once at
-   connect for UI.
-2. **`FeatureNotSupportedException` + command-path backstop** that parses the SCPI error code
-   and special-cases `-113`; land first on `GetSdCardStorageAsync` (the guard deferred from
-   [#214](https://github.com/daqifi/daqifi-core/pull/214)). *Primary near-term deliverable.*
-3. **Remove dead code**: the `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?` query
-   never existed in the firmware SCPI table. Public-API removal, separate from the #253 fix.
-4. *(Deferred — only when we consume a post-v3.5.0 command)* `DeviceFeature` version table +
-   lazy `Supports(...)`.
-5. *(Later, non-blocking)* `CONFigure:CAPabilities:JSON?` reader — the #327 growth path.
+1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinSupportedFirmware = v3.5.0`
+   + `FeatureNotSupportedException` + `-113` backstop** on `GetSdCardStorageAsync` (the guard
+   deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)). *Primary near-term
+   deliverable.*
+2. [#255](https://github.com/daqifi/daqifi-core/issues/255) — **Remove dead code**: the
+   `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?` query never existed in the
+   firmware SCPI table. Public-API removal, separate from the #253 fix.
+3. [#256](https://github.com/daqifi/daqifi-core/issues/256) *(deferred)* — `DeviceFeature`
+   version table + lazy `Supports(...)` (only when we consume a post-v3.5.0 command), and the
+   `CONFigure:CAPabilities:JSON?` reader (#327 growth path).
 
 ## Out of scope
 
