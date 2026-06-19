@@ -35,6 +35,16 @@ namespace Daqifi.Core.Device.SdCard
         Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Retrieves the free and total byte counts of the device's SD card.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
+        /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error or an unparseable response.</exception>
+        Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Starts logging data to the SD card.
         /// </summary>
         /// <param name="fileName">

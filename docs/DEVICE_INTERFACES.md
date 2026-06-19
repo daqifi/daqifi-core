@@ -277,6 +277,45 @@ device.Send(ScpiMessageProducer.StopStreaming);
 Console.WriteLine($"Received {sampleCount} samples");
 ```
 
+### Channel Management
+
+`IStreamingDevice` exposes device-level channel methods that operate over the device's own
+`Channels` collection, so callers no longer need to hand-encode the ADC enable bitmask. Enabling
+or disabling analog channels recomputes the full `ENAble:VOLTage:DC` bitmask internally; digital
+channels are toggled via the global DIO enable.
+
+```csharp
+using Daqifi.Core.Channel;
+
+// Channels are populated after a status message is received from the device.
+var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+var ai2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
+
+// Enable analog input channels (the device receives the combined bitmask, e.g. "5").
+device.EnableChannels(new[] { ai0, ai2 });
+
+// Disable a single channel — the recomputed mask reflects the remaining enabled channels.
+device.DisableChannel(ai0);
+
+// Turn everything off.
+device.DisableAllChannels();
+
+// Digital I/O: set direction and drive an output.
+var dio1 = device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+device.SetDioDirection(dio1, ChannelDirection.Output);
+device.SetDioValue(dio1, true); // drive high
+
+// Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
+device.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
+
+// Reboot the device (also disconnects, since the device drops its link while restarting).
+device.Reboot();
+```
+
+> Channel objects passed to the enable/disable and DIO methods must belong to the device's
+> `Channels` collection (so the internal state and bitmask stay in sync). Analog-output (DAC)
+> channels are not part of `Channels`, so `SetAnalogOutput` takes a channel number directly.
+
 ## SCPI Commands
 
 Use `ScpiMessageProducer` for device commands:
