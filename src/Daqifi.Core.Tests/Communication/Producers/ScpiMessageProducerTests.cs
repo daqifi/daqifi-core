@@ -476,6 +476,29 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    [Fact]
+    public void SetSdMinFreeSpace_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetSdMinFreeSpace(52428800);
+        Assert.Equal("SYSTem:STORage:SD:MINFree 52428800", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetSdMinFreeSpace_WithZero_DisablesGate()
+    {
+        var message = ScpiMessageProducer.SetSdMinFreeSpace(0);
+        Assert.Equal("SYSTem:STORage:SD:MINFree 0", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetSdMinFreeSpace_WithNegativeValue_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.SetSdMinFreeSpace(-1));
+    }
+
     [Theory]
     [InlineData(StreamInterface.Usb, 0)]
     [InlineData(StreamInterface.WiFi, 1)]
