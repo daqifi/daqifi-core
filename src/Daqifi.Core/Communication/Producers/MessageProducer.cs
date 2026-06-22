@@ -1,4 +1,6 @@
 using Daqifi.Core.Communication.Messages;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
 
 namespace Daqifi.Core.Communication.Producers;
@@ -11,6 +13,7 @@ namespace Daqifi.Core.Communication.Producers;
 public class MessageProducer<T> : IMessageProducer<T>
 {
     private readonly Stream _stream;
+    private readonly ILogger<MessageProducer<T>> _logger;
     private readonly ConcurrentQueue<IOutboundMessage<T>> _messageQueue;
     private readonly ManualResetEventSlim _messageAvailable = new(false);
     private volatile bool _isRunning;
@@ -21,10 +24,16 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// Initializes a new instance of the MessageProducer class.
     /// </summary>
     /// <param name="stream">The stream to write messages to.</param>
+    /// <param name="logger">
+    /// Optional logger used to surface write failures and background-loop lifecycle
+    /// events. When omitted, a <see cref="NullLogger{T}"/> is used so existing
+    /// consumers behave exactly as before.
+    /// </param>
     /// <exception cref="ArgumentNullException">Thrown when stream is null.</exception>
-    public MessageProducer(Stream stream)
+    public MessageProducer(Stream stream, ILogger<MessageProducer<T>>? logger = null)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+        _logger = logger ?? NullLogger<MessageProducer<T>>.Instance;
         _messageQueue = new ConcurrentQueue<IOutboundMessage<T>>();
     }
 
@@ -136,34 +145,68 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// </summary>
     private void ProcessMessages()
     {
-        while (_isRunning)
+        try
         {
-            try
+            while (_isRunning)
             {
-                // Wait for a message to be enqueued or timeout after 100ms
-                _messageAvailable.Wait(100);
-                _messageAvailable.Reset();
-
-                // Process all available messages
-                while (_messageQueue.TryDequeue(out var message))
+                try
                 {
-                    try
+                    // Wait for a message to be enqueued or timeout after 100ms
+                    _messageAvailable.Wait(100);
+                    _messageAvailable.Reset();
+
+                    // Process all available messages
+                    while (_messageQueue.TryDequeue(out var message))
                     {
-                        WriteMessageToStream(message);
-                    }
-                    catch (Exception)
-                    {
-                        // Log error but continue processing other messages
-                        // TODO: Add proper logging system in future step
-                        // For now, silently continue to match desktop behavior during shutdown
+                        try
+                        {
+                            WriteMessageToStream(message);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Surface the failure but keep draining the queue so a single
+                            // bad write doesn't stall the remaining messages.
+                            SafeLog(() => _logger.LogWarning(ex, "Failed to write message to the stream; continuing with remaining queued messages."));
+                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    // Protect the background thread from unexpected exceptions so the
+                    // producer keeps running rather than dying silently.
+                    SafeLog(() => _logger.LogError(ex, "Unexpected error in the MessageProducer background loop; the loop will continue running."));
+                }
             }
-            catch (Exception)
-            {
-                // Protect the background thread from unexpected exceptions
-                // TODO: Add proper logging system in future step
-            }
+
+            SafeLog(() => _logger.LogInformation("MessageProducer background loop exited cleanly after a stop was requested."));
+        }
+        catch (Exception ex)
+        {
+            // Last-resort handler. Every logging call in the loop is routed through
+            // SafeLog, so a faulting logger can no longer unwind the loop and this
+            // should be unreachable. If anything ever does escape, we must not leave
+            // the producer advertising IsRunning=true while the background thread is
+            // dead: that would let Send() enqueue messages that never drain and make
+            // StopSafely() block until timeout.
+            _isRunning = false;
+            SafeLog(() => _logger.LogError(ex, "MessageProducer background loop terminated abnormally."));
+        }
+    }
+
+    /// <summary>
+    /// Invokes a logging action, swallowing any exception thrown by the logger
+    /// itself. A faulting logger must never be allowed to terminate the background
+    /// processing loop or leave the producer in an inconsistent state.
+    /// </summary>
+    private static void SafeLog(Action logAction)
+    {
+        try
+        {
+            logAction();
+        }
+        catch
+        {
+            // A logger that throws is not permitted to take down the producer.
         }
     }
 
