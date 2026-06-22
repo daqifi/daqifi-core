@@ -33,19 +33,34 @@ public sealed class HidLibraryDeviceEnumerator : IHidDeviceEnumerator
         {
             // HID enumeration is synchronous; return a completed task to keep
             // the interface async without adding extra thread-pool hops.
-            var devices = _hidPlatform.EnumerateDevices()
-                .Where(device => !vendorId.HasValue || device.VendorId == vendorId.Value)
-                .Where(device => !productId.HasValue || device.ProductId == productId.Value)
-                .OrderBy(device => device.DevicePath, StringComparer.Ordinal)
-                .Select(device => new HidDeviceInfo(
-                    device.VendorId,
-                    device.ProductId,
-                    device.DevicePath,
-                    device.SerialNumber,
-                    device.ProductName))
-                .ToList();
+            var enumerated = _hidPlatform.EnumerateDevices();
+            try
+            {
+                var devices = enumerated
+                    .Where(device => !vendorId.HasValue || device.VendorId == vendorId.Value)
+                    .Where(device => !productId.HasValue || device.ProductId == productId.Value)
+                    .OrderBy(device => device.DevicePath, StringComparer.Ordinal)
+                    .Select(device => new HidDeviceInfo(
+                        device.VendorId,
+                        device.ProductId,
+                        device.DevicePath,
+                        device.SerialNumber,
+                        device.ProductName))
+                    .ToList();
 
-            return Task.FromResult<IReadOnlyList<HidDeviceInfo>>(devices);
+                return Task.FromResult<IReadOnlyList<HidDeviceInfo>>(devices);
+            }
+            finally
+            {
+                // Only metadata (HidDeviceInfo) is returned, so release every
+                // enumerated device handle now. The macOS backend retains a native
+                // IOKit ref per device; this releases it deterministically instead
+                // of leaving it for finalization. No-op for the HidSharp backend.
+                foreach (var device in enumerated)
+                {
+                    (device as IDisposable)?.Dispose();
+                }
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

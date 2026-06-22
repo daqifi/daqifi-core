@@ -95,7 +95,7 @@ internal sealed class MacOsHidPlatform : IHidPlatform
 /// no report-ID byte is prepended/stripped here.
 /// </summary>
 [SupportedOSPlatform("macos")]
-internal sealed class MacOsHidTransportDevice : IHidTransportDevice
+internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
 {
     // The PIC32 HID bootloader uses 64-byte IN/OUT reports. Used as a fallback when
     // the device omits the max-report-size properties from its IORegistry entry.
@@ -105,7 +105,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice
     // only bounds how quickly a missed CFRunLoopStop is observed on teardown.
     private const double RunLoopSliceSeconds = 0.2;
 
-    private readonly IntPtr _deviceRef;            // CFRetain'd in TryCreate; CFRelease'd in the finalizer.
+    private readonly IntPtr _deviceRef;            // CFRetain'd in TryCreate; CFRelease'd in Dispose() (finalizer is the backstop).
     private readonly int _maxInputReportLength;
     private readonly int _maxOutputReportLength;
     private readonly object _lifecycleLock = new();
@@ -143,14 +143,30 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice
 
     ~MacOsHidTransportDevice()
     {
-        // Backstop for the retained device ref. The transport always calls Close()
-        // for a device it opened, so the only object that reaches finalization with
-        // native I/O state is an enumerated-but-unopened device, which holds nothing
-        // but the CFRetain from TryCreate.
+        // Backstop for the retained device ref when Dispose() was not called (the
+        // enumerator and transport now dispose devices deterministically).
         if (Interlocked.Exchange(ref _released, 1) == 0 && _deviceRef != IntPtr.Zero)
         {
             NativeMethods.CFRelease(_deviceRef);
         }
+    }
+
+    /// <summary>
+    /// Releases the retained IOKit device reference deterministically rather than
+    /// at finalization. Callers (the enumerator and transport) dispose every
+    /// enumerated device they do not keep; the bootloader-wait poll loop enumerates
+    /// frequently, so prompt release avoids piling up finalizable objects and
+    /// native handles. Closes the device first if it is still open.
+    /// </summary>
+    public void Dispose()
+    {
+        Close();
+        if (Interlocked.Exchange(ref _released, 1) == 0 && _deviceRef != IntPtr.Zero)
+        {
+            NativeMethods.CFRelease(_deviceRef);
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     public int VendorId { get; }
@@ -286,20 +302,30 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice
         var report = new byte[_maxOutputReportLength];
         Array.Copy(data, report, data.Length);
 
-        var result = NativeMethods.IOHIDDeviceSetReport(
+        // IOHIDDeviceSetReport is synchronous and can stall on an unresponsive
+        // device. Run it on a worker and bound the wait by timeoutMs so the
+        // transport's WriteTimeout is honored, mirroring the HidSharp backend's
+        // stream.WriteTimeout. The captured report keeps the marshalled buffer
+        // pinned until the native call returns even if we stop waiting.
+        var setReport = Task.Run(() => NativeMethods.IOHIDDeviceSetReport(
             _deviceRef,
             NativeMethods.kIOHIDReportTypeOutput,
             reportID: 0,
             report,
-            report.Length);
+            report.Length));
 
-        if (result != NativeMethods.kIOReturnSuccess)
+        if (!setReport.Wait(timeoutMs))
+        {
+            throw new IOException($"IOHIDDeviceSetReport timed out after {timeoutMs} ms.");
+        }
+
+        if (setReport.Result != NativeMethods.kIOReturnSuccess)
         {
             // Surface the IOReturn code: it is the most useful datum for
             // diagnosing an on-device stall (e.g. 0xE00002C0 not-attached on
             // removal), and the firmware retry layer treats IOException the same
             // as the HidSharp path's coarse write-failure.
-            throw new IOException($"IOHIDDeviceSetReport failed (IOReturn=0x{result:X8}).");
+            throw new IOException($"IOHIDDeviceSetReport failed (IOReturn=0x{setReport.Result:X8}).");
         }
 
         return true;
@@ -455,43 +481,43 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice
             NativeMethods.CFRunLoopStop(_runLoop);
         }
 
+        // The run-loop thread deregisters the input callback and unschedules the
+        // device in its finally before exiting, so once it has actually stopped no
+        // callback can touch the native buffer. Verify it stopped before freeing
+        // anything — if a wedged native run loop fails to stop in time, leave the
+        // device/buffer/callback allocated (a bounded leak) rather than free memory
+        // IOKit might still write into, which would crash the process.
         var thread = _ioThread;
-        if (thread != null)
-        {
-            if (thread.IsAlive)
-            {
-                thread.Join(TimeSpan.FromSeconds(5));
-            }
-
-            _ioThread = null;
-        }
-
-        // The thread has exited and unscheduled the device, so no further input
-        // callbacks can fire. It is now safe to free the native buffer/delegate.
-        _runLoop = IntPtr.Zero;
+        var threadStopped = thread is null || !thread.IsAlive || thread.Join(TimeSpan.FromSeconds(5));
 
         _inbox?.CompleteAdding();
 
-        if (_deviceOpened)
+        if (threadStopped)
         {
-            NativeMethods.IOHIDDeviceClose(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
-            _deviceOpened = false;
+            _ioThread = null;
+            _runLoop = IntPtr.Zero;
+
+            if (_deviceOpened)
+            {
+                NativeMethods.IOHIDDeviceClose(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
+                _deviceOpened = false;
+            }
+
+            if (_inputBuffer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(_inputBuffer);
+                _inputBuffer = IntPtr.Zero;
+            }
+
+            _inputCallback = null;
+
+            var inbox = _inbox;
+            _inbox = null;
+            inbox?.Dispose();
+
+            _readyEvent?.Dispose();
+            _readyEvent = null;
         }
-
-        if (_inputBuffer != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(_inputBuffer);
-            _inputBuffer = IntPtr.Zero;
-        }
-
-        _inputCallback = null;
-
-        var inbox = _inbox;
-        _inbox = null;
-        inbox?.Dispose();
-
-        _readyEvent?.Dispose();
-        _readyEvent = null;
 
         _open = false;
     }

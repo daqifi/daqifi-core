@@ -92,13 +92,25 @@ public sealed class HidLibraryTransport : IHidTransport
             }
 
             var serialFilter = NormalizeSerialFilter(serialNumber);
-            var device = _hidPlatform.EnumerateDevices()
+            var candidates = _hidPlatform.EnumerateDevices();
+            var device = candidates
                 .Where(candidate => candidate.VendorId == vendorId)
                 .Where(candidate => candidate.ProductId == productId)
                 .Where(candidate => serialFilter == null ||
                     string.Equals(candidate.SerialNumber, serialFilter, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(candidate => candidate.DevicePath, StringComparer.Ordinal)
                 .FirstOrDefault();
+
+            // Release every enumerated device we are not keeping. The macOS backend
+            // retains a native IOKit ref per device; disposing the unused candidates
+            // frees them now instead of at finalization. No-op for HidSharp devices.
+            foreach (var candidate in candidates)
+            {
+                if (!ReferenceEquals(candidate, device))
+                {
+                    (candidate as IDisposable)?.Dispose();
+                }
+            }
 
             if (device == null)
             {
@@ -115,12 +127,14 @@ public sealed class HidLibraryTransport : IHidTransport
             }
             catch (Exception ex)
             {
+                (device as IDisposable)?.Dispose();
                 throw new IOException("Failed to open HID device.", ex);
             }
 
             if (!device.IsConnected)
             {
                 device.Close();
+                (device as IDisposable)?.Dispose();
                 throw new IOException("HID device did not report a connected state after open.");
             }
 
@@ -258,6 +272,7 @@ public sealed class HidLibraryTransport : IHidTransport
                 _ioLock.Release();
             }
 
+            (_connectedDevice as IDisposable)?.Dispose();
             ClearConnectionState();
 
             if (closeException != null)
@@ -298,6 +313,8 @@ public sealed class HidLibraryTransport : IHidTransport
         {
             // Ignore disconnection errors during disposal.
         }
+
+        (device as IDisposable)?.Dispose();
 
         _connectionLock.Dispose();
         _ioLock.Dispose();
