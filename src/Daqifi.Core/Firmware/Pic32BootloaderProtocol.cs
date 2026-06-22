@@ -118,8 +118,18 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
                         && r.Data.Length > 0
                         && r.Data[0] > 0
                         && r.Data.Length >= r.Data[0] + 5
+                        // The record's FULL byte span must lie within the
+                        // app-flash window. The bootloader filters per byte
+                        // (APP_ProgramHexRecord checks ProgAddress against
+                        // APP_FLASH_BASE/END for each write), so a record whose
+                        // span crosses the window boundary would have its
+                        // out-of-window bytes skipped by the device but still
+                        // CRC'd by the host — a guaranteed mismatch. Require the
+                        // whole span to be in range (overflow-safe form: the
+                        // byte count must fit in the bytes remaining to the end).
                         && r.Address >= AppFlashPhysicalStart
-                        && r.Address <= AppFlashPhysicalEnd)
+                        && r.Address <= AppFlashPhysicalEnd
+                        && (uint)r.Data[0] <= AppFlashPhysicalEnd - r.Address + 1)
             .OrderBy(r => r.Address)
             .ToList();
 

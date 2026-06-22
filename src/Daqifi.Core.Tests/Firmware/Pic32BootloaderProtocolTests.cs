@@ -211,6 +211,28 @@ public class Pic32BootloaderProtocolTests
         Assert.Equal(8u, region.Length);
     }
 
+    [Fact]
+    public void ComputeCrcRegions_ExcludesRecordSpanningPastAppFlashEnd()
+    {
+        // A record whose start is in-window but whose byte span crosses the
+        // app-flash end (0x1D1FFFFF). The bootloader programs per byte and skips
+        // the out-of-window tail, so CRC'ing the whole record would mismatch.
+        // A custom protected range (elsewhere) keeps the protected-range filter
+        // out of the way, isolating the app-flash-span check.
+        var protocol = new Pic32BootloaderProtocol(0x00010000, 0x00020000);
+        var lines = new[]
+        {
+            ":020000041D1FBE",                            // base 0x1D1F0000
+            // 16 bytes @ 0x1D1FFFF8 -> spans 0x1D1FFFF8..0x1D200007 (past 0x1D1FFFFF)
+            ":10FFF800000102030405060708090A0B0C0D0E0F81",
+            ":00000001FF"
+        };
+
+        var regions = protocol.ComputeCrcRegions(lines);
+
+        Assert.Empty(regions);
+    }
+
     private static byte[] FrameReadCrcResponse(ushort flashCrc)
     {
         const byte soh = 0x01;
