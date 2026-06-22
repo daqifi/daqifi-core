@@ -188,6 +188,29 @@ public class Pic32BootloaderProtocolTests
         Assert.Equal(8u, region.Length);
     }
 
+    [Fact]
+    public void ComputeCrcRegions_ExcludesRecordsOutsideAppFlashRange()
+    {
+        // Real firmware HEX files carry linker-emitted data outside the app-flash
+        // partition (e.g. at physical 0x00000000). The bootloader never programs
+        // those records, so including them would compare against flash the device
+        // never wrote and fail verification. They must be excluded.
+        var lines = new[]
+        {
+            ":020000040000FA",                  // base 0x00000000 (outside app flash)
+            ":080000000001020304050607DC",      // 8 bytes @ 0x00000000 — excluded
+            ":020000041D00DD",                  // base 0x1D000000 (app flash)
+            ":080000000001020304050607DC",      // 8 bytes @ 0x1D000000 — kept
+            ":00000001FF"
+        };
+
+        var regions = _protocol.ComputeCrcRegions(lines);
+
+        var region = Assert.Single(regions);
+        Assert.Equal(0x9D000000u, region.Address);
+        Assert.Equal(8u, region.Length);
+    }
+
     private static byte[] FrameReadCrcResponse(ushort flashCrc)
     {
         const byte soh = 0x01;

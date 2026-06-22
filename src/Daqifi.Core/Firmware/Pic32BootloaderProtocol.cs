@@ -14,6 +14,17 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
     private const uint Kseg0Mask = 0x80000000;
     private const byte DataRecordType = 0x00;
 
+    // Application flash partition the bootloader will actually program
+    // (APP_FLASH_BASE_ADDRESS..APP_FLASH_END_ADDRESS in the firmware: 2 MB at
+    // KSEG0 0x9D000000, i.e. physical 0x1D000000..0x1D1FFFFF). The bootloader
+    // silently skips records outside this window — real firmware HEX files carry
+    // linker-emitted data at e.g. physical 0x00000000 that is never flashed — so
+    // those records must be excluded from CRC regions, mirroring exactly what is
+    // programmed. Otherwise verification would compare against flash the device
+    // never wrote and fail every time.
+    private const uint AppFlashPhysicalStart = 0x1D000000;
+    private const uint AppFlashPhysicalEnd = 0x1D1FFFFF;
+
     private readonly IntelHexParser _hexParser;
 
     /// <summary>
@@ -106,7 +117,9 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
             .Where(r => r.RecordType == DataRecordType
                         && r.Data.Length > 0
                         && r.Data[0] > 0
-                        && r.Data.Length >= r.Data[0] + 5)
+                        && r.Data.Length >= r.Data[0] + 5
+                        && r.Address >= AppFlashPhysicalStart
+                        && r.Address <= AppFlashPhysicalEnd)
             .OrderBy(r => r.Address)
             .ToList();
 
