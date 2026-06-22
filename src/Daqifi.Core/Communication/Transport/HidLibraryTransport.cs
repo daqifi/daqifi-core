@@ -20,10 +20,11 @@ public sealed class HidLibraryTransport : IHidTransport
     private TimeSpan _writeTimeout = DefaultWriteTimeout;
 
     /// <summary>
-    /// Initializes a new transport instance backed by the default HidSharp adapter.
+    /// Initializes a new transport instance backed by the platform-appropriate HID
+    /// adapter (HidSharp on Windows/Linux, native IOKit on macOS).
     /// </summary>
     public HidLibraryTransport()
-        : this(new HidLibraryPlatform())
+        : this(HidPlatformFactory.CreateForCurrentPlatform())
     {
     }
 

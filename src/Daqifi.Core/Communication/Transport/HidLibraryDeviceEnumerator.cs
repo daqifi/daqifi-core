@@ -8,10 +8,11 @@ public sealed class HidLibraryDeviceEnumerator : IHidDeviceEnumerator
     private readonly IHidPlatform _hidPlatform;
 
     /// <summary>
-    /// Initializes a new instance backed by the default HID platform adapter.
+    /// Initializes a new instance backed by the platform-appropriate HID adapter
+    /// (HidSharp on Windows/Linux, native IOKit on macOS).
     /// </summary>
     public HidLibraryDeviceEnumerator()
-        : this(new HidLibraryPlatform())
+        : this(HidPlatformFactory.CreateForCurrentPlatform())
     {
     }
 
