@@ -187,6 +187,59 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_WhenReadCrcResponseMalformed_RetriesThenCompletes()
+    {
+        // A transiently malformed READ_CRC frame (decoder throws
+        // InvalidDataException for framing/CRC issues) must be retried like a
+        // HID read glitch — consistent with the erase/program steps — rather
+        // than failing the whole update. Only a real CRC mismatch fails fast.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0x00]);       // malformed READ_CRC response (first attempt)
+        hidTransport.EnqueueRead([0xCD, 0xAB]); // valid READ_CRC → 0xABCD (retry)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 2;
+        options.FlashWriteRetryDelay = TimeSpan.FromMilliseconds(5);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            options);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        // Two READ_CRC writes: the malformed first attempt plus the retry.
+        Assert.Equal(2, hidTransport.Writes.Count(w => w.Length > 0 && w[0] == 0x44));
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_VerifiesEveryCrcRegion()
     {
         // Multiple contiguous runs (e.g. split by a calibration gap) each get

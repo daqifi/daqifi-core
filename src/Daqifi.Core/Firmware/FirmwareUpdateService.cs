@@ -1036,20 +1036,42 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                         .ReadAsync(_options.BootloaderResponseTimeout, ct)
                         .ConfigureAwait(false);
 
-                    var actualCrc = _bootloaderProtocol.DecodeReadCrcResponse(response);
+                    ushort actualCrc;
+                    try
+                    {
+                        actualCrc = _bootloaderProtocol.DecodeReadCrcResponse(response);
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        // A malformed / framing-corrupt READ_CRC frame is a
+                        // transport-level fault, not evidence of bad flash. Surface
+                        // it as transient (like a HID read error) so a one-off USB
+                        // glitch is retried rather than failing the whole update —
+                        // consistent with how the erase/program steps treat
+                        // InvalidDataException.
+                        throw new IOException(
+                            $"READ_CRC response for region {index + 1} at 0x{region.Address:X8} was malformed; " +
+                            "treating as a transient transport fault.",
+                            ex);
+                    }
+
                     if (actualCrc != region.ExpectedCrc)
                     {
+                        // A genuine CRC mismatch is deterministic — the flash does
+                        // not match the image. Throw InvalidDataException, which the
+                        // retry predicate excludes, so verification fails fast into
+                        // the failure/cleanup path rather than masking a bad flash
+                        // behind retries.
                         throw new InvalidDataException(
                             $"Flash CRC mismatch in region {index + 1} at 0x{region.Address:X8} " +
                             $"(length {region.Length}): expected 0x{region.ExpectedCrc:X4}, " +
                             $"device reported 0x{actualCrc:X4}.");
                     }
                 },
-                // Retry only transient transport faults. A CRC mismatch — or a
-                // malformed response surfaced as InvalidDataException — is
-                // deterministic: retrying cannot change it, and verification must
-                // fail fast into the failure/cleanup path rather than mask a bad
-                // flash behind retries.
+                // Retry transient transport faults: HID read errors, timeouts, and
+                // malformed frames (wrapped as IOException above). A CRC mismatch
+                // throws InvalidDataException, which is intentionally NOT retried —
+                // it is deterministic and must fail fast into the failure/cleanup path.
                 ex => ex is IOException or TimeoutException,
                 cancellationToken).ConfigureAwait(false);
 
