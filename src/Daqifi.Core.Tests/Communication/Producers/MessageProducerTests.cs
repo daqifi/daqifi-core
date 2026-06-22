@@ -248,6 +248,31 @@ public class MessageProducerTests
         Assert.True(infoLogged, "Expected an information log when the background loop exits cleanly.");
     }
 
+    [Fact]
+    public void MessageProducer_WhenLoggerThrows_ShouldKeepDrainingAndStopCleanly()
+    {
+        // Arrange - a logger that always throws, combined with writes that always fail,
+        // exercises the logging path on the background thread on every message.
+        using var stream = new ThrowOnWriteStream();
+        var logger = new ThrowingLogger<MessageProducer<string>>();
+        using var producer = new MessageProducer<string>(stream, logger);
+        producer.Start();
+
+        // Act - queue several messages; each failed write triggers a logging call that throws.
+        for (int i = 0; i < 5; i++)
+        {
+            producer.Send(new ScpiMessage($"CMD{i}"));
+        }
+
+        var stopped = producer.StopSafely(2000);
+
+        // Assert - a faulting logger must not kill the loop: the queue still drains, the
+        // producer stops within the timeout, and it never reports a stale running state.
+        Assert.True(stopped, "StopSafely should not hang when the logger throws.");
+        Assert.False(producer.IsRunning);
+        Assert.Equal(0, producer.QueuedMessageCount);
+    }
+
     /// <summary>
     /// Captures log entries in-memory so tests can assert that the producer logs as expected.
     /// </summary>
@@ -272,6 +297,25 @@ public class MessageProducerTests
         }
 
         public sealed record LogEntry(LogLevel Level, Exception? Exception, string Message);
+    }
+
+    /// <summary>
+    /// A logger whose every <see cref="Log"/> call throws, used to verify the producer's
+    /// background loop survives a faulting logging provider.
+    /// </summary>
+    private sealed class ThrowingLogger<TCategory> : ILogger<TCategory>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("Simulated logger failure.");
     }
 
     /// <summary>

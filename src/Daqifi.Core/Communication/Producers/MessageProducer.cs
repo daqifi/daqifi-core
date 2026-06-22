@@ -166,7 +166,7 @@ public class MessageProducer<T> : IMessageProducer<T>
                         {
                             // Surface the failure but keep draining the queue so a single
                             // bad write doesn't stall the remaining messages.
-                            _logger.LogWarning(ex, "Failed to write message to the stream; continuing with remaining queued messages.");
+                            SafeLog(() => _logger.LogWarning(ex, "Failed to write message to the stream; continuing with remaining queued messages."));
                         }
                     }
                 }
@@ -174,26 +174,39 @@ public class MessageProducer<T> : IMessageProducer<T>
                 {
                     // Protect the background thread from unexpected exceptions so the
                     // producer keeps running rather than dying silently.
-                    _logger.LogError(ex, "Unexpected error in the MessageProducer background loop; the loop will continue running.");
+                    SafeLog(() => _logger.LogError(ex, "Unexpected error in the MessageProducer background loop; the loop will continue running."));
                 }
             }
 
-            _logger.LogInformation("MessageProducer background loop exited cleanly after a stop was requested.");
+            SafeLog(() => _logger.LogInformation("MessageProducer background loop exited cleanly after a stop was requested."));
         }
         catch (Exception ex)
         {
-            // Reaching here means an exception escaped the inner guards (most likely
-            // the logger itself faulted). The background thread is ending abnormally.
-            // This is the thread's last-resort handler: an unhandled exception here
-            // would crash the host process, so logging must never be allowed to throw.
-            try
-            {
-                _logger.LogError(ex, "MessageProducer background loop terminated abnormally.");
-            }
-            catch
-            {
-                // Nothing safe left to do from a dying background thread.
-            }
+            // Last-resort handler. Every logging call in the loop is routed through
+            // SafeLog, so a faulting logger can no longer unwind the loop and this
+            // should be unreachable. If anything ever does escape, we must not leave
+            // the producer advertising IsRunning=true while the background thread is
+            // dead: that would let Send() enqueue messages that never drain and make
+            // StopSafely() block until timeout.
+            _isRunning = false;
+            SafeLog(() => _logger.LogError(ex, "MessageProducer background loop terminated abnormally."));
+        }
+    }
+
+    /// <summary>
+    /// Invokes a logging action, swallowing any exception thrown by the logger
+    /// itself. A faulting logger must never be allowed to terminate the background
+    /// processing loop or leave the producer in an inconsistent state.
+    /// </summary>
+    private static void SafeLog(Action logAction)
+    {
+        try
+        {
+            logAction();
+        }
+        catch
+        {
+            // A logger that throws is not permitted to take down the producer.
         }
     }
 
