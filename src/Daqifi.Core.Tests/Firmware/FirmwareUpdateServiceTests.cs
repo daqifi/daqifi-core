@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
@@ -79,6 +80,160 @@ public class FirmwareUpdateServiceTests
 
         var terminalProgress = Assert.Single(progressEvents, p => p.State == FirmwareUpdateState.Complete);
         Assert.Equal(100, terminalProgress.PercentComplete);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenFlashCrcMatches_VerifiesViaReadCrcAndCompletes()
+    {
+        // Closes #213: the Verifying state issues READ_CRC per region and
+        // compares against the host-computed CRC. A matching CRC must pass
+        // verification and complete the update.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0xCD, 0xAB]); // READ_CRC response → decodes to 0xABCD (match)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions());
+
+        var stateTransitions = new List<FirmwareUpdateState>();
+        service.StateChanged += (_, args) => stateTransitions.Add(args.CurrentState);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Contains(FirmwareUpdateState.Verifying, stateTransitions);
+        // The fake encodes READ_CRC commands with a leading 0x44 marker; with a
+        // region configured, the version-liveness fallback is NOT used.
+        Assert.Contains(hidTransport.Writes, w => w.Length > 0 && w[0] == 0x44);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenFlashCrcMismatches_FailsVerificationIntoFailedState()
+    {
+        // Closes #213: a bit-flipped / partially-programmed flash is detected by
+        // the CRC compare and must fail in Verifying (routing through the
+        // failure/cleanup path) rather than jumping to a bad application image.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0x34, 0x12]); // READ_CRC response → 0x1234 (mismatch vs 0xABCD)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions());
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Verifying, exception.FailedState);
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        var inner = Assert.IsType<InvalidDataException>(exception.InnerException);
+        Assert.Contains("CRC mismatch", inner.Message);
+        // Must NOT have jumped to the application after a failed verification.
+        Assert.DoesNotContain(hidTransport.Writes, w => w.Length > 0 && w[0] == 0x55);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_VerifiesEveryCrcRegion()
+    {
+        // Multiple contiguous runs (e.g. split by a calibration gap) each get
+        // their own READ_CRC round-trip.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0x11, 0x00]); // region 1 → 0x0011
+        hidTransport.EnqueueRead([0x22, 0x00]); // region 2 → 0x0022
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions:
+            [
+                new FlashCrcRegion(0x9D000000, 16, 0x0011),
+                new FlashCrcRegion(0x9D000010, 16, 0x0022)
+            ]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions());
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(2, hidTransport.Writes.Count(w => w.Length > 0 && w[0] == 0x44));
     }
 
     [Fact]
@@ -1709,15 +1864,21 @@ public class FirmwareUpdateServiceTests
     private sealed class FakeBootloaderProtocol : IBootloaderProtocol
     {
         private readonly IReadOnlyList<byte[]> _hexRecords;
+        private readonly IReadOnlyList<FlashCrcRegion> _crcRegions;
 
-        public FakeBootloaderProtocol(IReadOnlyList<byte[]> hexRecords)
+        public FakeBootloaderProtocol(
+            IReadOnlyList<byte[]> hexRecords,
+            IReadOnlyList<FlashCrcRegion>? crcRegions = null)
         {
             _hexRecords = hexRecords;
+            _crcRegions = crcRegions ?? Array.Empty<FlashCrcRegion>();
         }
 
         public byte[] CreateRequestVersionMessage() => [0x11];
         public byte[] CreateEraseFlashMessage() => [0x22];
         public byte[] CreateProgramFlashMessage(byte[] hexRecord) => [0x33, .. hexRecord];
+        public byte[] CreateReadCrcMessage(uint address, uint length) =>
+            [0x44, .. BitConverter.GetBytes(address), .. BitConverter.GetBytes(length)];
         public byte[] CreateJumpToApplicationMessage() => [0x55];
 
         public string DecodeVersionResponse(byte[] data)
@@ -1739,6 +1900,21 @@ public class FirmwareUpdateServiceTests
         {
             return data.Length >= 2 && data[0] == 0x01 && data[1] == 0x02;
         }
+
+        // The enqueued READ_CRC HID response carries the device-reported CRC in
+        // its first two bytes (little-endian), so a test drives match/mismatch
+        // by enqueuing specific bytes.
+        public ushort DecodeReadCrcResponse(byte[] data)
+        {
+            if (data.Length < 2)
+            {
+                throw new InvalidDataException("Fake READ_CRC response was too short.");
+            }
+
+            return (ushort)(data[0] | (data[1] << 8));
+        }
+
+        public IReadOnlyList<FlashCrcRegion> ComputeCrcRegions(string[] hexFileLines) => _crcRegions;
 
         public List<byte[]> ParseHexFile(string[] hexFileLines)
         {

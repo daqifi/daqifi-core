@@ -217,6 +217,45 @@ public class Pic32BootloaderMessageProducerTests
     }
 
     [Fact]
+    public void CreateReadCrcMessage_StartsWithSohEndsWithEot()
+    {
+        var message = Pic32BootloaderMessageProducer.CreateReadCrcMessage(0x9D000000, 0x200000);
+
+        Assert.Equal(SOH, message[0]);
+        Assert.Equal(EOT, message[^1]);
+    }
+
+    [Fact]
+    public void CreateReadCrcMessage_EscapesCommandByte()
+    {
+        // READ_CRC command byte 0x04 matches EOT, so it must be DLE-escaped
+        // right after SOH.
+        var message = Pic32BootloaderMessageProducer.CreateReadCrcMessage(0x9D000000, 0x200000);
+
+        Assert.Equal(DLE, message[1]);
+        Assert.Equal(0x04, message[2]);
+    }
+
+    [Fact]
+    public void CreateReadCrcMessage_EncodesAddressAndLengthLittleEndian()
+    {
+        // Values chosen so none of the 8 address/length bytes collide with
+        // SOH/EOT/DLE, keeping their positions stable (no escaping inserted).
+        var message = Pic32BootloaderMessageProducer.CreateReadCrcMessage(0x9D0000A0, 0x000000C8);
+
+        // SOH(0), DLE(1), cmd 0x04(2), then little-endian address...
+        Assert.Equal(0xA0, message[3]);
+        Assert.Equal(0x00, message[4]);
+        Assert.Equal(0x00, message[5]);
+        Assert.Equal(0x9D, message[6]);
+        // ...then little-endian length (200 == 0x000000C8).
+        Assert.Equal(0xC8, message[7]);
+        Assert.Equal(0x00, message[8]);
+        Assert.Equal(0x00, message[9]);
+        Assert.Equal(0x00, message[10]);
+    }
+
+    [Fact]
     public void AllMessages_HaveValidFraming()
     {
         var messages = new[]
@@ -224,6 +263,7 @@ public class Pic32BootloaderMessageProducerTests
             Pic32BootloaderMessageProducer.CreateRequestVersionMessage(),
             Pic32BootloaderMessageProducer.CreateEraseFlashMessage(),
             Pic32BootloaderMessageProducer.CreateProgramFlashMessage([0xAA]),
+            Pic32BootloaderMessageProducer.CreateReadCrcMessage(0x9D000000, 0x200000),
             Pic32BootloaderMessageProducer.CreateJumpToApplicationMessage()
         };
 

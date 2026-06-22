@@ -5,6 +5,7 @@ namespace Daqifi.Core.Tests.Firmware;
 public class Pic32BootloaderMessageConsumerTests
 {
     private const byte SOH = 0x01;
+    private const byte EOT = 0x04;
     private const byte DLE = 0x10;
 
     #region DecodeVersionResponse
@@ -175,6 +176,100 @@ public class Pic32BootloaderMessageConsumerTests
     {
         // SOH + ProgramFlashCommand(0x03)
         Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse([SOH, 0x03]));
+    }
+
+    #endregion
+
+    #region DecodeReadCrcResponse
+
+    // Mirrors the firmware's response framing: content = [0x04, crcLo, crcHi];
+    // a framing CRC-16 over that content is appended, then the whole thing is
+    // SOH/EOT-framed with DLE escaping of any SOH/EOT/DLE bytes.
+    private static byte[] FrameReadCrcResponse(ushort flashCrc, ushort? overrideFrameCrc = null)
+    {
+        byte[] content = [0x04, (byte)(flashCrc & 0xFF), (byte)(flashCrc >> 8)];
+        var frameCrc = overrideFrameCrc ?? new Crc16(content).Crc;
+
+        var body = new List<byte>(content)
+        {
+            (byte)(frameCrc & 0xFF),
+            (byte)(frameCrc >> 8)
+        };
+
+        var framed = new List<byte> { SOH };
+        foreach (var b in body)
+        {
+            if (b is SOH or EOT or DLE)
+            {
+                framed.Add(DLE);
+            }
+            framed.Add(b);
+        }
+        framed.Add(EOT);
+        return framed.ToArray();
+    }
+
+    [Theory]
+    [InlineData((ushort)0x0000)]
+    [InlineData((ushort)0xABCD)]
+    [InlineData((ushort)0x0104)] // bytes collide with SOH/EOT → exercises escaping
+    [InlineData((ushort)0x1004)] // bytes collide with DLE/EOT → exercises escaping
+    [InlineData((ushort)0xFFFF)]
+    public void DecodeReadCrcResponse_RoundTripsFlashCrc(ushort flashCrc)
+    {
+        var framed = FrameReadCrcResponse(flashCrc);
+
+        var decoded = Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(framed);
+
+        Assert.Equal(flashCrc, decoded);
+    }
+
+    [Fact]
+    public void DecodeReadCrcResponse_WithoutSohStart_Throws()
+    {
+        Assert.Throws<InvalidDataException>(
+            () => Pic32BootloaderMessageConsumer.DecodeReadCrcResponse([0x00, 0x04, 0x12, 0x34, EOT]));
+    }
+
+    [Fact]
+    public void DecodeReadCrcResponse_NotEotTerminated_Throws()
+    {
+        // SOH + DLE + cmd + crc bytes but no terminating EOT.
+        Assert.Throws<InvalidDataException>(
+            () => Pic32BootloaderMessageConsumer.DecodeReadCrcResponse([SOH, DLE, 0x04, 0xCD, 0xAB]));
+    }
+
+    [Fact]
+    public void DecodeReadCrcResponse_WrongCommandEcho_Throws()
+    {
+        // Frame a structurally-valid response whose command echo is 0x03, not 0x04.
+        byte[] content = [0x03, 0x12, 0x34];
+        var frameCrc = new Crc16(content).Crc;
+        var body = new List<byte>(content) { (byte)(frameCrc & 0xFF), (byte)(frameCrc >> 8) };
+        var framed = new List<byte> { SOH };
+        foreach (var b in body)
+        {
+            if (b is SOH or EOT or DLE)
+            {
+                framed.Add(DLE);
+            }
+            framed.Add(b);
+        }
+        framed.Add(EOT);
+
+        Assert.Throws<InvalidDataException>(
+            () => Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(framed.ToArray()));
+    }
+
+    [Fact]
+    public void DecodeReadCrcResponse_BadFramingCrc_Throws()
+    {
+        // Correct flash CRC but a corrupted framing CRC must be rejected.
+        var goodFrameCrc = new Crc16([0x04, 0xCD, 0xAB]).Crc;
+        var framed = FrameReadCrcResponse(0xABCD, overrideFrameCrc: (ushort)(goodFrameCrc ^ 0xFFFF));
+
+        Assert.Throws<InvalidDataException>(
+            () => Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(framed));
     }
 
     #endregion

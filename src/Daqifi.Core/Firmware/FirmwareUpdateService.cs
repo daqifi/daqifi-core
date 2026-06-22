@@ -151,15 +151,21 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             throw new FileNotFoundException("Firmware HEX file was not found.", hexFilePath);
         }
 
-        var hexRecords = ParseHexRecords(hexFilePath);
+        var hexLines = File.ReadAllLines(hexFilePath);
+        var hexRecords = _bootloaderProtocol.ParseHexFile(hexLines);
         var totalBytes = hexRecords.Sum(record => (long)record.Length);
         if (totalBytes <= 0)
         {
             throw new InvalidDataException("Firmware HEX file did not contain any writable records.");
         }
 
+        // Computed up front (alongside parsing) so the post-programming Verifying
+        // state can checksum exactly the bytes we programmed via the bootloader
+        // READ_CRC command. See VerifyFlashContentsAsync.
+        var crcRegions = _bootloaderProtocol.ComputeCrcRegions(hexLines);
+
         await RunExclusiveAsync(
-            ct => RunPic32UpdateAsync(device, hexRecords, totalBytes, progress, ct),
+            ct => RunPic32UpdateAsync(device, hexRecords, crcRegions, totalBytes, progress, ct),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -265,6 +271,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     private async Task RunPic32UpdateAsync(
         IStreamingDevice device,
         IReadOnlyList<byte[]> hexRecords,
+        IReadOnlyList<FlashCrcRegion> crcRegions,
         long totalBytes,
         IProgress<FirmwareUpdateProgress>? progress,
         CancellationToken cancellationToken)
@@ -336,16 +343,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 ct => ProgramFlashAsync(hexRecords, totalBytes, progress, ct),
                 cancellationToken).ConfigureAwait(false);
 
-            TransitionToState(FirmwareUpdateState.Verifying, "Verifying bootloader response.");
+            TransitionToState(FirmwareUpdateState.Verifying, "Verifying flash contents via CRC.");
             ReportProgress(progress, FirmwareUpdateState.Verifying, 92, _currentOperation, totalBytes, totalBytes);
 
-            var verificationVersion = await ExecuteWithStateTimeoutAsync(
+            await ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.Verifying,
-                "verify bootloader response",
-                RequestBootloaderVersionAsync,
+                "verify flash contents via CRC",
+                ct => VerifyFlashContentsAsync(crcRegions, progress, totalBytes, ct),
                 cancellationToken).ConfigureAwait(false);
-
-            _logger.LogInformation("Bootloader verification response: {BootloaderVersion}", verificationVersion);
 
             TransitionToState(FirmwareUpdateState.JumpingToApp, "Jumping to application firmware.");
             ReportProgress(progress, FirmwareUpdateState.JumpingToApp, 95, _currentOperation, totalBytes, totalBytes);
@@ -843,12 +848,6 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             : escaped;
     }
 
-    private IReadOnlyList<byte[]> ParseHexRecords(string hexFilePath)
-    {
-        var lines = File.ReadAllLines(hexFilePath);
-        return _bootloaderProtocol.ParseHexFile(lines);
-    }
-
     private async Task<HidDeviceInfo> WaitForBootloaderDeviceAsync(CancellationToken cancellationToken)
     {
         while (true)
@@ -998,6 +997,76 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 bytesWritten,
                 totalBytes);
         }
+    }
+
+    private async Task VerifyFlashContentsAsync(
+        IReadOnlyList<FlashCrcRegion> crcRegions,
+        IProgress<FirmwareUpdateProgress>? progress,
+        long totalBytes,
+        CancellationToken cancellationToken)
+    {
+        if (crcRegions.Count == 0)
+        {
+            // No flashable regions to verify (degenerate/empty image). Fall back
+            // to confirming the bootloader is still responsive so we never jump
+            // to an application we couldn't reach over HID.
+            var version = await RequestBootloaderVersionAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation(
+                "No flash CRC regions to verify; confirmed bootloader liveness: {BootloaderVersion}.",
+                version);
+            return;
+        }
+
+        for (var index = 0; index < crcRegions.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var region = crcRegions[index];
+            await ExecuteWithRetryAsync(
+                $"read flash CRC for region {index + 1} at 0x{region.Address:X8}",
+                _options.FlashWriteRetryCount,
+                _options.FlashWriteRetryDelay,
+                async ct =>
+                {
+                    await _hidTransport
+                        .WriteAsync(_bootloaderProtocol.CreateReadCrcMessage(region.Address, region.Length), ct)
+                        .ConfigureAwait(false);
+
+                    var response = await _hidTransport
+                        .ReadAsync(_options.BootloaderResponseTimeout, ct)
+                        .ConfigureAwait(false);
+
+                    var actualCrc = _bootloaderProtocol.DecodeReadCrcResponse(response);
+                    if (actualCrc != region.ExpectedCrc)
+                    {
+                        throw new InvalidDataException(
+                            $"Flash CRC mismatch in region {index + 1} at 0x{region.Address:X8} " +
+                            $"(length {region.Length}): expected 0x{region.ExpectedCrc:X4}, " +
+                            $"device reported 0x{actualCrc:X4}.");
+                    }
+                },
+                // Retry only transient transport faults. A CRC mismatch — or a
+                // malformed response surfaced as InvalidDataException — is
+                // deterministic: retrying cannot change it, and verification must
+                // fail fast into the failure/cleanup path rather than mask a bad
+                // flash behind retries.
+                ex => ex is IOException or TimeoutException,
+                cancellationToken).ConfigureAwait(false);
+
+            // Verifying occupies the 92→94% band (JumpingToApp starts at 95%).
+            var verifyPercent = 92 + ((index + 1) / (double)crcRegions.Count * 2);
+            ReportProgress(
+                progress,
+                FirmwareUpdateState.Verifying,
+                verifyPercent,
+                $"Verified flash CRC region {index + 1} of {crcRegions.Count}",
+                totalBytes,
+                totalBytes);
+        }
+
+        _logger.LogInformation(
+            "Flash CRC verification passed for {RegionCount} region(s).",
+            crcRegions.Count);
     }
 
     private async Task JumpToApplicationAndReconnectAsync(
@@ -1440,7 +1509,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             FirmwareUpdateState.Programming =>
                 "Programming failed. Retry update while keeping USB connected; device may still be recoverable in bootloader mode.",
             FirmwareUpdateState.Verifying =>
-                "Verification failed. Retry update and confirm the expected firmware package was selected.",
+                "Flash verification failed — the device's flash CRC did not match the firmware image. " +
+                "Retry the update and confirm the expected firmware package was selected.",
             FirmwareUpdateState.JumpingToApp =>
                 "The device did not return to application mode. Power-cycle the device and reconnect.",
             _ =>

@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace Daqifi.Core.Firmware;
 
 /// <summary>
@@ -12,6 +14,7 @@ public static class Pic32BootloaderMessageProducer
     private const byte REQUEST_VERSION_COMMAND = 0x01;
     private const byte ERASE_FLASH_COMMAND = 0x02;
     private const byte PROGRAM_FLASH_COMMAND = 0x03;
+    private const byte READ_CRC_COMMAND = 0x04;
     private const byte JUMP_TO_APPLICATION_COMMAND = 0x05;
 
     /// <summary>
@@ -45,6 +48,24 @@ public static class Pic32BootloaderMessageProducer
         var command = new byte[1 + hexRecord.Length];
         command[0] = PROGRAM_FLASH_COMMAND;
         Array.Copy(hexRecord, 0, command, 1, hexRecord.Length);
+        return ConstructDataPacket(command);
+    }
+
+    /// <summary>
+    /// Creates a <c>READ_CRC</c> message asking the bootloader to checksum a
+    /// flash region. The payload is the command byte followed by the 4-byte
+    /// little-endian address and 4-byte little-endian length the firmware reads
+    /// from <c>buff2[1..4]</c> and <c>buff2[5..8]</c>.
+    /// </summary>
+    /// <param name="address">KSEG0 virtual flash address of the first byte.</param>
+    /// <param name="length">Number of contiguous flash bytes to checksum.</param>
+    /// <returns>The framed and escaped message bytes.</returns>
+    public static byte[] CreateReadCrcMessage(uint address, uint length)
+    {
+        var command = new byte[9];
+        command[0] = READ_CRC_COMMAND;
+        BinaryPrimitives.WriteUInt32LittleEndian(command.AsSpan(1, 4), address);
+        BinaryPrimitives.WriteUInt32LittleEndian(command.AsSpan(5, 4), length);
         return ConstructDataPacket(command);
     }
 
