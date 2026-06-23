@@ -29,6 +29,11 @@
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
+    <!-- USB HID transport. HidSharp backs Windows/Linux. On macOS it enumerates
+         0 HID devices (issue #262), so MacOsHidPlatform uses raw IOKit P/Invoke
+         instead (no package — IOKit/CoreFoundation are Apple-signed system
+         frameworks); HidPlatformFactory selects the backend at runtime. The
+         IOKit DllImports compile on every target and only execute on macOS. -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300" PrivateAssets="All" />
