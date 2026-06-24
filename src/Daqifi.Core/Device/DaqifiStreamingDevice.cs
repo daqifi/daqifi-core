@@ -1334,6 +1334,47 @@ namespace Daqifi.Core.Device
         /// <c>SYSTem:LOG?</c> and the stats queries can emit dozens of lines.</summary>
         private const int DIAGNOSTICS_RESPONSE_TIMEOUT_MS = 2000;
 
+        /// <summary>
+        /// Throws a <see cref="DeviceDiagnosticsException"/> when a diagnostics command produced no
+        /// usable result and the device's response consisted solely of SCPI error/status lines —
+        /// i.e. the command failed (commonly an unsupported header on below-floor firmware) rather
+        /// than legitimately returning nothing. A truly empty response (no lines) is treated as
+        /// success so callers can distinguish "empty log" from "command failed".
+        /// </summary>
+        private static void ThrowIfErrorOnlyResponse(int parsedResultCount, IReadOnlyList<string> lines, string operation)
+        {
+            if (parsedResultCount == 0 && IsErrorOnlyResponse(lines))
+            {
+                throw new DeviceDiagnosticsException(
+                    $"The device returned an error while attempting to {operation}.",
+                    lines);
+            }
+        }
+
+        /// <summary>
+        /// Returns true when the response contains at least one non-empty line and every non-empty
+        /// line is a SCPI error/status line (per <see cref="ScpiResponseClassifier"/>).
+        /// </summary>
+        private static bool IsErrorOnlyResponse(IReadOnlyList<string> lines)
+        {
+            var sawContent = false;
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                sawContent = true;
+                if (!IsNonResultLine(line))
+                {
+                    return false;
+                }
+            }
+
+            return sawContent;
+        }
+
         /// <inheritdoc />
         public async Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
         {
@@ -1349,7 +1390,15 @@ namespace Daqifi.Core.Device
                 responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            return SystemLogParser.Parse(lines);
+            var entries = SystemLogParser.Parse(lines);
+
+            // The parser drops error/status lines, so an error-only response would
+            // otherwise be indistinguishable from a genuinely empty log buffer.
+            // Surface a command failure (e.g. unsupported on below-floor firmware)
+            // rather than returning a misleading empty list.
+            ThrowIfErrorOnlyResponse(entries.Count, lines, "read the system log");
+
+            return entries;
         }
 
         /// <inheritdoc />
@@ -1362,10 +1411,14 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            await ExecuteTextCommandAsync(
+            var lines = await ExecuteTextCommandAsync(
                 () => Send(ScpiMessageProducer.ClearSystemLog),
                 responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            // On success the device echoes a short ack ("Log cleared"); an error-only
+            // response means the command failed and must not be swallowed.
+            ThrowIfErrorOnlyResponse(0, lines, "clear the system log");
         }
 
         /// <inheritdoc />
@@ -1420,7 +1473,14 @@ namespace Daqifi.Core.Device
                 responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            return CommandHistoryParser.Parse(lines);
+            var commands = CommandHistoryParser.Parse(lines);
+
+            // An empty list is valid ("No command history"), but an error-only
+            // response is a failure — distinguish the two. The "No command history"
+            // marker is not an error line, so it never trips this check.
+            ThrowIfErrorOnlyResponse(commands.Count, lines, "read the command history");
+
+            return commands;
         }
 
         /// <inheritdoc />
@@ -1433,10 +1493,14 @@ namespace Daqifi.Core.Device
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            await ExecuteTextCommandAsync(
+            var lines = await ExecuteTextCommandAsync(
                 () => Send(ScpiMessageProducer.TestSystemLog),
                 responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            // On success the device echoes "Added test log messages"; an error-only
+            // response means the command failed and must not be swallowed.
+            ThrowIfErrorOnlyResponse(0, lines, "run the system-log self-test");
         }
 
         /// <inheritdoc />

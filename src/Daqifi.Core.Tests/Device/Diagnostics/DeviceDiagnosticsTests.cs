@@ -37,14 +37,53 @@ public class DeviceDiagnosticsTests
     }
 
     [Fact]
+    public async Task GetSystemLogAsync_WhenBufferEmpty_ReturnsEmpty()
+    {
+        // No lines = genuinely empty buffer (firmware writes nothing); must not throw.
+        var device = new TestableDiagnosticsDevice("TestDevice");
+        device.Connect();
+
+        Assert.Empty(await device.GetSystemLogAsync());
+    }
+
+    [Fact]
+    public async Task GetSystemLogAsync_WhenErrorOnlyResponse_Throws()
+    {
+        // An error-only response must not masquerade as an empty log.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "**ERROR: -113,\"Undefined header\"" },
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.GetSystemLogAsync());
+        Assert.NotEmpty(ex.RawDeviceResponse);
+    }
+
+    [Fact]
     public async Task ClearSystemLogAsync_SendsCommand()
     {
-        var device = new TestableDiagnosticsDevice("TestDevice");
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "Log cleared" },
+        };
         device.Connect();
 
         await device.ClearSystemLogAsync();
 
         Assert.Contains("SYSTem:LOG:CLEar", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task ClearSystemLogAsync_WhenErrorOnlyResponse_Throws()
+    {
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "**ERROR: -113,\"Undefined header\"" },
+        };
+        device.Connect();
+
+        await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.ClearSystemLogAsync());
     }
 
     [Fact]
@@ -125,14 +164,41 @@ public class DeviceDiagnosticsTests
     }
 
     [Fact]
+    public async Task GetCommandHistoryAsync_WhenErrorOnlyResponse_Throws()
+    {
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "**ERROR: -113,\"Undefined header\"" },
+        };
+        device.Connect();
+
+        await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.GetCommandHistoryAsync());
+    }
+
+    [Fact]
     public async Task TestSystemLogAsync_SendsCommand()
     {
-        var device = new TestableDiagnosticsDevice("TestDevice");
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "Added test log messages" },
+        };
         device.Connect();
 
         await device.TestSystemLogAsync();
 
         Assert.Contains("SYSTem:LOG:TEST", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task TestSystemLogAsync_WhenErrorOnlyResponse_Throws()
+    {
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "**ERROR: -113,\"Undefined header\"" },
+        };
+        device.Connect();
+
+        await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.TestSystemLogAsync());
     }
 
     [Fact]
