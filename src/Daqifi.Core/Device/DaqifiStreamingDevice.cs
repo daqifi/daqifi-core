@@ -3,6 +3,7 @@ using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Diagnostics;
 using Daqifi.Core.Device.Network;
 using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Firmware;
@@ -24,7 +25,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics
     {
         /// <summary>
         /// The delay in milliseconds to wait for the WiFi module to restart after applying configuration.
@@ -1315,6 +1316,210 @@ namespace Daqifi.Core.Device
 
             LanChipInfoParser.TryParseLines(lines, out var info);
             return info;
+        }
+
+        // -----------------------------------------------------------------
+        // IDeviceDiagnostics
+        //
+        // Each method issues a single SCPI query/command as a text command
+        // (the protobuf consumer is paused for the exchange, same as the SD
+        // and LAN-chip queries) and hands the response to a tolerant parser.
+        // Unlike the SD operations these do not switch the SPI bus, so there
+        // is no PrepareSdInterface / settle delay; and they intentionally do
+        // not stop streaming, so callers can sample live counters — though
+        // parsing is most reliable when the device is not actively streaming.
+        // -----------------------------------------------------------------
+
+        /// <summary>Time allowed for the first diagnostics response line. Generous because
+        /// <c>SYSTem:LOG?</c> and the stats queries can emit dozens of lines.</summary>
+        private const int DIAGNOSTICS_RESPONSE_TIMEOUT_MS = 2000;
+
+        /// <inheritdoc />
+        public async Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetSystemLog),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            return SystemLogParser.Parse(lines);
+        }
+
+        /// <inheritdoc />
+        public async Task ClearSystemLogAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.ClearSystemLog),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public async Task<LogLevelSetting> SetLogLevelAsync(string module, int level, CancellationToken cancellationToken = default)
+        {
+            // Build the command first so argument validation (ArgumentException /
+            // ArgumentOutOfRangeException) surfaces the same way regardless of
+            // connection state, matching SetAnalogOutput / SetDioDirection.
+            var command = ScpiMessageProducer.SetLogLevel(module, level);
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(command),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (ContainsScpiError(lines))
+            {
+                throw new DeviceDiagnosticsException(
+                    $"The device rejected log level {level} for module '{module}'.",
+                    lines);
+            }
+
+            if (LogLevelParser.TryParseLines(lines, out var setting))
+            {
+                return setting;
+            }
+
+            throw new DeviceDiagnosticsException(
+                $"Setting the log level for module '{module}' returned an unparseable response.",
+                lines);
+        }
+
+        /// <inheritdoc />
+        public async Task<IReadOnlyList<string>> GetCommandHistoryAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetCommandHistory),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            return CommandHistoryParser.Parse(lines);
+        }
+
+        /// <inheritdoc />
+        public async Task TestSystemLogAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.TestSystemLog),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public async Task<int> GetSystemErrorCountAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetSystemErrorCount),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                if (int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
+                {
+                    return count;
+                }
+            }
+
+            throw new DeviceDiagnosticsException(
+                "The error-count query returned an unparseable response.",
+                lines);
+        }
+
+        /// <inheritdoc />
+        public async Task<StreamStats> GetStreamStatsAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetStreamStats),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (StreamStatsParser.TryParse(lines, out var stats))
+            {
+                return stats;
+            }
+
+            throw new DeviceDiagnosticsException(
+                "The streaming-stats query returned an unparseable response.",
+                lines);
+        }
+
+        /// <inheritdoc />
+        public async Task<MemoryDiagnostics> GetMemoryDiagnosticsAsync(CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetMemoryDiagnostics),
+                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (MemoryDiagnosticsParser.TryParse(lines, out var diagnostics))
+            {
+                return diagnostics;
+            }
+
+            throw new DeviceDiagnosticsException(
+                "The memory-diagnostics query returned an unparseable response.",
+                lines);
         }
     }
 }

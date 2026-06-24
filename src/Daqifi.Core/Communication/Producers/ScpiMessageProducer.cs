@@ -703,4 +703,132 @@ public class ScpiMessageProducer
     /// Example: messageProducer.Send(ScpiMessageProducer.GetLanChipInfo);
     /// </remarks>
     public static IOutboundMessage<string> GetLanChipInfo => new ScpiMessage("SYSTem:COMMunicate:LAN:GETChipInfo?");
+
+    // ---------------------------------------------------------------------
+    // Logging & diagnostics
+    //
+    // Firmware exposes a system log buffer, runtime log levels, SCPI command
+    // history, the SCPI error-queue depth, and streaming/memory performance
+    // counters. See the firmware wiki "SCPI Interface — Logging & Diagnostics"
+    // and Device.Diagnostics.IDeviceDiagnostics for the typed wrappers.
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Creates a query message to read and clear the device's system log buffer.
+    /// </summary>
+    /// <remarks>
+    /// Returns all buffered log entries as free-form text lines (one per entry) and clears the
+    /// buffer as a side effect (it also resets one-shot log suppression flags). The firmware does
+    /// not prefix entries with a structured level/module/timestamp; each line is the raw message.
+    /// Command: SYSTem:LOG?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetSystemLog);
+    /// </remarks>
+    public static IOutboundMessage<string> GetSystemLog => new ScpiMessage("SYSTem:LOG?");
+
+    /// <summary>
+    /// Creates a command message to clear the device's system log buffer without reading it.
+    /// </summary>
+    /// <remarks>
+    /// Also resets one-shot log suppression flags. The device replies with a short
+    /// acknowledgement (<c>Log cleared</c>).
+    /// Command: SYSTem:LOG:CLEar
+    /// Example: messageProducer.Send(ScpiMessageProducer.ClearSystemLog);
+    /// </remarks>
+    public static IOutboundMessage<string> ClearSystemLog => new ScpiMessage("SYSTem:LOG:CLEar");
+
+    /// <summary>
+    /// Creates a command message to set the runtime log level for a single module.
+    /// </summary>
+    /// <param name="module">The module name (e.g. <c>STREAM</c>, <c>WIFI</c>, <c>SD</c>, <c>USB</c>, <c>SCPI</c>,
+    /// <c>ADC</c>, <c>DAC</c>, <c>POWER</c>, <c>ENCODER</c>, <c>GENERAL</c>). Case-insensitive on the device.</param>
+    /// <param name="level">The log level: 0 = None, 1 = Error, 2 = Info, 3 = Debug.</param>
+    /// <remarks>
+    /// The device echoes the applied level and the compile-time ceiling
+    /// (<c>MODULE: &lt;level&gt; (ceiling &lt;ceiling&gt;)</c>); the applied level may be lower than requested
+    /// when a module's ceiling is below it.
+    /// Command: SYSTem:LOG:LEVel module,level
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetLogLevel("STREAM", 2));
+    /// </remarks>
+    public static IOutboundMessage<string> SetLogLevel(string module, int level)
+    {
+        if (string.IsNullOrWhiteSpace(module))
+        {
+            throw new ArgumentException("Module name cannot be null or empty.", nameof(module));
+        }
+
+        // Reject characters that would break out of the parameter or inject a
+        // second SCPI command/parameter. Module names are short alpha tokens,
+        // so any of these indicates malformed input.
+        if (module.IndexOfAny(new[] { '"', '\n', '\r', ';', ',', ' ', '\t' }) >= 0)
+        {
+            throw new ArgumentException(
+                "Module name contains invalid characters. Quotes, commas, semicolons, and whitespace are not allowed.",
+                nameof(module));
+        }
+
+        if (level < 0 || level > 3)
+        {
+            throw new ArgumentOutOfRangeException(nameof(level), level, "Log level must be between 0 (None) and 3 (Debug).");
+        }
+
+        return new ScpiMessage($"SYSTem:LOG:LEVel {module},{level}");
+    }
+
+    /// <summary>
+    /// Creates a query message to read the device's recent SCPI command history.
+    /// </summary>
+    /// <remarks>
+    /// Returns the most recent commands seen on the USB interface, newest first, prefixed with a
+    /// <c>Last N commands:</c> header (or <c>No command history</c> when empty).
+    /// Command: SYSTem:LOG:CMDHistory?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetCommandHistory);
+    /// </remarks>
+    public static IOutboundMessage<string> GetCommandHistory => new ScpiMessage("SYSTem:LOG:CMDHistory?");
+
+    /// <summary>
+    /// Creates a command message that injects a handful of test messages into the system log.
+    /// </summary>
+    /// <remarks>
+    /// Intended for verifying the logging pipeline end to end; the device replies with a short
+    /// acknowledgement (<c>Added test log messages</c>).
+    /// Command: SYSTem:LOG:TEST
+    /// Example: messageProducer.Send(ScpiMessageProducer.TestSystemLog);
+    /// </remarks>
+    public static IOutboundMessage<string> TestSystemLog => new ScpiMessage("SYSTem:LOG:TEST");
+
+    /// <summary>
+    /// Creates a query message to read the number of entries currently in the SCPI error queue.
+    /// </summary>
+    /// <remarks>
+    /// Non-destructive: unlike <see cref="GetSystemError"/>, this does not pop any entries.
+    /// Returns a single integer.
+    /// Command: SYSTem:ERRor:COUNt?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetSystemErrorCount);
+    /// </remarks>
+    public static IOutboundMessage<string> GetSystemErrorCount => new ScpiMessage("SYSTem:ERRor:COUNt?");
+
+    /// <summary>
+    /// Creates a query message to read streaming performance counters.
+    /// </summary>
+    /// <remarks>
+    /// Returns a set of <c>Key=Value</c> lines describing the current/last streaming session
+    /// (e.g. <c>TotalSamplesStreamed</c>, <c>TotalBytesStreamed</c>, <c>QueueDroppedSamples</c>,
+    /// per-transport dropped-byte counters, SD write metrics, and <c>TimerISRCalls</c>). The exact
+    /// field set varies by firmware version.
+    /// Command: SYSTem:STReam:STATS?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamStats);
+    /// </remarks>
+    public static IOutboundMessage<string> GetStreamStats => new ScpiMessage("SYSTem:STReam:STATS?");
+
+    /// <summary>
+    /// Creates a query message to read device memory diagnostics.
+    /// </summary>
+    /// <remarks>
+    /// Returns a set of <c>Key=Value</c> lines describing heap and pool usage (e.g. <c>HeapTotal</c>,
+    /// <c>HeapFree</c>, <c>HeapUsed</c>, <c>HeapMinEverFree</c>, <c>CoherentPoolTotal</c>,
+    /// <c>CoherentPoolFree</c>, and sample-pool counters). The exact field set varies by firmware version.
+    /// Command: SYSTem:MEMory:FREE?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetMemoryDiagnostics);
+    /// </remarks>
+    public static IOutboundMessage<string> GetMemoryDiagnostics => new ScpiMessage("SYSTem:MEMory:FREE?");
 }

@@ -336,6 +336,54 @@ device.Send(ScpiMessageProducer.DisableDeviceEcho);
 device.Send(ScpiMessageProducer.SetProtobufStreamFormat);
 ```
 
+## Device Diagnostics
+
+`IDeviceDiagnostics` (implemented by `DaqifiStreamingDevice`) is a typed wrapper over the firmware's
+logging and diagnostics SCPI surface — the system log, runtime log levels, SCPI command history,
+error-queue depth, and streaming/memory performance counters. These values originate **on the
+device**; this is not a client-side instrumentation framework.
+
+```csharp
+using Daqifi.Core.Device.Diagnostics;
+
+using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+
+// System log (reading the log also clears the device buffer).
+IReadOnlyList<SystemLogEntry> log = await device.GetSystemLogAsync();
+foreach (var entry in log) Console.WriteLine(entry.Message);
+await device.ClearSystemLogAsync();
+
+// Runtime log levels (0 = None, 1 = Error, 2 = Info, 3 = Debug). The returned
+// setting reflects the level actually applied, which a module's ceiling may cap.
+LogLevelSetting applied = await device.SetLogLevelAsync("STREAM", 2);
+Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
+
+// SCPI command history (newest first) and error-queue depth (non-destructive).
+IReadOnlyList<string> history = await device.GetCommandHistoryAsync();
+int queuedErrors = await device.GetSystemErrorCountAsync();
+
+// Performance counters. Headline fields are typed (nullable when the running
+// firmware doesn't emit them); the full set is available via Values.
+StreamStats stream = await device.GetStreamStatsAsync();
+Console.WriteLine($"Samples: {stream.TotalSamplesStreamed}, dropped: {stream.QueueDroppedSamples}");
+
+MemoryDiagnostics mem = await device.GetMemoryDiagnosticsAsync();
+Console.WriteLine($"Heap free: {mem.HeapFree}/{mem.HeapTotal}");
+foreach (var (key, value) in mem.Values) Console.WriteLine($"{key} = {value}");
+```
+
+Notes:
+- The `StreamStats`/`MemoryDiagnostics` parsers are **forward-compatible**: the device emits a set of
+  `Key=Value` lines whose membership grows between firmware versions, so every numeric pair is exposed
+  through `Values` and the typed properties return `null` for fields the running firmware omits.
+- Each call runs as a text command (the protobuf consumer is paused for the exchange, like the SD and
+  LAN-chip queries). They do **not** stop streaming, so you can sample live counters — but parsing is
+  most reliable when the device is not actively streaming. Avoid issuing them concurrently.
+- A `DeviceDiagnosticsException` (carrying `RawDeviceResponse`) is thrown when the device returns a
+  SCPI error or an unparseable response for the structured queries.
+- `SYSTem:OS:Stats?` (FreeRTOS task stats) is intentionally **not** wrapped: it is commented out in the
+  current firmware. It can be added once the firmware re-enables it.
+
 ## Thread Safety
 
 The `DaqifiDevice` message producer uses a background thread with a concurrent queue, making `Send()` calls thread-safe. Multiple threads can safely send commands:
