@@ -590,6 +590,100 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    // --- Logging & diagnostics ---
+
+    [Fact]
+    public void GetSystemLog_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetSystemLog;
+        Assert.Equal("SYSTem:LOG?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void ClearSystemLog_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.ClearSystemLog;
+        Assert.Equal("SYSTem:LOG:CLEar", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetCommandHistory_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetCommandHistory;
+        Assert.Equal("SYSTem:LOG:CMDHistory?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void TestSystemLog_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.TestSystemLog;
+        Assert.Equal("SYSTem:LOG:TEST", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetSystemErrorCount_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetSystemErrorCount;
+        Assert.Equal("SYSTem:ERRor:COUNt?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetStreamStats_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetStreamStats;
+        Assert.Equal("SYSTem:STReam:STATS?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetMemoryDiagnostics_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetMemoryDiagnostics;
+        Assert.Equal("SYSTem:MEMory:FREE?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetLogLevel_FormatsModuleAndLevel()
+    {
+        var message = ScpiMessageProducer.SetLogLevel("STREAM", 2);
+        Assert.Equal("SYSTem:LOG:LEVel STREAM,2", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SetLogLevel_WithEmptyModule_Throws(string? module)
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLogLevel(module!, 1));
+    }
+
+    [Theory]
+    [InlineData("STREAM,extra")]
+    [InlineData("a b")]
+    [InlineData("a;b")]
+    [InlineData("a\"b")]
+    [InlineData("a\nb")]
+    public void SetLogLevel_WithInjectionChars_Throws(string module)
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetLogLevel(module, 1));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(4)]
+    public void SetLogLevel_WithLevelOutOfRange_Throws(int level)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetLogLevel("STREAM", level));
+    }
+
     private static void AssertMessageFormat(IOutboundMessage<string> message)
     {
         var bytes = message.GetBytes();
