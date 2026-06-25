@@ -688,6 +688,57 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public void WifiFlashProgressParser_IgnoresImageBuildPercentAndAdvancesAcrossDeviceFlashPhases()
+    {
+        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+
+        // The local image-build phase reaches 100% per region; those must NOT move the bar,
+        // otherwise the monotonic max latches before the on-device flash even starts.
+        Assert.Null(parser.Observe("written 235472 of 237036 bytes to image (100%)"));
+        Assert.Null(parser.Observe("written 77304 of 765952 bytes to image (11%)"));
+
+        // Device flash phases advance the bar, each monotonically forward.
+        var writeStart = parser.Observe("begin write operation");
+        Assert.NotNull(writeStart);
+
+        var writeMid = parser.Observe(" 0x040000:[wwwwwwww] 0x048000:[wwwwwwww] 0x050000:[wwwwwwww] 0x058000:[wwwwwwww]");
+        Assert.NotNull(writeMid);
+        Assert.True(writeMid > writeStart);
+
+        var readStart = parser.Observe("begin read operation");
+        Assert.NotNull(readStart);
+        Assert.True(readStart >= writeMid);
+
+        Assert.Null(parser.Observe("verify range 0x000000 to 0x080000"));
+        var verifyStart = parser.Observe("begin verify operation");
+        Assert.NotNull(verifyStart);
+        Assert.True(verifyStart >= readStart);
+
+        var verifyEnd = parser.Observe(" 0x060000:[vvvvvvvv] 0x068000:[vvvvvvvv] 0x070000:[vvvvvvvv] 0x078000:[vvvvvvvv]");
+        Assert.NotNull(verifyEnd);
+        Assert.True(verifyEnd > verifyStart);
+        Assert.True(verifyEnd <= 100);
+    }
+
+    [Fact]
+    public void WifiFlashProgressParser_NeverMovesBackward_WhenAddressesResetBetweenPhases()
+    {
+        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+
+        parser.Observe("begin write operation");
+        var writeEnd = parser.Observe(" 0x060000:[wwwwwwww] 0x068000:[wwwwwwww] 0x070000:[wwwwwwww] 0x078000:[wwwwwwww]");
+        Assert.NotNull(writeEnd);
+
+        // Read restarts addresses at 0x0; the reported percent must not regress below the write end.
+        parser.Observe("begin read operation");
+        var readLow = parser.Observe(" 0x000000:[rrrrrrrr]");
+        if (readLow.HasValue)
+        {
+            Assert.True(readLow.Value >= writeEnd.Value);
+        }
+    }
+
+    [Fact]
     public async Task UpdateWifiModuleAsync_WhenDeviceVersionMatchesLatest_SkipsFlashAndReportsComplete()
     {
         var wifiRelease = new FirmwareReleaseInfo
