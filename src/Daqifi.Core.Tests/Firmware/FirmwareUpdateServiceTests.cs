@@ -2199,6 +2199,8 @@ public class FirmwareUpdateServiceTests
         public ExternalProcessRequest? LastRequest { get; private set; }
         public int RunCount { get; private set; }
 
+        private ExternalProcessResult? _lastDequeued;
+
         public Task<ExternalProcessResult> RunAsync(
             ExternalProcessRequest request,
             CancellationToken cancellationToken = default)
@@ -2207,7 +2209,14 @@ public class FirmwareUpdateServiceTests
             LastRequest = request;
             RunCount++;
 
-            var result = ResultSequence.Count > 0 ? ResultSequence.Dequeue() : NextResult;
+            if (ResultSequence.Count > 0)
+            {
+                _lastDequeued = ResultSequence.Dequeue();
+            }
+
+            // Once the sequence drains, repeat the last dequeued result; if the sequence was never
+            // used, fall back to NextResult.
+            var result = _lastDequeued ?? NextResult;
 
             foreach (var line in result.StandardOutputLines)
             {

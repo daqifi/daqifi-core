@@ -940,12 +940,19 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     /// </summary>
     private static string DescribeWifiFlashFailure(ExternalProcessResult result)
     {
+        // Scan both streams for the full failure-marker set — tool/script versions route these to
+        // stdout vs stderr inconsistently (mirrors IsTransientWifiFlashFailure).
         if (ContainsAny(
                 result.StandardErrorLines,
                 WifiBridgeIdQueryFailureMarker,
-                WifiProgrammerInitFailureMarker) ||
+                WifiProgrammerInitFailureMarker,
+                WifiProgrammingFailedMarker,
+                WifiReadXoFailedMarker,
+                WifiBuildImageFailedMarker) ||
             ContainsAny(
                 result.StandardOutputLines,
+                WifiBridgeIdQueryFailureMarker,
+                WifiProgrammerInitFailureMarker,
                 WifiProgrammingFailedMarker,
                 WifiReadXoFailedMarker,
                 WifiBuildImageFailedMarker))
