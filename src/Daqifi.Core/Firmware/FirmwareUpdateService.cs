@@ -456,7 +456,9 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             if (processResult.TimedOut)
             {
                 throw new TimeoutException(
-                    $"WiFi flashing process timed out after {_options.WifiProcessTimeout.TotalSeconds:F0} seconds.");
+                    $"WiFi flashing process timed out after {_options.WifiProcessTimeout.TotalSeconds:F0} seconds " +
+                    $"(exit code {processResult.ExitCode}). " +
+                    BuildProcessLogExcerpt(processResult));
             }
 
             // Verify success from the tool's OWN output, not from its exit code or run duration.
@@ -926,8 +928,10 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     /// </summary>
     private static bool IsTransientWifiFlashFailure(ExternalProcessResult result)
     {
-        return ContainsAny(result.StandardErrorLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker)
-            || ContainsAny(result.StandardOutputLines, WifiProgrammingFailedMarker, WifiReadXoFailedMarker);
+        // Scan both streams for every transient marker: different WINC tool/script versions route
+        // these lines to stdout vs stderr inconsistently, so don't assume a fixed stream per marker.
+        return ContainsAny(result.StandardErrorLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker, WifiProgrammingFailedMarker, WifiReadXoFailedMarker)
+            || ContainsAny(result.StandardOutputLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker, WifiProgrammingFailedMarker, WifiReadXoFailedMarker);
     }
 
     /// <summary>
@@ -1653,6 +1657,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         // programmed region is 0x80000 = 512 KB); expanded if a larger address is observed.
         private long _totalRange = 0x80000;
 
+        // Base address of the flashed range. Block addresses in the tool output are absolute, so
+        // the covered fraction is measured relative to this start (0 unless "verify range" reports
+        // a non-zero base).
+        private long _rangeStart;
+
         private Phase _phase = Phase.PreFlash;
         private double _lastPercent;
 
@@ -1696,6 +1705,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 long.TryParse(verifyRange.Groups["end"].Value, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var rangeEnd) &&
                 rangeEnd > rangeStart)
             {
+                _rangeStart = rangeStart;
                 _totalRange = rangeEnd - rangeStart;
                 return null;
             }
@@ -1712,7 +1722,9 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 var highestAddress = HighestBlockAddress(line);
                 if (highestAddress.HasValue)
                 {
-                    var covered = highestAddress.Value + BlockSize;
+                    // Block addresses are absolute; measure coverage from the range base so a
+                    // non-zero start doesn't make the fraction saturate to 1 immediately.
+                    var covered = highestAddress.Value - _rangeStart + BlockSize;
                     if (covered > _totalRange)
                     {
                         _totalRange = covered;

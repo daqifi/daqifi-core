@@ -721,6 +721,28 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public void WifiFlashProgressParser_MeasuresFromRangeBase_ForNonZeroVerifyRange()
+    {
+        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+
+        // Range base 0x40000 (span 0x40000). Absolute block addresses must be measured relative to
+        // the base; otherwise the first block saturates the fraction to ~100% immediately.
+        parser.Observe("verify range 0x040000 to 0x080000");
+        var verifyStart = parser.Observe("begin verify operation");
+        Assert.NotNull(verifyStart);
+
+        var firstBlock = parser.Observe(" 0x040000:[vvvvvvvv]");
+        Assert.NotNull(firstBlock);
+
+        var lastBlock = parser.Observe(" 0x078000:[vvvvvvvv]");
+        Assert.NotNull(lastBlock);
+
+        // The bar advances across the range (the first block was not already saturated).
+        Assert.True(lastBlock > firstBlock);
+        Assert.True(lastBlock <= 100);
+    }
+
+    [Fact]
     public void WifiFlashProgressParser_NeverMovesBackward_WhenAddressesResetBetweenPhases()
     {
         var parser = new FirmwareUpdateService.WifiFlashProgressParser();
