@@ -388,6 +388,12 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // Port is in use by another application
             return null;
         }
+        catch (OperationCanceledException)
+        {
+            // Caller cancelled (e.g. during the wake / echo-disable delays). Propagate so the
+            // DiscoverAsync Task.WhenAll cancellation path runs — don't convert it into a probe-miss.
+            throw;
+        }
         catch (Exception)
         {
             // Any other error - not a valid DAQiFi device or port unavailable
