@@ -17,6 +17,18 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         @"(?<percent>\d{1,3})\s*%",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // WINC flash tool prompt markers (stdin handshake).
+    private const string WincBootPromptMarker = "Power cycle WINC and set to bootloader mode";
+    private const string WincContinuePromptMarker = "Press any key to continue";
+
+    // WINC flash tool failure markers. The "transient" set is recoverable by re-running the
+    // tool once the device has settled into bridge mode; the full set forces a failure verdict.
+    private const string WifiBridgeIdQueryFailureMarker = "failed to read serial bridge ID query response";
+    private const string WifiProgrammerInitFailureMarker = "failed to initialise programming firmware";
+    private const string WifiProgrammingFailedMarker = "Programming device failed";
+    private const string WifiReadXoFailedMarker = "Reading XO (offset) failed";
+    private const string WifiBuildImageFailedMarker = "Building programming image failed";
+
     private static readonly IReadOnlyDictionary<FirmwareUpdateState, IReadOnlySet<FirmwareUpdateState>> AllowedTransitions
         = new Dictionary<FirmwareUpdateState, IReadOnlySet<FirmwareUpdateState>>
         {
@@ -422,34 +434,45 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     device.Send(ScpiMessageProducer.SetLanFirmwareUpdateMode);
                     await Task.Delay(_options.PostLanFirmwareModeDelay, stateToken).ConfigureAwait(false);
                     device.Disconnect();
+
+                    // The OS does not free the USB-CDC COM handle the instant Disconnect returns.
+                    // Wait so the external WINC flash tool can open the port; without this the tool
+                    // fails to open it and exits in ~1s producing no programming output (caught by
+                    // the output-based success verification below as a failure).
+                    if (_options.PostLanDisconnectPortReleaseDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(_options.PostLanDisconnectPortReleaseDelay, stateToken).ConfigureAwait(false);
+                    }
                 },
                 cancellationToken).ConfigureAwait(false);
 
             TransitionToState(FirmwareUpdateState.Programming, "Running WiFi module flash tool.");
             ReportProgress(progress, FirmwareUpdateState.Programming, 20, _currentOperation, 0, totalBytes);
 
-            var request = BuildWifiProcessRequest(device, firmwarePath, progress);
-            var processResult = await ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Programming,
-                "execute WiFi flash process",
-                ct => _externalProcessRunner.RunAsync(request, ct),
+            // Build a fresh request per attempt: the stdin prompt responder carries one-shot
+            // state (it answers the WINC prompt exactly once), so reusing a request across a
+            // retry would leave the responder already "spent".
+            var processResult = await RunWifiFlashToolWithRetryAsync(
+                () => BuildWifiProcessRequest(device, firmwarePath, progress),
                 cancellationToken).ConfigureAwait(false);
 
             if (processResult.TimedOut)
             {
                 throw new TimeoutException(
-                    $"WiFi flashing process timed out after {request.Timeout.TotalSeconds:F0} seconds.");
+                    $"WiFi flashing process timed out after {_options.WifiProcessTimeout.TotalSeconds:F0} seconds.");
             }
 
-            if (ContainsWifiProgrammingFailure(processResult.StandardOutputLines))
-            {
-                throw new IOException("WiFi flashing tool reported a programming failure.");
-            }
-
-            if (processResult.ExitCode != 0)
+            // Verify success from the tool's OWN output, not from its exit code or run duration.
+            // A genuine flash ends with "verify passed" then the success marker; when the tool
+            // cannot reach the WINC — most often because the device never released the serial port,
+            // so the tool couldn't open it and bailed in ~1s — it produces none of these. The exit
+            // code is unreliable in both directions (some WINC script/tool combinations emit failure
+            // markers yet still exit 0), so the success marker is the authority.
+            if (!ContainsAny(processResult.StandardOutputLines, _options.WifiFlashSuccessMarker))
             {
                 throw new IOException(
-                    $"WiFi flashing process exited with code {processResult.ExitCode}. " +
+                    $"WiFi flashing did not complete successfully — the flash tool never reported " +
+                    $"'{_options.WifiFlashSuccessMarker}'. {DescribeWifiFlashFailure(processResult)} " +
                     BuildProcessLogExcerpt(processResult));
             }
 
@@ -774,20 +797,162 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     100);
             },
             OnStandardErrorLine = line => _logger.LogWarning("WiFi flash stderr: {Line}", line),
-            StandardInputResponseFactory = line =>
-                line.Contains("Power cycle WINC and set to bootloader mode", StringComparison.OrdinalIgnoreCase)
-                    ? string.Empty
-                    : null
+            StandardInputResponseFactory = BuildWifiPromptResponder()
         };
     }
 
-    private static bool ContainsWifiProgrammingFailure(IEnumerable<string> outputLines)
+    /// <summary>
+    /// Builds the stdin responder for the WINC flash tool's interactive prompts. At the
+    /// "Power cycle WINC" prompt it fires the optional bridge-activation callback, waits
+    /// <see cref="FirmwareUpdateServiceOptions.WincBootPromptResponseDelay"/> so the firmware can
+    /// finish bridge-mode init, then sends the empty continue line. The returned delegate carries
+    /// one-shot state, so a fresh responder must be built for each flash attempt.
+    /// </summary>
+    private Func<string, string?> BuildWifiPromptResponder()
     {
-        foreach (var line in outputLines)
+        var continueSignalSent = false;
+
+        return line =>
         {
-            if (line.Contains("Programming device failed", StringComparison.OrdinalIgnoreCase))
+            if (line.Contains(WincBootPromptMarker, StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                if (continueSignalSent)
+                {
+                    return null;
+                }
+
+                if (_options.WifiBridgeActivationCallback is { } activate)
+                {
+                    _logger.LogInformation("Activating WiFi bridge mode before WINC programming.");
+                    try
+                    {
+                        activate();
+                        _logger.LogInformation("Bridge activation callback completed; waiting for firmware bridge init.");
+                    }
+                    catch (Exception ex)
+                    {
+                        // The bridge activation is best-effort — a failure here must not abort the
+                        // flash; the tool may still reach the WINC and the success verification is
+                        // the source of truth for the outcome.
+                        _logger.LogWarning(ex, "WiFi bridge activation callback threw; continuing with the flash.");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("WiFi flash tool requested WINC power-cycle; waiting before sending continue signal.");
+                }
+
+                if (_options.WincBootPromptResponseDelay > TimeSpan.Zero)
+                {
+                    // Synchronous wait: the responder runs on the process output-reading thread,
+                    // and the tool blocks on stdin until we return — a Task.Delay would not pause it.
+                    Thread.Sleep(_options.WincBootPromptResponseDelay);
+                }
+
+                continueSignalSent = true;
+                _logger.LogInformation("Sending continue signal to WiFi flash tool.");
+                return string.Empty;
+            }
+
+            if (!continueSignalSent &&
+                line.Contains(WincContinuePromptMarker, StringComparison.OrdinalIgnoreCase))
+            {
+                continueSignalSent = true;
+                _logger.LogInformation("Sending continue signal to WiFi flash tool.");
+                return string.Empty;
+            }
+
+            return null;
+        };
+    }
+
+    private async Task<ExternalProcessResult> RunWifiFlashToolWithRetryAsync(
+        Func<ExternalProcessRequest> requestFactory,
+        CancellationToken cancellationToken)
+    {
+        var attempts = Math.Max(1, _options.WifiFlashAttempts);
+        ExternalProcessResult result = null!;
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            var request = requestFactory();
+            result = await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.Programming,
+                "execute WiFi flash process",
+                ct => _externalProcessRunner.RunAsync(request, ct),
+                cancellationToken).ConfigureAwait(false);
+
+            // A timeout or a verified success ends the loop; so does a non-transient failure,
+            // since re-running the tool only helps when the device hadn't yet settled into bridge
+            // mode. Only a transient bridge-init failure with attempts remaining triggers a retry.
+            if (result.TimedOut ||
+                ContainsAny(result.StandardOutputLines, _options.WifiFlashSuccessMarker) ||
+                attempt >= attempts ||
+                !IsTransientWifiFlashFailure(result))
+            {
+                return result;
+            }
+
+            _logger.LogWarning(
+                "WiFi flash tool reported a transient bridge-init failure on attempt {Attempt}/{Attempts}; retrying in {DelayMs} ms.",
+                attempt,
+                attempts,
+                _options.WifiFlashRetryDelay.TotalMilliseconds);
+            await Task.Delay(_options.WifiFlashRetryDelay, cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// True when the result shows a transient bridge-init failure — the device hadn't finished
+    /// entering bridge mode when the tool issued its first query. Re-running the tool once the
+    /// device has settled typically succeeds, so these (and only these) are retried.
+    /// </summary>
+    private static bool IsTransientWifiFlashFailure(ExternalProcessResult result)
+    {
+        return ContainsAny(result.StandardErrorLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker)
+            || ContainsAny(result.StandardOutputLines, WifiProgrammingFailedMarker, WifiReadXoFailedMarker);
+    }
+
+    /// <summary>
+    /// Produces a short human-readable reason for a flash that did not report the success marker,
+    /// distinguishing "the tool never opened the port" from a device-reported programming failure.
+    /// </summary>
+    private static string DescribeWifiFlashFailure(ExternalProcessResult result)
+    {
+        if (ContainsAny(
+                result.StandardErrorLines,
+                WifiBridgeIdQueryFailureMarker,
+                WifiProgrammerInitFailureMarker) ||
+            ContainsAny(
+                result.StandardOutputLines,
+                WifiProgrammingFailedMarker,
+                WifiReadXoFailedMarker,
+                WifiBuildImageFailedMarker))
+        {
+            return "The flash tool reached the device but reported a programming failure.";
+        }
+
+        if (result.StandardOutputLines.Count == 0)
+        {
+            return "The flash tool produced no output — it likely could not open the serial port " +
+                   "(the device may not have released it).";
+        }
+
+        return $"The flash tool exited with code {result.ExitCode} without completing the program.";
+    }
+
+    private static bool ContainsAny(IReadOnlyList<string> lines, params string[] markers)
+    {
+        foreach (var line in lines)
+        {
+            foreach (var marker in markers)
+            {
+                if (line.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
         }
 
