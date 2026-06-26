@@ -928,10 +928,15 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     /// </summary>
     private static bool IsTransientWifiFlashFailure(ExternalProcessResult result)
     {
-        // Scan both streams for every transient marker: different WINC tool/script versions route
-        // these lines to stdout vs stderr inconsistently, so don't assume a fixed stream per marker.
-        return ContainsAny(result.StandardErrorLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker, WifiProgrammingFailedMarker, WifiReadXoFailedMarker)
-            || ContainsAny(result.StandardOutputLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker, WifiProgrammingFailedMarker, WifiReadXoFailedMarker);
+        // Retry ONLY on the bridge-init markers — the device hadn't finished entering bridge mode
+        // when the tool issued its first query, which a re-run fixes. These markers co-occur with
+        // the generic "Programming device failed" / "Reading XO failed" lines in the real failure
+        // output, so keying on them alone still catches the transient case without retrying a
+        // genuine (non-recoverable) programming failure — which would only delay the real error and
+        // needlessly re-fire the bridge-activation callback. Scan both streams since tool/script
+        // versions route these lines inconsistently.
+        return ContainsAny(result.StandardErrorLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker)
+            || ContainsAny(result.StandardOutputLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker);
     }
 
     /// <summary>
@@ -940,22 +945,28 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     /// </summary>
     private static string DescribeWifiFlashFailure(ExternalProcessResult result)
     {
-        // Scan both streams for the full failure-marker set — tool/script versions route these to
-        // stdout vs stderr inconsistently (mirrors IsTransientWifiFlashFailure).
+        // A "Building programming image failed" is a LOCAL image-build failure that happens before
+        // any on-device flashing, so it must not be reported as a device-reachability failure.
+        if (ContainsAny(result.StandardErrorLines, WifiBuildImageFailedMarker) ||
+            ContainsAny(result.StandardOutputLines, WifiBuildImageFailedMarker))
+        {
+            return "The flash tool failed to build the programming image (before contacting the device).";
+        }
+
+        // Markers that imply the tool actually reached the device. Scan both streams — tool/script
+        // versions route these to stdout vs stderr inconsistently.
         if (ContainsAny(
                 result.StandardErrorLines,
                 WifiBridgeIdQueryFailureMarker,
                 WifiProgrammerInitFailureMarker,
                 WifiProgrammingFailedMarker,
-                WifiReadXoFailedMarker,
-                WifiBuildImageFailedMarker) ||
+                WifiReadXoFailedMarker) ||
             ContainsAny(
                 result.StandardOutputLines,
                 WifiBridgeIdQueryFailureMarker,
                 WifiProgrammerInitFailureMarker,
                 WifiProgrammingFailedMarker,
-                WifiReadXoFailedMarker,
-                WifiBuildImageFailedMarker))
+                WifiReadXoFailedMarker))
         {
             return "The flash tool reached the device but reported a programming failure.";
         }

@@ -597,6 +597,49 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateWifiModuleAsync_WhenProgrammingFailsWithoutBridgeMarkers_DoesNotRetry()
+    {
+        // A genuine programming failure (no bridge-init markers) must NOT be retried — retrying
+        // only delays the real error and needlessly re-fires bridge activation.
+        var device = new FakeStreamingDevice("COM7");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                1,
+                timedOut: false,
+                TimeSpan.FromSeconds(30),
+                ["software WINC serial bridge found", "Programming device failed"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.WifiFlashAttempts = 2; // retry is allowed but must not trigger for this failure
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+            Assert.Equal(1, externalProcessRunner.RunCount);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task UpdateWifiModuleAsync_WhenTransientBridgeFailureThenSuccess_RetriesAndCompletes()
     {
         var device = new FakeStreamingDevice("COM7");
@@ -2191,15 +2234,15 @@ public class FirmwareUpdateServiceTests
 
         /// <summary>
         /// Optional per-attempt results. When non-empty each <see cref="RunAsync"/> call dequeues
-        /// the next result (the last one repeats once drained), letting tests model the WINC flash
-        /// retry path (transient failure → success).
+        /// the next result, letting tests model the WINC flash retry path (transient failure →
+        /// success). Once the sequence is drained, subsequent calls return <see cref="NextResult"/>
+        /// — kept deliberately distinct from the scripted results so a test asserting
+        /// <see cref="RunCount"/> can still catch unexpected extra attempts.
         /// </summary>
         public Queue<ExternalProcessResult> ResultSequence { get; } = new();
 
         public ExternalProcessRequest? LastRequest { get; private set; }
         public int RunCount { get; private set; }
-
-        private ExternalProcessResult? _lastDequeued;
 
         public Task<ExternalProcessResult> RunAsync(
             ExternalProcessRequest request,
@@ -2209,14 +2252,7 @@ public class FirmwareUpdateServiceTests
             LastRequest = request;
             RunCount++;
 
-            if (ResultSequence.Count > 0)
-            {
-                _lastDequeued = ResultSequence.Dequeue();
-            }
-
-            // Once the sequence drains, repeat the last dequeued result; if the sequence was never
-            // used, fall back to NextResult.
-            var result = _lastDequeued ?? NextResult;
+            var result = ResultSequence.Count > 0 ? ResultSequence.Dequeue() : NextResult;
 
             foreach (var line in result.StandardOutputLines)
             {
