@@ -13,9 +13,17 @@ namespace Daqifi.Core.Firmware;
 /// </summary>
 public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 {
-    private static readonly Regex PercentRegex = new(
-        @"(?<percent>\d{1,3})\s*%",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // WINC flash tool prompt markers (stdin handshake).
+    private const string WincBootPromptMarker = "Power cycle WINC and set to bootloader mode";
+    private const string WincContinuePromptMarker = "Press any key to continue";
+
+    // WINC flash tool failure markers. The "transient" set is recoverable by re-running the
+    // tool once the device has settled into bridge mode; the full set forces a failure verdict.
+    private const string WifiBridgeIdQueryFailureMarker = "failed to read serial bridge ID query response";
+    private const string WifiProgrammerInitFailureMarker = "failed to initialise programming firmware";
+    private const string WifiProgrammingFailedMarker = "Programming device failed";
+    private const string WifiReadXoFailedMarker = "Reading XO (offset) failed";
+    private const string WifiBuildImageFailedMarker = "Building programming image failed";
 
     private static readonly IReadOnlyDictionary<FirmwareUpdateState, IReadOnlySet<FirmwareUpdateState>> AllowedTransitions
         = new Dictionary<FirmwareUpdateState, IReadOnlySet<FirmwareUpdateState>>
@@ -422,34 +430,48 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     device.Send(ScpiMessageProducer.SetLanFirmwareUpdateMode);
                     await Task.Delay(_options.PostLanFirmwareModeDelay, stateToken).ConfigureAwait(false);
                     device.Disconnect();
+
+                    // The OS does not free the USB-CDC COM handle the instant Disconnect returns.
+                    // Wait so the external WINC flash tool can open the port; without this the tool
+                    // fails to open it and exits in ~1s producing no programming output (caught by
+                    // the output-based success verification below as a failure).
+                    if (_options.PostLanDisconnectPortReleaseDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(_options.PostLanDisconnectPortReleaseDelay, stateToken).ConfigureAwait(false);
+                    }
                 },
                 cancellationToken).ConfigureAwait(false);
 
             TransitionToState(FirmwareUpdateState.Programming, "Running WiFi module flash tool.");
             ReportProgress(progress, FirmwareUpdateState.Programming, 20, _currentOperation, 0, totalBytes);
 
-            var request = BuildWifiProcessRequest(device, firmwarePath, progress);
-            var processResult = await ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Programming,
-                "execute WiFi flash process",
-                ct => _externalProcessRunner.RunAsync(request, ct),
+            // Build a fresh request per attempt: the stdin prompt responder carries one-shot
+            // state (it answers the WINC prompt exactly once), so reusing a request across a
+            // retry would leave the responder already "spent". The factory takes the per-attempt
+            // linked token so the prompt-delay wait stays cancellable.
+            var processResult = await RunWifiFlashToolWithRetryAsync(
+                ct => BuildWifiProcessRequest(device, firmwarePath, progress, ct),
                 cancellationToken).ConfigureAwait(false);
 
             if (processResult.TimedOut)
             {
                 throw new TimeoutException(
-                    $"WiFi flashing process timed out after {request.Timeout.TotalSeconds:F0} seconds.");
+                    $"WiFi flashing process timed out after {_options.WifiProcessTimeout.TotalSeconds:F0} seconds " +
+                    $"(exit code {processResult.ExitCode}). " +
+                    BuildProcessLogExcerpt(processResult));
             }
 
-            if (ContainsWifiProgrammingFailure(processResult.StandardOutputLines))
-            {
-                throw new IOException("WiFi flashing tool reported a programming failure.");
-            }
-
-            if (processResult.ExitCode != 0)
+            // Verify success from the tool's OWN output, not from its exit code or run duration.
+            // A genuine flash ends with "verify passed" then the success marker; when the tool
+            // cannot reach the WINC — most often because the device never released the serial port,
+            // so the tool couldn't open it and bailed in ~1s — it produces none of these. The exit
+            // code is unreliable in both directions (some WINC script/tool combinations emit failure
+            // markers yet still exit 0), so the success marker is the authority.
+            if (!ContainsAny(processResult.StandardOutputLines, _options.WifiFlashSuccessMarker))
             {
                 throw new IOException(
-                    $"WiFi flashing process exited with code {processResult.ExitCode}. " +
+                    $"WiFi flashing did not complete successfully — the flash tool never reported " +
+                    $"'{_options.WifiFlashSuccessMarker}'. {DescribeWifiFlashFailure(processResult)} " +
                     BuildProcessLogExcerpt(processResult));
             }
 
@@ -711,7 +733,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     private ExternalProcessRequest BuildWifiProcessRequest(
         IStreamingDevice device,
         string firmwarePath,
-        IProgress<FirmwareUpdateProgress>? progress)
+        IProgress<FirmwareUpdateProgress>? progress,
+        CancellationToken cancellationToken)
     {
         var toolPath = ResolveWifiToolPath(firmwarePath);
         var port = ResolveWifiPort(device);
@@ -732,7 +755,10 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             executableArguments = $"/c \"{toolPath}\" {toolArguments}";
         }
 
-        var lastProcessPercent = 0;
+        // Tracks the live device-flash phase (write/read/verify) from the tool's block-address
+        // output so the bar advances across the multi-minute flash, instead of latching to the
+        // image-build phase's "100%" lines and freezing. See WifiFlashProgressParser.
+        var progressParser = new WifiFlashProgressParser();
         var progressLock = new object();
 
         return new ExternalProcessRequest
@@ -745,49 +771,232 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             {
                 _logger.LogInformation("WiFi flash output: {Line}", line);
 
-                var parsedPercent = TryParseWifiToolPercent(line);
-                if (!parsedPercent.HasValue)
-                {
-                    return;
-                }
-
-                var processPercent = parsedPercent.Value;
+                double processPercent;
                 lock (progressLock)
                 {
-                    if (processPercent < lastProcessPercent)
+                    var updated = progressParser.Observe(line);
+                    if (!updated.HasValue)
                     {
-                        processPercent = lastProcessPercent;
+                        return;
                     }
-                    else
-                    {
-                        lastProcessPercent = processPercent;
-                    }
+
+                    processPercent = updated.Value;
                 }
 
+                // Map the 0-100 device-flash percent into the Programming state's 20-90 overall band.
                 var overallPercent = 20 + (processPercent * 0.70);
                 ReportProgress(
                     progress,
                     FirmwareUpdateState.Programming,
                     overallPercent,
                     line,
-                    processPercent,
+                    (long)Math.Round(processPercent),
                     100);
             },
             OnStandardErrorLine = line => _logger.LogWarning("WiFi flash stderr: {Line}", line),
-            StandardInputResponseFactory = line =>
-                line.Contains("Power cycle WINC and set to bootloader mode", StringComparison.OrdinalIgnoreCase)
-                    ? string.Empty
-                    : null
+            StandardInputResponseFactory = BuildWifiPromptResponder(cancellationToken)
         };
     }
 
-    private static bool ContainsWifiProgrammingFailure(IEnumerable<string> outputLines)
+    /// <summary>
+    /// Builds the stdin responder for the WINC flash tool's interactive prompts. At the
+    /// "Power cycle WINC" prompt it fires the optional bridge-activation callback, waits
+    /// <see cref="FirmwareUpdateServiceOptions.WincBootPromptResponseDelay"/> so the firmware can
+    /// finish bridge-mode init, then sends the empty continue line. The returned delegate carries
+    /// one-shot state, so a fresh responder must be built for each flash attempt.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// The flash run's linked token (state timeout + caller cancellation). The prompt-response wait
+    /// observes it so a timeout or cancel unblocks the output-pump thread promptly instead of
+    /// sleeping out the full delay after the process has been killed.
+    /// </param>
+    private Func<string, string?> BuildWifiPromptResponder(CancellationToken cancellationToken)
     {
-        foreach (var line in outputLines)
+        var continueSignalSent = false;
+
+        return line =>
         {
-            if (line.Contains("Programming device failed", StringComparison.OrdinalIgnoreCase))
+            if (line.Contains(WincBootPromptMarker, StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                if (continueSignalSent)
+                {
+                    return null;
+                }
+
+                if (_options.WifiBridgeActivationCallback is { } activate)
+                {
+                    _logger.LogInformation("Activating WiFi bridge mode before WINC programming.");
+                    try
+                    {
+                        activate();
+                        _logger.LogInformation("Bridge activation callback completed; waiting for firmware bridge init.");
+                    }
+                    catch (Exception ex)
+                    {
+                        // The bridge activation is best-effort — a failure here must not abort the
+                        // flash; the tool may still reach the WINC and the success verification is
+                        // the source of truth for the outcome.
+                        _logger.LogWarning(ex, "WiFi bridge activation callback threw; continuing with the flash.");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("WiFi flash tool requested WINC power-cycle; waiting before sending continue signal.");
+                }
+
+                if (_options.WincBootPromptResponseDelay > TimeSpan.Zero)
+                {
+                    // The responder runs inline on the process output-pump thread and the tool
+                    // blocks on stdin until we return, so the wait must be synchronous (a fire-and-
+                    // forget Task.Delay would not pause it). Block on a cancellable delay so a run
+                    // timeout / cancel unblocks the pump immediately; if canceled, skip the continue
+                    // signal — the process is being torn down anyway.
+                    try
+                    {
+                        Task.Delay(_options.WincBootPromptResponseDelay, cancellationToken)
+                            .GetAwaiter()
+                            .GetResult();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _logger.LogDebug("WINC prompt-response wait canceled; skipping the continue signal.");
+                        return null;
+                    }
+                }
+
+                continueSignalSent = true;
+                _logger.LogInformation("Sending continue signal to WiFi flash tool.");
+                return string.Empty;
+            }
+
+            if (!continueSignalSent &&
+                line.Contains(WincContinuePromptMarker, StringComparison.OrdinalIgnoreCase))
+            {
+                continueSignalSent = true;
+                _logger.LogInformation("Sending continue signal to WiFi flash tool.");
+                return string.Empty;
+            }
+
+            return null;
+        };
+    }
+
+    private async Task<ExternalProcessResult> RunWifiFlashToolWithRetryAsync(
+        Func<CancellationToken, ExternalProcessRequest> requestFactory,
+        CancellationToken cancellationToken)
+    {
+        var attempts = Math.Max(1, _options.WifiFlashAttempts);
+        ExternalProcessResult result = null!;
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            // Build the request inside the state-timeout lambda so the responder closes over the
+            // linked token (state timeout + caller cancellation) and its prompt-delay wait unblocks
+            // when the run is canceled or times out.
+            result = await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.Programming,
+                "execute WiFi flash process",
+                ct => _externalProcessRunner.RunAsync(requestFactory(ct), ct),
+                cancellationToken).ConfigureAwait(false);
+
+            // A timeout or a verified success ends the loop; so does a non-transient failure,
+            // since re-running the tool only helps when the device hadn't yet settled into bridge
+            // mode. Only a transient bridge-init failure with attempts remaining triggers a retry.
+            if (result.TimedOut ||
+                ContainsAny(result.StandardOutputLines, _options.WifiFlashSuccessMarker) ||
+                attempt >= attempts ||
+                !IsTransientWifiFlashFailure(result))
+            {
+                return result;
+            }
+
+            _logger.LogWarning(
+                "WiFi flash tool reported a transient bridge-init failure on attempt {Attempt}/{Attempts}; retrying in {DelayMs} ms.",
+                attempt,
+                attempts,
+                _options.WifiFlashRetryDelay.TotalMilliseconds);
+            await Task.Delay(_options.WifiFlashRetryDelay, cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// True when the result shows a transient bridge-init failure — the device hadn't finished
+    /// entering bridge mode when the tool issued its first query. Re-running the tool once the
+    /// device has settled typically succeeds, so these (and only these) are retried.
+    /// </summary>
+    private static bool IsTransientWifiFlashFailure(ExternalProcessResult result)
+    {
+        // Retry ONLY on the bridge-init markers — the device hadn't finished entering bridge mode
+        // when the tool issued its first query, which a re-run fixes. These markers co-occur with
+        // the generic "Programming device failed" / "Reading XO failed" lines in the real failure
+        // output, so keying on them alone still catches the transient case without retrying a
+        // genuine (non-recoverable) programming failure — which would only delay the real error and
+        // needlessly re-fire the bridge-activation callback. Scan both streams since tool/script
+        // versions route these lines inconsistently.
+        return ContainsAny(result.StandardErrorLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker)
+            || ContainsAny(result.StandardOutputLines, WifiBridgeIdQueryFailureMarker, WifiProgrammerInitFailureMarker);
+    }
+
+    /// <summary>
+    /// Produces a short human-readable reason for a flash that did not report the success marker,
+    /// distinguishing "the tool never opened the port" from a device-reported programming failure.
+    /// </summary>
+    private static string DescribeWifiFlashFailure(ExternalProcessResult result)
+    {
+        // A "Building programming image failed" is a LOCAL image-build failure that happens before
+        // any on-device flashing, so it must not be reported as a device-reachability failure.
+        if (ContainsAny(result.StandardErrorLines, WifiBuildImageFailedMarker) ||
+            ContainsAny(result.StandardOutputLines, WifiBuildImageFailedMarker))
+        {
+            return "The flash tool failed to build the programming image (before contacting the device).";
+        }
+
+        // Markers that imply the tool actually reached the device. Scan both streams — tool/script
+        // versions route these to stdout vs stderr inconsistently.
+        if (ContainsAny(
+                result.StandardErrorLines,
+                WifiBridgeIdQueryFailureMarker,
+                WifiProgrammerInitFailureMarker,
+                WifiProgrammingFailedMarker,
+                WifiReadXoFailedMarker) ||
+            ContainsAny(
+                result.StandardOutputLines,
+                WifiBridgeIdQueryFailureMarker,
+                WifiProgrammerInitFailureMarker,
+                WifiProgrammingFailedMarker,
+                WifiReadXoFailedMarker))
+        {
+            return "The flash tool reached the device but reported a programming failure.";
+        }
+
+        // "No output" must consider BOTH streams — some failure modes (tool/port errors) print
+        // only to stderr, so checking stdout alone would mislabel them as "no output".
+        if (result.StandardOutputLines.Count == 0 && result.StandardErrorLines.Count == 0)
+        {
+            return "The flash tool produced no output — it likely could not open the serial port " +
+                   "(the device may not have released it).";
+        }
+
+        if (result.StandardOutputLines.Count == 0 && result.StandardErrorLines.Count > 0)
+        {
+            return $"The flash tool wrote only to stderr and never programmed the device (exit code {result.ExitCode}).";
+        }
+
+        return $"The flash tool exited with code {result.ExitCode} without completing the program.";
+    }
+
+    private static bool ContainsAny(IReadOnlyList<string> lines, params string[] markers)
+    {
+        foreach (var line in lines)
+        {
+            foreach (var marker in markers)
+            {
+                if (line.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
         }
 
@@ -1439,36 +1648,154 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         return builder.ToString();
     }
 
-    private static int? TryParseWifiToolPercent(string line)
+    /// <summary>
+    /// Derives a 0-100 progress percentage for the WiFi (WINC) flash from the flash tool's live
+    /// stdout. The tool runs a fast local image-build phase (whose "written … (NN%)" lines reach
+    /// 100% and must be ignored, or they latch the bar near the top before the real flash starts)
+    /// followed by the multi-minute on-device write → read → verify phases. Those phases emit
+    /// block-address lines like <c>0x000000:[wwwwwwww] 0x008000:[wwwwwwww] …</c> with no percent,
+    /// so this parser advances the bar from the highest block address seen relative to the flashed
+    /// range. Each phase occupies its own monotonically increasing band; <see cref="Observe"/>
+    /// returns the new percent when it advances, or <c>null</c> when a line carries no progress.
+    /// </summary>
+    internal sealed class WifiFlashProgressParser
     {
-        if (string.IsNullOrWhiteSpace(line))
+        private static readonly Regex BlockAddressRegex = new(
+            @"0x(?<addr>[0-9a-fA-F]+)\s*:",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        private static readonly Regex VerifyRangeRegex = new(
+            @"verify range\s+0x(?<start>[0-9a-fA-F]+)\s+to\s+0x(?<end>[0-9a-fA-F]+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        // Block size between consecutive addresses in the tool's progress lines (0x8000).
+        private const long BlockSize = 0x8000;
+
+        // Default flashed range when the tool hasn't yet announced "verify range" (the WINC
+        // programmed region is 0x80000 = 512 KB); expanded if a larger address is observed.
+        private long _totalRange = 0x80000;
+
+        // Base address of the flashed range. Block addresses in the tool output are absolute, so
+        // the covered fraction is measured relative to this start (0 unless "verify range" reports
+        // a non-zero base).
+        private long _rangeStart;
+
+        private Phase _phase = Phase.PreFlash;
+        private double _lastPercent;
+
+        private enum Phase
         {
+            PreFlash,
+            Write,
+            Read,
+            Verify
+        }
+
+        // Per-phase overall bands (write is weighted heaviest — it is by far the longest phase).
+        private static (double Start, double End) BandFor(Phase phase) => phase switch
+        {
+            Phase.Write => (5, 60),
+            Phase.Read => (60, 78),
+            Phase.Verify => (78, 100),
+            _ => (0, 0)
+        };
+
+        public double? Observe(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return null;
+            }
+
+            if (line.Contains("begin write operation", StringComparison.OrdinalIgnoreCase))
+            {
+                return Advance(Phase.Write, BandFor(Phase.Write).Start);
+            }
+
+            if (line.Contains("begin read operation", StringComparison.OrdinalIgnoreCase))
+            {
+                return Advance(Phase.Read, BandFor(Phase.Read).Start);
+            }
+
+            var verifyRange = VerifyRangeRegex.Match(line);
+            if (verifyRange.Success &&
+                long.TryParse(verifyRange.Groups["start"].Value, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var rangeStart) &&
+                long.TryParse(verifyRange.Groups["end"].Value, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var rangeEnd) &&
+                rangeEnd > rangeStart)
+            {
+                _rangeStart = rangeStart;
+                _totalRange = rangeEnd - rangeStart;
+                return null;
+            }
+
+            if (line.Contains("begin verify operation", StringComparison.OrdinalIgnoreCase))
+            {
+                return Advance(Phase.Verify, BandFor(Phase.Verify).Start);
+            }
+
+            // Block-address lines advance the current phase. Ignored before the device flash
+            // starts (PreFlash) so the image-build phase never moves the bar.
+            if (_phase != Phase.PreFlash)
+            {
+                var highestAddress = HighestBlockAddress(line);
+                if (highestAddress.HasValue)
+                {
+                    // Block addresses are absolute; measure coverage from the range base so a
+                    // non-zero start doesn't make the fraction saturate to 1 immediately.
+                    var covered = highestAddress.Value - _rangeStart + BlockSize;
+                    if (covered > _totalRange)
+                    {
+                        _totalRange = covered;
+                    }
+
+                    var fraction = Math.Clamp(covered / (double)_totalRange, 0, 1);
+                    var (start, end) = BandFor(_phase);
+                    return Advance(_phase, start + (fraction * (end - start)));
+                }
+            }
+
             return null;
         }
 
-        var match = PercentRegex.Match(line);
-        if (match.Success &&
-            int.TryParse(match.Groups["percent"].Value, out var parsedPercent))
+        private double? Advance(Phase phase, double candidatePercent)
         {
-            return Math.Clamp(parsedPercent, 0, 100);
+            if (phase > _phase)
+            {
+                _phase = phase;
+            }
+
+            var clamped = Math.Clamp(candidatePercent, 0, 100);
+
+            // Monotonic: never let the bar move backward (e.g. address resets to 0 at each new phase).
+            if (clamped <= _lastPercent)
+            {
+                return null;
+            }
+
+            _lastPercent = clamped;
+            return clamped;
         }
 
-        if (line.Contains("begin write operation", StringComparison.OrdinalIgnoreCase))
+        private static long? HighestBlockAddress(string line)
         {
-            return 33;
-        }
+            long? highest = null;
+            foreach (Match match in BlockAddressRegex.Matches(line))
+            {
+                if (long.TryParse(
+                        match.Groups["addr"].Value,
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var address))
+                {
+                    if (highest is null || address > highest.Value)
+                    {
+                        highest = address;
+                    }
+                }
+            }
 
-        if (line.Contains("begin read operation", StringComparison.OrdinalIgnoreCase))
-        {
-            return 66;
+            return highest;
         }
-
-        if (line.Contains("begin verify operation", StringComparison.OrdinalIgnoreCase))
-        {
-            return 90;
-        }
-
-        return null;
     }
 
     private static string BuildProcessLogExcerpt(ExternalProcessResult result)

@@ -466,7 +466,7 @@ public class FirmwareUpdateServiceTests
                 0,
                 timedOut: false,
                 TimeSpan.FromMilliseconds(10),
-                ["begin write operation", "67%", "begin verify operation"],
+                ["begin write operation", "67%", "begin verify operation", "verify passed", "Operation completed successfully"],
                 [])
         };
 
@@ -557,6 +557,253 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateWifiModuleAsync_WhenToolExitsZeroButNeverReportsSuccess_FailsFromOutput()
+    {
+        // The port-not-released / "false success" case: the WINC tool couldn't open the serial
+        // port, produced no programming output, and exited 0. Success is verified from the tool's
+        // output (the success marker), NOT its exit code, so this must fail rather than report done.
+        var device = new FakeStreamingDevice("COM7");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(0, timedOut: false, TimeSpan.FromSeconds(30), [], [])
+        };
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+            // No retry for a non-transient failure (no bridge-init markers).
+            Assert.Equal(1, externalProcessRunner.RunCount);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenProgrammingFailsWithoutBridgeMarkers_DoesNotRetry()
+    {
+        // A genuine programming failure (no bridge-init markers) must NOT be retried — retrying
+        // only delays the real error and needlessly re-fires bridge activation.
+        var device = new FakeStreamingDevice("COM7");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                1,
+                timedOut: false,
+                TimeSpan.FromSeconds(30),
+                ["software WINC serial bridge found", "Programming device failed"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.WifiFlashAttempts = 2; // retry is allowed but must not trigger for this failure
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+            Assert.Equal(1, externalProcessRunner.RunCount);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenTransientBridgeFailureThenSuccess_RetriesAndCompletes()
+    {
+        var device = new FakeStreamingDevice("COM7");
+        var externalProcessRunner = new FakeExternalProcessRunner();
+        // Attempt 1: device hadn't settled into bridge mode — transient failure markers, exit 1.
+        externalProcessRunner.ResultSequence.Enqueue(new ExternalProcessResult(
+            1,
+            timedOut: false,
+            TimeSpan.FromSeconds(5),
+            ["software WINC serial bridge found", "Programming device failed"],
+            ["error: failed to read serial bridge ID query response"]));
+        // Attempt 2: succeeds.
+        externalProcessRunner.ResultSequence.Enqueue(new ExternalProcessResult(
+            0,
+            timedOut: false,
+            TimeSpan.FromSeconds(40),
+            ["begin write operation", "verify passed", "Operation completed successfully"],
+            []));
+
+        var options = CreateFastOptions();
+        options.WifiFlashAttempts = 2;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(2, externalProcessRunner.RunCount);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_FiresBridgeActivationCallbackAtWincPrompt()
+    {
+        var device = new FakeStreamingDevice("COM7");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromSeconds(40),
+                ["Power cycle WINC and set to bootloader mode", "verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var bridgeActivations = 0;
+        var options = CreateFastOptions();
+        options.WifiBridgeActivationCallback = () => bridgeActivations++;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(1, bridgeActivations);
+    }
+
+    [Fact]
+    public void WifiFlashProgressParser_IgnoresImageBuildPercentAndAdvancesAcrossDeviceFlashPhases()
+    {
+        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+
+        // The local image-build phase reaches 100% per region; those must NOT move the bar,
+        // otherwise the monotonic max latches before the on-device flash even starts.
+        Assert.Null(parser.Observe("written 235472 of 237036 bytes to image (100%)"));
+        Assert.Null(parser.Observe("written 77304 of 765952 bytes to image (11%)"));
+
+        // Device flash phases advance the bar, each monotonically forward.
+        var writeStart = parser.Observe("begin write operation");
+        Assert.NotNull(writeStart);
+
+        var writeMid = parser.Observe(" 0x040000:[wwwwwwww] 0x048000:[wwwwwwww] 0x050000:[wwwwwwww] 0x058000:[wwwwwwww]");
+        Assert.NotNull(writeMid);
+        Assert.True(writeMid > writeStart);
+
+        var readStart = parser.Observe("begin read operation");
+        Assert.NotNull(readStart);
+        Assert.True(readStart >= writeMid);
+
+        Assert.Null(parser.Observe("verify range 0x000000 to 0x080000"));
+        var verifyStart = parser.Observe("begin verify operation");
+        Assert.NotNull(verifyStart);
+        Assert.True(verifyStart >= readStart);
+
+        var verifyEnd = parser.Observe(" 0x060000:[vvvvvvvv] 0x068000:[vvvvvvvv] 0x070000:[vvvvvvvv] 0x078000:[vvvvvvvv]");
+        Assert.NotNull(verifyEnd);
+        Assert.True(verifyEnd > verifyStart);
+        Assert.True(verifyEnd <= 100);
+    }
+
+    [Fact]
+    public void WifiFlashProgressParser_MeasuresFromRangeBase_ForNonZeroVerifyRange()
+    {
+        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+
+        // Range base 0x40000 (span 0x40000). Absolute block addresses must be measured relative to
+        // the base; otherwise the first block saturates the fraction to ~100% immediately.
+        parser.Observe("verify range 0x040000 to 0x080000");
+        var verifyStart = parser.Observe("begin verify operation");
+        Assert.NotNull(verifyStart);
+
+        var firstBlock = parser.Observe(" 0x040000:[vvvvvvvv]");
+        Assert.NotNull(firstBlock);
+
+        var lastBlock = parser.Observe(" 0x078000:[vvvvvvvv]");
+        Assert.NotNull(lastBlock);
+
+        // The bar advances across the range (the first block was not already saturated).
+        Assert.True(lastBlock > firstBlock);
+        Assert.True(lastBlock <= 100);
+    }
+
+    [Fact]
+    public void WifiFlashProgressParser_NeverMovesBackward_WhenAddressesResetBetweenPhases()
+    {
+        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+
+        parser.Observe("begin write operation");
+        var writeEnd = parser.Observe(" 0x060000:[wwwwwwww] 0x068000:[wwwwwwww] 0x070000:[wwwwwwww] 0x078000:[wwwwwwww]");
+        Assert.NotNull(writeEnd);
+
+        // Read restarts addresses at 0x0; the reported percent must not regress below the write end.
+        parser.Observe("begin read operation");
+        var readLow = parser.Observe(" 0x000000:[rrrrrrrr]");
+        if (readLow.HasValue)
+        {
+            Assert.True(readLow.Value >= writeEnd.Value);
+        }
+    }
+
+    [Fact]
     public async Task UpdateWifiModuleAsync_WhenDeviceVersionMatchesLatest_SkipsFlashAndReportsComplete()
     {
         var wifiRelease = new FirmwareReleaseInfo
@@ -627,7 +874,7 @@ public class FirmwareUpdateServiceTests
 
         var externalProcessRunner = new FakeExternalProcessRunner
         {
-            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), ["verify passed", "Operation completed successfully"], [])
         };
 
         var options = CreateFastOptions();
@@ -668,7 +915,7 @@ public class FirmwareUpdateServiceTests
 
         var externalProcessRunner = new FakeExternalProcessRunner
         {
-            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), ["verify passed", "Operation completed successfully"], [])
         };
 
         var options = CreateFastOptions();
@@ -1225,7 +1472,7 @@ public class FirmwareUpdateServiceTests
 
         var externalProcessRunner = new FakeExternalProcessRunner
         {
-            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), ["verify passed", "Operation completed successfully"], [])
         };
 
         var options = CreateFastOptions();
@@ -1293,7 +1540,7 @@ public class FirmwareUpdateServiceTests
 
         var externalProcessRunner = new FakeExternalProcessRunner
         {
-            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), [], [])
+            NextResult = new ExternalProcessResult(0, false, TimeSpan.FromMilliseconds(10), ["verify passed", "Operation completed successfully"], [])
         };
 
         var options = CreateFastOptions();
@@ -1587,6 +1834,12 @@ public class FirmwareUpdateServiceTests
             HidConnectRetryDelay = TimeSpan.FromMilliseconds(5),
             FlashWriteRetryDelay = TimeSpan.FromMilliseconds(5),
             WifiProcessTimeout = TimeSpan.FromSeconds(2),
+            // Collapse the WiFi-flash lifecycle waits for unit tests: the fake transport
+            // releases its port synchronously and the fake process runner needs no
+            // prompt/bridge-init window, so these delays are pure latency here.
+            PostLanDisconnectPortReleaseDelay = TimeSpan.Zero,
+            WincBootPromptResponseDelay = TimeSpan.Zero,
+            WifiFlashRetryDelay = TimeSpan.FromMilliseconds(5),
             // Disable the macOS USB CDC stale-handle settling delay for unit
             // tests — FakeStreamingDevice doesn't reproduce the re-enum race,
             // so the dance is pure latency that would blow the fast budgets.
@@ -1978,7 +2231,18 @@ public class FirmwareUpdateServiceTests
     private sealed class FakeExternalProcessRunner : IExternalProcessRunner
     {
         public ExternalProcessResult NextResult { get; set; } = new(0, false, TimeSpan.Zero, [], []);
+
+        /// <summary>
+        /// Optional per-attempt results. When non-empty each <see cref="RunAsync"/> call dequeues
+        /// the next result, letting tests model the WINC flash retry path (transient failure →
+        /// success). Once the sequence is drained, subsequent calls return <see cref="NextResult"/>
+        /// — kept deliberately distinct from the scripted results so a test asserting
+        /// <see cref="RunCount"/> can still catch unexpected extra attempts.
+        /// </summary>
+        public Queue<ExternalProcessResult> ResultSequence { get; } = new();
+
         public ExternalProcessRequest? LastRequest { get; private set; }
+        public int RunCount { get; private set; }
 
         public Task<ExternalProcessResult> RunAsync(
             ExternalProcessRequest request,
@@ -1986,19 +2250,22 @@ public class FirmwareUpdateServiceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastRequest = request;
+            RunCount++;
 
-            foreach (var line in NextResult.StandardOutputLines)
+            var result = ResultSequence.Count > 0 ? ResultSequence.Dequeue() : NextResult;
+
+            foreach (var line in result.StandardOutputLines)
             {
                 request.OnStandardOutputLine?.Invoke(line);
                 request.StandardInputResponseFactory?.Invoke(line);
             }
 
-            foreach (var line in NextResult.StandardErrorLines)
+            foreach (var line in result.StandardErrorLines)
             {
                 request.OnStandardErrorLine?.Invoke(line);
             }
 
-            return Task.FromResult(NextResult);
+            return Task.FromResult(result);
         }
     }
 

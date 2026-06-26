@@ -73,9 +73,64 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostLanFirmwareModeDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// Delay after the managed serial connection is disconnected (entering WiFi update mode)
+    /// and before the external WINC flash tool is launched. The OS does not free the USB-CDC
+    /// COM handle the instant the device's serial connection is disconnected; without this pause
+    /// the flash tool tries to open the port before it is released, fails to open it,
+    /// and exits within ~1s producing no programming output — which the output-based success
+    /// verification (see <see cref="WifiFlashSuccessMarker"/>) then correctly reports as a
+    /// failure. Set to <see cref="TimeSpan.Zero"/> to skip the wait (e.g. unit tests, or
+    /// transports that release the port synchronously).
+    /// </summary>
+    public TimeSpan PostLanDisconnectPortReleaseDelay { get; set; } = TimeSpan.FromSeconds(1.5);
+
+    /// <summary>
     /// Delay before attempting to reconnect serial after WiFi tool execution.
     /// </summary>
     public TimeSpan PostWifiReconnectDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Delay observed at the WINC "Power cycle WINC and set to bootloader mode" prompt before the
+    /// empty continue line is sent to the flash tool. Gives the WiFi firmware time to finish its
+    /// bridge-mode initialization — especially after <see cref="WifiBridgeActivationCallback"/>
+    /// fires — before the tool issues its first serial bridge query. Set to
+    /// <see cref="TimeSpan.Zero"/> to respond immediately.
+    /// </summary>
+    public TimeSpan WincBootPromptResponseDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Optional callback invoked synchronously when the WINC "Power cycle WINC" prompt is detected,
+    /// before the <see cref="WincBootPromptResponseDelay"/> wait. Intended for the host to open a
+    /// raw serial port and send the bridge-activation commands (LAN:FWUpdate / LAN:APPLY) that
+    /// trigger the device's bridge-mode state machine immediately before the tool starts
+    /// programming. Kept injectable so the raw-serial specifics stay in the host while Core owns
+    /// the flash lifecycle, prompt detection, and response timing. Exceptions thrown by the
+    /// callback are logged and swallowed — they must not abort the flash.
+    /// </summary>
+    public Action? WifiBridgeActivationCallback { get; set; }
+
+    /// <summary>
+    /// Total attempts (initial + retries) for the external WINC flash process when an attempt fails
+    /// with a transient bridge-init failure (e.g. "failed to read serial bridge ID query response"
+    /// or "failed to initialise programming firmware"). A second attempt typically succeeds because
+    /// the device has since settled into bridge mode. Must be at least 1.
+    /// </summary>
+    public int WifiFlashAttempts { get; set; } = 2;
+
+    /// <summary>
+    /// Delay between WINC flash retry attempts. Only consulted when <see cref="WifiFlashAttempts"/>
+    /// is greater than 1.
+    /// </summary>
+    public TimeSpan WifiFlashRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Output line (case-insensitive substring) that the WINC flash tool emits on a fully
+    /// successful program. Success is verified from the tool's own output rather than from its exit
+    /// code or run duration: a genuine flash ends with "verify passed" then this marker, whereas a
+    /// tool that cannot reach the WINC (e.g. because the device never released the serial port)
+    /// produces none of these. Defaults to the shipped WINC Programming Tool 2.0.1 terminal line.
+    /// </summary>
+    public string WifiFlashSuccessMarker { get; set; } = "Operation completed successfully";
 
     /// <summary>
     /// Maximum HID connection attempts during bootloader connect, including the initial attempt.
@@ -249,6 +304,24 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(HidConnectRetryDelay, nameof(HidConnectRetryDelay));
         ValidatePositive(FlashWriteRetryDelay, nameof(FlashWriteRetryDelay));
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
+        ValidatePositive(WifiFlashRetryDelay, nameof(WifiFlashRetryDelay));
+
+        // These two permit Zero (= "skip the wait"); only reject negatives.
+        ValidateNonNegative(PostLanDisconnectPortReleaseDelay, nameof(PostLanDisconnectPortReleaseDelay));
+        ValidateNonNegative(WincBootPromptResponseDelay, nameof(WincBootPromptResponseDelay));
+
+        if (WifiFlashAttempts < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(WifiFlashAttempts),
+                WifiFlashAttempts,
+                "WiFi flash attempts must be at least 1.");
+        }
+
+        if (string.IsNullOrWhiteSpace(WifiFlashSuccessMarker))
+        {
+            throw new ArgumentException("WiFi flash success marker cannot be empty.", nameof(WifiFlashSuccessMarker));
+        }
 
         // The readiness options only matter when a probe is configured —
         // gate every readiness validation behind that, both the positive
@@ -328,6 +401,14 @@ public sealed class FirmwareUpdateServiceOptions
         if (value <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(parameterName, value, "Timeouts and delays must be greater than zero.");
+        }
+    }
+
+    private static void ValidateNonNegative(TimeSpan value, string parameterName)
+    {
+        if (value < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(parameterName, value, "Delay must not be negative.");
         }
     }
 }
