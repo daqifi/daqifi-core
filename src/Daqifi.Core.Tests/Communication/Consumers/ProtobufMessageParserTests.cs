@@ -468,6 +468,48 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
+    public void ProtobufMessageParser_ParseMessages_RecoversFrameAfterLongAsciiNoise()
+    {
+        // Hardening for #268: the resync must recover a frame even when a large
+        // amount of ASCII noise precedes it (e.g. a verbose boot banner / log lines
+        // echoed before the real reply). Each ASCII byte forms a single-byte varint
+        // length prefix and many are followed by plausible-looking field-tag bytes,
+        // so the look-ahead's field-tag pre-filter + ParseFrom must scan through all
+        // of it and still find the real frame — the scan is intentionally NOT capped
+        // to a fixed window, so devices with long leading chatter aren't missed.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // ~640 bytes of repeated ASCII log noise — well past any small fixed window.
+        var noise = Encoding.ASCII.GetBytes(string.Concat(
+            Enumerable.Repeat("DAQIFI boot: ok, waiting for command...\r\n", 16)));
+        Assert.True(noise.Length > 512, "Test precondition: noise must exceed a small scan window.");
+
+        var status = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            DeviceSn = 99,
+            AnalogInPortNum = 16,
+        };
+        using var ms = new MemoryStream();
+        status.WriteDelimitedTo(ms);
+        var frame = ms.ToArray();
+
+        var data = noise.Concat(frame).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert — the frame is recovered despite the long leading noise.
+        Assert.Single(messages);
+        var parsed = Assert.IsType<DaqifiOutMessage>(messages[0].Data);
+        Assert.Equal("Nq1", parsed.DevicePn);
+        Assert.Equal(ProtobufMessageType.Status, ProtobufProtocolHandler.DetectMessageType(parsed));
+        Assert.Equal(data.Length, consumedBytes);
+    }
+
+    [Fact]
     public void ProtobufMessageParser_ParseMessages_CompleteFrameThenPartial_EmitsCompletePreservesPartial()
     {
         // Guards the look-ahead resync added for #268: when a complete frame is

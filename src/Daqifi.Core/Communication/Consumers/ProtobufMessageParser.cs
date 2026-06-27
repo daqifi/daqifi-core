@@ -216,7 +216,9 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
     /// It is a bounded linear scan, and the caller only invokes it when no frame has
     /// been parsed from the buffer yet (leading-noise recovery), so the normal
     /// streaming path — which parses frames before reaching a trailing partial —
-    /// never pays for it.
+    /// never pays for it. A cheap field-tag pre-filter rejects most noise offsets
+    /// before the expensive ParseFrom, keeping the per-offset cost low even when the
+    /// scan covers a large noisy buffer.
     /// </remarks>
     private static int FindNextParseableFrameStart(byte[] data, int start)
     {
@@ -239,6 +241,19 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
             {
                 // Declared frame isn't fully buffered at i, so it can't be the
                 // complete, parseable frame we're scanning for.
+                continue;
+            }
+
+            // Cheap pre-filter before the comparatively expensive ParseFrom: the
+            // first body byte of a real DaqifiOutMessage is always a valid protobuf
+            // field tag, so an implausible tag byte here cannot begin a real frame.
+            // This skips the parse attempt at the vast majority of noise offsets
+            // (echoed ASCII command text, "DAQIFI>" prompt, stray bytes) and never
+            // skips a real frame — any byte that fails this check would also fail
+            // ParseFrom. messageLength is > 0 and fully buffered, so the indexed byte
+            // is in range.
+            if (!IsPlausibleFieldTagByte(remaining[prefixBytes]))
+            {
                 continue;
             }
 
