@@ -1,5 +1,7 @@
+using System.Text;
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Device.Protocol;
 using Google.Protobuf;
 
 namespace Daqifi.Core.Tests.Communication.Consumers;
@@ -336,6 +338,58 @@ public class StreamMessageConsumerIntegrationTests
         Assert.False(consumer.IsRunning);
         Assert.Throws<ObjectDisposedException>(() => consumer.Start());
         Assert.Throws<ObjectDisposedException>(() => consumer.ClearBuffer());
+    }
+
+    /// <summary>
+    /// Closes #268 at the pipeline level: an echo-on device wraps its SYSInfoPB?
+    /// reply in the echoed ASCII command text and a trailing "DAQIFI>" prompt. The
+    /// full consumer + parser pipeline must skip that non-protobuf noise and still
+    /// deliver the embedded status message — this is what lets serial discovery stay
+    /// GetDeviceInfo-only without toggling device echo.
+    /// </summary>
+    [Fact]
+    public void FullPipeline_EchoWrappedStatusReply_StillDeliversStatusMessage()
+    {
+        // Arrange - status reply framed exactly as an echo-on device emits it.
+        var status = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            DeviceSn = 4242,
+            DeviceFwRev = "3.5.0",
+            AnalogInPortNum = 16,
+            DigitalPortNum = 16,
+        };
+
+        var wireData = Encoding.ASCII.GetBytes("SYSTem:SYSInfoPB?\r\n")
+            .Concat(SerializeWithLengthPrefix(status))
+            .Concat(Encoding.ASCII.GetBytes("\r\nDAQIFI>"))
+            .ToArray();
+
+        using var stream = new MemoryStream(wireData);
+        var parser = new ProtobufMessageParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        DaqifiOutMessage? received = null;
+        var messageReceived = new ManualResetEventSlim(false);
+        consumer.MessageReceived += (sender, args) =>
+        {
+            if (ProtobufProtocolHandler.DetectMessageType(args.Message.Data) == ProtobufMessageType.Status)
+            {
+                received = args.Message.Data;
+                messageReceived.Set();
+            }
+        };
+
+        // Act
+        consumer.Start();
+        var eventFired = messageReceived.Wait(TimeSpan.FromSeconds(1));
+        consumer.Stop();
+
+        // Assert - the device is identified despite the echo/prompt wrapper.
+        Assert.True(eventFired, "Status message should be delivered despite echo/prompt wrapper");
+        Assert.NotNull(received);
+        Assert.Equal("Nq1", received!.DevicePn);
+        Assert.Equal(4242u, received.DeviceSn);
     }
 
     /// <summary>

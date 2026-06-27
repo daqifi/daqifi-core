@@ -1,5 +1,7 @@
+using System.Text;
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Device.Protocol;
 using Google.Protobuf;
 
 namespace Daqifi.Core.Tests.Communication.Consumers;
@@ -358,6 +360,146 @@ public class ProtobufMessageParserTests
         Assert.Empty(messages);
         Assert.True(consumedBytes >= 1,
             $"Expected parser to advance past garbage prefix, got consumedBytes={consumedBytes}");
+    }
+
+    [Fact]
+    public void ProtobufMessageParser_ParseMessages_RecoversFrameWrappedInEchoAndPrompt()
+    {
+        // Closes #268. A device booted with echo ON wraps its SYSInfoPB? reply in the
+        // echoed ASCII command text and a trailing "DAQIFI>" prompt:
+        //
+        //     SYSTem:SYSInfoPB?\r\n  <length-delimited protobuf status>  \r\nDAQIFI>
+        //
+        // The leading 'S' (0x53) varint-decodes to a length of 83 and the following
+        // 'Y' looks like a valid field tag, so the old parser waited forever for 83
+        // bytes that never came, consumed nothing, and the embedded status frame was
+        // never parsed — the device was silently missed even though it answered.
+        // The parser must now skip the ASCII echo/prompt noise and recover the frame.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        // A realistic status reply: channel-count fields make it classify as Status,
+        // which is exactly what serial discovery keys on.
+        var status = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            DeviceSn = 1234567,
+            DeviceFwRev = "3.5.0",
+            AnalogInPortNum = 16,
+            DigitalPortNum = 16,
+        };
+        using var ms = new MemoryStream();
+        status.WriteDelimitedTo(ms);
+        var frame = ms.ToArray();
+
+        var echo = Encoding.ASCII.GetBytes("SYSTem:SYSInfoPB?\r\n");
+        var prompt = Encoding.ASCII.GetBytes("\r\nDAQIFI>");
+        var data = echo.Concat(frame).Concat(prompt).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert — the embedded status frame is recovered intact...
+        Assert.Single(messages);
+        var parsed = Assert.IsType<DaqifiOutMessage>(messages[0].Data);
+        Assert.Equal("Nq1", parsed.DevicePn);
+        Assert.Equal(1234567UL, parsed.DeviceSn);
+        Assert.Equal(ProtobufMessageType.Status, ProtobufProtocolHandler.DetectMessageType(parsed));
+
+        // ...and the parser consumed through the end of the frame. The trailing
+        // "DAQIFI>" prompt is left buffered (it looks like the start of another
+        // frame), but the status message has already been delivered.
+        Assert.Equal(echo.Length + frame.Length, consumedBytes);
+    }
+
+    [Fact]
+    public void ProtobufMessageParser_ParseMessages_EchoWrappedFedOneByteAtATime_RecoversExactlyOnce()
+    {
+        // Mirrors how StreamMessageConsumer drives the parser: bytes trickle in and
+        // the consumed prefix is trimmed between calls. Worst-case single-byte
+        // chunking must still recover the echo-wrapped status frame exactly once and
+        // not stall with an ever-growing buffer (the failure mode in #268).
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+        var status = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            DeviceSn = 7,
+            AnalogInPortNum = 16,
+        };
+        using var ms = new MemoryStream();
+        status.WriteDelimitedTo(ms);
+        var frame = ms.ToArray();
+
+        var data = Encoding.ASCII.GetBytes("SYSTem:SYSInfoPB?\r\n")
+            .Concat(frame)
+            .Concat(Encoding.ASCII.GetBytes("\r\nDAQIFI>"))
+            .ToArray();
+
+        // Act — feed one byte at a time, trimming consumed exactly like the consumer.
+        var buffer = new List<byte>();
+        var statusMessages = 0;
+        foreach (var b in data)
+        {
+            buffer.Add(b);
+            var msgs = parser.ParseMessages(buffer.ToArray(), out var consumed).ToList();
+            if (consumed > 0)
+            {
+                buffer.RemoveRange(0, Math.Min(consumed, buffer.Count));
+            }
+
+            foreach (var m in msgs)
+            {
+                var d = Assert.IsType<DaqifiOutMessage>(m.Data);
+                if (ProtobufProtocolHandler.DetectMessageType(d) == ProtobufMessageType.Status)
+                {
+                    statusMessages++;
+                }
+            }
+        }
+
+        // Assert — the status frame was delivered exactly once and the leftover
+        // buffer never grew past the un-consumed trailing prompt.
+        Assert.Equal(1, statusMessages);
+        Assert.True(buffer.Count <= "\r\nDAQIFI>".Length,
+            $"Leftover buffer should be at most the trailing prompt, was {buffer.Count} bytes.");
+    }
+
+    [Fact]
+    public void ProtobufMessageParser_ParseMessages_CompleteFrameThenPartial_EmitsCompletePreservesPartial()
+    {
+        // Guards the look-ahead resync added for #268: when a complete frame is
+        // followed by the start of a second frame whose body hasn't fully arrived,
+        // the parser must emit the first frame and preserve the partial exactly at
+        // its boundary. The look-ahead must not scan into and corrupt the trailing
+        // partial — callers trim consumedBytes unconditionally.
+
+        // Arrange
+        var parser = new ProtobufMessageParser();
+
+        using var s1 = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 11 }.WriteDelimitedTo(s1);
+        var firstFrame = s1.ToArray();
+
+        using var s2 = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 22 }.WriteDelimitedTo(s2);
+        var secondFrame = s2.ToArray();
+        // Keep only the prefix + first body byte of the second frame.
+        var secondPartial = secondFrame.Take(2).ToArray();
+
+        var data = firstFrame.Concat(secondPartial).ToArray();
+
+        // Act
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert — only the complete first frame is emitted, and consumed stops at
+        // the partial's boundary so the caller retains it for the next read.
+        Assert.Single(messages);
+        var parsed = Assert.IsType<DaqifiOutMessage>(messages[0].Data);
+        Assert.Equal(11UL, parsed.MsgTimeStamp);
+        Assert.Equal(firstFrame.Length, consumedBytes);
     }
 
     private static int GetVarintLength(byte[] buffer)

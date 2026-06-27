@@ -134,6 +134,49 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
                     continue;
                 }
 
+                // The declared frame isn't fully buffered. Normally that means a
+                // genuine frame split across reads — wait for the rest. But the
+                // same condition is reached by leading non-protobuf noise whose
+                // bytes happen to varint-decode to a plausible length with a
+                // plausible first body byte. The motivating case (issue #268): an
+                // echo-on device prefixes its SYSInfoPB? reply with the echoed
+                // ASCII command ("SYSTem:SYSInfoPB?\r\n") and trails it with a
+                // "DAQIFI>" prompt. The leading 'S' (0x53) decodes as length 83
+                // and the next byte 'Y' looks like a field tag, so a plain wait
+                // would block forever on 83 bytes that never arrive while the real
+                // frame sitting further along is never parsed — the device is
+                // silently missed.
+                //
+                // Tell the two apart structurally: a genuine partial frame runs
+                // past the end of the buffer, so nothing parseable can follow it;
+                // noise, by contrast, is followed by the real, complete frame. Scan
+                // ahead for the next fully-buffered, parseable frame. If one exists,
+                // the current position is noise — skip straight to it (everything
+                // before the first parseable frame is, by definition, not a frame
+                // start and holds no recoverable partial, since a partial would
+                // extend past the buffer end and thus past that frame). If none
+                // exists, this really is a partial: preserve it and wait.
+                //
+                // Only do this when no frame has been parsed yet in this call. Once
+                // we've emitted at least one frame from this buffer, a trailing
+                // under-buffered frame is overwhelmingly a genuine split frame to
+                // wait for (the normal streaming case) — not leading noise — so we
+                // skip the linear scan and keep that hot path cheap. Stray bytes
+                // appearing mid-stream are still recovered: the caller trims the
+                // preceding frame and those bytes lead the next call, where no frame
+                // has been parsed yet and the scan runs. Discovery always reaches
+                // here with zero frames parsed, so it recovers on the first reply.
+                if (messages.Count == 0)
+                {
+                    var nextFrameIndex = FindNextParseableFrameStart(data, currentIndex + 1);
+                    if (nextFrameIndex >= 0)
+                    {
+                        currentIndex = nextFrameIndex;
+                        consumedBytes = currentIndex;
+                        continue;
+                    }
+                }
+
                 break;
             }
 
@@ -155,6 +198,63 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         }
 
         return messages;
+    }
+
+    /// <summary>
+    /// Scans forward from <paramref name="start"/> for the first index at which a
+    /// complete, fully-buffered, successfully-parseable length-delimited frame
+    /// begins, returning that index or -1 if none exists before the end of
+    /// <paramref name="data"/>. Used by the partial-frame wait path to tell leading
+    /// non-protobuf noise (echoed command text, a "DAQIFI>" prompt, stray bytes)
+    /// apart from a real frame split across reads: noise is followed by a parseable
+    /// frame, a genuine partial is not.
+    /// </summary>
+    /// <remarks>
+    /// The scan only recognizes frames whose declared length is fully present and
+    /// whose body parses — it never reports a partial and never emits a message, so
+    /// it cannot advance into (and corrupt) a real frame that is still arriving.
+    /// It is a bounded linear scan, and the caller only invokes it when no frame has
+    /// been parsed from the buffer yet (leading-noise recovery), so the normal
+    /// streaming path — which parses frames before reaching a trailing partial —
+    /// never pays for it.
+    /// </remarks>
+    private static int FindNextParseableFrameStart(byte[] data, int start)
+    {
+        for (var i = start; i < data.Length; i++)
+        {
+            var remaining = new ReadOnlySpan<byte>(data, i, data.Length - i);
+
+            if (!TryReadLengthPrefix(remaining, out var messageLength, out var prefixBytes, out _))
+            {
+                // Incomplete or malformed length prefix here — not a frame start.
+                continue;
+            }
+
+            if (messageLength <= 0 || messageLength > MaxMessageSizeBytes)
+            {
+                continue;
+            }
+
+            if (remaining.Length < prefixBytes + messageLength)
+            {
+                // Declared frame isn't fully buffered at i, so it can't be the
+                // complete, parseable frame we're scanning for.
+                continue;
+            }
+
+            try
+            {
+                DaqifiOutMessage.Parser.ParseFrom(remaining.Slice(prefixBytes, messageLength));
+                return i;
+            }
+            catch (Exception)
+            {
+                // A varint length that happens to fit but whose body isn't a valid
+                // message is not a real frame boundary — keep scanning.
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>
