@@ -34,6 +34,36 @@ public class HidLibraryTransportTests
     }
 
     [Fact]
+    public async Task ConnectAsync_ByDefault_OpensDeviceShared()
+    {
+        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
+        var platform = new FakeHidPlatform([device]);
+
+        using var transport = new HidLibraryTransport(platform);
+
+        await transport.ConnectAsync(0x04D8, 0x003C);
+
+        // ExclusiveAccess defaults false so non-bootloader HID consumers keep a shared open.
+        Assert.False(transport.ExclusiveAccess);
+        Assert.False(device.LastOpenExclusive);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_WhenExclusiveAccessSet_OpensDeviceExclusively()
+    {
+        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
+        var platform = new FakeHidPlatform([device]);
+
+        using var transport = new HidLibraryTransport(platform) { ExclusiveAccess = true };
+
+        await transport.ConnectAsync(0x04D8, 0x003C);
+
+        // A2: the bootloader flash must hold the HID handle exclusively. The flag is threaded to the
+        // device open so the stray-write guard (and discovery lockout) is actually requested.
+        Assert.True(device.LastOpenExclusive);
+    }
+
+    [Fact]
     public async Task ConnectAsync_WithSerialFilter_SelectsMatchingDevice()
     {
         var first = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
@@ -221,6 +251,7 @@ public class HidLibraryTransportTests
 
         public int OpenCount { get; private set; }
         public int CloseCount { get; private set; }
+        public bool LastOpenExclusive { get; private set; }
         public int? LastWriteTimeoutMs { get; private set; }
         public int? LastReadTimeoutMs { get; private set; }
 
@@ -228,9 +259,10 @@ public class HidLibraryTransportTests
         public HidTransportReadResult NextReadResult { get; set; }
             = HidTransportReadResult.Success(Array.Empty<byte>());
 
-        public void Open()
+        public void Open(bool exclusive)
         {
             OpenCount++;
+            LastOpenExclusive = exclusive;
             IsConnected = true;
         }
 

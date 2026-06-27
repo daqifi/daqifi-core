@@ -18,7 +18,10 @@ internal interface IHidTransportDevice
     string? ProductName { get; }
     bool IsConnected { get; }
 
-    void Open();
+    // When exclusive is true, request an exclusive open (Windows dwShareMode=0; macOS IOKit seize)
+    // so no other user-mode opener can open or write to the device while this handle is held.
+    // Best-effort: a refused exclusive open falls back to a shared open.
+    void Open(bool exclusive);
     void Close();
     bool Write(byte[] data, int timeoutMs);
     Task<bool> WriteAsync(byte[] data, int timeoutMs);
@@ -115,19 +118,47 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
         }
     }
 
-    public void Open()
+    public void Open(bool exclusive)
     {
         if (_stream != null)
         {
             return;
         }
 
-        if (!_device.TryOpen(out var stream) || stream == null)
+        HidStream? opened = null;
+
+        if (exclusive)
         {
-            throw new IOException("Failed to open HID device.");
+            // A2 (stray-write guard): open the bootloader's vendor collection exclusively
+            // (Windows dwShareMode=0) so no other user-mode opener — the desktop's own HID discovery
+            // loop, a second app instance, anything — can open or write to the device while this
+            // handle is held. The PIC32 bootloader's CRC check is disabled, so a stray SOH…EOT frame
+            // from another opener could be mis-parsed as an ERASE; the exclusive handle guards
+            // against that. A vendor-defined top-level collection (Usage Page 0xFF00) permits
+            // exclusive access, unlike the system keyboard/mouse collections hidclass keeps shared.
+            var exclusiveConfig = new OpenConfiguration();
+            exclusiveConfig.SetOption(OpenOption.Exclusive, true);
+
+            // Best-effort: a refused exclusive open (another handle already open — e.g. a transient
+            // discovery handle not yet released) falls through to the shared open below, so a flash
+            // that works today is never regressed by the added guard.
+            if (_device.TryOpen(exclusiveConfig, out var exclusiveStream) && exclusiveStream != null)
+            {
+                opened = exclusiveStream;
+            }
         }
 
-        _stream = stream;
+        if (opened == null)
+        {
+            if (!_device.TryOpen(out var sharedStream) || sharedStream == null)
+            {
+                throw new IOException("Failed to open HID device.");
+            }
+
+            opened = sharedStream;
+        }
+
+        _stream = opened;
     }
 
     public void Close()

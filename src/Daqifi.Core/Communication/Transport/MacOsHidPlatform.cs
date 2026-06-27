@@ -232,7 +232,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
             maxOutput);
     }
 
-    public void Open()
+    public void Open(bool exclusive)
     {
         lock (_lifecycleLock)
         {
@@ -241,7 +241,20 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
                 return;
             }
 
-            var result = NativeMethods.IOHIDDeviceOpen(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
+            // A2 (stray-write guard): when exclusive, seize the device so no other user-mode opener
+            // can drive it while we hold it — the macOS equivalent of the Windows dwShareMode=0 open.
+            // Best-effort, mirroring the HidSharp backend: a refused seize falls back to a shared
+            // open so a flash that works today is not regressed.
+            var options = exclusive
+                ? NativeMethods.kIOHIDOptionsTypeSeizeDevice
+                : NativeMethods.kIOHIDOptionsTypeNone;
+            var result = NativeMethods.IOHIDDeviceOpen(_deviceRef, options);
+            if (result != NativeMethods.kIOReturnSuccess && exclusive)
+            {
+                // Refused seize falls back to a shared open so a flash that works today is not regressed.
+                result = NativeMethods.IOHIDDeviceOpen(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
+            }
+
             if (result != NativeMethods.kIOReturnSuccess)
             {
                 throw new IOException($"IOHIDDeviceOpen failed (IOReturn=0x{result:X8}).");
@@ -630,6 +643,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
         private const string LibSystem = "/usr/lib/libSystem.dylib";
 
         internal const uint kIOHIDOptionsTypeNone = 0;
+        internal const uint kIOHIDOptionsTypeSeizeDevice = 1;
         internal const int kIOReturnSuccess = 0;
         internal const int kIOHIDReportTypeOutput = 1;
         internal const int kCFNumberSInt32Type = 3;
