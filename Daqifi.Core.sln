@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core", "src\Daqifi.C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core.Tests", "src\Daqifi.Core.Tests\Daqifi.Core.Tests.csproj", "{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core.SmokeTest", "src\Daqifi.Core.SmokeTest\Daqifi.Core.SmokeTest.csproj", "{FFB51BF3-CB42-4788-8D8D-36429FB2FC03}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,9 +28,14 @@ Global
 		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FFB51BF3-CB42-4788-8D8D-36429FB2FC03}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FFB51BF3-CB42-4788-8D8D-36429FB2FC03}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FFB51BF3-CB42-4788-8D8D-36429FB2FC03}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FFB51BF3-CB42-4788-8D8D-36429FB2FC03}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{F30FE70B-E858-46F1-8BDA-16859680FE56} = {5412868F-5B63-486D-8EA6-ED8C83418517}
 		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128} = {5412868F-5B63-486D-8EA6-ED8C83418517}
+		{FFB51BF3-CB42-4788-8D8D-36429FB2FC03} = {5412868F-5B63-486D-8EA6-ED8C83418517}
 	EndGlobalSection
 EndGlobal
