@@ -139,12 +139,20 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
             var exclusiveConfig = new OpenConfiguration();
             exclusiveConfig.SetOption(OpenOption.Exclusive, true);
 
-            // Best-effort: a refused exclusive open (another handle already open — e.g. a transient
-            // discovery handle not yet released) falls through to the shared open below, so a flash
-            // that works today is never regressed by the added guard.
-            if (_device.TryOpen(exclusiveConfig, out var exclusiveStream) && exclusiveStream != null)
+            // Best-effort: a refused exclusive open falls through to the shared open below, so a flash
+            // that works today is never regressed by the added guard. This covers BOTH ways HidSharp can
+            // refuse — TryOpen returning false AND TryOpen throwing (e.g. a sharing-violation surfaced as
+            // an exception) — otherwise an exclusive-open throw would become a hard connection failure.
+            try
             {
-                opened = exclusiveStream;
+                if (_device.TryOpen(exclusiveConfig, out var exclusiveStream) && exclusiveStream != null)
+                {
+                    opened = exclusiveStream;
+                }
+            }
+            catch (Exception)
+            {
+                // Exclusive open threw; leave opened == null so the shared open below is attempted.
             }
         }
 
