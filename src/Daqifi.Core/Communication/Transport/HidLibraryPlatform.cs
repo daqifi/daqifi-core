@@ -126,6 +126,7 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
         }
 
         HidStream? opened = null;
+        Exception? exclusiveOpenError = null;
 
         if (exclusive)
         {
@@ -150,9 +151,11 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
                     opened = exclusiveStream;
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Exclusive open threw; leave opened == null so the shared open below is attempted.
+                // Exclusive open threw; remember why and leave opened == null so the shared open below
+                // is attempted. The cause is chained into the final throw if the shared open also fails.
+                exclusiveOpenError = ex;
             }
         }
 
@@ -160,7 +163,8 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
         {
             if (!_device.TryOpen(out var sharedStream) || sharedStream == null)
             {
-                throw new IOException("Failed to open HID device.");
+                // Chain the exclusive-open failure (if any) so a double failure preserves the root cause.
+                throw new IOException("Failed to open HID device.", exclusiveOpenError);
             }
 
             opened = sharedStream;

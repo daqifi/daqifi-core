@@ -249,6 +249,7 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
                 ? NativeMethods.kIOHIDOptionsTypeSeizeDevice
                 : NativeMethods.kIOHIDOptionsTypeNone;
             var result = NativeMethods.IOHIDDeviceOpen(_deviceRef, options);
+            var seizeResult = result;
             if (result != NativeMethods.kIOReturnSuccess && exclusive)
             {
                 // Refused seize falls back to a shared open so a flash that works today is not regressed.
@@ -257,7 +258,11 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
 
             if (result != NativeMethods.kIOReturnSuccess)
             {
-                throw new IOException($"IOHIDDeviceOpen failed (IOReturn=0x{result:X8}).");
+                // On a double failure surface both codes so the seize and the shared fallback are distinguishable.
+                throw new IOException(
+                    exclusive
+                        ? $"IOHIDDeviceOpen failed (seize IOReturn=0x{seizeResult:X8}, shared IOReturn=0x{result:X8})."
+                        : $"IOHIDDeviceOpen failed (IOReturn=0x{result:X8}).");
             }
 
             _deviceOpened = true;
