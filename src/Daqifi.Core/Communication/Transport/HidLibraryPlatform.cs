@@ -161,10 +161,27 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
 
         if (opened == null)
         {
-            if (!_device.TryOpen(out var sharedStream) || sharedStream == null)
+            // The shared open can also throw (not just return false); catch it so a throwing shared
+            // fallback still routes through our normalized IOException and never drops the exclusive cause.
+            HidStream? sharedStream = null;
+            Exception? sharedOpenError = null;
+            try
             {
-                // Chain the exclusive-open failure (if any) so a double failure preserves the root cause.
-                throw new IOException("Failed to open HID device.", exclusiveOpenError);
+                _device.TryOpen(out sharedStream);
+            }
+            catch (Exception ex)
+            {
+                sharedOpenError = ex;
+            }
+
+            if (sharedStream == null)
+            {
+                // Both opens failed — preserve whatever cause(s) we have. When both threw, chain both via
+                // an AggregateException so neither root cause is lost for diagnosis.
+                var cause = exclusiveOpenError != null && sharedOpenError != null
+                    ? new AggregateException(exclusiveOpenError, sharedOpenError)
+                    : sharedOpenError ?? exclusiveOpenError;
+                throw new IOException("Failed to open HID device.", cause);
             }
 
             opened = sharedStream;
