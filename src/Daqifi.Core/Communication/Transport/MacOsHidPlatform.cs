@@ -248,12 +248,16 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
             var options = exclusive
                 ? NativeMethods.kIOHIDOptionsTypeSeizeDevice
                 : NativeMethods.kIOHIDOptionsTypeNone;
+            var seizeResult = NativeMethods.kIOReturnSuccess;
             var result = NativeMethods.IOHIDDeviceOpen(_deviceRef, options);
-            var seizeResult = result;
-            if (result != NativeMethods.kIOReturnSuccess && exclusive)
+            if (exclusive)
             {
-                // Refused seize falls back to a shared open so a flash that works today is not regressed.
-                result = NativeMethods.IOHIDDeviceOpen(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
+                seizeResult = result;
+                if (result != NativeMethods.kIOReturnSuccess)
+                {
+                    // Refused seize falls back to a shared open so a flash that works today is not regressed.
+                    result = NativeMethods.IOHIDDeviceOpen(_deviceRef, NativeMethods.kIOHIDOptionsTypeNone);
+                }
             }
 
             if (result != NativeMethods.kIOReturnSuccess)

@@ -150,6 +150,11 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
                 {
                     opened = exclusiveStream;
                 }
+                else
+                {
+                    // TryOpen reported failure; dispose any partial stream so it isn't leaked.
+                    exclusiveStream?.Dispose();
+                }
             }
             catch (Exception ex)
             {
@@ -167,7 +172,12 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
             Exception? sharedOpenError = null;
             try
             {
-                _device.TryOpen(out sharedStream);
+                if (!_device.TryOpen(out sharedStream) || sharedStream == null)
+                {
+                    // TryOpen reported failure; dispose any partial stream and fall through to the throw.
+                    sharedStream?.Dispose();
+                    sharedStream = null;
+                }
             }
             catch (Exception ex)
             {
