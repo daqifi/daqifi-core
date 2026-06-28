@@ -280,6 +280,9 @@ public sealed class FirmwareUpdateServiceOptions
             FirmwareUpdateState.Programming => ProgrammingTimeout,
             FirmwareUpdateState.Verifying => VerifyingTimeout,
             FirmwareUpdateState.JumpingToApp => JumpingToApplicationTimeout,
+            // Cleanup re-erases the application flash, so it is bounded by the
+            // same budget as a normal erase.
+            FirmwareUpdateState.CleaningUp => ErasingFlashTimeout,
             _ => TimeSpan.FromMinutes(5)
         };
     }

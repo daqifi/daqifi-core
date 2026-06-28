@@ -25,6 +25,20 @@ public interface IFirmwareUpdateService
     /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// On failure this throws <see cref="FirmwareUpdateException"/>. If the failure
+    /// occurs after flash has been written (while the HID bootloader is still
+    /// connected), the service automatically re-erases the application flash so the
+    /// device is left in a clean, re-flashable bootloader state rather than a
+    /// half-flashed one. In that case <see cref="CurrentState"/> ends at
+    /// <see cref="FirmwareUpdateState.Recovered"/> (preceded by a
+    /// <see cref="FirmwareUpdateState.CleaningUp"/> transition) and the exception's
+    /// recovery guidance reflects that the device is safe to re-flash; if the
+    /// re-erase itself cannot complete, <see cref="CurrentState"/> ends at
+    /// <see cref="FirmwareUpdateState.Failed"/>. The exception's
+    /// <see cref="FirmwareUpdateException.FailedState"/> always reports where the
+    /// original failure occurred, regardless of cleanup outcome.
+    /// </remarks>
     Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
