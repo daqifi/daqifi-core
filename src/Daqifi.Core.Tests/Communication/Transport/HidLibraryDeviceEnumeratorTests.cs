@@ -144,7 +144,7 @@ public class HidLibraryDeviceEnumeratorTests
         public string? ProductName { get; }
         public bool IsConnected { get; private set; }
 
-        public void Open() => IsConnected = true;
+        public void Open(bool exclusive) => IsConnected = true;
 
         public void Close() => IsConnected = false;
 

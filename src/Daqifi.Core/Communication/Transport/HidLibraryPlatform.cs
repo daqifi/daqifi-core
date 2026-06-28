@@ -18,7 +18,10 @@ internal interface IHidTransportDevice
     string? ProductName { get; }
     bool IsConnected { get; }
 
-    void Open();
+    // When exclusive is true, request an exclusive open (Windows dwShareMode=0; macOS IOKit seize)
+    // so no other user-mode opener can open or write to the device while this handle is held.
+    // Best-effort: a refused exclusive open falls back to a shared open.
+    void Open(bool exclusive);
     void Close();
     bool Write(byte[] data, int timeoutMs);
     Task<bool> WriteAsync(byte[] data, int timeoutMs);
@@ -115,19 +118,86 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
         }
     }
 
-    public void Open()
+    public void Open(bool exclusive)
     {
         if (_stream != null)
         {
             return;
         }
 
-        if (!_device.TryOpen(out var stream) || stream == null)
+        HidStream? opened = null;
+        Exception? exclusiveOpenError = null;
+
+        if (exclusive)
         {
-            throw new IOException("Failed to open HID device.");
+            // A2 (stray-write guard): open the bootloader's vendor collection exclusively
+            // (Windows dwShareMode=0) so no other user-mode opener — the desktop's own HID discovery
+            // loop, a second app instance, anything — can open or write to the device while this
+            // handle is held. The PIC32 bootloader's CRC check is disabled, so a stray SOH…EOT frame
+            // from another opener could be mis-parsed as an ERASE; the exclusive handle guards
+            // against that. A vendor-defined top-level collection (Usage Page 0xFF00) permits
+            // exclusive access, unlike the system keyboard/mouse collections hidclass keeps shared.
+            var exclusiveConfig = new OpenConfiguration();
+            exclusiveConfig.SetOption(OpenOption.Exclusive, true);
+
+            // Best-effort: a refused exclusive open falls through to the shared open below, so a flash
+            // that works today is never regressed by the added guard. This covers BOTH ways HidSharp can
+            // refuse — TryOpen returning false AND TryOpen throwing (e.g. a sharing-violation surfaced as
+            // an exception) — otherwise an exclusive-open throw would become a hard connection failure.
+            try
+            {
+                if (_device.TryOpen(exclusiveConfig, out var exclusiveStream) && exclusiveStream != null)
+                {
+                    opened = exclusiveStream;
+                }
+                else
+                {
+                    // TryOpen reported failure; dispose any partial stream so it isn't leaked.
+                    exclusiveStream?.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                // Exclusive open threw; remember why and leave opened == null so the shared open below
+                // is attempted. The cause is chained into the final throw if the shared open also fails.
+                exclusiveOpenError = ex;
+            }
         }
 
-        _stream = stream;
+        if (opened == null)
+        {
+            // The shared open can also throw (not just return false); catch it so a throwing shared
+            // fallback still routes through our normalized IOException and never drops the exclusive cause.
+            HidStream? sharedStream = null;
+            Exception? sharedOpenError = null;
+            try
+            {
+                if (!_device.TryOpen(out sharedStream) || sharedStream == null)
+                {
+                    // TryOpen reported failure; dispose any partial stream and fall through to the throw.
+                    sharedStream?.Dispose();
+                    sharedStream = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                sharedOpenError = ex;
+            }
+
+            if (sharedStream == null)
+            {
+                // Both opens failed — preserve whatever cause(s) we have. When both threw, chain both via
+                // an AggregateException so neither root cause is lost for diagnosis.
+                var cause = exclusiveOpenError != null && sharedOpenError != null
+                    ? new AggregateException(exclusiveOpenError, sharedOpenError)
+                    : sharedOpenError ?? exclusiveOpenError;
+                throw new IOException("Failed to open HID device.", cause);
+            }
+
+            opened = sharedStream;
+        }
+
+        _stream = opened;
     }
 
     public void Close()

@@ -70,6 +70,17 @@ public sealed class HidLibraryTransport : IHidTransport
         }
     }
 
+    /// <summary>
+    /// Gets or sets whether <see cref="ConnectAsync"/> opens the device exclusively (Windows
+    /// <c>dwShareMode=0</c>; macOS IOKit seize) so no other user-mode opener can open or write to it
+    /// while this transport holds the handle. Defaults to <c>false</c> (shared). Set to <c>true</c>
+    /// for a PIC32 bootloader flash: the bootloader's CRC check is disabled, so an exclusive handle
+    /// guards against a stray frame from another opener being mis-parsed as an ERASE and locks the
+    /// discovery loop out of the device for the flash. Best-effort — a refused exclusive open falls
+    /// back to a shared open so a flash that works today is never regressed.
+    /// </summary>
+    public bool ExclusiveAccess { get; set; }
+
     /// <inheritdoc />
     public async Task ConnectAsync(
         int vendorId,
@@ -123,7 +134,7 @@ public sealed class HidLibraryTransport : IHidTransport
 
             try
             {
-                device.Open();
+                device.Open(ExclusiveAccess);
             }
             catch (Exception ex)
             {
