@@ -1113,7 +1113,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             var match = targetDevicePath == null
                 ? devices.FirstOrDefault()
                 : devices.FirstOrDefault(d =>
-                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.Ordinal));
+                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.OrdinalIgnoreCase));
             if (match != null)
             {
                 return match;

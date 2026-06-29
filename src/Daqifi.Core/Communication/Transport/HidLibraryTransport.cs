@@ -123,8 +123,11 @@ public sealed class HidLibraryTransport : IHidTransport
             throw new ArgumentException("Device path cannot be null or empty.", nameof(devicePath));
         }
 
+        // Windows HID device paths are case-insensitive and their casing can vary across enumerations,
+        // so match case-insensitively (real device paths never differ only by case, so this can't
+        // mis-target). Mirrors the OrdinalIgnoreCase used for the serial filter in ConnectAsync.
         await ConnectMatchingDeviceAsync(
-            candidate => string.Equals(candidate.DevicePath, devicePath, StringComparison.Ordinal),
+            candidate => string.Equals(candidate.DevicePath, devicePath, StringComparison.OrdinalIgnoreCase),
             $"Path={devicePath}",
             cancellationToken).ConfigureAwait(false);
     }
