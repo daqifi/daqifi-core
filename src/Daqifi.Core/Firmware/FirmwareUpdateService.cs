@@ -104,6 +104,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     private double _lastReportedPercent;
     private int _bootloaderPollAttempts;
     private Exception? _lastBootloaderEnumerationError;
+    private string? _targetBootloaderDevicePath;
     private bool _disposed;
 
     /// <summary>
@@ -141,24 +142,33 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     public event EventHandler<FirmwareUpdateStateChangedEventArgs>? StateChanged;
 
     /// <inheritdoc />
-    // targetDevicePath added AFTER cancellationToken (technically violates CA1068
-    // "CancellationToken should be last") to avoid breaking source compat for any
-    // existing positional caller passing CancellationToken as the 4th argument —
-    // the same trade-off UpdateWifiModuleAsync makes for skipVersionCheck.
-#pragma warning disable CA1068
-    public async Task UpdateFirmwareAsync(
+    public Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default,
-        string? targetDevicePath = null)
-#pragma warning restore CA1068
+        CancellationToken cancellationToken = default)
+        => UpdateFirmwareAsync(device, hexFilePath, progress, null, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task UpdateFirmwareAsync(
+        IStreamingDevice device,
+        string hexFilePath,
+        IProgress<FirmwareUpdateProgress>? progress,
+        string? targetDevicePath,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(device);
 
         if (string.IsNullOrWhiteSpace(hexFilePath))
         {
             throw new ArgumentException("HEX file path cannot be empty.", nameof(hexFilePath));
+        }
+
+        // Fast-fail an obviously-invalid target (whitespace) rather than polling until the
+        // WaitingForBootloader state timeout. Null means "no targeting" (first enumerated bootloader).
+        if (targetDevicePath != null && string.IsNullOrWhiteSpace(targetDevicePath))
+        {
+            throw new ArgumentException("Target device path cannot be whitespace.", nameof(targetDevicePath));
         }
 
         if (!File.Exists(hexFilePath))
@@ -274,6 +284,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             _lastReportedPercent = 0;
             _bootloaderPollAttempts = 0;
             _lastBootloaderEnumerationError = null;
+            _targetBootloaderDevicePath = null;
             await operation(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -292,6 +303,9 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         string? targetDevicePath,
         CancellationToken cancellationToken)
     {
+        // Recorded so a WaitingForBootloader timeout can name the requested path in its message.
+        _targetBootloaderDevicePath = targetDevicePath;
+
         try
         {
             TransitionToState(FirmwareUpdateState.PreparingDevice, "Preparing device for PIC32 firmware update.");
@@ -1644,6 +1658,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         var details =
             $"No matching HID bootloader device was enumerated for VID=0x{_options.BootloaderVendorId:X4}, " +
             $"PID=0x{_options.BootloaderProductId:X4} after {_bootloaderPollAttempts} poll attempt(s).";
+
+        if (_targetBootloaderDevicePath != null)
+        {
+            details += $" Target device path requested: {_targetBootloaderDevicePath}.";
+        }
 
         if (_lastBootloaderEnumerationError == null)
         {

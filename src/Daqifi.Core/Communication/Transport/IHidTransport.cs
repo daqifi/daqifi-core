@@ -68,16 +68,21 @@ public interface IHidTransport : IDisposable
     /// device among several identical ones (same VID/PID, and no serial to tell them apart), where
     /// <see cref="ConnectAsync(int,int,string?,CancellationToken)"/>'s first-match cannot distinguish
     /// them. The path is the value reported by discovery (<c>HidDeviceInfo.DevicePath</c>).
+    /// Provided as a default interface method (so adding it does not break existing implementers); the
+    /// default throws <see cref="NotSupportedException"/> and the real transport overrides it.
     /// </summary>
     /// <param name="devicePath">Platform-specific HID device path to connect to.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default);
+    Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This IHidTransport implementation does not support path-based addressing.");
 
     /// <summary>
-    /// Connects to the specific HID device at <paramref name="devicePath"/> synchronously.
+    /// Connects to the specific HID device at <paramref name="devicePath"/> synchronously. Default
+    /// interface method; the default throws <see cref="NotSupportedException"/>.
     /// </summary>
     /// <param name="devicePath">Platform-specific HID device path to connect to.</param>
-    void ConnectByPath(string devicePath);
+    void ConnectByPath(string devicePath)
+        => throw new NotSupportedException("This IHidTransport implementation does not support path-based addressing.");
 
     /// <summary>
     /// Writes a HID report payload asynchronously.

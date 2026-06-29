@@ -170,7 +170,7 @@ public class FirmwareUpdateServiceTests
         var hexPath = CreateTempFile();
         try
         {
-            await service.UpdateFirmwareAsync(device, hexPath, targetDevicePath: "path-2");
+            await service.UpdateFirmwareAsync(device, hexPath, progress: null, targetDevicePath: "path-2");
         }
         finally
         {
@@ -181,6 +181,33 @@ public class FirmwareUpdateServiceTests
         Assert.Equal("path-2", hidTransport.LastConnectByPath);
         Assert.Equal(1, hidTransport.ConnectByPathAttempts);
         Assert.Equal(0, hidTransport.ConnectAttempts); // did NOT fall back to VID/PID first-match
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WithWhitespaceTargetDevicePath_ThrowsArgumentException()
+    {
+        // A whitespace target can never match an enumerated path, so fail fast instead of polling
+        // until the WaitingForBootloader timeout. (null target is allowed = untargeted.)
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var device = new FakeStreamingDevice("COM3");
+        var hexPath = CreateTempFile();
+        try
+        {
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => service.UpdateFirmwareAsync(device, hexPath, progress: null, targetDevicePath: "   "));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
     }
 
     [Fact]
