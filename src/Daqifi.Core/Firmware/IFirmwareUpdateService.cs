@@ -25,11 +25,22 @@ public interface IFirmwareUpdateService
     /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="targetDevicePath">
+    /// Optional HID device path identifying which bootloader to flash when several identical ones
+    /// (same VID/PID, no serial) are present. When null, the first enumerated bootloader is used,
+    /// preserving the single-device behavior. The path is the value reported by discovery
+    /// (<c>HidDeviceInfo.DevicePath</c>).
+    /// </param>
+    // targetDevicePath added AFTER cancellationToken (technically violates CA1068) to preserve source
+    // compat for existing positional callers — mirrors UpdateWifiModuleAsync's skipVersionCheck.
+#pragma warning disable CA1068
     Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? targetDevicePath = null);
+#pragma warning restore CA1068
 
     /// <summary>
     /// Executes a WiFi module update using an external flashing tool.

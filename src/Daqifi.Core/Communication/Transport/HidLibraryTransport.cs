@@ -92,6 +92,60 @@ public sealed class HidLibraryTransport : IHidTransport
         ValidateUsbIdentifier(vendorId, nameof(vendorId));
         ValidateUsbIdentifier(productId, nameof(productId));
 
+        var serialFilter = NormalizeSerialFilter(serialNumber);
+        var target = serialFilter == null
+            ? $"VID=0x{vendorId:X4}, PID=0x{productId:X4}"
+            : $"VID=0x{vendorId:X4}, PID=0x{productId:X4}, Serial={serialFilter}";
+
+        await ConnectMatchingDeviceAsync(
+            candidate => candidate.VendorId == vendorId
+                && candidate.ProductId == productId
+                && (serialFilter == null || string.Equals(
+                    candidate.SerialNumber, serialFilter, StringComparison.OrdinalIgnoreCase)),
+            target,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public void Connect(int vendorId, int productId, string? serialNumber = null)
+    {
+        ConnectAsync(vendorId, productId, serialNumber, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    /// <inheritdoc />
+    public async Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (string.IsNullOrWhiteSpace(devicePath))
+        {
+            throw new ArgumentException("Device path cannot be null or empty.", nameof(devicePath));
+        }
+
+        await ConnectMatchingDeviceAsync(
+            candidate => string.Equals(candidate.DevicePath, devicePath, StringComparison.Ordinal),
+            $"Path={devicePath}",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public void ConnectByPath(string devicePath)
+    {
+        ConnectByPathAsync(devicePath, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    // Shared connect path: enumerate, pick the single device matching <paramref name="matches"/>
+    // (deterministically ordered by DevicePath), release the rest, and open it. ConnectAsync targets a
+    // VID/PID(+serial); ConnectByPathAsync targets one exact device path among several identical ones.
+    private async Task ConnectMatchingDeviceAsync(
+        Func<IHidTransportDevice, bool> matches,
+        string targetDescription,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
         await _connectionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -102,13 +156,9 @@ public sealed class HidLibraryTransport : IHidTransport
                 return;
             }
 
-            var serialFilter = NormalizeSerialFilter(serialNumber);
             var candidates = _hidPlatform.EnumerateDevices();
             var device = candidates
-                .Where(candidate => candidate.VendorId == vendorId)
-                .Where(candidate => candidate.ProductId == productId)
-                .Where(candidate => serialFilter == null ||
-                    string.Equals(candidate.SerialNumber, serialFilter, StringComparison.OrdinalIgnoreCase))
+                .Where(matches)
                 .OrderBy(candidate => candidate.DevicePath, StringComparer.Ordinal)
                 .FirstOrDefault();
 
@@ -125,11 +175,7 @@ public sealed class HidLibraryTransport : IHidTransport
 
             if (device == null)
             {
-                var target = serialFilter == null
-                    ? $"VID=0x{vendorId:X4}, PID=0x{productId:X4}"
-                    : $"VID=0x{vendorId:X4}, PID=0x{productId:X4}, Serial={serialFilter}";
-
-                throw new IOException($"No HID device found for {target}.");
+                throw new IOException($"No HID device found for {targetDescription}.");
             }
 
             try
@@ -159,14 +205,6 @@ public sealed class HidLibraryTransport : IHidTransport
         {
             _connectionLock.Release();
         }
-    }
-
-    /// <inheritdoc />
-    public void Connect(int vendorId, int productId, string? serialNumber = null)
-    {
-        ConnectAsync(vendorId, productId, serialNumber, CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
     }
 
     /// <inheritdoc />

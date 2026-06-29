@@ -141,11 +141,18 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     public event EventHandler<FirmwareUpdateStateChangedEventArgs>? StateChanged;
 
     /// <inheritdoc />
+    // targetDevicePath added AFTER cancellationToken (technically violates CA1068
+    // "CancellationToken should be last") to avoid breaking source compat for any
+    // existing positional caller passing CancellationToken as the 4th argument —
+    // the same trade-off UpdateWifiModuleAsync makes for skipVersionCheck.
+#pragma warning disable CA1068
     public async Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? targetDevicePath = null)
+#pragma warning restore CA1068
     {
         ArgumentNullException.ThrowIfNull(device);
 
@@ -173,7 +180,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         var crcRegions = _bootloaderProtocol.ComputeCrcRegions(hexLines);
 
         await RunExclusiveAsync(
-            ct => RunPic32UpdateAsync(device, hexRecords, crcRegions, totalBytes, progress, ct),
+            ct => RunPic32UpdateAsync(device, hexRecords, crcRegions, totalBytes, progress, targetDevicePath, ct),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -282,6 +289,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IReadOnlyList<FlashCrcRegion> crcRegions,
         long totalBytes,
         IProgress<FirmwareUpdateProgress>? progress,
+        string? targetDevicePath,
         CancellationToken cancellationToken)
     {
         try
@@ -313,7 +321,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             var hidDevice = await ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.WaitingForBootloader,
                 "wait for HID bootloader enumeration",
-                WaitForBootloaderDeviceAsync,
+                ct => WaitForBootloaderDeviceAsync(targetDevicePath, ct),
                 cancellationToken).ConfigureAwait(false);
 
             TransitionToState(FirmwareUpdateState.Connecting, "Connecting to HID bootloader.");
@@ -322,7 +330,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             await ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.Connecting,
                 "connect HID transport",
-                ct => ConnectToBootloaderWithRetryAsync(hidDevice, ct),
+                ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, ct),
                 cancellationToken).ConfigureAwait(false);
 
             var version = await ExecuteWithStateTimeoutAsync(
@@ -1057,7 +1065,9 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             : escaped;
     }
 
-    private async Task<HidDeviceInfo> WaitForBootloaderDeviceAsync(CancellationToken cancellationToken)
+    private async Task<HidDeviceInfo> WaitForBootloaderDeviceAsync(
+        string? targetDevicePath,
+        CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -1083,10 +1093,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     ex);
             }
 
-            var firstMatch = devices.FirstOrDefault();
-            if (firstMatch != null)
+            // Multiple identical bootloaders can be enumerated at once; when a specific one was
+            // requested, match it by path (the rest stay held by the caller). Otherwise take the
+            // first match, preserving the single-device behavior.
+            var match = targetDevicePath == null
+                ? devices.FirstOrDefault()
+                : devices.FirstOrDefault(d =>
+                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.Ordinal));
+            if (match != null)
             {
-                return firstMatch;
+                return match;
             }
 
             await Task.Delay(_options.PollInterval, cancellationToken).ConfigureAwait(false);
@@ -1095,6 +1111,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
     private async Task ConnectToBootloaderWithRetryAsync(
         HidDeviceInfo bootloaderDevice,
+        string? targetDevicePath,
         CancellationToken cancellationToken)
     {
         await ExecuteWithRetryAsync(
@@ -1108,11 +1125,23 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     await _hidTransport.DisconnectAsync().ConfigureAwait(false);
                 }
 
-                await _hidTransport.ConnectAsync(
-                    _options.BootloaderVendorId,
-                    _options.BootloaderProductId,
-                    bootloaderDevice.SerialNumber,
-                    ct).ConfigureAwait(false);
+                // When a specific device was requested (several identical bootloaders present), connect to
+                // that exact device by path — bootloaderDevice was matched on the same path. Otherwise fall
+                // back to VID/PID(+serial) first-match for the single-device case.
+                if (targetDevicePath != null)
+                {
+                    await _hidTransport
+                        .ConnectByPathAsync(bootloaderDevice.DevicePath, ct)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    await _hidTransport.ConnectAsync(
+                        _options.BootloaderVendorId,
+                        _options.BootloaderProductId,
+                        bootloaderDevice.SerialNumber,
+                        ct).ConfigureAwait(false);
+                }
             },
             ex => ex is IOException or TimeoutException or InvalidOperationException,
             cancellationToken).ConfigureAwait(false);
