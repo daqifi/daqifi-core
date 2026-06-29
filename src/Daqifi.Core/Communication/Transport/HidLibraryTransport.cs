@@ -125,8 +125,8 @@ public sealed class HidLibraryTransport : IHidTransport
 
         // Match the device path case-sensitively (Ordinal). A device path is an OS-level identifier —
         // case-sensitive on Linux/macOS — so a case-insensitive compare would impose Windows semantics
-        // on the cross-platform HID layer. It is also unnecessary here: the path always originates from
-        // the same in-process HidSharp enumeration the caller used to obtain it, so its casing is
+        // on the cross-platform HID layer. It is also unnecessary here: the path comes from the same
+        // in-process HID enumeration (the IHidPlatform-backed source discovery uses), so its casing is
         // consistent. (The serial filter uses OrdinalIgnoreCase because a serial is a user-facing
         // string, not an OS path identifier.)
         await ConnectMatchingDeviceAsync(

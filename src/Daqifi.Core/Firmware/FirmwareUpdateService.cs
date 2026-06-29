@@ -1111,7 +1111,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             // requested, match it by path (the rest stay held by the caller). Otherwise take the
             // first match, preserving the single-device behavior.
             // Ordinal (case-sensitive): a device path is an OS identifier and, in this flow, comes from
-            // the same in-process HidSharp enumeration the caller used to obtain targetDevicePath.
+            // the same in-process HID enumeration (via IHidPlatform) the caller used to obtain targetDevicePath.
             var match = targetDevicePath == null
                 ? devices.FirstOrDefault()
                 : devices.FirstOrDefault(d =>
