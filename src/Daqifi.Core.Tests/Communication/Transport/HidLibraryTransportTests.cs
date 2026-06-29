@@ -125,20 +125,6 @@ public class HidLibraryTransportTests
     }
 
     [Fact]
-    public async Task ConnectByPathAsync_MatchesPathCaseInsensitively()
-    {
-        // Windows HID device paths are case-insensitive; casing can vary across enumerations.
-        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "PATH-A", string.Empty);
-        var platform = new FakeHidPlatform([device]);
-        using var transport = new HidLibraryTransport(platform);
-
-        await transport.ConnectByPathAsync("path-a");
-
-        Assert.True(transport.IsConnected);
-        Assert.Equal(1, device.OpenCount);
-    }
-
-    [Fact]
     public async Task ConnectByPathAsync_WhenNoDeviceMatchesPath_ThrowsIOException()
     {
         var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");

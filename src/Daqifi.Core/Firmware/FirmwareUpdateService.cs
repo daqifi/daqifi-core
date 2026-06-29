@@ -1110,10 +1110,12 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             // Multiple identical bootloaders can be enumerated at once; when a specific one was
             // requested, match it by path (the rest stay held by the caller). Otherwise take the
             // first match, preserving the single-device behavior.
+            // Ordinal (case-sensitive): a device path is an OS identifier and, in this flow, comes from
+            // the same in-process HidSharp enumeration the caller used to obtain targetDevicePath.
             var match = targetDevicePath == null
                 ? devices.FirstOrDefault()
                 : devices.FirstOrDefault(d =>
-                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.Ordinal));
             if (match != null)
             {
                 return match;
