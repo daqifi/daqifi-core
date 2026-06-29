@@ -135,6 +135,82 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_WithTargetDevicePath_FlashesThatExactBootloaderByPath()
+    {
+        // Multi-device: several identical bootloaders (same VID/PID, no serial) are enumerated at once.
+        // targetDevicePath must select and connect to that EXACT device by path — not VID/PID first-match.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0xCD, 0xAB]); // READ_CRC response → 0xABCD (match)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            [
+                new HidDeviceInfo(0x04D8, 0x003C, "path-1", null, "DAQiFi Bootloader"),
+                new HidDeviceInfo(0x04D8, 0x003C, "path-2", null, "DAQiFi Bootloader")
+            ]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions());
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath, progress: null, targetDevicePath: "path-2");
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal("path-2", hidTransport.LastConnectByPath);
+        Assert.Equal(1, hidTransport.ConnectByPathAttempts);
+        Assert.Equal(0, hidTransport.ConnectAttempts); // did NOT fall back to VID/PID first-match
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WithWhitespaceTargetDevicePath_ThrowsArgumentException()
+    {
+        // A whitespace target can never match an enumerated path, so fail fast instead of polling
+        // until the WaitingForBootloader timeout. (null target is allowed = untargeted.)
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var device = new FakeStreamingDevice("COM3");
+        var hexPath = CreateTempFile();
+        try
+        {
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => service.UpdateFirmwareAsync(device, hexPath, progress: null, targetDevicePath: "   "));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_WhenFlashCrcMismatches_FailsVerificationIntoFailedState()
     {
         // Closes #213: a bit-flipped / partially-programmed flash is detected by
@@ -2058,6 +2134,24 @@ public class FirmwareUpdateServiceTests
         public void Connect(int vendorId, int productId, string? serialNumber = null)
         {
             ConnectAsync(vendorId, productId, serialNumber).GetAwaiter().GetResult();
+        }
+
+        public int ConnectByPathAttempts { get; private set; }
+        public string? LastConnectByPath { get; private set; }
+
+        public Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ConnectByPathAttempts++;
+            LastConnectByPath = devicePath;
+            IsConnected = true;
+            DevicePath = devicePath;
+            return Task.CompletedTask;
+        }
+
+        public void ConnectByPath(string devicePath)
+        {
+            ConnectByPathAsync(devicePath).GetAwaiter().GetResult();
         }
 
         public Task WriteAsync(byte[] data, CancellationToken cancellationToken = default)
