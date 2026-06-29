@@ -35,10 +35,6 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private const int MaxRetries = 2;
     private const int RetryIntervalMs = 300;
     private const int PollIntervalMs = 50;
-    // Time to let the device process the echo-disable command (and echo it one last time) before we
-    // flush the receive buffer, so the probe reads a clean protobuf stream. See the echo-disable note
-    // in TryGetDeviceInfoAsync.
-    private const int EchoDisableSettleMs = 250;
     // Upper bound on concurrent SerialPort opens during a single discovery
     // pass. Most OS serial stacks tolerate 4-8 simultaneous opens cleanly;
     // beyond that, IO failures and slow opens stack up. Common case (with
@@ -289,26 +285,6 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             producer = new MessageProducer<string>(stream);
             producer.Start();
 
-            // Disable echo before probing. A freshly-booted / never-connected device sits in its
-            // interactive shell with echo ON (at the "DAQIFI>" prompt). With echo on it prefixes the
-            // SYSInfoPB? reply with the echoed command text and trails it with a prompt, so the protobuf
-            // parser can't frame a message out of the stream and the device is silently missed even
-            // though it answered. Turn echo off, give the device a moment to process it (and echo this
-            // command one last time), then flush so the probe consumer below reads a clean protobuf
-            // stream. Identity-only otherwise — no power/stream-format changes (the connect handshake
-            // owns those).
-            producer.Send(ScpiMessageProducer.DisableDeviceEcho);
-            await Task.Delay(EchoDisableSettleMs, cancellationToken);
-            try
-            {
-                port.DiscardInBuffer();
-            }
-            catch
-            {
-                // Best-effort flush of the echoed command + prompt; if it throws, the retry loop and
-                // parser resync still give the probe additional chances on a clean(er) follow-up reply.
-            }
-
             var parser = new ProtobufMessageParser();
             consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
 
@@ -331,12 +307,14 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
             consumer.Start();
 
-            // Identity probe: DisableEcho (above) + GetDeviceInfo. The rest of the old setup sequence
+            // Identity probe: GetDeviceInfo only. The rest of the old setup sequence
             // (StopStreaming / TurnDeviceOn / SetProtobufStreamFormat) is connection setup, not
             // identification — a healthy DAQiFi answers SYSTem:SYSInfoPB? regardless of stream format or
-            // power state, so the caller setting up an actual connection still owns those. Echo is the
-            // exception: an echo-on device corrupts the reply stream, so the probe must disable it to
-            // identify the device at all (closes #157 follow-up: echo-on units were undiscoverable).
+            // power state, so the caller setting up an actual connection still owns those. Echo is left
+            // alone too: an echo-on device wraps its reply in the echoed command text plus a trailing
+            // "DAQIFI>" prompt, but ProtobufMessageParser now resyncs past that non-protobuf noise to
+            // the embedded frame (issue #268), so the probe stays GetDeviceInfo-only (closes #157)
+            // instead of toggling device echo.
             // Send GetDeviceInfo command with retry logic
             var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
             var lastRequestTime = DateTime.MinValue;
