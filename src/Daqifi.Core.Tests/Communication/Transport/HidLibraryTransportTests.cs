@@ -34,6 +34,36 @@ public class HidLibraryTransportTests
     }
 
     [Fact]
+    public async Task ConnectAsync_ByDefault_OpensDeviceShared()
+    {
+        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
+        var platform = new FakeHidPlatform([device]);
+
+        using var transport = new HidLibraryTransport(platform);
+
+        await transport.ConnectAsync(0x04D8, 0x003C);
+
+        // ExclusiveAccess defaults false so non-bootloader HID consumers keep a shared open.
+        Assert.False(transport.ExclusiveAccess);
+        Assert.False(device.LastOpenExclusive);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_WhenExclusiveAccessSet_OpensDeviceExclusively()
+    {
+        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
+        var platform = new FakeHidPlatform([device]);
+
+        using var transport = new HidLibraryTransport(platform) { ExclusiveAccess = true };
+
+        await transport.ConnectAsync(0x04D8, 0x003C);
+
+        // A2: the bootloader flash must hold the HID handle exclusively. The flag is threaded to the
+        // device open so the stray-write guard (and discovery lockout) is actually requested.
+        Assert.True(device.LastOpenExclusive);
+    }
+
+    [Fact]
     public async Task ConnectAsync_WithSerialFilter_SelectsMatchingDevice()
     {
         var first = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
@@ -74,6 +104,45 @@ public class HidLibraryTransportTests
         using var transport = new HidLibraryTransport(platform);
 
         await Assert.ThrowsAsync<IOException>(() => transport.ConnectAsync(0x04D8, 0x003C));
+    }
+
+    [Fact]
+    public async Task ConnectByPathAsync_WithMatchingPath_OpensThatExactDevice()
+    {
+        // Two identical bootloaders (same VID/PID, no serial); only the path tells them apart.
+        var deviceA = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", string.Empty);
+        var deviceB = new FakeHidTransportDevice(0x04D8, 0x003C, "path-b", string.Empty);
+        var platform = new FakeHidPlatform([deviceA, deviceB]);
+
+        using var transport = new HidLibraryTransport(platform);
+
+        await transport.ConnectByPathAsync("path-b");
+
+        Assert.True(transport.IsConnected);
+        Assert.Equal("path-b", transport.DevicePath);
+        Assert.Equal(0, deviceA.OpenCount);
+        Assert.Equal(1, deviceB.OpenCount);
+    }
+
+    [Fact]
+    public async Task ConnectByPathAsync_WhenNoDeviceMatchesPath_ThrowsIOException()
+    {
+        var device = new FakeHidTransportDevice(0x04D8, 0x003C, "path-a", "SN-A");
+        var platform = new FakeHidPlatform([device]);
+        using var transport = new HidLibraryTransport(platform);
+
+        await Assert.ThrowsAsync<IOException>(() => transport.ConnectByPathAsync("path-z"));
+        Assert.False(transport.IsConnected);
+        Assert.Equal(0, device.OpenCount);
+    }
+
+    [Fact]
+    public async Task ConnectByPathAsync_WithEmptyPath_ThrowsArgumentException()
+    {
+        var platform = new FakeHidPlatform([]);
+        using var transport = new HidLibraryTransport(platform);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => transport.ConnectByPathAsync("  "));
     }
 
     [Fact]
@@ -221,6 +290,7 @@ public class HidLibraryTransportTests
 
         public int OpenCount { get; private set; }
         public int CloseCount { get; private set; }
+        public bool LastOpenExclusive { get; private set; }
         public int? LastWriteTimeoutMs { get; private set; }
         public int? LastReadTimeoutMs { get; private set; }
 
@@ -228,9 +298,10 @@ public class HidLibraryTransportTests
         public HidTransportReadResult NextReadResult { get; set; }
             = HidTransportReadResult.Success(Array.Empty<byte>());
 
-        public void Open()
+        public void Open(bool exclusive)
         {
             OpenCount++;
+            LastOpenExclusive = exclusive;
             IsConnected = true;
         }
 

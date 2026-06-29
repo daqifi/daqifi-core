@@ -104,6 +104,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     private double _lastReportedPercent;
     private int _bootloaderPollAttempts;
     private Exception? _lastBootloaderEnumerationError;
+    private string? _targetBootloaderDevicePath;
     private bool _disposed;
 
     /// <summary>
@@ -141,10 +142,19 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     public event EventHandler<FirmwareUpdateStateChangedEventArgs>? StateChanged;
 
     /// <inheritdoc />
-    public async Task UpdateFirmwareAsync(
+    public Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
         IProgress<FirmwareUpdateProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+        => UpdateFirmwareAsync(device, hexFilePath, progress, null, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task UpdateFirmwareAsync(
+        IStreamingDevice device,
+        string hexFilePath,
+        IProgress<FirmwareUpdateProgress>? progress,
+        string? targetDevicePath,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(device);
@@ -152,6 +162,13 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         if (string.IsNullOrWhiteSpace(hexFilePath))
         {
             throw new ArgumentException("HEX file path cannot be empty.", nameof(hexFilePath));
+        }
+
+        // Fast-fail an obviously-invalid target (whitespace) rather than polling until the
+        // WaitingForBootloader state timeout. Null means "no targeting" (first enumerated bootloader).
+        if (targetDevicePath != null && string.IsNullOrWhiteSpace(targetDevicePath))
+        {
+            throw new ArgumentException("Target device path cannot be whitespace.", nameof(targetDevicePath));
         }
 
         if (!File.Exists(hexFilePath))
@@ -173,7 +190,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         var crcRegions = _bootloaderProtocol.ComputeCrcRegions(hexLines);
 
         await RunExclusiveAsync(
-            ct => RunPic32UpdateAsync(device, hexRecords, crcRegions, totalBytes, progress, ct),
+            ct => RunPic32UpdateAsync(device, hexRecords, crcRegions, totalBytes, progress, targetDevicePath, ct),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -267,6 +284,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             _lastReportedPercent = 0;
             _bootloaderPollAttempts = 0;
             _lastBootloaderEnumerationError = null;
+            _targetBootloaderDevicePath = null;
             await operation(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -282,8 +300,12 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         IReadOnlyList<FlashCrcRegion> crcRegions,
         long totalBytes,
         IProgress<FirmwareUpdateProgress>? progress,
+        string? targetDevicePath,
         CancellationToken cancellationToken)
     {
+        // Recorded so a WaitingForBootloader timeout can name the requested path in its message.
+        _targetBootloaderDevicePath = targetDevicePath;
+
         try
         {
             TransitionToState(FirmwareUpdateState.PreparingDevice, "Preparing device for PIC32 firmware update.");
@@ -313,7 +335,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             var hidDevice = await ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.WaitingForBootloader,
                 "wait for HID bootloader enumeration",
-                WaitForBootloaderDeviceAsync,
+                ct => WaitForBootloaderDeviceAsync(targetDevicePath, ct),
                 cancellationToken).ConfigureAwait(false);
 
             TransitionToState(FirmwareUpdateState.Connecting, "Connecting to HID bootloader.");
@@ -322,7 +344,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             await ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.Connecting,
                 "connect HID transport",
-                ct => ConnectToBootloaderWithRetryAsync(hidDevice, ct),
+                ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, ct),
                 cancellationToken).ConfigureAwait(false);
 
             var version = await ExecuteWithStateTimeoutAsync(
@@ -1057,7 +1079,9 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             : escaped;
     }
 
-    private async Task<HidDeviceInfo> WaitForBootloaderDeviceAsync(CancellationToken cancellationToken)
+    private async Task<HidDeviceInfo> WaitForBootloaderDeviceAsync(
+        string? targetDevicePath,
+        CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -1083,10 +1107,18 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     ex);
             }
 
-            var firstMatch = devices.FirstOrDefault();
-            if (firstMatch != null)
+            // Multiple identical bootloaders can be enumerated at once; when a specific one was
+            // requested, match it by path (the rest stay held by the caller). Otherwise take the
+            // first match, preserving the single-device behavior.
+            // Ordinal (case-sensitive): a device path is an OS identifier and, in this flow, comes from
+            // the same in-process HID enumeration (via IHidPlatform) the caller used to obtain targetDevicePath.
+            var match = targetDevicePath == null
+                ? devices.FirstOrDefault()
+                : devices.FirstOrDefault(d =>
+                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.Ordinal));
+            if (match != null)
             {
-                return firstMatch;
+                return match;
             }
 
             await Task.Delay(_options.PollInterval, cancellationToken).ConfigureAwait(false);
@@ -1095,6 +1127,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
     private async Task ConnectToBootloaderWithRetryAsync(
         HidDeviceInfo bootloaderDevice,
+        string? targetDevicePath,
         CancellationToken cancellationToken)
     {
         await ExecuteWithRetryAsync(
@@ -1108,11 +1141,23 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     await _hidTransport.DisconnectAsync().ConfigureAwait(false);
                 }
 
-                await _hidTransport.ConnectAsync(
-                    _options.BootloaderVendorId,
-                    _options.BootloaderProductId,
-                    bootloaderDevice.SerialNumber,
-                    ct).ConfigureAwait(false);
+                // When a specific device was requested (several identical bootloaders present), connect to
+                // that exact device by path — bootloaderDevice was matched on the same path. Otherwise fall
+                // back to VID/PID(+serial) first-match for the single-device case.
+                if (targetDevicePath != null)
+                {
+                    await _hidTransport
+                        .ConnectByPathAsync(bootloaderDevice.DevicePath, ct)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    await _hidTransport.ConnectAsync(
+                        _options.BootloaderVendorId,
+                        _options.BootloaderProductId,
+                        bootloaderDevice.SerialNumber,
+                        ct).ConfigureAwait(false);
+                }
             },
             ex => ex is IOException or TimeoutException or InvalidOperationException,
             cancellationToken).ConfigureAwait(false);
@@ -1615,6 +1660,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         var details =
             $"No matching HID bootloader device was enumerated for VID=0x{_options.BootloaderVendorId:X4}, " +
             $"PID=0x{_options.BootloaderProductId:X4} after {_bootloaderPollAttempts} poll attempt(s).";
+
+        if (_targetBootloaderDevicePath != null)
+        {
+            details += $" Target device path requested: {_targetBootloaderDevicePath}.";
+        }
 
         if (_lastBootloaderEnumerationError == null)
         {
