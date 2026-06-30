@@ -60,16 +60,20 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// The public <see cref="Channels"/> property exposes a live view over the backing list;
         /// callers that fold over channels off the consumer thread (e.g. the device-level
-        /// channel-management API) should use this snapshot instead to avoid a concurrent-mutation
-        /// <see cref="InvalidOperationException"/> or a torn read.
+        /// channel-management API, or an out-of-process control surface) should use this snapshot
+        /// instead to avoid a concurrent-mutation <see cref="InvalidOperationException"/> or a torn read.
         /// </remarks>
-        protected IReadOnlyList<IChannel> SnapshotChannels()
+        /// <returns>A lock-protected copy of the current channel collection.</returns>
+        public IReadOnlyList<IChannel> GetChannelsSnapshot()
         {
             lock (_channelsLock)
             {
                 return _channels.ToArray();
             }
         }
+
+        /// <inheritdoc cref="GetChannelsSnapshot"/>
+        protected IReadOnlyList<IChannel> SnapshotChannels() => GetChannelsSnapshot();
 
         /// <summary>
         /// Gets the device's timestamp clock frequency in Hz.

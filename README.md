@@ -23,6 +23,8 @@ DAQiFi builds wireless data acquisition hardware designed to get out of the way 
 
 Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
 
+Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, set the sample rate, and run SD-card logging through plain conversation.
+
 ## See it in 30 seconds
 
 ```shell
@@ -69,6 +71,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
 | **SDK** | **DAQiFi Core — this library** |
 | App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
+| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client |
 | Your code | Custom apps, dashboards, pipelines, test rigs |
 
 ## What you can do
@@ -224,6 +227,8 @@ This library follows semantic versioning. Releases are automated via GitHub Acti
 1. Create a new GitHub Release
 2. Tag it `vX.Y.Z` (pre-releases use `-alpha.1`, `-beta.1`, `-rc.1` suffixes)
 3. Publishing to NuGet happens automatically on release
+
+The same release also packs and publishes the **`Daqifi.Mcp`** MCP server as a .NET tool (`dotnet tool install -g Daqifi.Mcp`).
 
 ---
 
