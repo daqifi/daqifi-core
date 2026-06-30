@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Daqifi.Mcp</RootNamespace>
+    <AssemblyName>daqifi-mcp</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Distribution: `dotnet tool install -g Daqifi.Mcp` exposes the `daqifi-mcp` command. -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>daqifi-mcp</ToolCommandName>
+    <PackageId>Daqifi.Mcp</PackageId>
+    <Authors>DAQiFi</Authors>
+    <Description>Model Context Protocol (MCP) server for DAQiFi Nyquist data-acquisition devices. Lets an AI agent discover, connect, configure channels, and run on-device SD-card logging.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Daqifi.Core\Daqifi.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <PackageReference Include="ModelContextProtocol" Version="2.0.0-preview.1" />
+  </ItemGroup>
+
+  <!-- ModelContextProtocol + Microsoft.Extensions.Hosting are added via `dotnet add package`
+       so the restored versions are pinned to whatever is current. -->
+
+</Project>
