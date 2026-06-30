@@ -29,7 +29,8 @@ public sealed class ServerOptions
                     readOnly = true;
                     break;
                 case "--max-sample-rate-hz" when i + 1 < args.Length:
-                    if (int.TryParse(args[++i], out var rate))
+                    // Ignore non-positive values; a clamp of <= 0 would otherwise force an invalid rate.
+                    if (int.TryParse(args[++i], out var rate) && rate >= 1)
                     {
                         maxRate = rate;
                     }

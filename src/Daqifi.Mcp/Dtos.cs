@@ -37,7 +37,7 @@ public sealed record ConnectedDeviceInfo(
     {
         var analog = 0;
         var digital = 0;
-        foreach (var ch in device.Channels.ToArray())
+        foreach (var ch in device.GetChannelsSnapshot())
         {
             if (ch.Type == ChannelType.Analog) analog++;
             else if (ch.Type == ChannelType.Digital) digital++;
@@ -61,7 +61,7 @@ public sealed record DeviceStatus(
         var streaming = (device as IStreamingDevice)?.IsStreaming ?? false;
         var rate = (device as IStreamingDevice)?.StreamingFrequency ?? 0;
         var logging = (device as ISdCardOperations)?.IsLoggingToSdCard ?? false;
-        var enabled = device.Channels.ToArray()
+        var enabled = device.GetChannelsSnapshot()
             .Where(c => c.Type == ChannelType.Analog && c.IsEnabled)
             .Select(c => c.ChannelNumber)
             .OrderBy(n => n)

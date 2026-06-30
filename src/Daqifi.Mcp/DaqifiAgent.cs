@@ -88,7 +88,7 @@ public sealed class DaqifiAgent
             }
 
             var device = await DaqifiDeviceFactory
-                .ConnectFromDeviceInfoAsync(info, options: null, cancellationToken)
+                .ConnectFromDeviceInfoAsync(info, null, cancellationToken)
                 .ConfigureAwait(false);
 
             _connected[deviceId] = device;
@@ -188,8 +188,9 @@ public sealed class DaqifiAgent
             var (_, streaming) = RequireStreaming(deviceId);
 
             // The hardware ceiling (1000 Hz) always applies; --max-sample-rate-hz can only lower it.
+            // Guard against a non-positive cap so the applied rate is always a valid >= 1 value.
             var cap = _options.MaxSampleRateHz is { } max
-                ? Math.Min(HardwareMaxSampleRateHz, max)
+                ? Math.Clamp(max, 1, HardwareMaxSampleRateHz)
                 : HardwareMaxSampleRateHz;
 
             var applied = Math.Min(rateHz, cap);
@@ -336,8 +337,8 @@ public sealed class DaqifiAgent
         }
     }
 
-    /// <summary>Snapshots the live channel view so callers never fold it while the consumer thread repopulates it.</summary>
-    private static IReadOnlyList<IChannel> Snapshot(DaqifiDevice device) => device.Channels.ToArray();
+    /// <summary>Lock-protected channel snapshot so callers never fold the live view while the consumer thread repopulates it.</summary>
+    private static IReadOnlyList<IChannel> Snapshot(DaqifiDevice device) => device.GetChannelsSnapshot();
 
     private static IReadOnlyList<int> EnabledAnalog(DaqifiDevice device) => Snapshot(device)
         .Where(c => c.Type == ChannelType.Analog && c.IsEnabled)

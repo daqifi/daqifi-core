@@ -29,6 +29,14 @@ public class ServerOptionsTests
     {
         Assert.Null(ServerOptions.Parse(new[] { "--max-sample-rate-hz", "fast" }).MaxSampleRateHz);
     }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-5")]
+    public void Parse_MaxSampleRate_NonPositive_IsIgnored(string value)
+    {
+        Assert.Null(ServerOptions.Parse(new[] { "--max-sample-rate-hz", value }).MaxSampleRateHz);
+    }
 }
 
 public class DaqifiAgentTests
