@@ -174,6 +174,102 @@ public sealed class DaqifiAgent
         }
     }
 
+    /// <summary>
+    /// Enables exactly the requested digital channels (by channel number) and disables the rest.
+    /// The wire-level DIO enable is global — enabling any digital channel turns the whole port
+    /// on — but per-channel enablement determines which channels the streaming decode samples.
+    /// </summary>
+    public async Task<ConfigureDigitalResult> ConfigureDigitalChannelsAsync(string deviceId, int[] enabledChannels)
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            RequireControl();
+            var (device, streaming) = RequireStreaming(deviceId);
+
+            var digital = Snapshot(device).Where(c => c.Type == ChannelType.Digital).ToList();
+            var validNumbers = digital.Select(c => c.ChannelNumber).ToHashSet();
+
+            var wanted = new HashSet<int>(enabledChannels ?? Array.Empty<int>());
+            var unknown = wanted.Where(n => !validNumbers.Contains(n)).OrderBy(n => n).ToList();
+            if (unknown.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Unknown digital channel(s): {string.Join(", ", unknown)}. " +
+                    $"This device has digital channels: {string.Join(", ", validNumbers.OrderBy(n => n))}.");
+            }
+
+            var toEnable = digital.Where(c => wanted.Contains(c.ChannelNumber)).ToList();
+            foreach (var ch in digital.Where(c => !wanted.Contains(c.ChannelNumber) && c.IsEnabled))
+            {
+                streaming.DisableChannel(ch);
+            }
+            if (toEnable.Count > 0)
+            {
+                streaming.EnableChannels(toEnable);
+            }
+
+            return new ConfigureDigitalResult(deviceId, EnabledDigital(device));
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Sets a digital channel's direction (input or output) via
+    /// <see cref="IStreamingDevice.SetDioDirection"/>.
+    /// </summary>
+    public async Task<DigitalPinResult> SetDigitalDirectionAsync(string deviceId, int channel, string direction)
+    {
+        var parsed = ParseDirection(direction);
+
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            RequireControl();
+            var (device, streaming) = RequireStreaming(deviceId);
+            var ch = RequireDigitalChannel(device, channel);
+
+            streaming.SetDioDirection(ch, parsed);
+
+            return DigitalPinResult.From(deviceId, ch);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Drives a digital output channel high or low. A channel still in input direction is
+    /// switched to output first, so a single call is enough to drive a pin.
+    /// </summary>
+    public async Task<DigitalPinResult> SetDigitalOutputAsync(string deviceId, int channel, bool high)
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            RequireControl();
+            var (device, streaming) = RequireStreaming(deviceId);
+            var ch = RequireDigitalChannel(device, channel);
+
+            if (ch.Direction != ChannelDirection.Output)
+            {
+                streaming.SetDioDirection(ch, ChannelDirection.Output);
+            }
+
+            streaming.SetDioValue(ch, high);
+
+            return DigitalPinResult.From(deviceId, ch);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<SampleRateResult> SetSampleRateAsync(string deviceId, int rateHz)
     {
         if (rateHz < 1)
@@ -345,6 +441,32 @@ public sealed class DaqifiAgent
         .Select(c => c.ChannelNumber)
         .OrderBy(n => n)
         .ToList();
+
+    private static IReadOnlyList<int> EnabledDigital(DaqifiDevice device) => Snapshot(device)
+        .Where(c => c.Type == ChannelType.Digital && c.IsEnabled)
+        .Select(c => c.ChannelNumber)
+        .OrderBy(n => n)
+        .ToList();
+
+    private static IChannel RequireDigitalChannel(DaqifiDevice device, int channelNumber)
+    {
+        var digital = Snapshot(device).Where(c => c.Type == ChannelType.Digital).ToList();
+        var match = digital.FirstOrDefault(c => c.ChannelNumber == channelNumber);
+        if (match is null)
+        {
+            throw new InvalidOperationException(
+                $"Unknown digital channel {channelNumber}. This device has digital channels: " +
+                $"{string.Join(", ", digital.Select(c => c.ChannelNumber).OrderBy(n => n))}.");
+        }
+        return match;
+    }
+
+    private static ChannelDirection ParseDirection(string? direction) => (direction ?? string.Empty).Trim().ToLowerInvariant() switch
+    {
+        "input" or "in" => ChannelDirection.Input,
+        "output" or "out" => ChannelDirection.Output,
+        _ => throw new InvalidOperationException($"Unknown direction '{direction}'. Use 'input' or 'output'."),
+    };
 
     private static string ExtensionFor(SdCardLogFormat format) => format switch
     {

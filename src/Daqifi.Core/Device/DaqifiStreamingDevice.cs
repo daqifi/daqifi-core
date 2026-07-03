@@ -323,12 +323,13 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Unpacks a frame's digital byte(s) into per-channel high/low samples for the enabled
-        /// digital input channels, ordered by channel number. Bit position corresponds to the
-        /// channel's position within the active list (LSB first: position <c>i</c> -> byte
-        /// <c>i / 8</c>, bit <c>i % 8</c>), matching the device's dense packing of enabled channels
-        /// across however many payload bytes are present. Output channels occupy a bit position but
-        /// are not sampled. Decoding stops once the payload runs out of bits rather than wrapping
-        /// or forcing later channels low.
+        /// digital input channels. The firmware streams the whole DIO port as a raw pin-state
+        /// snapshot (the wire-level DIO enable is global, not per pin), so a channel's bit
+        /// position is its channel number — bit <c>n</c> lives at byte <c>n / 8</c>, bit
+        /// <c>n % 8</c> (LSB first) — independent of which channels the client has enabled.
+        /// Output-direction channels are not sampled (their state is client-driven via
+        /// <see cref="SetDioValue"/>). Channels whose number lies beyond the payload get no
+        /// sample rather than a bogus "low" reading.
         /// </summary>
         private static void DecodeDigital(
             DaqifiOutMessage message,
@@ -339,28 +340,26 @@ namespace Daqifi.Core.Device
             var digitalData = message.DigitalData;
             var bitCount = digitalData.Length * 8;
 
-            var activeDigital = new List<IChannel>();
             foreach (var channel in channels)
             {
-                if (channel.IsEnabled && channel.Type == ChannelType.Digital)
+                if (!channel.IsEnabled || channel.Type != ChannelType.Digital)
                 {
-                    activeDigital.Add(channel);
+                    continue;
                 }
-            }
-            activeDigital.Sort((a, b) => a.ChannelNumber.CompareTo(b.ChannelNumber));
 
-            for (var i = 0; i < activeDigital.Count && i < bitCount; i++)
-            {
-                var channel = activeDigital[i];
-
-                // Only input-direction channels carry a meaningful streamed reading; an output
-                // channel still occupies its bit position (so i advances), but is not sampled.
+                // Only input-direction channels carry a meaningful streamed reading.
                 if (channel.Direction != ChannelDirection.Input)
                 {
                     continue;
                 }
 
-                var bit = (digitalData[i / 8] & (1 << (i % 8))) != 0;
+                var bitIndex = channel.ChannelNumber;
+                if (bitIndex >= bitCount)
+                {
+                    continue;
+                }
+
+                var bit = (digitalData[bitIndex / 8] & (1 << (bitIndex % 8))) != 0;
 
                 channel.SetActiveSample(
                     new DataSample(hostTimestamp, bit ? 1.0 : 0.0, bit ? 1 : 0, deviceTimestamp));

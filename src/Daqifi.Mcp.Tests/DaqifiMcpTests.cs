@@ -94,4 +94,48 @@ public class DaqifiAgentTests
             () => NewAgent(readOnly: true).ConfigureAnalogChannelsAsync("x", new[] { 0, 1 }));
         Assert.Contains("read-only", ex.Message);
     }
+
+    [Fact]
+    public async Task ConfigureDigitalChannels_InReadOnlyMode_IsBlocked()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent(readOnly: true).ConfigureDigitalChannelsAsync("x", new[] { 0, 1 }));
+        Assert.Contains("read-only", ex.Message);
+    }
+
+    [Fact]
+    public async Task SetDigitalDirection_InvalidDirection_ThrowsBeforeDeviceLookup()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().SetDigitalDirectionAsync("x", 0, "sideways"));
+        Assert.Contains("'input' or 'output'", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("input")]
+    [InlineData("OUTPUT")]
+    [InlineData(" out ")]
+    public async Task SetDigitalDirection_ValidDirection_FailsOnUnknownDeviceNotParsing(string direction)
+    {
+        // Direction strings parse (case/whitespace-insensitive), so the failure is the missing device.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().SetDigitalDirectionAsync("serial:NOPE", 0, direction));
+        Assert.Contains("not connected", ex.Message);
+    }
+
+    [Fact]
+    public async Task SetDigitalOutput_InReadOnlyMode_IsBlocked()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent(readOnly: true).SetDigitalOutputAsync("x", 0, high: true));
+        Assert.Contains("read-only", ex.Message);
+    }
+
+    [Fact]
+    public async Task SetDigitalOutput_UnknownDevice_ThrowsWithActionableMessage()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().SetDigitalOutputAsync("serial:NOPE", 3, high: true));
+        Assert.Contains("connect_device", ex.Message);
+    }
 }

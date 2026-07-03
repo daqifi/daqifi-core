@@ -81,6 +81,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **Auto-discovery** | Find any DAQiFi on WiFi or USB in seconds — no IP hunting, no config files |
 | **One-line connect** | `DaqifiDeviceFactory.ConnectTcpAsync(...)` wraps transport setup and device init; retries are opt-in via `DeviceConnectionOptions` |
 | **Real-time streaming** | Event-driven async API; no polling loops to write |
+| **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
 | **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
 | **Network configuration** | Push WiFi credentials and static LAN IPs from your app |
 | **Firmware updates** | PIC32 and WiFi-module flashing with progress and cancellation |
@@ -158,6 +159,24 @@ cts.CancelAfter(TimeSpan.FromSeconds(10));
 var devices = await wifiFinder.DiscoverAsync(cts.Token);
 
 using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
+```
+
+### Digital output
+
+Digital channels default to inputs. Flip one to output and drive it — the level is applied
+immediately, and flipping back to input releases the pin to high-impedance.
+
+```csharp
+using Daqifi.Core.Channel;
+
+var channels = device.GetChannelsSnapshot();
+var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
+
+device.SetDioDirection(dio3, ChannelDirection.Output);
+device.SetDioValue(dio3, true);   // drive high
+device.SetDioValue(dio3, false);  // drive low
+
+device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
 ```
 
 ### Network configuration

@@ -148,6 +148,46 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
+    public void Decode_Digital_MapsBitsByChannelNumberNotEnablePosition()
+    {
+        // The firmware streams the whole DIO port (the wire-level enable is global), so an
+        // enabled channel reads the bit at its channel number. Enable only DIO 5: a decoder
+        // that densely packed enabled channels would wrongly read bit 0.
+        var device = CreateStreamingDevice(analogCount: 0, digitalCount: 8);
+        var dio5 = DigitalChannel(device, 5);
+        dio5.IsEnabled = true;
+        device.StartStreaming();
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
+        frame.DigitalData = ByteString.CopyFrom(new byte[] { 0b0010_0000 }); // only bit 5 high
+
+        device.InvokeStreamMessage(frame);
+
+        Assert.Equal(1.0, dio5.ActiveSample!.Value);
+    }
+
+    [Fact]
+    public void Decode_Digital_SubsetOfChannelsEnabled_EachReadsItsOwnBit()
+    {
+        // Loopback-style scenario: only DIO 3 and DIO 5 enabled, with other port bits set as
+        // noise. Positional decoding would read bits 0 and 1 (both high) for these channels.
+        var device = CreateStreamingDevice(analogCount: 0, digitalCount: 16);
+        var dio3 = DigitalChannel(device, 3);
+        var dio5 = DigitalChannel(device, 5);
+        dio3.IsEnabled = true;
+        dio5.IsEnabled = true;
+        device.StartStreaming();
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
+        frame.DigitalData = ByteString.CopyFrom(new byte[] { 0b0010_0011, 0xFF }); // bit 3 low, bit 5 high
+
+        device.InvokeStreamMessage(frame);
+
+        Assert.Equal(0.0, dio3.ActiveSample!.Value);
+        Assert.Equal(1.0, dio5.ActiveSample!.Value);
+    }
+
+    [Fact]
     public void Decode_Digital_SkipsOutputDirectionChannels()
     {
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 2);

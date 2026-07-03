@@ -54,31 +54,65 @@ public sealed record DeviceStatus(
     bool Streaming,
     bool LoggingToSdCard,
     int SampleRateHz,
-    IReadOnlyList<int> EnabledAnalogChannels)
+    IReadOnlyList<int> EnabledAnalogChannels,
+    IReadOnlyList<int> EnabledDigitalChannels)
 {
     public static DeviceStatus From(string id, DaqifiDevice device)
     {
         var streaming = (device as IStreamingDevice)?.IsStreaming ?? false;
         var rate = (device as IStreamingDevice)?.StreamingFrequency ?? 0;
         var logging = (device as ISdCardOperations)?.IsLoggingToSdCard ?? false;
-        var enabled = device.GetChannelsSnapshot()
+        var channels = device.GetChannelsSnapshot();
+        var enabledAnalog = channels
             .Where(c => c.Type == ChannelType.Analog && c.IsEnabled)
             .Select(c => c.ChannelNumber)
             .OrderBy(n => n)
             .ToList();
-        return new DeviceStatus(id, device.Name, device.Status.ToString(), streaming, logging, rate, enabled);
+        var enabledDigital = channels
+            .Where(c => c.Type == ChannelType.Digital && c.IsEnabled)
+            .Select(c => c.ChannelNumber)
+            .OrderBy(n => n)
+            .ToList();
+        return new DeviceStatus(
+            id, device.Name, device.Status.ToString(), streaming, logging, rate, enabledAnalog, enabledDigital);
     }
 }
 
-/// <summary>A single channel on a device.</summary>
-public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bool Enabled, string Direction)
+/// <summary>
+/// A single channel on a device. <see cref="OutputValue"/> is the last commanded output level
+/// for digital channels (null for analog channels).
+/// </summary>
+public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bool Enabled, string Direction, bool? OutputValue)
 {
     public static ChannelInfo From(IChannel ch) =>
-        new(ch.ChannelNumber, ch.Type.ToString(), ch.Name, ch.IsEnabled, ch.Direction.ToString());
+        new(
+            ch.ChannelNumber,
+            ch.Type.ToString(),
+            ch.Name,
+            ch.IsEnabled,
+            ch.Direction.ToString(),
+            ch is IDigitalChannel digital ? digital.OutputValue : null);
 }
 
 /// <summary>Result of a channel-configuration change.</summary>
 public sealed record ConfigureResult(string DeviceId, IReadOnlyList<int> EnabledAnalogChannels, int SampleRateHz);
+
+/// <summary>Result of a digital channel-configuration change.</summary>
+public sealed record ConfigureDigitalResult(string DeviceId, IReadOnlyList<int> EnabledDigitalChannels);
+
+/// <summary>
+/// Result of a digital direction or output change, reflecting the channel's state after the
+/// operation. <see cref="OutputValue"/> is the last commanded output level; it is meaningful
+/// only while <see cref="Direction"/> is Output.
+/// </summary>
+public sealed record DigitalPinResult(string DeviceId, int Channel, string Direction, bool OutputValue)
+{
+    public static DigitalPinResult From(string deviceId, IChannel ch) => new(
+        deviceId,
+        ch.ChannelNumber,
+        ch.Direction.ToString(),
+        ch is IDigitalChannel digital && digital.OutputValue);
+}
 
 /// <summary>
 /// Result of a sample-rate change. <see cref="Clamped"/> is true when <see cref="RequestedRateHz"/>
