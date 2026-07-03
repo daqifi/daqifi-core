@@ -522,6 +522,9 @@ namespace Daqifi.Core.Device
                 {
                     // Disabling PWM leaves the pin high-impedance and the firmware zeroes its
                     // stored output value; mirror that so local state doesn't claim a driven level.
+                    // Direction is intentionally left as-is: the firmware keeps the channel's
+                    // stored direction and re-applies it (resuming driving) on the next state or
+                    // direction write, or on the next streaming tick — verified on hardware.
                     digitalChannel.OutputValue = false;
                 }
             }

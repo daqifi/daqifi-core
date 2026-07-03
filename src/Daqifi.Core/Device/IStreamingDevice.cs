@@ -91,8 +91,10 @@ namespace Daqifi.Core.Device
         /// Set the duty cycle (and, once per session, the shared frequency) before enabling — see
         /// <see cref="SetPwmDutyCycle"/> and <see cref="SetPwmFrequency"/>. While PWM is enabled the firmware
         /// ignores digital direction/state writes for the channel at the hardware level. Disabling leaves the
-        /// pin high-impedance; re-issue <see cref="SetDioDirection"/>/<see cref="SetDioValue"/> to drive it
-        /// digitally again.
+        /// pin transiently high-impedance, but the firmware keeps the channel's stored direction (mirrored by
+        /// <see cref="Channel.IChannel.Direction"/>), and any subsequent <see cref="SetDioValue"/> or
+        /// <see cref="SetDioDirection"/> write — or the per-tick refresh while streaming — re-applies it and
+        /// resumes driving, so no explicit direction resend is required first.
         /// </remarks>
         void SetPwmEnabled(IChannel channel, bool enabled);
 
