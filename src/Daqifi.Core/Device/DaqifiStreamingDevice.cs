@@ -324,9 +324,11 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Unpacks a frame's digital byte(s) into per-channel high/low samples for the enabled
         /// digital input channels, ordered by channel number. Bit position corresponds to the
-        /// channel's position within the active list (bits 0-7 in byte 0, bits 8-15 in byte 1),
-        /// matching the device's dense packing of enabled channels. Output channels occupy a bit
-        /// position but are not sampled.
+        /// channel's position within the active list (LSB first: position <c>i</c> -> byte
+        /// <c>i / 8</c>, bit <c>i % 8</c>), matching the device's dense packing of enabled channels
+        /// across however many payload bytes are present. Output channels occupy a bit position but
+        /// are not sampled. Decoding stops once the payload runs out of bits rather than wrapping
+        /// or forcing later channels low.
         /// </summary>
         private static void DecodeDigital(
             DaqifiOutMessage message,
@@ -335,8 +337,7 @@ namespace Daqifi.Core.Device
             uint deviceTimestamp)
         {
             var digitalData = message.DigitalData;
-            var byte0 = digitalData.Length > 0 ? digitalData[0] : (byte)0;
-            var byte1 = digitalData.Length > 1 ? digitalData[1] : (byte)0;
+            var bitCount = digitalData.Length * 8;
 
             var activeDigital = new List<IChannel>();
             foreach (var channel in channels)
@@ -348,7 +349,7 @@ namespace Daqifi.Core.Device
             }
             activeDigital.Sort((a, b) => a.ChannelNumber.CompareTo(b.ChannelNumber));
 
-            for (var i = 0; i < activeDigital.Count; i++)
+            for (var i = 0; i < activeDigital.Count && i < bitCount; i++)
             {
                 var channel = activeDigital[i];
 
@@ -359,9 +360,7 @@ namespace Daqifi.Core.Device
                     continue;
                 }
 
-                var bit = i < 8
-                    ? (byte0 & (1 << i)) != 0
-                    : (byte1 & (1 << (i % 8))) != 0;
+                var bit = (digitalData[i / 8] & (1 << (i % 8))) != 0;
 
                 channel.SetActiveSample(
                     new DataSample(hostTimestamp, bit ? 1.0 : 0.0, bit ? 1 : 0, deviceTimestamp));

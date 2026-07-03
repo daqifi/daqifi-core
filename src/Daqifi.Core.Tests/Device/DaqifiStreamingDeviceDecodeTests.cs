@@ -168,6 +168,52 @@ public class DaqifiStreamingDeviceDecodeTests
         Assert.Null(dio1.ActiveSample); // output channel skipped
     }
 
+    [Fact]
+    public void Decode_Digital_BeyondTwoBytes_ReadsCorrectByteWithoutWrapping()
+    {
+        // Regression for Qodo #279: with >16 enabled digital channels / >2 payload bytes, bit
+        // position i must map to byte i/8, bit i%8 — not wrap byte 1 for i>=16.
+        var device = CreateStreamingDevice(analogCount: 0, digitalCount: 17);
+        var dio = Enumerable.Range(0, 17).Select(n => DigitalChannel(device, n)).ToList();
+        foreach (var d in dio) d.IsEnabled = true;
+        device.StartStreaming();
+
+        // Only channel index 16 high: byte 2 bit 0. A wrapping decoder would read byte 1 bit 0 (low).
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
+        frame.DigitalData = ByteString.CopyFrom(new byte[] { 0x00, 0x00, 0b0000_0001 });
+
+        device.InvokeStreamMessage(frame);
+
+        Assert.Equal(1.0, dio[16].ActiveSample!.Value);
+        for (var i = 0; i < 16; i++)
+        {
+            Assert.Equal(0.0, dio[i].ActiveSample!.Value);
+        }
+    }
+
+    [Fact]
+    public void Decode_Digital_MoreChannelsThanPayloadBits_StopsInsteadOfForcingLow()
+    {
+        // With a single payload byte (8 bits) but more enabled channels, channels past the
+        // payload get no sample rather than a bogus "low" reading.
+        var device = CreateStreamingDevice(analogCount: 0, digitalCount: 10);
+        var dio = Enumerable.Range(0, 10).Select(n => DigitalChannel(device, n)).ToList();
+        foreach (var d in dio) d.IsEnabled = true;
+        device.StartStreaming();
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
+        frame.DigitalData = ByteString.CopyFrom(new byte[] { 0xFF }); // 8 bits, channels 0-7
+
+        device.InvokeStreamMessage(frame);
+
+        for (var i = 0; i < 8; i++)
+        {
+            Assert.Equal(1.0, dio[i].ActiveSample!.Value);
+        }
+        Assert.Null(dio[8].ActiveSample);
+        Assert.Null(dio[9].ActiveSample);
+    }
+
     #endregion
 
     #region Gating and resilience
