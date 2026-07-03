@@ -11,6 +11,8 @@ public class DigitalChannel : IDigitalChannel
     private bool _isEnabled;
     private ChannelDirection _direction;
     private bool _outputValue;
+    private bool _isPwmEnabled;
+    private int _pwmDutyCyclePercent;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -95,6 +97,31 @@ public class DigitalChannel : IDigitalChannel
     }
 
     /// <summary>
+    /// Gets whether this channel's hardware supports PWM output.
+    /// </summary>
+    public bool IsPwmCapable { get; }
+
+    /// <summary>
+    /// Gets or sets whether PWM output is enabled on this channel (local bookkeeping mirroring
+    /// the last commanded state).
+    /// </summary>
+    public bool IsPwmEnabled
+    {
+        get { lock (_lock) { return _isPwmEnabled; } }
+        set { lock (_lock) { _isPwmEnabled = value; } }
+    }
+
+    /// <summary>
+    /// Gets or sets the last commanded PWM duty cycle in whole percent (0-100). Local
+    /// bookkeeping mirroring the last commanded state.
+    /// </summary>
+    public int PwmDutyCyclePercent
+    {
+        get { lock (_lock) { return _pwmDutyCyclePercent; } }
+        set { lock (_lock) { _pwmDutyCyclePercent = value; } }
+    }
+
+    /// <summary>
     /// Event raised when a new sample is received on this channel.
     /// </summary>
     public event EventHandler<SampleReceivedEventArgs>? SampleReceived;
@@ -103,16 +130,20 @@ public class DigitalChannel : IDigitalChannel
     /// Initializes a new instance of the <see cref="DigitalChannel"/> class.
     /// </summary>
     /// <param name="channelNumber">The channel number/index.</param>
-    public DigitalChannel(int channelNumber)
+    /// <param name="isPwmCapable">Whether this channel's hardware supports PWM output.</param>
+    public DigitalChannel(int channelNumber, bool isPwmCapable = false)
     {
         if (channelNumber < 0)
             throw new ArgumentOutOfRangeException(nameof(channelNumber), "Channel number must be non-negative.");
 
         ChannelNumber = channelNumber;
+        IsPwmCapable = isPwmCapable;
         _name = $"Digital Channel {channelNumber}";
         _isEnabled = false;
         _direction = ChannelDirection.Input;
         _outputValue = false;
+        _isPwmEnabled = false;
+        _pwmDutyCyclePercent = 0;
     }
 
     /// <summary>

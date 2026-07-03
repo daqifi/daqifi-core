@@ -270,6 +270,67 @@ public sealed class DaqifiAgent
         }
     }
 
+    /// <summary>
+    /// Configures and starts PWM output on a PWM-capable digital channel: duty first, then the
+    /// shared frequency when supplied, then enable. The device's PWM frequency is global (one
+    /// hardware timer drives all PWM channels).
+    /// </summary>
+    public async Task<PwmResult> SetPwmOutputAsync(string deviceId, int channel, int dutyCyclePercent, int frequencyHz)
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            RequireControl();
+            var (device, streaming) = RequireStreaming(deviceId);
+            var ch = RequireDigitalChannel(device, channel);
+
+            if (frequencyHz == 0 && streaming.PwmFrequencyHz == 0)
+            {
+                throw new InvalidOperationException(
+                    "No PWM frequency has been set this session. Pass frequency_hz (6-50000). " +
+                    "The frequency is shared by all PWM channels.");
+            }
+
+            // Duty before frequency before enable: the firmware applies a stored duty when the
+            // frequency is (re)programmed, so this order never leaves a stale compare value.
+            streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
+            if (frequencyHz != 0)
+            {
+                streaming.SetPwmFrequency(frequencyHz);
+            }
+            streaming.SetPwmEnabled(ch, true);
+
+            return PwmResult.From(deviceId, streaming, ch);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Stops PWM output on a digital channel. The pin is left high-impedance; use
+    /// set_digital_direction / set_digital_output to drive it digitally again.
+    /// </summary>
+    public async Task<PwmResult> DisablePwmAsync(string deviceId, int channel)
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            RequireControl();
+            var (device, streaming) = RequireStreaming(deviceId);
+            var ch = RequireDigitalChannel(device, channel);
+
+            streaming.SetPwmEnabled(ch, false);
+
+            return PwmResult.From(deviceId, streaming, ch);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<SampleRateResult> SetSampleRateAsync(string deviceId, int rateHz)
     {
         if (rateHz < 1)

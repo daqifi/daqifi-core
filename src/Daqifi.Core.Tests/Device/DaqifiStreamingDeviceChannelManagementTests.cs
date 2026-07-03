@@ -389,6 +389,187 @@ namespace Daqifi.Core.Tests.Device
 
         #endregion
 
+        #region PWM
+
+        // The device populates IsPwmCapable from the firmware board mask 0x00F9: channels
+        // 0, 3, 4, 5, 6, 7 are capable; 1, 2 and 8+ are not. Use 8 digital channels so both
+        // capable and non-capable channels exist.
+
+        [Fact]
+        public void PopulateChannels_SetsPwmCapabilityFromBoardMask()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 16);
+
+            var capable = device.Channels
+                .OfType<IDigitalChannel>()
+                .Where(c => c.IsPwmCapable)
+                .Select(c => c.ChannelNumber)
+                .OrderBy(n => n)
+                .ToList();
+
+            Assert.Equal(new[] { 0, 3, 4, 5, 6, 7 }, capable);
+        }
+
+        [Fact]
+        public void SetPwmDutyCycle_OnCapableChannel_SetsBookkeepingAndSendsCommand()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+
+            device.SetPwmDutyCycle(channel, 50);
+
+            Assert.Equal(50, channel.PwmDutyCyclePercent);
+            var sent = Assert.Single(device.SentMessages);
+            Assert.Equal(ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50).Data, sent.Data);
+        }
+
+        [Theory]
+        [InlineData(0)] // duty 0 is a firmware trap: stored but never applied; disable is the off switch
+        [InlineData(101)]
+        public void SetPwmDutyCycle_OutOfRange_ThrowsArgumentOutOfRangeException(int duty)
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = DigitalChannelAt(device, 4);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetPwmDutyCycle(channel, duty));
+        }
+
+        [Fact]
+        public void SetPwmDutyCycle_OnNonCapableChannel_ThrowsWithCapableList()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = DigitalChannelAt(device, 2);
+
+            var ex = Assert.Throws<ArgumentException>(() => device.SetPwmDutyCycle(channel, 50));
+            Assert.Contains("0, 3, 4, 5, 6, 7", ex.Message);
+        }
+
+        [Fact]
+        public void SetPwmEnabled_True_SetsFlagAndSendsCommand()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+
+            device.SetPwmEnabled(channel, true);
+
+            Assert.True(channel.IsPwmEnabled);
+            var sent = Assert.Single(device.SentMessages);
+            Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(4, true).Data, sent.Data);
+        }
+
+        [Fact]
+        public void SetPwmEnabled_True_OnNonCapableChannel_Throws()
+        {
+            // The firmware marks a channel PWM-active before its capability check fails and never
+            // rolls it back (bricking digital writes on the channel), so the client hard-blocks this.
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = DigitalChannelAt(device, 2);
+
+            var ex = Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(channel, true));
+            Assert.Contains("0, 3, 4, 5, 6, 7", ex.Message);
+            Assert.Empty(device.SentMessages);
+        }
+
+        [Fact]
+        public void SetPwmEnabled_False_OnNonCapableChannel_IsAllowedAsRecovery()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = DigitalChannelAt(device, 2);
+
+            device.SetPwmEnabled(channel, false);
+
+            var sent = Assert.Single(device.SentMessages);
+            Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(2, false).Data, sent.Data);
+        }
+
+        [Fact]
+        public void SetPwmEnabled_False_ClearsOutputValueBookkeeping()
+        {
+            // Firmware zeroes the stored output value when PWM is disabled; local state mirrors it.
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+            channel.OutputValue = true;
+            channel.IsPwmEnabled = true;
+
+            device.SetPwmEnabled(channel, false);
+
+            Assert.False(channel.IsPwmEnabled);
+            Assert.False(channel.OutputValue);
+        }
+
+        [Fact]
+        public void SetPwmEnabled_OnAnalogChannel_ThrowsArgumentException()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = AnalogChannelAt(device, 0);
+
+            Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(channel, true));
+        }
+
+        [Fact]
+        public void SetPwmEnabled_WithForeignDigitalChannel_ThrowsArgumentException()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var foreign = new DigitalChannel(4, isPwmCapable: true);
+
+            Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(foreign, true));
+        }
+
+        [Fact]
+        public void SetPwmFrequency_SendsCommandAddressedToChannelZeroAndTracksValue()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+
+            device.SetPwmFrequency(1000);
+
+            Assert.Equal(1000, device.PwmFrequencyHz);
+            var sent = Assert.Single(device.SentMessages);
+            Assert.Equal(ScpiMessageProducer.SetPwmChannelFrequency(0, 1000).Data, sent.Data);
+        }
+
+        [Theory]
+        [InlineData(5)]     // 1-5 Hz silently wrap the firmware's 16-bit period register
+        [InlineData(50001)] // above the advertised cap
+        public void SetPwmFrequency_OutOfRange_ThrowsArgumentOutOfRangeException(int frequency)
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetPwmFrequency(frequency));
+        }
+
+        [Fact]
+        public void SetPwmEnabled_WhenDisconnected_ThrowsInvalidOperationException()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = DigitalChannelAt(device, 4);
+            device.Disconnect();
+
+            Assert.Throws<InvalidOperationException>(() => device.SetPwmEnabled(channel, true));
+        }
+
+        [Fact]
+        public void PopulateChannelsFromStatus_PreservesPwmBookkeepingAcrossRefresh()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+            device.SetPwmDutyCycle(channel, 42);
+            device.SetPwmEnabled(channel, true);
+
+            device.PopulateChannelsFromStatus(new DaqifiOutMessage
+            {
+                AnalogInPortNum = 4,
+                AnalogInRes = 65535,
+                DigitalPortNum = 8
+            });
+
+            var refreshed = (IDigitalChannel)DigitalChannelAt(device, 4);
+            Assert.NotSame(channel, refreshed);
+            Assert.True(refreshed.IsPwmEnabled);
+            Assert.Equal(42, refreshed.PwmDutyCyclePercent);
+        }
+
+        #endregion
+
         #region SetAnalogOutput
 
         [Fact]

@@ -81,6 +81,51 @@ namespace Daqifi.Core.Device
         void SetDioValue(IChannel channel, bool value);
 
         /// <summary>
+        /// Enables or disables PWM output on a PWM-capable digital channel.
+        /// </summary>
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
+        /// Enabling requires <see cref="Channel.IDigitalChannel.IsPwmCapable"/>; disabling is accepted on any
+        /// digital channel.</param>
+        /// <param name="enabled"><c>true</c> to start PWM output; <c>false</c> to stop it.</param>
+        /// <remarks>
+        /// Set the duty cycle (and, once per session, the shared frequency) before enabling — see
+        /// <see cref="SetPwmDutyCycle"/> and <see cref="SetPwmFrequency"/>. While PWM is enabled the firmware
+        /// ignores digital direction/state writes for the channel at the hardware level. Disabling leaves the
+        /// pin high-impedance; re-issue <see cref="SetDioDirection"/>/<see cref="SetDioValue"/> to drive it
+        /// digitally again.
+        /// </remarks>
+        void SetPwmEnabled(IChannel channel, bool enabled);
+
+        /// <summary>
+        /// Sets the PWM duty cycle of a PWM-capable digital channel.
+        /// </summary>
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection
+        /// and be <see cref="Channel.IDigitalChannel.IsPwmCapable"/>.</param>
+        /// <param name="dutyCyclePercent">The duty cycle in whole percent, 1-100. A duty of 0 is rejected
+        /// because the firmware stores but never applies it (the old duty keeps toggling); stop the output
+        /// with <see cref="SetPwmEnabled"/> instead.</param>
+        void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent);
+
+        /// <summary>
+        /// Sets the PWM frequency, in hertz, for the whole device.
+        /// </summary>
+        /// <param name="frequencyHz">The frequency in hertz, 6-50000. Values below 6 Hz are rejected because
+        /// the firmware's 16-bit period register silently wraps for them, producing a kilohertz-range output.</param>
+        /// <remarks>
+        /// All PWM channels share one hardware timer, so this applies to every PWM channel at once — there is
+        /// no per-channel frequency. Changing it while channels are enabled takes effect live and rescales
+        /// each enabled channel's duty cycle.
+        /// </remarks>
+        void SetPwmFrequency(int frequencyHz);
+
+        /// <summary>
+        /// Gets the last PWM frequency commanded through <see cref="SetPwmFrequency"/> this
+        /// session, in hertz, or 0 when none has been set. Local bookkeeping only — a device
+        /// keeps its PWM state across host disconnects, so 0 does not prove the device is unset.
+        /// </summary>
+        int PwmFrequencyHz { get; }
+
+        /// <summary>
         /// Sets the analog output (DAC) voltage of a channel and applies it immediately.
         /// </summary>
         /// <param name="channelNumber">The analog output channel number. DAC channels are addressed by

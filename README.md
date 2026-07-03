@@ -82,6 +82,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **One-line connect** | `DaqifiDeviceFactory.ConnectTcpAsync(...)` wraps transport setup and device init; retries are opt-in via `DeviceConnectionOptions` |
 | **Real-time streaming** | Event-driven async API; no polling loops to write |
 | **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
+| **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
 | **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
 | **Network configuration** | Push WiFi credentials and static LAN IPs from your app |
 | **Firmware updates** | PIC32 and WiFi-module flashing with progress and cancellation |
@@ -177,6 +178,28 @@ device.SetDioValue(dio3, true);   // drive high
 device.SetDioValue(dio3, false);  // drive low
 
 device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
+```
+
+### PWM output
+
+PWM runs on capable DIO pins (`IDigitalChannel.IsPwmCapable` — channels 0, 3, 4, 5, 6 and 7 on
+Nyquist hardware). Duty cycle is per channel; the frequency is shared by all PWM channels, since
+one hardware timer drives them all.
+
+```csharp
+using Daqifi.Core.Channel;
+
+var pwm = device.GetChannelsSnapshot()
+    .OfType<IDigitalChannel>()
+    .First(c => c.IsPwmCapable);
+
+device.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
+device.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
+device.SetPwmEnabled(pwm, true);  // start
+
+device.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
+
+device.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
 ```
 
 ### Network configuration

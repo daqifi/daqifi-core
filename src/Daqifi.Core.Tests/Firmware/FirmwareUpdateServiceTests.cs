@@ -1838,6 +1838,10 @@ public class FirmwareUpdateServiceTests
         public void DisableAllChannels() { }
         public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
         public void SetDioValue(IChannel channel, bool value) { }
+        public void SetPwmEnabled(IChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetPwmFrequency(int frequencyHz) { }
+        public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
         public void Reboot() => IsConnected = false;
         public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
@@ -2013,6 +2017,10 @@ public class FirmwareUpdateServiceTests
         public void DisableAllChannels() { }
         public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
         public void SetDioValue(IChannel channel, bool value) { }
+        public void SetPwmEnabled(IChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetPwmFrequency(int frequencyHz) { }
+        public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
         public void Reboot() => Disconnect();
     }
@@ -2079,6 +2087,10 @@ public class FirmwareUpdateServiceTests
         public void DisableAllChannels() { }
         public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
         public void SetDioValue(IChannel channel, bool value) { }
+        public void SetPwmEnabled(IChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetPwmFrequency(int frequencyHz) { }
+        public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
         public void Reboot() => Disconnect();
 

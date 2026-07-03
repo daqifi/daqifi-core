@@ -469,6 +469,151 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
         }
 
+        /// <summary>
+        /// The lowest PWM frequency the firmware reproduces correctly. Below this the firmware's
+        /// 16-bit period register silently wraps and the output runs in the kilohertz range.
+        /// </summary>
+        public const int MinPwmFrequencyHz = 6;
+
+        /// <summary>
+        /// The highest PWM frequency the device advertises (full duty resolution is retained
+        /// well past this, so the advertised cap is the binding limit).
+        /// </summary>
+        public const int MaxPwmFrequencyHz = 50_000;
+
+        /// <summary>
+        /// Gets the last commanded device-wide PWM frequency in hertz, or 0 when none has been
+        /// set this session. Local bookkeeping mirroring <see cref="SetPwmFrequency"/>.
+        /// </summary>
+        public int PwmFrequencyHz { get; private set; }
+
+        /// <inheritdoc />
+        public void SetPwmEnabled(IChannel channel, bool enabled)
+        {
+            ArgumentNullException.ThrowIfNull(channel);
+
+            if (channel.Type != ChannelType.Digital)
+            {
+                throw new ArgumentException("PWM can only be controlled on digital channels.", nameof(channel));
+            }
+
+            // Enabling PWM on a non-capable channel must be blocked here: the firmware flags the
+            // channel PWM-active before its capability check fails and never rolls that back,
+            // leaving the channel dead to digital writes. Disabling is that state's only recovery
+            // command, so it is accepted on any digital channel.
+            if (enabled && channel is not IDigitalChannel { IsPwmCapable: true })
+            {
+                throw new ArgumentException(
+                    $"Channel {channel.ChannelNumber} does not support PWM. PWM-capable channels: {PwmCapableChannelList}.",
+                    nameof(channel));
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            EnsureChannelBelongs(channel);
+
+            if (channel is IDigitalChannel digitalChannel)
+            {
+                digitalChannel.IsPwmEnabled = enabled;
+                if (!enabled)
+                {
+                    // Disabling PWM leaves the pin high-impedance and the firmware zeroes its
+                    // stored output value; mirror that so local state doesn't claim a driven level.
+                    digitalChannel.OutputValue = false;
+                }
+            }
+
+            Send(ScpiMessageProducer.SetPwmChannelEnabled(channel.ChannelNumber, enabled));
+        }
+
+        /// <inheritdoc />
+        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
+        {
+            ArgumentNullException.ThrowIfNull(channel);
+
+            if (channel.Type != ChannelType.Digital)
+            {
+                throw new ArgumentException("PWM can only be controlled on digital channels.", nameof(channel));
+            }
+
+            if (channel is not IDigitalChannel { IsPwmCapable: true })
+            {
+                throw new ArgumentException(
+                    $"Channel {channel.ChannelNumber} does not support PWM. PWM-capable channels: {PwmCapableChannelList}.",
+                    nameof(channel));
+            }
+
+            // Duty 0 is rejected rather than forwarded: the firmware stores it but never writes
+            // the compare register, so the output keeps toggling at the previous duty while the
+            // stored value claims 0. Stopping the output is SetPwmEnabled(channel, false).
+            if (dutyCyclePercent is < 1 or > 100)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(dutyCyclePercent), dutyCyclePercent,
+                    "Duty cycle must be 1-100 percent. To stop the output, use SetPwmEnabled(channel, false).");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            EnsureChannelBelongs(channel);
+
+            if (channel is IDigitalChannel digitalChannel)
+            {
+                digitalChannel.PwmDutyCyclePercent = dutyCyclePercent;
+            }
+
+            Send(ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
+        }
+
+        /// <inheritdoc />
+        public void SetPwmFrequency(int frequencyHz)
+        {
+            if (frequencyHz is < MinPwmFrequencyHz or > MaxPwmFrequencyHz)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(frequencyHz), frequencyHz,
+                    $"PWM frequency must be {MinPwmFrequencyHz}-{MaxPwmFrequencyHz} Hz.");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            // The SCPI command is addressed to a channel, but the firmware drives all PWM from
+            // one shared timer and applies the frequency to every channel. Channel 0 is used as
+            // the address because it is PWM-capable on all supported hardware.
+            Send(ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
+            PwmFrequencyHz = frequencyHz;
+        }
+
+        /// <summary>
+        /// Comma-separated PWM-capable channel numbers for error messages, derived from this
+        /// device's channel collection.
+        /// </summary>
+        private string PwmCapableChannelList
+        {
+            get
+            {
+                var capable = new List<int>();
+                foreach (var ch in SnapshotChannels())
+                {
+                    if (ch is IDigitalChannel { IsPwmCapable: true })
+                    {
+                        capable.Add(ch.ChannelNumber);
+                    }
+                }
+                capable.Sort();
+                return capable.Count > 0 ? string.Join(", ", capable) : "none on this device";
+            }
+        }
+
         /// <inheritdoc />
         public void SetAnalogOutput(int channelNumber, double voltage)
         {
