@@ -49,6 +49,18 @@ namespace Daqifi.Core.Device
         private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
 
         /// <summary>
+        /// Reconstructs host timestamps from the device's rolling 32-bit tick counter during a
+        /// streaming session. Scoped to this device instance, so a single fixed key suffices.
+        /// </summary>
+        private readonly ITimestampProcessor _timestampProcessor = new TimestampProcessor();
+
+        /// <summary>
+        /// The per-device key used with <see cref="_timestampProcessor"/>. The processor is not
+        /// shared across devices, so the key only needs to be stable within this instance.
+        /// </summary>
+        private const string StreamTimestampKey = "stream";
+
+        /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
         /// </summary>
         public bool IsStreaming { get; private set; }
@@ -161,6 +173,13 @@ namespace Daqifi.Core.Device
 
             if (IsStreaming) return;
 
+            // Re-anchor per-session timestamp reconstruction: the first frame of this session
+            // anchors to the current host time, and subsequent frames advance by the device-tick
+            // delta. Apply the device-reported tick frequency (falls back to the 50 MHz default
+            // when unreported, e.g. older firmware).
+            _timestampProcessor.Reset(StreamTimestampKey);
+            _timestampProcessor.SetTimestampFrequency(StreamTimestampKey, TimestampFrequency);
+
             IsStreaming = true;
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
         }
@@ -180,6 +199,173 @@ namespace Daqifi.Core.Device
 
             IsStreaming = false;
             Send(ScpiMessageProducer.StopStreaming);
+        }
+
+        /// <summary>
+        /// Handles a streaming data frame: re-raises it for raw-frame consumers (via the base
+        /// implementation) and, while streaming, decodes it into per-channel samples that drive
+        /// <see cref="IChannel.SampleReceived"/>.
+        /// </summary>
+        /// <param name="message">The streaming message from the device.</param>
+        protected override void OnStreamMessageReceived(DaqifiOutMessage message)
+        {
+            // Preserve the raw-frame MessageReceived event so existing consumers that hand-demux
+            // the protobuf frame keep working unchanged.
+            base.OnStreamMessageReceived(message);
+
+            // Only decode into channel samples while an app-driven stream is active. A stray frame
+            // that arrives outside a streaming session is still re-raised above but not decoded.
+            if (!IsStreaming)
+            {
+                return;
+            }
+
+            try
+            {
+                DecodeStreamFrame(message);
+            }
+            catch (Exception)
+            {
+                // A single malformed frame must never tear down the stream or starve other
+                // consumers; decoding is best-effort per frame.
+            }
+        }
+
+        /// <summary>
+        /// Decodes a streaming frame into per-channel samples: selects the active channels in
+        /// device order, chooses the correct value source (USB pre-scaled float vs. WiFi raw ADC
+        /// count scaled via calibration), unpacks digital bits, and pushes a sample to each channel.
+        /// </summary>
+        /// <param name="message">The streaming message to decode.</param>
+        private void DecodeStreamFrame(DaqifiOutMessage message)
+        {
+            var hasFloat = message.AnalogInDataFloat.Count > 0;
+            var hasRawAnalog = message.AnalogInData.Count > 0;
+            var hasDigital = message.DigitalData.Length > 0;
+
+            if (!hasFloat && !hasRawAnalog && !hasDigital)
+            {
+                return;
+            }
+
+            // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
+            // the raw device tick value through to each decoded sample.
+            var deviceTimestamp = message.MsgTimeStamp;
+            var hostTimestamp = _timestampProcessor
+                .ProcessTimestamp(StreamTimestampKey, deviceTimestamp)
+                .Timestamp;
+
+            // Snapshot channels once: the consumer thread that repopulates channels is the same
+            // thread that runs this decode, so the structure is stable for the duration of the call.
+            var channels = SnapshotChannels();
+
+            if (hasFloat || hasRawAnalog)
+            {
+                DecodeAnalog(message, channels, hostTimestamp, deviceTimestamp, hasFloat);
+            }
+
+            if (hasDigital)
+            {
+                DecodeDigital(message, channels, hostTimestamp, deviceTimestamp);
+            }
+        }
+
+        /// <summary>
+        /// Maps a frame's analog values to the enabled analog channels, in ascending channel order.
+        /// USB firmware streams pre-scaled floats (used directly); WiFi firmware streams raw ADC
+        /// counts (scaled per channel via <see cref="IAnalogChannel.GetScaledValue"/>).
+        /// </summary>
+        private static void DecodeAnalog(
+            DaqifiOutMessage message,
+            IReadOnlyList<IChannel> channels,
+            DateTime hostTimestamp,
+            uint deviceTimestamp,
+            bool hasFloat)
+        {
+            // The device streams one value per enabled analog channel, ordered by channel number,
+            // not by activation order — so re-derive that ordering here.
+            var activeAnalog = new List<IAnalogChannel>();
+            foreach (var channel in channels)
+            {
+                if (channel.IsEnabled && channel is IAnalogChannel analog)
+                {
+                    activeAnalog.Add(analog);
+                }
+            }
+            activeAnalog.Sort((a, b) => a.ChannelNumber.CompareTo(b.ChannelNumber));
+
+            var dataCount = hasFloat ? message.AnalogInDataFloat.Count : message.AnalogInData.Count;
+            var count = Math.Min(dataCount, activeAnalog.Count);
+
+            for (var i = 0; i < count; i++)
+            {
+                var channel = activeAnalog[i];
+                double scaled;
+                int? raw;
+
+                if (hasFloat)
+                {
+                    // USB firmware already scaled to volts; no raw ADC count is available.
+                    scaled = message.AnalogInDataFloat[i];
+                    raw = null;
+                }
+                else
+                {
+                    // WiFi firmware sent a raw ADC count; apply this channel's calibration.
+                    var rawValue = message.AnalogInData[i];
+                    scaled = channel.GetScaledValue(rawValue);
+                    raw = rawValue;
+                }
+
+                channel.SetActiveSample(new DataSample(hostTimestamp, scaled, raw, deviceTimestamp));
+            }
+        }
+
+        /// <summary>
+        /// Unpacks a frame's digital byte(s) into per-channel high/low samples for the enabled
+        /// digital input channels, ordered by channel number. Bit position corresponds to the
+        /// channel's position within the active list (bits 0-7 in byte 0, bits 8-15 in byte 1),
+        /// matching the device's dense packing of enabled channels. Output channels occupy a bit
+        /// position but are not sampled.
+        /// </summary>
+        private static void DecodeDigital(
+            DaqifiOutMessage message,
+            IReadOnlyList<IChannel> channels,
+            DateTime hostTimestamp,
+            uint deviceTimestamp)
+        {
+            var digitalData = message.DigitalData;
+            var byte0 = digitalData.Length > 0 ? digitalData[0] : (byte)0;
+            var byte1 = digitalData.Length > 1 ? digitalData[1] : (byte)0;
+
+            var activeDigital = new List<IChannel>();
+            foreach (var channel in channels)
+            {
+                if (channel.IsEnabled && channel.Type == ChannelType.Digital)
+                {
+                    activeDigital.Add(channel);
+                }
+            }
+            activeDigital.Sort((a, b) => a.ChannelNumber.CompareTo(b.ChannelNumber));
+
+            for (var i = 0; i < activeDigital.Count; i++)
+            {
+                var channel = activeDigital[i];
+
+                // Only input-direction channels carry a meaningful streamed reading; an output
+                // channel still occupies its bit position (so i advances), but is not sampled.
+                if (channel.Direction != ChannelDirection.Input)
+                {
+                    continue;
+                }
+
+                var bit = i < 8
+                    ? (byte0 & (1 << i)) != 0
+                    : (byte1 & (1 << (i % 8))) != 0;
+
+                channel.SetActiveSample(
+                    new DataSample(hostTimestamp, bit ? 1.0 : 0.0, bit ? 1 : 0, deviceTimestamp));
+            }
         }
 
         /// <summary>

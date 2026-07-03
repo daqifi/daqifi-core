@@ -140,6 +140,39 @@ public class AnalogChannelTests
     }
 
     [Fact]
+    public void SetActiveSample_EventArgsCarryRaisingChannel()
+    {
+        // Arrange
+        var channel = new AnalogChannel(3);
+        IChannel? eventChannel = null;
+        channel.SampleReceived += (_, args) => eventChannel = args.Channel;
+
+        // Act
+        channel.SetActiveSample(1.0, DateTime.UtcNow);
+
+        // Assert
+        Assert.Same(channel, eventChannel);
+    }
+
+    [Fact]
+    public void SetActiveSample_WithFullSample_PreservesRawValueAndDeviceTimestamp()
+    {
+        // Arrange
+        var channel = new AnalogChannel(0);
+        IDataSample? received = null;
+        channel.SampleReceived += (_, args) => received = args.Sample;
+        var sample = new DataSample(DateTime.UtcNow, 2.5, rawValue: 128, deviceTimestamp: 555u);
+
+        // Act
+        channel.SetActiveSample(sample);
+
+        // Assert
+        Assert.Same(sample, channel.ActiveSample);
+        Assert.Equal(128, received!.RawValue);
+        Assert.Equal(555u, received.DeviceTimestamp);
+    }
+
+    [Fact]
     public async Task SetActiveSample_IsThreadSafe()
     {
         // Arrange

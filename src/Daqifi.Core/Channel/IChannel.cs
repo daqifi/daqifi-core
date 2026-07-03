@@ -46,4 +46,12 @@ public interface IChannel
     /// <param name="value">The raw or scaled value.</param>
     /// <param name="timestamp">The timestamp when the sample was taken.</param>
     void SetActiveSample(double value, DateTime timestamp);
+
+    /// <summary>
+    /// Sets the active sample for this channel to a fully-formed sample and triggers the
+    /// SampleReceived event. Used by the decode pipeline to carry raw value and device
+    /// timestamp metadata that <see cref="SetActiveSample(double, DateTime)"/> cannot.
+    /// </summary>
+    /// <param name="sample">The sample to set as active.</param>
+    void SetActiveSample(IDataSample sample);
 }
