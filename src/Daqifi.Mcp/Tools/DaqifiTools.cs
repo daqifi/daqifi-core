@@ -66,6 +66,32 @@ public static class DaqifiTools
         [Description("Analog channel numbers to enable, e.g. [0,1,2,3]. Channels not listed are disabled.")] int[] enabledChannels)
         => GuardAsync(() => agent.ConfigureAnalogChannelsAsync(deviceId, enabledChannels));
 
+    [McpServerTool(Name = "configure_digital_channels")]
+    [Description("Enable exactly the given digital channels (by channel number) and disable the rest. Enabled digital channels are sampled during streaming; the device's DIO enable is global, so enabling any digital channel powers the whole port. Pass an empty list to disable all digital channels.")]
+    public static Task<ConfigureDigitalResult> ConfigureDigitalChannels(
+        DaqifiAgent agent,
+        [Description("The device_id to configure.")] string deviceId,
+        [Description("Digital channel numbers to enable, e.g. [0,1,2]. Channels not listed are disabled.")] int[] enabledChannels)
+        => GuardAsync(() => agent.ConfigureDigitalChannelsAsync(deviceId, enabledChannels));
+
+    [McpServerTool(Name = "set_digital_direction")]
+    [Description("Set a digital channel's direction: 'input' (high-impedance, sampled during streaming) or 'output' (driven by the device; set the level with set_digital_output).")]
+    public static Task<DigitalPinResult> SetDigitalDirection(
+        DaqifiAgent agent,
+        [Description("The device_id to configure.")] string deviceId,
+        [Description("The digital channel number (e.g. 0-15 on Nyquist).")] int channel,
+        [Description("'input' or 'output'.")] string direction)
+        => GuardAsync(() => agent.SetDigitalDirectionAsync(deviceId, channel, direction));
+
+    [McpServerTool(Name = "set_digital_output")]
+    [Description("Drive a digital channel high or low. If the channel is currently an input it is switched to output direction first, so one call is enough to drive a pin.")]
+    public static Task<DigitalPinResult> SetDigitalOutput(
+        DaqifiAgent agent,
+        [Description("The device_id to control.")] string deviceId,
+        [Description("The digital channel number (e.g. 0-15 on Nyquist).")] int channel,
+        [Description("true to drive the pin high, false to drive it low.")] bool high)
+        => GuardAsync(() => agent.SetDigitalOutputAsync(deviceId, channel, high));
+
     [McpServerTool(Name = "set_sample_rate")]
     [Description("Set the device sample (streaming) rate in Hz, applied to streaming and SD-card logging. Nyquist hardware supports 1–1000 Hz; requests above 1000 Hz (or above --max-sample-rate-hz) are clamped and reported in the result.")]
     public static Task<SampleRateResult> SetSampleRate(

@@ -18,6 +18,9 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `get_device_status` | Connection state, streaming/logging flags, sample rate, enabled channels. |
 | `list_channels` | All channels with type/enabled/direction. |
 | `configure_analog_channels` | Enable exactly the given analog channels; disable the rest. |
+| `configure_digital_channels` | Enable exactly the given digital channels; disable the rest. |
+| `set_digital_direction` | Set a digital channel to `input` or `output`. |
+| `set_digital_output` | Drive a digital channel high or low (switches it to output if needed). |
 | `set_sample_rate` | Set sample rate in Hz (Nyquist hardware supports up to 1000 Hz). |
 | `start_sd_logging` | Start on-device SD logging (**requires a USB/serial connection**). |
 | `stop_sd_logging` | Stop SD logging. |
