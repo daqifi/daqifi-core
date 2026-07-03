@@ -80,18 +80,24 @@ public sealed record DeviceStatus(
 
 /// <summary>
 /// A single channel on a device. <see cref="OutputValue"/> is the last commanded output level
-/// for digital channels (null for analog channels).
+/// for digital channels; <see cref="PwmCapable"/>/<see cref="PwmEnabled"/> report PWM hardware
+/// support and the last commanded PWM state (all three are null for analog channels).
 /// </summary>
-public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bool Enabled, string Direction, bool? OutputValue)
+public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bool Enabled, string Direction, bool? OutputValue, bool? PwmCapable, bool? PwmEnabled)
 {
-    public static ChannelInfo From(IChannel ch) =>
-        new(
+    public static ChannelInfo From(IChannel ch)
+    {
+        var digital = ch as IDigitalChannel;
+        return new(
             ch.ChannelNumber,
             ch.Type.ToString(),
             ch.Name,
             ch.IsEnabled,
             ch.Direction.ToString(),
-            ch is IDigitalChannel digital ? digital.OutputValue : null);
+            digital?.OutputValue,
+            digital?.IsPwmCapable,
+            digital?.IsPwmEnabled);
+    }
 }
 
 /// <summary>Result of a channel-configuration change.</summary>
@@ -112,6 +118,25 @@ public sealed record DigitalPinResult(string DeviceId, int Channel, string Direc
         ch.ChannelNumber,
         ch.Direction.ToString(),
         ch is IDigitalChannel digital && digital.OutputValue);
+}
+
+/// <summary>
+/// Result of a PWM operation, reflecting the channel's state after it. <see cref="FrequencyHz"/>
+/// is the device-wide PWM frequency last commanded this session (0 when none was set; all PWM
+/// channels share one frequency).
+/// </summary>
+public sealed record PwmResult(string DeviceId, int Channel, bool Enabled, int DutyCyclePercent, int FrequencyHz)
+{
+    public static PwmResult From(string deviceId, IStreamingDevice device, IChannel ch)
+    {
+        var digital = ch as IDigitalChannel;
+        return new(
+            deviceId,
+            ch.ChannelNumber,
+            digital?.IsPwmEnabled ?? false,
+            digital?.PwmDutyCyclePercent ?? 0,
+            device.PwmFrequencyHz);
+    }
 }
 
 /// <summary>

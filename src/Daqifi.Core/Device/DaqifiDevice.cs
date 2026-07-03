@@ -1144,11 +1144,16 @@ namespace Daqifi.Core.Device
                 // the enable/direction/output state the device-level channel-management API
                 // computes its ADC mask and DIO state from. Keyed by (type, number) since the
                 // channel instances themselves are replaced.
-                var priorState = new Dictionary<(ChannelType, int), (bool IsEnabled, ChannelDirection Direction, bool OutputValue)>();
+                var priorState = new Dictionary<(ChannelType, int), (bool IsEnabled, ChannelDirection Direction, bool OutputValue, bool IsPwmEnabled, int PwmDutyCyclePercent)>();
                 foreach (var existing in _channels)
                 {
-                    var outputValue = existing is IDigitalChannel digitalExisting && digitalExisting.OutputValue;
-                    priorState[(existing.Type, existing.ChannelNumber)] = (existing.IsEnabled, existing.Direction, outputValue);
+                    var digitalExisting = existing as IDigitalChannel;
+                    priorState[(existing.Type, existing.ChannelNumber)] = (
+                        existing.IsEnabled,
+                        existing.Direction,
+                        digitalExisting?.OutputValue ?? false,
+                        digitalExisting?.IsPwmEnabled ?? false,
+                        digitalExisting?.PwmDutyCyclePercent ?? 0);
                 }
 
                 // Clear existing channels before repopulating
@@ -1180,6 +1185,8 @@ namespace Daqifi.Core.Device
                     if (channel is IDigitalChannel digitalChannel)
                     {
                         digitalChannel.OutputValue = state.OutputValue;
+                        digitalChannel.IsPwmEnabled = state.IsPwmEnabled;
+                        digitalChannel.PwmDutyCyclePercent = state.PwmDutyCyclePercent;
                     }
                 }
 
@@ -1230,6 +1237,13 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Bitmask of digital channels whose hardware supports PWM output (bit n = channel n).
+        /// Channels 0, 3, 4, 5, 6 and 7 route to output-compare modules; the mask comes from the
+        /// firmware's board configuration and is identical across Nyquist variants.
+        /// </summary>
+        private const int PwmCapableChannelMask = 0x00F9;
+
+        /// <summary>
         /// Populates digital channels from the protobuf message.
         /// </summary>
         /// <param name="message">The protobuf message containing digital channel data.</param>
@@ -1240,7 +1254,8 @@ namespace Daqifi.Core.Device
 
             for (var i = 0; i < count; i++)
             {
-                var channel = new DigitalChannel(i)
+                var isPwmCapable = i < 32 && (PwmCapableChannelMask & (1 << i)) != 0;
+                var channel = new DigitalChannel(i, isPwmCapable)
                 {
                     Name = $"DIO{i}",
                     Direction = ChannelDirection.Input,

@@ -92,6 +92,24 @@ public static class DaqifiTools
         [Description("true to drive the pin high, false to drive it low.")] bool high)
         => GuardAsync(() => agent.SetDigitalOutputAsync(deviceId, channel, high));
 
+    [McpServerTool(Name = "set_pwm_output")]
+    [Description("Start PWM output on a PWM-capable digital channel (Nyquist: channels 0, 3, 4, 5, 6, 7). Sets the duty cycle, optionally the device-wide frequency, then enables the channel. The frequency is shared by ALL PWM channels (one hardware timer). While PWM runs, digital direction/state commands for the channel are ignored by the hardware.")]
+    public static Task<PwmResult> SetPwmOutput(
+        DaqifiAgent agent,
+        [Description("The device_id to control.")] string deviceId,
+        [Description("The PWM-capable digital channel number.")] int channel,
+        [Description("Duty cycle in whole percent, 1-100. To stop the output use disable_pwm, not duty 0.")] int dutyCyclePercent,
+        [Description("PWM frequency in Hz, 6-50000, applied device-wide. Pass 0 to keep the frequency already set this session (required on first use).")] int frequencyHz = 0)
+        => GuardAsync(() => agent.SetPwmOutputAsync(deviceId, channel, dutyCyclePercent, frequencyHz));
+
+    [McpServerTool(Name = "disable_pwm")]
+    [Description("Stop PWM output on a digital channel. The pin is left high-impedance (not driven); use set_digital_direction/set_digital_output to drive it digitally again.")]
+    public static Task<PwmResult> DisablePwm(
+        DaqifiAgent agent,
+        [Description("The device_id to control.")] string deviceId,
+        [Description("The digital channel number to stop PWM on.")] int channel)
+        => GuardAsync(() => agent.DisablePwmAsync(deviceId, channel));
+
     [McpServerTool(Name = "set_sample_rate")]
     [Description("Set the device sample (streaming) rate in Hz, applied to streaming and SD-card logging. Nyquist hardware supports 1–1000 Hz; requests above 1000 Hz (or above --max-sample-rate-hz) are clamped and reported in the result.")]
     public static Task<SampleRateResult> SetSampleRate(

@@ -138,4 +138,28 @@ public class DaqifiAgentTests
             () => NewAgent().SetDigitalOutputAsync("serial:NOPE", 3, high: true));
         Assert.Contains("connect_device", ex.Message);
     }
+
+    [Fact]
+    public async Task SetPwmOutput_InReadOnlyMode_IsBlocked()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent(readOnly: true).SetPwmOutputAsync("x", 4, dutyCyclePercent: 50, frequencyHz: 1000));
+        Assert.Contains("read-only", ex.Message);
+    }
+
+    [Fact]
+    public async Task SetPwmOutput_UnknownDevice_ThrowsWithActionableMessage()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().SetPwmOutputAsync("serial:NOPE", 4, dutyCyclePercent: 50, frequencyHz: 1000));
+        Assert.Contains("connect_device", ex.Message);
+    }
+
+    [Fact]
+    public async Task DisablePwm_InReadOnlyMode_IsBlocked()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent(readOnly: true).DisablePwmAsync("x", 4));
+        Assert.Contains("read-only", ex.Message);
+    }
 }

@@ -434,6 +434,78 @@ public class ScpiMessageProducer
     }
 
     /// <summary>
+    /// Creates a command message to enable or disable PWM output on a digital channel.
+    /// </summary>
+    /// <param name="channel">The digital channel number.</param>
+    /// <param name="enabled">True to enable PWM on the channel; false to disable it.</param>
+    /// <remarks>
+    /// Only PWM-capable channels accept an enable; the firmware leaves a channel in a broken
+    /// half-enabled state when PWM is enabled on a non-capable channel, so callers should gate
+    /// on capability first (the device-level API does).
+    /// Command: PWM:CHannel:ENable channel,enabled
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetPwmChannelEnabled(4, true)); // PWM on channel 4
+    /// </remarks>
+    public static IOutboundMessage<string> SetPwmChannelEnabled(int channel, bool enabled)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        return new ScpiMessage($"PWM:CHannel:ENable {channel},{(enabled ? 1 : 0)}");
+    }
+
+    /// <summary>
+    /// Creates a command message to set the PWM frequency.
+    /// </summary>
+    /// <param name="channel">The digital channel number the command is addressed to.</param>
+    /// <param name="frequencyHz">The PWM frequency in hertz.</param>
+    /// <remarks>
+    /// All PWM channels share one hardware timer, so the frequency applies to every PWM
+    /// channel on the device regardless of the channel this command is addressed to.
+    /// Command: PWM:CHannel:FREQuency channel,frequency
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetPwmChannelFrequency(0, 1000)); // 1 kHz for all PWM
+    /// </remarks>
+    public static IOutboundMessage<string> SetPwmChannelFrequency(int channel, int frequencyHz)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        if (frequencyHz <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(frequencyHz), frequencyHz, "Frequency must be positive.");
+        }
+
+        return new ScpiMessage($"PWM:CHannel:FREQuency {channel},{frequencyHz}");
+    }
+
+    /// <summary>
+    /// Creates a command message to set the PWM duty cycle of a digital channel.
+    /// </summary>
+    /// <param name="channel">The digital channel number.</param>
+    /// <param name="dutyCyclePercent">The duty cycle in whole percent (0-100).</param>
+    /// <remarks>
+    /// Command: PWM:CHannel:DUTY channel,duty
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50)); // 50% on channel 4
+    /// </remarks>
+    public static IOutboundMessage<string> SetPwmChannelDutyCycle(int channel, int dutyCyclePercent)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        if (dutyCyclePercent is < 0 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dutyCyclePercent), dutyCyclePercent, "Duty cycle must be 0-100 percent.");
+        }
+
+        return new ScpiMessage($"PWM:CHannel:DUTY {channel},{dutyCyclePercent}");
+    }
+
+    /// <summary>
     /// Creates a command message to stage an analog output (DAC) voltage on a channel.
     /// </summary>
     /// <param name="channel">The analog output channel number.</param>

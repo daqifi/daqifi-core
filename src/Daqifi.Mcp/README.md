@@ -21,6 +21,8 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `configure_digital_channels` | Enable exactly the given digital channels; disable the rest. |
 | `set_digital_direction` | Set a digital channel to `input` or `output`. |
 | `set_digital_output` | Drive a digital channel high or low (switches it to output if needed). |
+| `set_pwm_output` | Start PWM on a capable channel: duty 1-100%, shared frequency 6-50000 Hz. |
+| `disable_pwm` | Stop PWM on a channel (pin is left high-impedance). |
 | `set_sample_rate` | Set sample rate in Hz (Nyquist hardware supports up to 1000 Hz). |
 | `start_sd_logging` | Start on-device SD logging (**requires a USB/serial connection**). |
 | `stop_sd_logging` | Stop SD logging. |

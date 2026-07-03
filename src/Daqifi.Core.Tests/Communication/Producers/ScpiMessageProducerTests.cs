@@ -182,6 +182,42 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    [Theory]
+    [InlineData(true, "PWM:CHannel:ENable 4,1")]
+    [InlineData(false, "PWM:CHannel:ENable 4,0")]
+    public void SetPwmChannelEnabled_ReturnsCorrectCommand(bool enabled, string expected)
+    {
+        var message = ScpiMessageProducer.SetPwmChannelEnabled(4, enabled);
+        Assert.Equal(expected, message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetPwmChannelFrequency_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetPwmChannelFrequency(0, 1000);
+        Assert.Equal("PWM:CHannel:FREQuency 0,1000", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetPwmChannelDutyCycle_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50);
+        Assert.Equal("PWM:CHannel:DUTY 4,50", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void PwmProducers_RejectInvalidArguments()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelEnabled(-1, true));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelFrequency(0, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelFrequency(-1, 100));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelDutyCycle(4, 101));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelDutyCycle(-1, 50));
+    }
+
     [Fact]
     public void SetNetworkWifiModeSelfHosted_ReturnsCorrectCommand()
     {

@@ -305,6 +305,13 @@ var dio1 = device.Channels.First(c => c.Type == ChannelType.Digital && c.Channel
 device.SetDioDirection(dio1, ChannelDirection.Output);
 device.SetDioValue(dio1, true); // drive high
 
+// PWM on a capable channel (IDigitalChannel.IsPwmCapable). Duty is per channel; the
+// frequency is device-wide because one hardware timer drives every PWM channel.
+var pwm = device.Channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
+device.SetPwmDutyCycle(pwm, 25);  // 1-100 %
+device.SetPwmFrequency(1000);     // 6-50000 Hz, shared by all PWM channels
+device.SetPwmEnabled(pwm, true);  // start; SetPwmEnabled(pwm, false) stops (pin goes high-impedance)
+
 // Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
 device.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
 
