@@ -181,14 +181,24 @@ public class AnalogChannel : IAnalogChannel
     /// <param name="timestamp">The timestamp when the sample was taken.</param>
     public void SetActiveSample(double value, DateTime timestamp)
     {
-        var sample = new DataSample(timestamp, value);
+        SetActiveSample(new DataSample(timestamp, value));
+    }
+
+    /// <summary>
+    /// Sets the active sample for this channel to a fully-formed sample and triggers the
+    /// SampleReceived event.
+    /// </summary>
+    /// <param name="sample">The sample to set as active.</param>
+    public void SetActiveSample(IDataSample sample)
+    {
+        ArgumentNullException.ThrowIfNull(sample);
 
         lock (_lock)
         {
             _activeSample = sample;
         }
 
-        SampleReceived?.Invoke(this, new SampleReceivedEventArgs(sample));
+        SampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));
     }
 
     /// <summary>

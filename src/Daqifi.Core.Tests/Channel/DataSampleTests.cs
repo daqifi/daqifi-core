@@ -31,6 +31,29 @@ public class DataSampleTests
     }
 
     [Fact]
+    public void Constructor_WithNoDecodeMetadata_DefaultsRawValueAndDeviceTimestamp()
+    {
+        // Samples not produced by the decode pipeline have no raw value or device timestamp.
+        var sample = new DataSample(DateTime.UtcNow, 1.0);
+
+        Assert.Null(sample.RawValue);
+        Assert.Null(sample.DeviceTimestamp);
+    }
+
+    [Fact]
+    public void Constructor_WithDecodeMetadata_SetsRawValueAndDeviceTimestamp()
+    {
+        var timestamp = new DateTime(2025, 10, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        var sample = new DataSample(timestamp, 1.25, rawValue: 4321, deviceTimestamp: 987654u);
+
+        Assert.Equal(timestamp, sample.Timestamp);
+        Assert.Equal(1.25, sample.Value);
+        Assert.Equal(4321, sample.RawValue);
+        Assert.Equal(987654u, sample.DeviceTimestamp);
+    }
+
+    [Fact]
     public void Value_CanBeModified()
     {
         // Arrange
