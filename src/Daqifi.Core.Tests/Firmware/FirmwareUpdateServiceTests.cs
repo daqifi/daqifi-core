@@ -756,6 +756,237 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_WhenCanceledBeforeFlash_SurfacesCanceledOperationToObservers()
+    {
+        // The rethrown OperationCanceledException carries no context, so the
+        // terminal StateChanged/progress text is the only channel telling a UI
+        // "the user canceled" apart from a device failure.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        var enumerator = new FakeHidDeviceEnumerator([], Array.Empty<HidDeviceInfo>());
+        var bootloaderProtocol = new FakeBootloaderProtocol([[0x10]]);
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromSeconds(5);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            options);
+
+        var stateEvents = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => stateEvents.Add(args);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(120));
+        var hexPath = CreateTempFile();
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateFirmwareAsync(device, hexPath, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        var terminal = stateEvents[^1];
+        Assert.Equal(FirmwareUpdateState.Failed, terminal.CurrentState);
+        Assert.Equal("PIC32 firmware update canceled.", terminal.Operation);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenTransportDropsMidFlash_SurfacesHalfFlashedWarningToObservers()
+    {
+        // A flash-touching failure where the HID transport itself dropped is
+        // cleanup-eligible but cleanup CANNOT run. Observers must still get the
+        // half-flashed warning in the terminal event (not a stale in-flight
+        // message), because on this path it may be their only signal.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.DropWhenReadQueueEmpty();  // program ack 2 → transport drops
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]);
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 1;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            options);
+
+        var stateEvents = new List<FirmwareUpdateStateChangedEventArgs>();
+        service.StateChanged += (_, args) => stateEvents.Add(args);
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        // No CleaningUp detour — the transport is gone, so no re-erase was possible.
+        Assert.DoesNotContain(stateEvents, e => e.CurrentState == FirmwareUpdateState.CleaningUp);
+        Assert.Equal(1, hidTransport.Writes.Count(w => w.Length > 0 && w[0] == 0x22));
+        // Both the exception guidance AND the terminal event text warn half-flashed.
+        Assert.NotNull(exception.RecoveryGuidance);
+        Assert.Contains("half-flashed", exception.RecoveryGuidance);
+        var terminal = stateEvents[^1];
+        Assert.Equal(FirmwareUpdateState.Failed, terminal.CurrentState);
+        Assert.Contains("half-flashed", terminal.Operation);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenObserverThrowsOnCleaningUp_EndsInFailedNotWedged()
+    {
+        // A throwing StateChanged subscriber at the CleaningUp transition must
+        // not strand the machine in the non-terminal CleaningUp state (which has
+        // no reset path) or replace the original failure exception.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0x34, 0x12]); // READ_CRC → mismatch
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 1;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            options);
+
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.CleaningUp)
+            {
+                throw new InvalidOperationException("Subscriber failure on CleaningUp.");
+            }
+        };
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        // Terminal Failed (resettable), original failure context preserved, and
+        // guidance reflects that the cleanup did not complete.
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Equal(FirmwareUpdateState.Verifying, exception.FailedState);
+        Assert.IsType<InvalidDataException>(exception.InnerException);
+        Assert.NotNull(exception.RecoveryGuidance);
+        Assert.Contains("half-flashed", exception.RecoveryGuidance);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenObserverThrowsOnRecovered_KeepsRecoveredOutcome()
+    {
+        // If the re-erase itself succeeded, a consumer callback throwing on the
+        // Recovered notification must not flip the outcome to half-flashed (and
+        // Recovered → Failed is not a legal transition anyway).
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0x34, 0x12]); // READ_CRC → mismatch
+        hidTransport.EnqueueRead([0x01, 0x02]); // cleanup re-erase ack
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var options = CreateFastOptions();
+        options.FlashWriteRetryCount = 1;
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            options);
+
+        service.StateChanged += (_, args) =>
+        {
+            if (args.CurrentState == FirmwareUpdateState.Recovered)
+            {
+                throw new InvalidOperationException("Subscriber failure on Recovered.");
+            }
+        };
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        // The device WAS re-erased: outcome stays Recovered end-to-end.
+        Assert.Equal(FirmwareUpdateState.Recovered, service.CurrentState);
+        Assert.Equal(FirmwareUpdateState.Verifying, exception.FailedState);
+        Assert.Equal(2, hidTransport.Writes.Count(w => w.Length > 0 && w[0] == 0x22));
+        Assert.NotNull(exception.RecoveryGuidance);
+        Assert.Contains("clean bootloader state", exception.RecoveryGuidance);
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_WhenProgramAckFails_RetriesAndCompletes()
     {
         var device = new FakeStreamingDevice("COM3");
@@ -2496,6 +2727,15 @@ public class FirmwareUpdateServiceTests
             WriteAsync(data).GetAwaiter().GetResult();
         }
 
+        private bool _dropWhenReadQueueEmpty;
+
+        /// <summary>
+        /// Makes the first ReadAsync after the queued responses are exhausted
+        /// throw and drop the connection, simulating the device disappearing
+        /// from the bus mid-operation.
+        /// </summary>
+        public void DropWhenReadQueueEmpty() => _dropWhenReadQueueEmpty = true;
+
         public Task<byte[]> ReadAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -2506,6 +2746,13 @@ public class FirmwareUpdateServiceTests
 
             if (_readQueue.Count == 0)
             {
+                if (_dropWhenReadQueueEmpty)
+                {
+                    _dropWhenReadQueueEmpty = false;
+                    IsConnected = false;
+                    throw new IOException("Simulated HID transport drop.");
+                }
+
                 throw new InvalidOperationException("No queued HID response available.");
             }
 
