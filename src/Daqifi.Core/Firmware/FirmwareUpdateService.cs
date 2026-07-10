@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Discovery;
 using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Core.Firmware;
@@ -129,6 +130,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     private readonly ILogger<FirmwareUpdateService> _logger;
     private readonly IBootloaderProtocol _bootloaderProtocol;
     private readonly IHidDeviceEnumerator _hidDeviceEnumerator;
+    private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly FirmwareUpdateServiceOptions _options;
 
     private string _currentOperation = "Idle";
@@ -136,10 +138,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     private int _bootloaderPollAttempts;
     private Exception? _lastBootloaderEnumerationError;
     private string? _targetBootloaderDevicePath;
+    private string? _targetBootloaderLocationKey;
     private bool _disposed;
 
     /// <summary>
-    /// Initializes a new firmware update service.
+    /// Initializes a new firmware update service. <paramref name="usbLocationProvider"/> resolves
+    /// an enumerated bootloader's USB physical-location key when targeting by
+    /// <c>targetLocationKey</c>; when null, a platform-default provider is used (Windows → WMI,
+    /// others → no-op fallback, which makes location-key targeting a no-op).
     /// </summary>
     public FirmwareUpdateService(
         IHidTransport hidTransport,
@@ -148,7 +154,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         ILogger<FirmwareUpdateService> logger,
         IBootloaderProtocol? bootloaderProtocol = null,
         IHidDeviceEnumerator? hidDeviceEnumerator = null,
-        FirmwareUpdateServiceOptions? options = null)
+        FirmwareUpdateServiceOptions? options = null,
+        IUsbLocationProvider? usbLocationProvider = null)
     {
         _hidTransport = hidTransport ?? throw new ArgumentNullException(nameof(hidTransport));
         FirmwareDownloadService = firmwareDownloadService ?? throw new ArgumentNullException(nameof(firmwareDownloadService));
@@ -158,6 +165,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         _hidDeviceEnumerator = hidDeviceEnumerator ?? new HidLibraryDeviceEnumerator();
         _options = options ?? new FirmwareUpdateServiceOptions();
         _options.Validate();
+        _usbLocationProvider = usbLocationProvider ?? UsbLocationProviderFactory.CreateForCurrentPlatform();
     }
 
     /// <summary>
@@ -181,11 +189,21 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         => UpdateFirmwareAsync(device, hexFilePath, progress, null, cancellationToken);
 
     /// <inheritdoc />
+    public Task UpdateFirmwareAsync(
+        IStreamingDevice device,
+        string hexFilePath,
+        IProgress<FirmwareUpdateProgress>? progress,
+        string? targetDevicePath,
+        CancellationToken cancellationToken = default)
+        => UpdateFirmwareAsync(device, hexFilePath, progress, targetDevicePath, null, cancellationToken);
+
+    /// <inheritdoc />
     public async Task UpdateFirmwareAsync(
         IStreamingDevice device,
         string hexFilePath,
         IProgress<FirmwareUpdateProgress>? progress,
         string? targetDevicePath,
+        string? targetLocationKey,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(device);
@@ -200,6 +218,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         if (targetDevicePath != null && string.IsNullOrWhiteSpace(targetDevicePath))
         {
             throw new ArgumentException("Target device path cannot be whitespace.", nameof(targetDevicePath));
+        }
+
+        if (targetLocationKey != null && string.IsNullOrWhiteSpace(targetLocationKey))
+        {
+            throw new ArgumentException("Target location key cannot be whitespace.", nameof(targetLocationKey));
         }
 
         if (!File.Exists(hexFilePath))
@@ -221,7 +244,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         var crcRegions = _bootloaderProtocol.ComputeCrcRegions(hexLines);
 
         await RunExclusiveAsync(
-            ct => RunPic32UpdateAsync(device, hexRecords, crcRegions, totalBytes, progress, targetDevicePath, ct),
+            ct => RunPic32UpdateAsync(
+                device, hexRecords, crcRegions, totalBytes, progress, targetDevicePath, targetLocationKey, ct),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -316,6 +340,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             _bootloaderPollAttempts = 0;
             _lastBootloaderEnumerationError = null;
             _targetBootloaderDevicePath = null;
+            _targetBootloaderLocationKey = null;
             await operation(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -332,10 +357,12 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         long totalBytes,
         IProgress<FirmwareUpdateProgress>? progress,
         string? targetDevicePath,
+        string? targetLocationKey,
         CancellationToken cancellationToken)
     {
-        // Recorded so a WaitingForBootloader timeout can name the requested path in its message.
+        // Recorded so a WaitingForBootloader timeout can name the requested path/location in its message.
         _targetBootloaderDevicePath = targetDevicePath;
+        _targetBootloaderLocationKey = targetLocationKey;
 
         try
         {
@@ -366,7 +393,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             var hidDevice = await ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.WaitingForBootloader,
                 "wait for HID bootloader enumeration",
-                ct => WaitForBootloaderDeviceAsync(targetDevicePath, ct),
+                ct => WaitForBootloaderDeviceAsync(targetDevicePath, targetLocationKey, ct),
                 cancellationToken).ConfigureAwait(false);
 
             TransitionToState(FirmwareUpdateState.Connecting, "Connecting to HID bootloader.");
@@ -375,7 +402,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             await ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.Connecting,
                 "connect HID transport",
-                ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, ct),
+                ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, targetLocationKey, ct),
                 cancellationToken).ConfigureAwait(false);
 
             var version = await ExecuteWithStateTimeoutAsync(
@@ -1260,8 +1287,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
     private async Task<HidDeviceInfo> WaitForBootloaderDeviceAsync(
         string? targetDevicePath,
+        string? targetLocationKey,
         CancellationToken cancellationToken)
     {
+        // A device path's physical location can't change while it stays enumerated, so caching
+        // per call (across poll iterations, not across separate update runs) avoids re-issuing a
+        // WMI query for the same candidate on every poll while targeting by location.
+        var locationCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1287,14 +1320,24 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             }
 
             // Multiple identical bootloaders can be enumerated at once; when a specific one was
-            // requested, match it by path (the rest stay held by the caller). Otherwise take the
-            // first match, preserving the single-device behavior.
+            // requested, match it by path (the rest stay held by the caller). Otherwise, if a
+            // location key was requested, resolve each candidate's physical-location key and match
+            // on that — this is what lets a caller target the bootloader a device rebooted INTO,
+            // before its device path exists, using the location it observed while the device was
+            // still in serial/app mode. Otherwise take the first match, preserving the
+            // single-device behavior.
             // Ordinal (case-sensitive): a device path is an OS identifier and, in this flow, comes from
             // the same in-process HID enumeration (via IHidPlatform) the caller used to obtain targetDevicePath.
-            var match = targetDevicePath == null
-                ? devices.FirstOrDefault()
-                : devices.FirstOrDefault(d =>
-                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.Ordinal));
+            var match = targetDevicePath != null
+                ? devices.FirstOrDefault(d =>
+                    string.Equals(d.DevicePath, targetDevicePath, StringComparison.Ordinal))
+                : targetLocationKey != null
+                    ? devices.FirstOrDefault(d =>
+                        string.Equals(
+                            ResolveLocationCached(d.DevicePath, locationCache),
+                            targetLocationKey,
+                            StringComparison.Ordinal))
+                    : devices.FirstOrDefault();
             if (match != null)
             {
                 return match;
@@ -1304,9 +1347,22 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
     }
 
+    private string? ResolveLocationCached(string devicePath, Dictionary<string, string?> cache)
+    {
+        if (cache.TryGetValue(devicePath, out var cached))
+        {
+            return cached;
+        }
+
+        var resolved = _usbLocationProvider.GetLocationKey(devicePath);
+        cache[devicePath] = resolved;
+        return resolved;
+    }
+
     private async Task ConnectToBootloaderWithRetryAsync(
         HidDeviceInfo bootloaderDevice,
         string? targetDevicePath,
+        string? targetLocationKey,
         CancellationToken cancellationToken)
     {
         await ExecuteWithRetryAsync(
@@ -1320,10 +1376,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     await _hidTransport.DisconnectAsync().ConfigureAwait(false);
                 }
 
-                // When a specific device was requested (several identical bootloaders present), connect to
-                // that exact device by path — bootloaderDevice was matched on the same path. Otherwise fall
-                // back to VID/PID(+serial) first-match for the single-device case.
-                if (targetDevicePath != null)
+                // When a specific device was requested (by path or by location, several identical
+                // bootloaders present), connect to that exact device by path — bootloaderDevice was
+                // already matched on the requested criterion in WaitForBootloaderDeviceAsync.
+                // Otherwise fall back to VID/PID(+serial) first-match for the single-device case.
+                if (targetDevicePath != null || targetLocationKey != null)
                 {
                     await _hidTransport
                         .ConnectByPathAsync(bootloaderDevice.DevicePath, ct)
@@ -1843,6 +1900,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         if (_targetBootloaderDevicePath != null)
         {
             details += $" Target device path requested: {_targetBootloaderDevicePath}.";
+        }
+
+        if (_targetBootloaderLocationKey != null)
+        {
+            details += $" Target location key requested: {_targetBootloaderLocationKey}.";
         }
 
         if (_lastBootloaderEnumerationError == null)
