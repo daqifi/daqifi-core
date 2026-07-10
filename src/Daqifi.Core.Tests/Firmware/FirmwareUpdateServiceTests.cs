@@ -4,6 +4,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -181,6 +182,218 @@ public class FirmwareUpdateServiceTests
         Assert.Equal("path-2", hidTransport.LastConnectByPath);
         Assert.Equal(1, hidTransport.ConnectByPathAttempts);
         Assert.Equal(0, hidTransport.ConnectAttempts); // did NOT fall back to VID/PID first-match
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WithTargetLocationKey_FlashesThatExactBootloaderByLocation()
+    {
+        // Same multi-device scenario as the targetDevicePath test above, but the caller only
+        // knows the target's USB physical-location key (resolved before the reboot into
+        // bootloader mode, when the device was still enumerable by its old identity) — not its
+        // future bootloader device path. WaitForBootloaderDeviceAsync must resolve each
+        // candidate's location via the injected provider and match on that.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0xCD, 0xAB]); // READ_CRC response → 0xABCD (match)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            [
+                new HidDeviceInfo(0x04D8, 0x003C, "path-1", null, "DAQiFi Bootloader"),
+                new HidDeviceInfo(0x04D8, 0x003C, "path-2", null, "DAQiFi Bootloader")
+            ]
+        ]);
+
+        var locationProvider = new FakeUsbLocationProvider(new Dictionary<string, string>
+        {
+            ["path-1"] = "Port_#0001.Hub_#0001",
+            ["path-2"] = "Port_#0002.Hub_#0001"
+        });
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions(),
+            locationProvider);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(
+                device, hexPath, progress: null, targetDevicePath: null, targetLocationKey: "Port_#0002.Hub_#0001");
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal("path-2", hidTransport.LastConnectByPath);
+        Assert.Equal(1, hidTransport.ConnectByPathAttempts);
+        Assert.Equal(0, hidTransport.ConnectAttempts); // did NOT fall back to VID/PID first-match
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WithTargetDevicePathAndTargetLocationKey_DevicePathTakesPriority()
+    {
+        // When both are supplied, targetDevicePath must win — it's an exact identifier while
+        // targetLocationKey depends on a resolvable provider.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0xCD, 0xAB]); // READ_CRC response → 0xABCD (match)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            [
+                new HidDeviceInfo(0x04D8, 0x003C, "path-1", null, "DAQiFi Bootloader"),
+                new HidDeviceInfo(0x04D8, 0x003C, "path-2", null, "DAQiFi Bootloader")
+            ]
+        ]);
+
+        // Deliberately mismatched: the location key would resolve to path-2, but the explicit
+        // device path (path-1) must win.
+        var locationProvider = new FakeUsbLocationProvider(new Dictionary<string, string>
+        {
+            ["path-1"] = "Port_#0001.Hub_#0001",
+            ["path-2"] = "Port_#0002.Hub_#0001"
+        });
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions(),
+            locationProvider);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(
+                device,
+                hexPath,
+                progress: null,
+                targetDevicePath: "path-1",
+                targetLocationKey: "Port_#0002.Hub_#0001");
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal("path-1", hidTransport.LastConnectByPath);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WithTargetLocationKey_ResolvesEachDevicePathAtMostOncePerPoll()
+    {
+        // Regression test: WaitForBootloaderDeviceAsync used to call GetLocationKey(...) inside
+        // its FirstOrDefault predicate on every poll iteration, re-resolving the SAME device
+        // path's (WMI, on the real Windows provider) location repeatedly while polling. A device
+        // path's physical location can't change while it stays enumerated, so a per-call cache
+        // should mean each unique path is resolved at most once across the whole wait, no matter
+        // how many poll iterations it takes to see a match. path-1 is enumerated on BOTH polls
+        // below; path-2 (the match) only appears on the second.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0xCD, 0xAB]); // READ_CRC response → 0xABCD (match)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", null, "DAQiFi Bootloader")],
+            [
+                new HidDeviceInfo(0x04D8, 0x003C, "path-1", null, "DAQiFi Bootloader"),
+                new HidDeviceInfo(0x04D8, 0x003C, "path-2", null, "DAQiFi Bootloader")
+            ]
+        ]);
+
+        var locationProvider = new FakeUsbLocationProvider(new Dictionary<string, string>
+        {
+            ["path-1"] = "Port_#0001.Hub_#0001",
+            ["path-2"] = "Port_#0002.Hub_#0001"
+        });
+
+        var bootloaderProtocol = new FakeBootloaderProtocol(
+            [[0xA1, 0x01], [0xA1, 0x02]],
+            crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions(),
+            locationProvider);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(
+                device, hexPath, progress: null, targetDevicePath: null, targetLocationKey: "Port_#0002.Hub_#0001");
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal("path-2", hidTransport.LastConnectByPath);
+        Assert.Equal(1, locationProvider.Requests.Count(p => p == "path-1"));
+        Assert.Equal(1, locationProvider.Requests.Count(p => p == "path-2"));
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WithWhitespaceTargetLocationKey_ThrowsArgumentException()
+    {
+        // Same fast-fail contract as targetDevicePath: whitespace can never match a resolved
+        // location key, so fail before polling until the WaitingForBootloader timeout.
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var device = new FakeStreamingDevice("COM3");
+        var hexPath = CreateTempFile();
+        try
+        {
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => service.UpdateFirmwareAsync(
+                    device, hexPath, progress: null, targetDevicePath: null, targetLocationKey: "   "));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
     }
 
     [Fact]
@@ -2830,6 +3043,24 @@ public class FirmwareUpdateServiceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromException<IReadOnlyList<HidDeviceInfo>>(_exception);
+        }
+    }
+
+    private sealed class FakeUsbLocationProvider : IUsbLocationProvider
+    {
+        private readonly IReadOnlyDictionary<string, string> _locationsByDevicePath;
+
+        public FakeUsbLocationProvider(IReadOnlyDictionary<string, string> locationsByDevicePath)
+        {
+            _locationsByDevicePath = locationsByDevicePath;
+        }
+
+        public List<string> Requests { get; } = [];
+
+        public string? GetLocationKey(string portNameOrDevicePath)
+        {
+            Requests.Add(portNameOrDevicePath);
+            return _locationsByDevicePath.TryGetValue(portNameOrDevicePath, out var location) ? location : null;
         }
     }
 

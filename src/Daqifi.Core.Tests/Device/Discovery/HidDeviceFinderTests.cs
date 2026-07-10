@@ -76,6 +76,63 @@ public class HidDeviceFinderTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_PopulatesLocationKey_FromInjectedProvider()
+    {
+        var enumerator = new FakeHidDeviceEnumerator([
+            new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN1", "DAQiFi Bootloader")
+        ]);
+        var locationProvider = new RecordingUsbLocationProvider(
+            path => path == "path-1" ? "Port_#0001.Hub_#0001" : null);
+
+        using var finder = new HidDeviceFinder(enumerator, locationProvider);
+
+        var devices = (await finder.DiscoverAsync()).ToList();
+
+        var device = Assert.IsType<DeviceInfo>(devices[0]);
+        Assert.Equal("Port_#0001.Hub_#0001", device.LocationKey);
+        Assert.Contains("path-1", locationProvider.Requests);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_WithUnresolvableDevicePath_LocationKeyIsNull()
+    {
+        // The default (no explicit provider) constructor resolves the platform provider, which
+        // on any platform returns null for a path this malformed — proving discovery never
+        // throws when location resolution can't classify the device.
+        var enumerator = new FakeHidDeviceEnumerator([
+            new HidDeviceInfo(0x04D8, 0x003C, "not-a-real-device-interface-path", "SN1", "DAQiFi Bootloader")
+        ]);
+
+        using var finder = new HidDeviceFinder(enumerator);
+
+        var devices = (await finder.DiscoverAsync()).ToList();
+
+        Assert.Null(devices[0].LocationKey);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_WithThrowingLocationProvider_DoesNotAbortDiscovery()
+    {
+        // A misbehaving custom IUsbLocationProvider must never take down the whole enumeration —
+        // location is enrichment metadata, not identification. Mirrors
+        // SerialDeviceFinder's DiscoverAsync_WithThrowingDescriptorProvider_DoesNotAbortDiscovery.
+        var enumerator = new FakeHidDeviceEnumerator([
+            new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN1", "Bootloader A"),
+            new HidDeviceInfo(0x04D8, 0x003C, "path-2", "SN2", "Bootloader B")
+        ]);
+        var throwingProvider = new RecordingUsbLocationProvider(
+            path => path == "path-1" ? throw new InvalidOperationException("simulated provider failure") : "loc-2");
+
+        using var finder = new HidDeviceFinder(enumerator, throwingProvider);
+
+        var devices = (await finder.DiscoverAsync()).ToList();
+
+        Assert.Equal(2, devices.Count);
+        Assert.Null(devices[0].LocationKey);
+        Assert.Equal("loc-2", devices[1].LocationKey);
+    }
+
+    [Fact]
     public void HidDeviceFinder_Dispose_DoesNotThrow()
     {
         var enumerator = new FakeHidDeviceEnumerator();
@@ -116,6 +173,21 @@ public class HidDeviceFinderTests
             LastVendorId = vendorId;
             LastProductId = productId;
             return Task.FromResult(_devices);
+        }
+    }
+
+    private sealed class RecordingUsbLocationProvider : IUsbLocationProvider
+    {
+        private readonly Func<string, string?> _resolver;
+
+        public RecordingUsbLocationProvider(Func<string, string?> resolver) => _resolver = resolver;
+
+        public List<string> Requests { get; } = [];
+
+        public string? GetLocationKey(string portNameOrDevicePath)
+        {
+            Requests.Add(portNameOrDevicePath);
+            return _resolver(portNameOrDevicePath);
         }
     }
 }
