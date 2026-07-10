@@ -284,39 +284,46 @@ Console.WriteLine($"Received {sampleCount} samples");
 or disabling analog channels recomputes the full `ENAble:VOLTage:DC` bitmask internally; digital
 channels are toggled via the global DIO enable.
 
+`DaqifiDeviceFactory` returns the base `DaqifiDevice` type, so pattern-match to `IStreamingDevice`
+to reach these members — the same way as `INetworkConfigurable` below.
+
 ```csharp
 using Daqifi.Core.Channel;
 
-// Channels are populated after a status message is received from the device.
-var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
-var ai2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
+if (device is IStreamingDevice streamingDevice)
+{
+    // Channels are populated after a status message is received from the device.
+    // Channels itself lives on the DaqifiDevice base class, so it's read from `device`.
+    var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+    var ai2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
 
-// Enable analog input channels (the device receives the combined bitmask, e.g. "5").
-device.EnableChannels(new[] { ai0, ai2 });
+    // Enable analog input channels (the device receives the combined bitmask, e.g. "5").
+    streamingDevice.EnableChannels(new[] { ai0, ai2 });
 
-// Disable a single channel — the recomputed mask reflects the remaining enabled channels.
-device.DisableChannel(ai0);
+    // Disable a single channel — the recomputed mask reflects the remaining enabled channels.
+    streamingDevice.DisableChannel(ai0);
 
-// Turn everything off.
-device.DisableAllChannels();
+    // Turn everything off.
+    streamingDevice.DisableAllChannels();
 
-// Digital I/O: set direction and drive an output.
-var dio1 = device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
-device.SetDioDirection(dio1, ChannelDirection.Output);
-device.SetDioValue(dio1, true); // drive high
+    // Digital I/O: set direction and drive an output.
+    var dio1 = device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+    streamingDevice.SetDioDirection(dio1, ChannelDirection.Output);
+    streamingDevice.SetDioValue(dio1, true); // drive high
 
-// PWM on a capable channel (IDigitalChannel.IsPwmCapable). Duty is per channel; the
-// frequency is device-wide because one hardware timer drives every PWM channel.
-var pwm = device.Channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
-device.SetPwmDutyCycle(pwm, 25);  // 1-100 %
-device.SetPwmFrequency(1000);     // 6-50000 Hz, shared by all PWM channels
-device.SetPwmEnabled(pwm, true);  // start; SetPwmEnabled(pwm, false) stops (pin goes high-impedance)
+    // PWM on a capable channel (IDigitalChannel.IsPwmCapable). Duty is per channel; the
+    // frequency is device-wide because one hardware timer drives every PWM channel.
+    var pwm = device.Channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
+    streamingDevice.SetPwmDutyCycle(pwm, 25);  // 1-100 %
+    streamingDevice.SetPwmFrequency(1000);     // 6-50000 Hz, shared by all PWM channels
+    streamingDevice.SetPwmEnabled(pwm, true);  // start; SetPwmEnabled(pwm, false) stops (pin goes high-impedance)
 
-// Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
-device.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
+    // Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
+    streamingDevice.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
 
-// Reboot the device (also disconnects, since the device drops its link while restarting).
-device.Reboot();
+    // Reboot the device (also disconnects, since the device drops its link while restarting).
+    streamingDevice.Reboot();
+}
 ```
 
 > Channel objects passed to the enable/disable and DIO methods must belong to the device's
@@ -350,33 +357,39 @@ logging and diagnostics SCPI surface — the system log, runtime log levels, SCP
 error-queue depth, and streaming/memory performance counters. These values originate **on the
 device**; this is not a client-side instrumentation framework.
 
+`DaqifiDeviceFactory` returns the base `DaqifiDevice` type, so pattern-match to `IDeviceDiagnostics`
+to reach these members — the same way as `INetworkConfigurable` below.
+
 ```csharp
 using Daqifi.Core.Device.Diagnostics;
 
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-// System log (reading the log also clears the device buffer).
-IReadOnlyList<SystemLogEntry> log = await device.GetSystemLogAsync();
-foreach (var entry in log) Console.WriteLine(entry.Message);
-await device.ClearSystemLogAsync();
+if (device is IDeviceDiagnostics diagnostics)
+{
+    // System log (reading the log also clears the device buffer).
+    IReadOnlyList<SystemLogEntry> log = await diagnostics.GetSystemLogAsync();
+    foreach (var entry in log) Console.WriteLine(entry.Message);
+    await diagnostics.ClearSystemLogAsync();
 
-// Runtime log levels (0 = None, 1 = Error, 2 = Info, 3 = Debug). The returned
-// setting reflects the level actually applied, which a module's ceiling may cap.
-LogLevelSetting applied = await device.SetLogLevelAsync("STREAM", 2);
-Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
+    // Runtime log levels (0 = None, 1 = Error, 2 = Info, 3 = Debug). The returned
+    // setting reflects the level actually applied, which a module's ceiling may cap.
+    LogLevelSetting applied = await diagnostics.SetLogLevelAsync("STREAM", 2);
+    Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
 
-// SCPI command history (newest first) and error-queue depth (non-destructive).
-IReadOnlyList<string> history = await device.GetCommandHistoryAsync();
-int queuedErrors = await device.GetSystemErrorCountAsync();
+    // SCPI command history (newest first) and error-queue depth (non-destructive).
+    IReadOnlyList<string> history = await diagnostics.GetCommandHistoryAsync();
+    int queuedErrors = await diagnostics.GetSystemErrorCountAsync();
 
-// Performance counters. Headline fields are typed (nullable when the running
-// firmware doesn't emit them); the full set is available via Values.
-StreamStats stream = await device.GetStreamStatsAsync();
-Console.WriteLine($"Samples: {stream.TotalSamplesStreamed}, dropped: {stream.QueueDroppedSamples}");
+    // Performance counters. Headline fields are typed (nullable when the running
+    // firmware doesn't emit them); the full set is available via Values.
+    StreamStats stream = await diagnostics.GetStreamStatsAsync();
+    Console.WriteLine($"Samples: {stream.TotalSamplesStreamed}, dropped: {stream.QueueDroppedSamples}");
 
-MemoryDiagnostics mem = await device.GetMemoryDiagnosticsAsync();
-Console.WriteLine($"Heap free: {mem.HeapFree}/{mem.HeapTotal}");
-foreach (var (key, value) in mem.Values) Console.WriteLine($"{key} = {value}");
+    MemoryDiagnostics mem = await diagnostics.GetMemoryDiagnosticsAsync();
+    Console.WriteLine($"Heap free: {mem.HeapFree}/{mem.HeapTotal}");
+    foreach (var (key, value) in mem.Values) Console.WriteLine($"{key} = {value}");
+}
 ```
 
 Notes:

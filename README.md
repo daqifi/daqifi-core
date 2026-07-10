@@ -167,17 +167,23 @@ using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
 Digital channels default to inputs. Flip one to output and drive it — the level is applied
 immediately, and flipping back to input releases the pin to high-impedance.
 
+`DaqifiDeviceFactory` returns the base `DaqifiDevice` type, so pattern-match to `IStreamingDevice`
+to reach these members — the same way as `INetworkConfigurable` below.
+
 ```csharp
 using Daqifi.Core.Channel;
 
-var channels = device.GetChannelsSnapshot();
-var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
+if (device is IStreamingDevice streamingDevice)
+{
+    var channels = device.GetChannelsSnapshot();
+    var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
 
-device.SetDioDirection(dio3, ChannelDirection.Output);
-device.SetDioValue(dio3, true);   // drive high
-device.SetDioValue(dio3, false);  // drive low
+    streamingDevice.SetDioDirection(dio3, ChannelDirection.Output);
+    streamingDevice.SetDioValue(dio3, true);   // drive high
+    streamingDevice.SetDioValue(dio3, false);  // drive low
 
-device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
+    streamingDevice.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
+}
 ```
 
 ### PWM output
@@ -189,17 +195,20 @@ one hardware timer drives them all.
 ```csharp
 using Daqifi.Core.Channel;
 
-var pwm = device.GetChannelsSnapshot()
-    .OfType<IDigitalChannel>()
-    .First(c => c.IsPwmCapable);
+if (device is IStreamingDevice streamingDevice)
+{
+    var pwm = device.GetChannelsSnapshot()
+        .OfType<IDigitalChannel>()
+        .First(c => c.IsPwmCapable);
 
-device.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
-device.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
-device.SetPwmEnabled(pwm, true);  // start
+    streamingDevice.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
+    streamingDevice.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
+    streamingDevice.SetPwmEnabled(pwm, true);  // start
 
-device.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
+    streamingDevice.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
 
-device.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
+    streamingDevice.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
+}
 ```
 
 ### Network configuration
