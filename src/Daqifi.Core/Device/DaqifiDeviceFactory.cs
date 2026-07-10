@@ -28,11 +28,11 @@ public static class DaqifiDeviceFactory
     /// <param name="port">The TCP port to connect to.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when host is null or empty.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when port is not between 1 and 65535.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    public static async Task<DaqifiDevice> ConnectTcpAsync(
+    public static async Task<DaqifiStreamingDevice> ConnectTcpAsync(
         string host,
         int port,
         DeviceConnectionOptions? options = null,
@@ -61,11 +61,11 @@ public static class DaqifiDeviceFactory
     /// <param name="port">The TCP port to connect to.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when ipAddress is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when port is not between 1 and 65535.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    public static async Task<DaqifiDevice> ConnectTcpAsync(
+    public static async Task<DaqifiStreamingDevice> ConnectTcpAsync(
         IPAddress ipAddress,
         int port,
         DeviceConnectionOptions? options = null,
@@ -93,9 +93,9 @@ public static class DaqifiDeviceFactory
     /// <param name="host">The hostname or IP address string to connect to.</param>
     /// <param name="port">The TCP port to connect to.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when host is null or empty.</exception>
-    public static DaqifiDevice ConnectTcp(
+    public static DaqifiStreamingDevice ConnectTcp(
         string host,
         int port,
         DeviceConnectionOptions? options = null)
@@ -109,9 +109,9 @@ public static class DaqifiDeviceFactory
     /// <param name="ipAddress">The IP address to connect to.</param>
     /// <param name="port">The TCP port to connect to.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when ipAddress is null.</exception>
-    public static DaqifiDevice ConnectTcp(
+    public static DaqifiStreamingDevice ConnectTcp(
         IPAddress ipAddress,
         int port,
         DeviceConnectionOptions? options = null)
@@ -125,10 +125,10 @@ public static class DaqifiDeviceFactory
     /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    public static Task<DaqifiDevice> ConnectSerialAsync(
+    public static Task<DaqifiStreamingDevice> ConnectSerialAsync(
         string portName,
         DeviceConnectionOptions? options = null,
         CancellationToken cancellationToken = default)
@@ -143,11 +143,11 @@ public static class DaqifiDeviceFactory
     /// <param name="baudRate">The baud rate for the serial connection.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when baudRate is less than or equal to zero.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    public static async Task<DaqifiDevice> ConnectSerialAsync(
+    public static async Task<DaqifiStreamingDevice> ConnectSerialAsync(
         string portName,
         int baudRate,
         DeviceConnectionOptions? options = null,
@@ -182,9 +182,9 @@ public static class DaqifiDeviceFactory
     /// </summary>
     /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
-    public static DaqifiDevice ConnectSerial(
+    public static DaqifiStreamingDevice ConnectSerial(
         string portName,
         DeviceConnectionOptions? options = null)
     {
@@ -197,10 +197,10 @@ public static class DaqifiDeviceFactory
     /// <param name="portName">The name of the serial port (e.g., "COM3", "/dev/ttyUSB0").</param>
     /// <param name="baudRate">The baud rate for the serial connection.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when portName is null or empty.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when baudRate is less than or equal to zero.</exception>
-    public static DaqifiDevice ConnectSerial(
+    public static DaqifiStreamingDevice ConnectSerial(
         string portName,
         int baudRate,
         DeviceConnectionOptions? options = null)
@@ -214,12 +214,12 @@ public static class DaqifiDeviceFactory
     /// <param name="deviceInfo">The device information from discovery.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
     /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when deviceInfo is null.</exception>
     /// <exception cref="ArgumentException">Thrown when deviceInfo is missing required fields (IPAddress or Port for WiFi connections).</exception>
     /// <exception cref="NotSupportedException">Thrown when the connection type is not supported (e.g., Serial, HID).</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
-    public static async Task<DaqifiDevice> ConnectFromDeviceInfoAsync(
+    public static async Task<DaqifiStreamingDevice> ConnectFromDeviceInfoAsync(
         IDeviceInfo deviceInfo,
         DeviceConnectionOptions? options = null,
         CancellationToken cancellationToken = default)
@@ -258,11 +258,11 @@ public static class DaqifiDeviceFactory
     /// </summary>
     /// <param name="deviceInfo">The device information from discovery.</param>
     /// <param name="options">Optional connection options. If null, uses default options.</param>
-    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiStreamingDevice"/>.</returns>
     /// <exception cref="ArgumentNullException">Thrown when deviceInfo is null.</exception>
     /// <exception cref="ArgumentException">Thrown when deviceInfo is missing required fields (IPAddress or Port for WiFi connections).</exception>
     /// <exception cref="NotSupportedException">Thrown when the connection type is not supported (e.g., Serial, HID).</exception>
-    public static DaqifiDevice ConnectFromDeviceInfo(
+    public static DaqifiStreamingDevice ConnectFromDeviceInfo(
         IDeviceInfo deviceInfo,
         DeviceConnectionOptions? options = null)
     {
@@ -272,7 +272,7 @@ public static class DaqifiDeviceFactory
     /// <summary>
     /// Connects to a WiFi device using the provided device info.
     /// </summary>
-    private static async Task<DaqifiDevice> ConnectWiFiDeviceAsync(
+    private static async Task<DaqifiStreamingDevice> ConnectWiFiDeviceAsync(
         IDeviceInfo deviceInfo,
         DeviceConnectionOptions? options,
         CancellationToken cancellationToken)
@@ -323,7 +323,7 @@ public static class DaqifiDeviceFactory
     /// <summary>
     /// Connects to a serial device using the provided device info.
     /// </summary>
-    private static async Task<DaqifiDevice> ConnectSerialDeviceAsync(
+    private static async Task<DaqifiStreamingDevice> ConnectSerialDeviceAsync(
         IDeviceInfo deviceInfo,
         DeviceConnectionOptions? options,
         CancellationToken cancellationToken)
@@ -373,12 +373,12 @@ public static class DaqifiDeviceFactory
     /// <summary>
     /// Internal method that handles the actual connection logic with a transport.
     /// </summary>
-    private static async Task<DaqifiDevice> ConnectWithTransportAsync(
+    private static async Task<DaqifiStreamingDevice> ConnectWithTransportAsync(
         IStreamTransport transport,
         DeviceConnectionOptions options,
         CancellationToken cancellationToken)
     {
-        DaqifiDevice? device = null;
+        DaqifiStreamingDevice? device = null;
 
         try
         {
