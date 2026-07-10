@@ -48,6 +48,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private readonly int _baudRate;
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private readonly IUsbPortDescriptorProvider _usbPortDescriptorProvider;
+    private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly Func<string[]>? _portNameProvider;
     private bool _disposed;
 
@@ -103,15 +104,23 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// Lets unit tests deterministically exercise the descriptor / probe
     /// path on hosts (CI containers) that have no real serial ports.
     /// </param>
+    /// <param name="usbLocationProvider">
+    /// Provider used to resolve a discovered device's USB physical-location
+    /// key. When null, a platform-default provider is used (Windows → WMI,
+    /// others → no-op fallback).
+    /// </param>
     internal SerialDeviceFinder(
         int baudRate,
         IUsbPortDescriptorProvider? usbPortDescriptorProvider,
-        Func<string[]>? portNameProvider = null)
+        Func<string[]>? portNameProvider = null,
+        IUsbLocationProvider? usbLocationProvider = null)
     {
         _baudRate = baudRate;
         _usbPortDescriptorProvider = usbPortDescriptorProvider
             ?? UsbPortDescriptorProviderFactory.CreateForCurrentPlatform();
         _portNameProvider = portNameProvider;
+        _usbLocationProvider = usbLocationProvider
+            ?? UsbLocationProviderFactory.CreateForCurrentPlatform();
     }
 
     #endregion
@@ -356,7 +365,8 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
                 ConnectionType = ConnectionType.Serial,
                 PortName = portName,
                 Type = ConvertDeviceType(DeviceTypeDetector.DetectFromPartNumber(statusMessage.DevicePn)),
-                IsPowerOn = true
+                IsPowerOn = true,
+                LocationKey = _usbLocationProvider.GetLocationKey(portName)
             };
 
             return deviceInfo;

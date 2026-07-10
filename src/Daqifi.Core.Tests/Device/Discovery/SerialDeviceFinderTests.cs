@@ -112,6 +112,22 @@ public class SerialDeviceFinderTests
     }
 
     [Fact]
+    public void SerialDeviceFinder_CustomUsbLocationProvider_AcceptsProvider()
+    {
+        // DeviceInfo.LocationKey is only populated after a real status-message probe succeeds
+        // (see TryGetDeviceInfoAsync), which this suite has no fake serial transport to
+        // simulate — the same limitation that already applies to every other field mapped
+        // from statusMessage there (SerialNumber, FirmwareVersion, etc.). This test locks in
+        // the constructor wiring; end-to-end LocationKey population is exercised on real
+        // hardware, not here.
+        var fakeProvider = new RecordingUsbLocationProvider(_ => "Port_#0001.Hub_#0001");
+
+        using var finder = new SerialDeviceFinder(9600, usbPortDescriptorProvider: null, usbLocationProvider: fakeProvider);
+
+        Assert.NotNull(finder);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_WithNonDaqifiVidPid_DoesNotProbePort()
     {
         // Closes #157: ports whose USB descriptor is NOT a known DAQiFi
@@ -230,5 +246,12 @@ public class SerialDeviceFinderTests
             Interlocked.Increment(ref _callCount);
             return _classifier(portName);
         }
+    }
+
+    private sealed class RecordingUsbLocationProvider : IUsbLocationProvider
+    {
+        private readonly Func<string, string?> _resolver;
+        public RecordingUsbLocationProvider(Func<string, string?> resolver) => _resolver = resolver;
+        public string? GetLocationKey(string portNameOrDevicePath) => _resolver(portNameOrDevicePath);
     }
 }

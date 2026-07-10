@@ -573,6 +573,7 @@ public class DaqifiDeviceFactoryTests
         public ConnectionType ConnectionType { get; set; } = ConnectionType.Unknown;
         public string? PortName { get; set; }
         public string? DevicePath { get; set; }
+        public string? LocationKey { get; set; }
     }
 
     #endregion

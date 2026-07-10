@@ -18,6 +18,7 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
     public const int DefaultProductId = 0x003C;
 
     private readonly IHidDeviceEnumerator _hidDeviceEnumerator;
+    private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private bool _disposed;
 
@@ -30,9 +31,27 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
     }
 
     internal HidDeviceFinder(IHidDeviceEnumerator hidDeviceEnumerator)
+        : this(hidDeviceEnumerator, usbLocationProvider: null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the HidDeviceFinder class with an
+    /// explicit USB location provider — primarily for tests that mock the
+    /// platform-specific WMI lookup.
+    /// </summary>
+    /// <param name="hidDeviceEnumerator">Enumerator used to list HID devices.</param>
+    /// <param name="usbLocationProvider">
+    /// Provider used to resolve a discovered device's USB physical-location
+    /// key. When null, a platform-default provider is used (Windows → WMI,
+    /// others → no-op fallback).
+    /// </param>
+    internal HidDeviceFinder(IHidDeviceEnumerator hidDeviceEnumerator, IUsbLocationProvider? usbLocationProvider)
     {
         _hidDeviceEnumerator = hidDeviceEnumerator
             ?? throw new ArgumentNullException(nameof(hidDeviceEnumerator));
+        _usbLocationProvider = usbLocationProvider
+            ?? UsbLocationProviderFactory.CreateForCurrentPlatform();
 
         VendorIdFilter = DefaultVendorId;
         ProductIdFilter = DefaultProductId;
@@ -94,7 +113,8 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
                     FirmwareVersion = string.Empty,
                     ConnectionType = ConnectionType.Hid,
                     Type = DeviceType.Unknown,
-                    DevicePath = hidDevice.DevicePath
+                    DevicePath = hidDevice.DevicePath,
+                    LocationKey = _usbLocationProvider.GetLocationKey(hidDevice.DevicePath)
                 };
 
                 discoveredDevices.Add(deviceInfo);

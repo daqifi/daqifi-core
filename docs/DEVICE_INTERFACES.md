@@ -125,6 +125,32 @@ if (devices.Any())
 }
 ```
 
+### USB Physical-Location Correlation
+
+`IDeviceInfo.LocationKey` is a stable, topology-derived identifier for the physical USB port a
+device is plugged into (e.g. `Port_#0001.Hub_#0001` on Windows). Unlike `PortName`, `DevicePath`,
+and `SerialNumber` — which are transport-scoped and don't survive a device switching identities —
+`LocationKey` stays the same for the same physical port across a device's transitions between
+serial (app) mode and HID bootloader mode, and across re-enumerations. Use it to correlate the
+same physical unit across a firmware update's mode switch, or to disambiguate multiple identical
+HID bootloaders (same VID/PID, no serial number) plugged into different ports:
+
+```csharp
+using var serialFinder = new SerialDeviceFinder();
+var device = (await serialFinder.DiscoverAsync()).First();
+var targetLocation = device.LocationKey; // resolved while still in serial/app mode
+
+// ...device reboots into bootloader mode via ForceBootloader...
+
+// Target the bootloader that came from the SAME physical port, even though its
+// HID device path didn't exist until after the reboot.
+await firmwareUpdateService.UpdateFirmwareAsync(
+    device, hexFilePath, progress: null, targetDevicePath: null, targetLocationKey: targetLocation);
+```
+
+`LocationKey` is resolved via `IUsbLocationProvider` and is Windows-only in v1 (Linux/macOS
+resolve to `null`, same as `IUsbPortDescriptorProvider`'s cross-platform fallback pattern).
+
 ### Continuous Discovery (Live Device Set)
 
 `IDeviceFinder.DiscoverAsync` is a single pass. For a UI that shows a live, self-updating
