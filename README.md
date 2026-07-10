@@ -85,7 +85,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
 | **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
 | **Network configuration** | Push WiFi credentials and static LAN IPs from your app |
-| **Firmware updates** | PIC32 and WiFi-module flashing with progress and cancellation |
+| **Firmware updates** | PIC32 and WiFi-module flashing with progress, cancellation, and automatic recovery to a clean re-flashable bootloader state on mid-flash failure |
 | **Cross-platform** | .NET 9.0 and 10.0 on Windows, macOS, Linux |
 
 ## Quick recipes
@@ -231,6 +231,13 @@ if (device is INetworkConfigurable networkDevice)
 
 - `UpdateFirmwareAsync(...)` — PIC32 firmware flashing from a local Intel HEX file
 - `UpdateWifiModuleAsync(...)` — WiFi module flashing via an external tool runner. Automatically checks the device's current WiFi-chip firmware against the latest GitHub release and skips the flash if already up to date.
+
+**Safe failure cleanup (PIC32).** If a PIC32 update fails — or is canceled — after flash has been written (`ErasingFlash`, `Programming`, or `Verifying`) and the HID bootloader is still connected, the service automatically re-erases the application flash so the device is never abandoned half-flashed: a half-flashed image would otherwise boot into garbage on the next power cycle, recoverable only by the physical button-hold procedure. The flow surfaces two extra states:
+
+- `CleaningUp` — the re-erase is running; progress percent stays frozen at the failure point (never 100) so a percent-only UI can't mistake cleanup for success
+- `Recovered` — terminal: the update **failed** (the call still throws), but the device is in a clean bootloader state and safe to simply re-flash
+
+`FirmwareUpdateException.RecoveryGuidance` tells the operator whether to just re-run the update (`Recovered`) or power-cycle into bootloader mode first (cleanup couldn't run — the device may be half-flashed). `FirmwareUpdateException.FailedState` always reports where the original failure occurred, independent of cleanup outcome.
 
 > **Note:** The default WiFi flash tool config uses `winc_flash_tool.cmd` conventions. On macOS / Linux, supply a compatible executable and argument template via `FirmwareUpdateServiceOptions`.
 

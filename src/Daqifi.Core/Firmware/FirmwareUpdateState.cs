@@ -53,5 +53,23 @@ public enum FirmwareUpdateState
     /// <summary>
     /// Update terminated with an error or cancellation.
     /// </summary>
-    Failed = 9
+    Failed = 9,
+
+    /// <summary>
+    /// Recovering from a failure by re-erasing the application flash so the
+    /// device is left in a clean bootloader state rather than a half-flashed
+    /// one. Entered only on failures during <see cref="ErasingFlash"/>,
+    /// <see cref="Programming"/>, or <see cref="Verifying"/>, where the HID
+    /// bootloader is still connected and the flash may have been modified.
+    /// </summary>
+    CleaningUp = 10,
+
+    /// <summary>
+    /// The update failed, but cleanup succeeded: the application flash was
+    /// re-erased and the device is in a clean bootloader state, ready to be
+    /// re-flashed. This is a terminal failure state — the firmware was not
+    /// installed — but the device is safe and recoverable by re-running the
+    /// update.
+    /// </summary>
+    Recovered = 11
 }
