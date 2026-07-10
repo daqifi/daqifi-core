@@ -1162,6 +1162,29 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardStorageAsync_WithUndefinedHeaderError_ThrowsFeatureNotSupportedException()
+        {
+            // -113 "Undefined header" means the firmware doesn't recognize the storage query at
+            // all (e.g. it predates the version that introduced it) — a distinct, typed failure
+            // from a generic SdCardOperationException.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = "3.4.3";
+            device.Metadata.DeviceType = DeviceType.Nyquist1;
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -113, \"Undefined header\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -113, \"Undefined header\"" });
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.GetSdCardStorageAsync());
+
+            Assert.Equal(2, device.ExecuteTextCommandCallCount);
+            Assert.Equal(DeviceFeature.SdStorageQuery, ex.Feature);
+            Assert.Equal(DaqifiStreamingDevice.MinSupportedFirmware, ex.RequiredVersion);
+            Assert.Equal("3.4.3", ex.ActualVersion);
+            Assert.Equal(DeviceType.Nyquist1, ex.Board);
+        }
+
+        [Fact]
         public async Task GetSdCardStorageAsync_WithNoSdCardDetected_ThrowsSdCardNotPresentException()
         {
             // The "No SD Card Detected" marker is non-transient, so the method must

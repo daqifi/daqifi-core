@@ -49,6 +49,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
+        /// <exception cref="Daqifi.Core.Device.FeatureNotSupportedException">Thrown when the device's firmware does not recognize the storage query (SCPI -113 "Undefined header"), typically because it predates the minimum supported firmware.</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error or an unparseable response.</exception>
         Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default);
 

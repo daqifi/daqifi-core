@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Protocol;
+using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -42,6 +43,26 @@ namespace Daqifi.Core.Device
         /// Gets the device metadata containing part number, firmware version, etc.
         /// </summary>
         public DeviceMetadata Metadata { get; } = new DeviceMetadata();
+
+        /// <summary>
+        /// Minimum firmware version daqifi-core is built and tested against (ADR 0001,
+        /// docs/adr/0001-firmware-feature-gating.md). Every SCPI command daqifi-core issues today
+        /// exists on all firmware at or above this floor, so a device below it gets best-effort
+        /// behavior: an individual command may still work, but any that don't are surfaced as a
+        /// typed <see cref="FeatureNotSupportedException"/> via the wire-level <c>-113</c>
+        /// "Undefined header" backstop, rather than a guarantee up front.
+        /// </summary>
+        public static readonly FirmwareVersion MinSupportedFirmware = new(3, 5, 0, null, 0);
+
+        /// <summary>
+        /// Gets a value indicating whether the connected device's reported firmware version meets
+        /// <see cref="MinSupportedFirmware"/>. Evaluated live against <see cref="Metadata"/> on every
+        /// access — not cached — so it always reflects the most recently reported version rather than
+        /// a stale snapshot. Returns <c>false</c> if the firmware version has not yet been reported or
+        /// does not parse; callers should treat that as "unknown", not "confirmed unsupported".
+        /// </summary>
+        public bool IsFirmwareVersionSupported =>
+            FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var parsed) && parsed >= MinSupportedFirmware;
 
         /// <summary>
         /// Gets the collection of channels populated from device status messages.
