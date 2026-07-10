@@ -45,6 +45,14 @@ namespace Daqifi.Core.Device
         /// </summary>
         private const int SD_LIST_MAX_RETRIES = 1;
 
+        /// <summary>
+        /// libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c> — the code the firmware returns for a
+        /// command it doesn't recognize (e.g. a command that postdates the connected firmware).
+        /// This is the wire-level signal behind the <see cref="FeatureNotSupportedException"/>
+        /// backstop (ADR 0001, docs/adr/0001-firmware-feature-gating.md).
+        /// </summary>
+        private const int ScpiErrorCodeUndefinedHeader = -113;
+
         private bool _isLoggingToSdCard;
         private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
 
@@ -1016,6 +1024,7 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
+        /// <exception cref="FeatureNotSupportedException">Thrown when the device's firmware does not recognize the storage query (SCPI -113 "Undefined header"), typically because it predates <see cref="DaqifiDevice.MinSupportedFirmware"/>.</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
         public async Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
         {
@@ -1094,6 +1103,20 @@ namespace Daqifi.Core.Device
             if (ContainsNoSdCardMarker(lines))
             {
                 throw new SdCardNotPresentException(lines, lastScpiError);
+            }
+
+            // A -113 "Undefined header" reply means the firmware doesn't recognize the storage
+            // query at all — typically because it predates the version that introduced it — so
+            // it gets the typed feature-gating exception instead of a generic operation error.
+            if (lastScpiError != null
+                && TryParseScpiErrorCode(lastScpiError, out var scpiErrorCode)
+                && scpiErrorCode == ScpiErrorCodeUndefinedHeader)
+            {
+                throw new FeatureNotSupportedException(
+                    DeviceFeature.SdStorageQuery,
+                    MinSupportedFirmware,
+                    Metadata.FirmwareVersion,
+                    Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
             }
 
             throw new SdCardOperationException(
@@ -1539,6 +1562,41 @@ namespace Daqifi.Core.Device
             var trimmed = line.TrimStart();
             return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
                 || trimmed.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Parses the numeric error code out of a SCPI error line matched by
+        /// <see cref="IsScpiErrorLine"/> — e.g. <c>**ERROR: -113, "Undefined header"</c>,
+        /// <c>ERROR: -113,"Undefined header"</c>, or a space/tab-delimited variant like
+        /// <c>**ERROR -113, "Undefined header"</c>. The delimiter between the <c>ERROR</c>/
+        /// <c>**ERROR</c> token and the code may be <c>:</c>, space, or tab — matching the
+        /// delimiters <see cref="ScpiResponseClassifier"/> accepts — and the code is the text
+        /// up to the following comma (if any).
+        /// </summary>
+        private static bool TryParseScpiErrorCode(string line, out int code)
+        {
+            code = 0;
+            var trimmed = line.TrimStart();
+
+            string afterToken;
+            if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                afterToken = trimmed[7..];
+            }
+            else if (trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                afterToken = trimmed[5..];
+            }
+            else
+            {
+                return false;
+            }
+
+            afterToken = afterToken.TrimStart(':', ' ', '\t');
+
+            var commaIndex = afterToken.IndexOf(',');
+            var codeSpan = (commaIndex >= 0 ? afterToken[..commaIndex] : afterToken).Trim();
+            return int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
         }
 
         // Permissive: any line that looks like a device error or status message,

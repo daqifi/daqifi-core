@@ -11,7 +11,10 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
     - uses: actions/checkout@v7
     
@@ -44,11 +47,17 @@ jobs:
     - name: Pack
       run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
 
+    - name: NuGet login (OIDC -> temp API key)
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: tylerkron
+
     - name: Push to NuGet
-      run: dotnet nuget push nupkgs/Daqifi.Core.*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      run: dotnet nuget push nupkgs/Daqifi.Core.*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
     - name: Pack MCP server (dotnet tool)
       run: dotnet pack src/Daqifi.Mcp/Daqifi.Mcp.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
 
     - name: Push MCP server to NuGet
-      run: dotnet nuget push nupkgs/Daqifi.Mcp.*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      run: dotnet nuget push nupkgs/Daqifi.Mcp.*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

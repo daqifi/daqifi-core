@@ -10,6 +10,26 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 
 public class WiFiDeviceFinderTests
 {
+    // Issue #283: GetDeviceType had no "nq2" case, so a Nyquist2's part
+    // number was silently reported as Unknown, same class of bug as
+    // SerialDeviceFinder.ConvertDeviceType.
+    [Theory]
+    [InlineData("nq1", DeviceType.Nyquist1)]
+    [InlineData("Nq1", DeviceType.Nyquist1)]
+    [InlineData("nq2", DeviceType.Nyquist2)]
+    [InlineData("Nq2", DeviceType.Nyquist2)]
+    [InlineData("nq3", DeviceType.Nyquist3)]
+    [InlineData("Nq3", DeviceType.Nyquist3)]
+    [InlineData("nq4", DeviceType.Unknown)]
+    [InlineData("", DeviceType.Unknown)]
+    [InlineData(null, DeviceType.Unknown)]
+    public void GetDeviceType_PartNumber_ReturnsCorrectType(string? partNumber, DeviceType expected)
+    {
+        var result = WiFiDeviceFinder.GetDeviceType(partNumber);
+
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {
