@@ -28,7 +28,7 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `stop_sd_logging` | Stop SD logging. |
 
 > SD logging is on-device: the device writes to its own SD card. Data does not stream back to the
-> agent in this version (see the streaming-evolution plan).
+> agent in this version.
 
 ## Run it
 

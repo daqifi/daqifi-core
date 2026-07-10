@@ -53,7 +53,10 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 
 ### IStreamingDevice
 
-Extends `IDevice` with data streaming functionality for devices that support continuous data acquisition. Note: This interface is primarily implemented in the desktop application; the core library provides the base `DaqifiDevice` class.
+Extends `IDevice` with data streaming functionality for devices that support continuous data acquisition:
+starting/stopping a stream, per-channel enable/disable, digital I/O, PWM, and analog output.
+`DaqifiStreamingDevice` implements it in this library — see [DaqifiStreamingDevice](#daqifistreamingdevice)
+below.
 
 ## Implementation Classes
 
@@ -67,6 +70,20 @@ The primary device class that provides:
 - Protocol buffer message handling
 - Channel population from device status
 
+### DaqifiStreamingDevice
+
+Extends `DaqifiDevice` with the full streaming/configuration surface — this is the class
+`DaqifiDeviceFactory` actually constructs for a connection. It implements:
+
+- `IStreamingDevice` — streaming start/stop, channel enable/disable, digital I/O, PWM, analog output
+  (see [Channel Management](#channel-management) below)
+- `INetworkConfigurable` — WiFi/LAN configuration (see the
+  [Network configuration](../README.md#network-configuration) recipe in the root README)
+- `ISdCardOperations` — list/download/delete/format SD card contents and start/stop on-device logging
+- `ILanChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
+- `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
+  (see [Device Diagnostics](#device-diagnostics) below)
+
 ### DaqifiDeviceFactory
 
 Static factory class for simplified device connections:
@@ -76,7 +93,11 @@ Static factory class for simplified device connections:
 | `ConnectTcpAsync(host, port, options?, token?)` | Connect by hostname |
 | `ConnectTcpAsync(ipAddress, port, options?, token?)` | Connect by IP address |
 | `ConnectTcp(...)` | Synchronous versions |
+| `ConnectSerialAsync(portName, options?, token?)` | Connect over serial/USB at the default baud rate (9600) |
+| `ConnectSerialAsync(portName, baudRate, options?, token?)` | Connect over serial/USB at an explicit baud rate |
+| `ConnectSerial(...)` | Synchronous versions |
 | `ConnectFromDeviceInfoAsync(deviceInfo, options?, token?)` | Connect from discovery result |
+| `ConnectFromDeviceInfo(...)` | Synchronous version |
 
 ### DeviceConnectionOptions
 
@@ -249,6 +270,42 @@ Console.WriteLine($"Digital I/O: {caps.DigitalPortCount}");
 ```
 
 ### Streaming Data
+
+Two ways to consume streamed data: decoded per-channel samples via `IChannel.SampleReceived`
+(recommended for most consumers), or the raw protobuf frame via `MessageReceived` (for hand-decoding
+or bridging into another pipeline).
+
+#### Per-channel samples (recommended)
+
+While a stream is active, `DaqifiStreamingDevice` decodes every frame and raises `SampleReceived` on
+each enabled channel — no protobuf field names or ADC bitmasks to interpret client-side.
+
+```csharp
+using Daqifi.Core.Channel;
+
+using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+
+var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+ai0.SampleReceived += (sender, e) =>
+{
+    Console.WriteLine($"{e.Channel.Name}: {e.Sample.Value} (raw: {e.Sample.RawValue}, {e.Sample.Timestamp})");
+};
+
+device.Send(ScpiMessageProducer.EnableAdcChannels("1")); // Enable channel 0
+device.Send(ScpiMessageProducer.StartStreaming(100));    // 100 Hz
+
+await Task.Delay(TimeSpan.FromSeconds(10));
+
+device.Send(ScpiMessageProducer.StopStreaming);
+```
+
+`IDataSample.Value` is already scaled (volts for analog, 0/1 for digital). `RawValue` carries the raw
+ADC count or bit when one exists (`null` for the USB pre-scaled float path), and `DeviceTimestamp`
+carries the raw device tick count alongside the rollover-adjusted host `Timestamp`. Decoding only runs
+while the device considers itself streaming; a stray frame that arrives outside a session is still
+re-raised via `MessageReceived` but is not decoded into samples.
+
+#### Raw protobuf frames
 
 ```csharp
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
