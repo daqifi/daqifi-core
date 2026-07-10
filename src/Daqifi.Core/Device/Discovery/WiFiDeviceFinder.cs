@@ -344,7 +344,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     /// <summary>
     /// Determines device type from part number.
     /// </summary>
-    internal static DeviceType GetDeviceType(string partNumber)
+    internal static DeviceType GetDeviceType(string? partNumber)
     {
         if (string.IsNullOrWhiteSpace(partNumber))
             return DeviceType.Unknown;

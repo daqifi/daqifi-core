@@ -79,22 +79,22 @@ public enum DeviceType
     /// <summary>
     /// Unknown device type.
     /// </summary>
-    Unknown,
+    Unknown = 0,
 
     /// <summary>
     /// Nyquist 1 device.
     /// </summary>
-    Nyquist1,
+    Nyquist1 = 1,
 
     /// <summary>
     /// Nyquist 2 device.
     /// </summary>
-    Nyquist2,
+    Nyquist2 = 2,
 
     /// <summary>
     /// Nyquist 3 device.
     /// </summary>
-    Nyquist3
+    Nyquist3 = 3
 }
 
 /// <summary>

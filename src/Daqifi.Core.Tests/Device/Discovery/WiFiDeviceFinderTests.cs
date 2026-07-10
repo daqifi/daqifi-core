@@ -25,7 +25,7 @@ public class WiFiDeviceFinderTests
     [InlineData(null, DeviceType.Unknown)]
     public void GetDeviceType_PartNumber_ReturnsCorrectType(string? partNumber, DeviceType expected)
     {
-        var result = WiFiDeviceFinder.GetDeviceType(partNumber!);
+        var result = WiFiDeviceFinder.GetDeviceType(partNumber);
 
         Assert.Equal(expected, result);
     }
