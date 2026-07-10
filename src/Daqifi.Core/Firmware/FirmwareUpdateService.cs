@@ -1290,6 +1290,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         string? targetLocationKey,
         CancellationToken cancellationToken)
     {
+        // A device path's physical location can't change while it stays enumerated, so caching
+        // per call (across poll iterations, not across separate update runs) avoids re-issuing a
+        // WMI query for the same candidate on every poll while targeting by location.
+        var locationCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1329,7 +1334,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                 : targetLocationKey != null
                     ? devices.FirstOrDefault(d =>
                         string.Equals(
-                            _usbLocationProvider.GetLocationKey(d.DevicePath),
+                            ResolveLocationCached(d.DevicePath, locationCache),
                             targetLocationKey,
                             StringComparison.Ordinal))
                     : devices.FirstOrDefault();
@@ -1340,6 +1345,18 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
             await Task.Delay(_options.PollInterval, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private string? ResolveLocationCached(string devicePath, Dictionary<string, string?> cache)
+    {
+        if (cache.TryGetValue(devicePath, out var cached))
+        {
+            return cached;
+        }
+
+        var resolved = _usbLocationProvider.GetLocationKey(devicePath);
+        cache[devicePath] = resolved;
+        return resolved;
     }
 
     private async Task ConnectToBootloaderWithRetryAsync(

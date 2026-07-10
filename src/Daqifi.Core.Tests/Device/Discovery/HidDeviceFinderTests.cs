@@ -111,6 +111,28 @@ public class HidDeviceFinderTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_WithThrowingLocationProvider_DoesNotAbortDiscovery()
+    {
+        // A misbehaving custom IUsbLocationProvider must never take down the whole enumeration —
+        // location is enrichment metadata, not identification. Mirrors
+        // SerialDeviceFinder's DiscoverAsync_WithThrowingDescriptorProvider_DoesNotAbortDiscovery.
+        var enumerator = new FakeHidDeviceEnumerator([
+            new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN1", "Bootloader A"),
+            new HidDeviceInfo(0x04D8, 0x003C, "path-2", "SN2", "Bootloader B")
+        ]);
+        var throwingProvider = new RecordingUsbLocationProvider(
+            path => path == "path-1" ? throw new InvalidOperationException("simulated provider failure") : "loc-2");
+
+        using var finder = new HidDeviceFinder(enumerator, throwingProvider);
+
+        var devices = (await finder.DiscoverAsync()).ToList();
+
+        Assert.Equal(2, devices.Count);
+        Assert.Null(devices[0].LocationKey);
+        Assert.Equal("loc-2", devices[1].LocationKey);
+    }
+
+    [Fact]
     public void HidDeviceFinder_Dispose_DoesNotThrow()
     {
         var enumerator = new FakeHidDeviceEnumerator();

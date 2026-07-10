@@ -104,6 +104,19 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
 
             foreach (var hidDevice in hidDevices)
             {
+                string? locationKey;
+                try
+                {
+                    locationKey = _usbLocationProvider.GetLocationKey(hidDevice.DevicePath);
+                }
+                catch
+                {
+                    // A misbehaving custom IUsbLocationProvider must never abort the whole
+                    // enumeration — location is enrichment metadata, not identification.
+                    // Mirrors SerialDeviceFinder's handling of a throwing provider.
+                    locationKey = null;
+                }
+
                 var deviceInfo = new DeviceInfo
                 {
                     Name = string.IsNullOrWhiteSpace(hidDevice.ProductName)
@@ -114,7 +127,7 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
                     ConnectionType = ConnectionType.Hid,
                     Type = DeviceType.Unknown,
                     DevicePath = hidDevice.DevicePath,
-                    LocationKey = _usbLocationProvider.GetLocationKey(hidDevice.DevicePath)
+                    LocationKey = locationKey
                 };
 
                 discoveredDevices.Add(deviceInfo);

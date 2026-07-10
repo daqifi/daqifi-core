@@ -151,6 +151,14 @@ await firmwareUpdateService.UpdateFirmwareAsync(
 `LocationKey` is resolved via `IUsbLocationProvider` and is Windows-only in v1 (Linux/macOS
 resolve to `null`, same as `IUsbPortDescriptorProvider`'s cross-platform fallback pattern).
 
+> **Verification status:** the serial ⇄ HID-bootloader stability claim above is this feature's
+> core design assumption ([#285](https://github.com/daqifi/daqifi-core/issues/285)), but it has
+> **not yet been empirically confirmed on Windows hardware** in this repo — the environment this
+> was built in has no Windows machine. `WindowsUsbLocationProvider`'s WMI query path is likewise
+> unverified against a real device (CI runs `ubuntu-latest` only, so only the platform-independent
+> parsing/fallback logic has automated coverage). Confirm both on a Windows bench with real
+> hardware before relying on this for anything safety-critical.
+
 ### Continuous Discovery (Live Device Set)
 
 `IDeviceFinder.DiscoverAsync` is a single pass. For a UI that shows a live, self-updating

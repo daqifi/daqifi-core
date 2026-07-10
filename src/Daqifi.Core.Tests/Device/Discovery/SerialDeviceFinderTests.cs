@@ -114,17 +114,57 @@ public class SerialDeviceFinderTests
     [Fact]
     public void SerialDeviceFinder_CustomUsbLocationProvider_AcceptsProvider()
     {
-        // DeviceInfo.LocationKey is only populated after a real status-message probe succeeds
-        // (see TryGetDeviceInfoAsync), which this suite has no fake serial transport to
-        // simulate — the same limitation that already applies to every other field mapped
-        // from statusMessage there (SerialNumber, FirmwareVersion, etc.). This test locks in
-        // the constructor wiring; end-to-end LocationKey population is exercised on real
-        // hardware, not here.
         var fakeProvider = new RecordingUsbLocationProvider(_ => "Port_#0001.Hub_#0001");
 
         using var finder = new SerialDeviceFinder(9600, usbPortDescriptorProvider: null, usbLocationProvider: fakeProvider);
 
         Assert.NotNull(finder);
+    }
+
+    [Fact]
+    public void BuildDeviceInfo_MapsStatusMessageAndLocationKey()
+    {
+        // BuildDeviceInfo is the pure mapping logic TryGetDeviceInfoAsync delegates to after a
+        // real probe succeeds — split out specifically so this mapping (including the new
+        // LocationKey field) is unit-testable with a hand-constructed status message, without
+        // needing a fake serial transport (which this suite has none of).
+        var statusMessage = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            DeviceSn = 12345,
+            DeviceFwRev = "3.7.1"
+        };
+
+        var deviceInfo = SerialDeviceFinder.BuildDeviceInfo(statusMessage, "COM3", "Port_#0001.Hub_#0001");
+
+        Assert.Equal("Nq1", deviceInfo.Name);
+        Assert.Equal("12345", deviceInfo.SerialNumber);
+        Assert.Equal("3.7.1", deviceInfo.FirmwareVersion);
+        Assert.Equal(ConnectionType.Serial, deviceInfo.ConnectionType);
+        Assert.Equal("COM3", deviceInfo.PortName);
+        Assert.Equal("Port_#0001.Hub_#0001", deviceInfo.LocationKey);
+    }
+
+    [Fact]
+    public void BuildDeviceInfo_WithNullLocationKey_LeavesLocationKeyNull()
+    {
+        // Covers the "location provider returned null / threw and the caller passed null"
+        // path — e.g. macOS/Linux's NullUsbLocationProvider fallback.
+        var statusMessage = new DaqifiOutMessage { DevicePn = "Nq1", DeviceSn = 1, DeviceFwRev = "3.7.1" };
+
+        var deviceInfo = SerialDeviceFinder.BuildDeviceInfo(statusMessage, "COM3", null);
+
+        Assert.Null(deviceInfo.LocationKey);
+    }
+
+    [Fact]
+    public void BuildDeviceInfo_WithBlankDevicePn_FallsBackToPortNameAsName()
+    {
+        var statusMessage = new DaqifiOutMessage { DevicePn = "", DeviceSn = 1, DeviceFwRev = "3.7.1" };
+
+        var deviceInfo = SerialDeviceFinder.BuildDeviceInfo(statusMessage, "COM3", null);
+
+        Assert.Equal("COM3", deviceInfo.Name);
     }
 
     [Fact]
