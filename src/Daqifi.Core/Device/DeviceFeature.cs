@@ -15,8 +15,12 @@ namespace Daqifi.Core.Device
         AnalogOutput,
 
         /// <summary>
-        /// SD card storage capacity query (<c>SYSTem:STORage:SD:SPACe?</c>). Firmware-gated:
-        /// requires firmware &gt;= v3.4.6b1, at or below the <see cref="DaqifiDevice.MinSupportedFirmware"/> floor.
+        /// SD card storage capacity query (<c>SYSTem:STORage:SD:SPACe?</c>). Introduced in
+        /// firmware v3.4.6b1 — below the <see cref="DaqifiDevice.MinSupportedFirmware"/> floor,
+        /// so every supported device already has it. The typed-exception backstop only fires
+        /// against below-floor devices, and reports <see cref="DaqifiDevice.MinSupportedFirmware"/>
+        /// (not v3.4.6b1) as the required version, since that floor — not the command's original
+        /// introduction version — is what daqifi-core actually guarantees.
         /// </summary>
         SdStorageQuery,
 

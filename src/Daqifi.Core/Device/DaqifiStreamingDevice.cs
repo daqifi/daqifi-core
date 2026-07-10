@@ -1116,7 +1116,7 @@ namespace Daqifi.Core.Device
                     DeviceFeature.SdStorageQuery,
                     MinSupportedFirmware,
                     Metadata.FirmwareVersion,
-                    Metadata.DeviceType);
+                    Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
             }
 
             throw new SdCardOperationException(
@@ -1566,19 +1566,36 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Parses the numeric error code out of a SCPI error line matched by
-        /// <see cref="IsScpiErrorLine"/> — e.g. <c>**ERROR: -113, "Undefined header"</c> or
-        /// <c>ERROR: -113,"Undefined header"</c>. The code is the text between the first colon
-        /// and the following comma (if any).
+        /// <see cref="IsScpiErrorLine"/> — e.g. <c>**ERROR: -113, "Undefined header"</c>,
+        /// <c>ERROR: -113,"Undefined header"</c>, or a space/tab-delimited variant like
+        /// <c>**ERROR -113, "Undefined header"</c>. The delimiter between the <c>ERROR</c>/
+        /// <c>**ERROR</c> token and the code may be <c>:</c>, space, or tab — matching the
+        /// delimiters <see cref="ScpiResponseClassifier"/> accepts — and the code is the text
+        /// up to the following comma (if any).
         /// </summary>
         private static bool TryParseScpiErrorCode(string line, out int code)
         {
             code = 0;
-            var colonIndex = line.IndexOf(':');
-            if (colonIndex < 0) return false;
+            var trimmed = line.TrimStart();
 
-            var afterColon = line[(colonIndex + 1)..];
-            var commaIndex = afterColon.IndexOf(',');
-            var codeSpan = (commaIndex >= 0 ? afterColon[..commaIndex] : afterColon).Trim();
+            string afterToken;
+            if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                afterToken = trimmed[7..];
+            }
+            else if (trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                afterToken = trimmed[5..];
+            }
+            else
+            {
+                return false;
+            }
+
+            afterToken = afterToken.TrimStart(':', ' ', '\t');
+
+            var commaIndex = afterToken.IndexOf(',');
+            var codeSpan = (commaIndex >= 0 ? afterToken[..commaIndex] : afterToken).Trim();
             return int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
         }
 

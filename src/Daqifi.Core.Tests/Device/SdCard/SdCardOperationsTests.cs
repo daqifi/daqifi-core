@@ -1185,6 +1185,39 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardStorageAsync_WithSpaceDelimitedUndefinedHeaderError_ThrowsFeatureNotSupportedException()
+        {
+            // The shared ScpiResponseClassifier treats ':', space, and tab as equally valid
+            // delimiters after the ERROR token, so the -113 code parser must recognize a
+            // space-delimited line too, not just the colon-delimited form.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR -113, \"Undefined header\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR -113, \"Undefined header\"" });
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.GetSdCardStorageAsync());
+
+            Assert.Equal(DeviceFeature.SdStorageQuery, ex.Feature);
+        }
+
+        [Fact]
+        public async Task GetSdCardStorageAsync_WithUndefinedHeaderError_AndUnknownDeviceType_LeavesBoardNull()
+        {
+            // Metadata.DeviceType defaults to Unknown until a part number has been reported;
+            // that sentinel should not be forwarded as a "known" board.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -113, \"Undefined header\"" });
+            device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -113, \"Undefined header\"" });
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.GetSdCardStorageAsync());
+
+            Assert.Null(ex.Board);
+        }
+
+        [Fact]
         public async Task GetSdCardStorageAsync_WithNoSdCardDetected_ThrowsSdCardNotPresentException()
         {
             // The "No SD Card Detected" marker is non-transient, so the method must
