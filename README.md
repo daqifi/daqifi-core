@@ -33,19 +33,20 @@ dotnet add package Daqifi.Core
 
 ```csharp
 using Daqifi.Core.Device;
-using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Channel;
 
-// Connect — transport and device initialization handled for you
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+// Connect — transport and device initialization handled for you. The factory returns the base
+// DaqifiDevice type, but the constructed instance is always a DaqifiStreamingDevice.
+using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // Subscribe to decoded, per-channel samples
-var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
 ai0.SampleReceived += (_, e) => Console.WriteLine($"{e.Sample.Timestamp}: {e.Sample.Value} V");
 
 // Enable channel 0, then stream at 100 Hz
-device.Send(ScpiMessageProducer.EnableAdcChannels("1"));
-device.Send(ScpiMessageProducer.StartStreaming(100));
+device.EnableChannel(ai0);
+device.StreamingFrequency = 100;
+device.StartStreaming();
 ```
 
 A real, working program — no GUI required. Prefer the raw protobuf frame instead? Subscribe to

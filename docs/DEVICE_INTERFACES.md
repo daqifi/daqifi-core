@@ -278,32 +278,41 @@ or bridging into another pipeline).
 #### Per-channel samples (recommended)
 
 While a stream is active, `DaqifiStreamingDevice` decodes every frame and raises `SampleReceived` on
-each enabled channel — no protobuf field names or ADC bitmasks to interpret client-side.
+each enabled channel — no protobuf field names or ADC bitmasks to interpret client-side. Decoding is
+gated on the device's own `IsStreaming` flag and each channel's `IsEnabled` flag, so this only fires
+when streaming is started via `StartStreaming()`/channels are enabled via `EnableChannel(s)` — sending
+the equivalent raw SCPI commands directly (as in the raw-frame example below) drives the hardware but
+never sets that local state, so `SampleReceived` would not fire.
 
 ```csharp
 using Daqifi.Core.Channel;
+using Daqifi.Core.Device;
 
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+// DaqifiDeviceFactory methods return the base DaqifiDevice type, but the constructed instance is
+// always a DaqifiStreamingDevice — cast (or pattern-match with `is`) to reach its streaming API.
+using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
 ai0.SampleReceived += (sender, e) =>
 {
     Console.WriteLine($"{e.Channel.Name}: {e.Sample.Value} (raw: {e.Sample.RawValue}, {e.Sample.Timestamp})");
 };
 
-device.Send(ScpiMessageProducer.EnableAdcChannels("1")); // Enable channel 0
-device.Send(ScpiMessageProducer.StartStreaming(100));    // 100 Hz
+device.EnableChannel(ai0);
+device.StreamingFrequency = 100; // Hz
+device.StartStreaming();
 
 await Task.Delay(TimeSpan.FromSeconds(10));
 
-device.Send(ScpiMessageProducer.StopStreaming);
+device.StopStreaming();
 ```
 
 `IDataSample.Value` is already scaled (volts for analog, 0/1 for digital). `RawValue` carries the raw
 ADC count or bit when one exists (`null` for the USB pre-scaled float path), and `DeviceTimestamp`
-carries the raw device tick count alongside the rollover-adjusted host `Timestamp`. Decoding only runs
-while the device considers itself streaming; a stray frame that arrives outside a session is still
-re-raised via `MessageReceived` but is not decoded into samples.
+carries the raw device tick count alongside the rollover-adjusted host `Timestamp`. A stray frame that
+arrives outside a streaming session is still re-raised via `MessageReceived` but is not decoded into
+samples. `GetChannelsSnapshot()` is used above (rather than the live `Channels` property) because the
+channel list can be repopulated concurrently when a new device status message arrives.
 
 #### Raw protobuf frames
 
