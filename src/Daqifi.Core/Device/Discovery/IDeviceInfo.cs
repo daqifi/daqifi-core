@@ -69,6 +69,24 @@ public interface IDeviceInfo
     /// Gets the device path (for HID devices).
     /// </summary>
     string? DevicePath { get; }
+
+    /// <summary>
+    /// Gets the USB physical-location key (e.g. <c>Port_#0001.Hub_#0001</c>), or null if it
+    /// could not be resolved. Stable for a given physical USB port across a device's
+    /// transitions between transports (e.g. serial app mode ⇄ HID bootloader mode) and
+    /// re-enumerations, so it can be used to correlate the same physical unit and disambiguate
+    /// multiple identical devices (same VID/PID, no serial number). Resolved via
+    /// <see cref="IUsbLocationProvider"/>; Windows-only in v1, always null elsewhere.
+    /// </summary>
+    /// <remarks>
+    /// Implemented as a default interface property (so adding it does not break existing
+    /// implementers — the same technique used by
+    /// <see cref="Daqifi.Core.Firmware.IFirmwareUpdateService"/>'s targeted-update overloads):
+    /// an external <c>IDeviceInfo</c> implementation compiled before this member existed
+    /// inherits this default (null, meaning "not resolved") without recompiling.
+    /// <see cref="DeviceInfo"/> overrides it with a real stored value.
+    /// </remarks>
+    string? LocationKey => null;
 }
 
 /// <summary>

@@ -70,6 +70,40 @@ public interface IFirmwareUpdateService
             "This IFirmwareUpdateService implementation does not support targeted (device-path) firmware updates.");
 
     /// <summary>
+    /// Executes a PIC32 firmware update targeting one specific bootloader by USB physical-location
+    /// key, for callers that know the target device's location (e.g. from <c>IDeviceInfo.LocationKey</c>
+    /// in serial/app mode) but not its future bootloader device path — the path only exists once the
+    /// device has already rebooted into bootloader mode. Added as a default interface method so
+    /// existing implementers and callers of the untargeted/path-targeted overloads above are
+    /// unaffected; implementations that support location-key targeting (the production
+    /// <c>FirmwareUpdateService</c>) override it. The default throws <see cref="NotSupportedException"/>.
+    /// </summary>
+    /// <param name="device">The connected streaming device to update.</param>
+    /// <param name="hexFilePath">Path to an Intel HEX firmware file.</param>
+    /// <param name="progress">Progress reporter (may be null).</param>
+    /// <param name="targetDevicePath">
+    /// HID device path identifying which bootloader to flash (from discovery's
+    /// <c>HidDeviceInfo.DevicePath</c>). Null behaves like the untargeted overload. Takes priority
+    /// over <paramref name="targetLocationKey"/> when both are supplied.
+    /// </param>
+    /// <param name="targetLocationKey">
+    /// USB physical-location key identifying which bootloader to flash (from discovery's
+    /// <c>IDeviceInfo.LocationKey</c>, resolved before the device rebooted into bootloader mode).
+    /// Ignored when <paramref name="targetDevicePath"/> is non-null. Null behaves like the
+    /// untargeted overload.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task UpdateFirmwareAsync(
+        IStreamingDevice device,
+        string hexFilePath,
+        IProgress<FirmwareUpdateProgress>? progress,
+        string? targetDevicePath,
+        string? targetLocationKey,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            "This IFirmwareUpdateService implementation does not support targeted (location-key) firmware updates.");
+
+    /// <summary>
     /// Executes a WiFi module update using an external flashing tool.
     /// </summary>
     /// <param name="device">The connected streaming device to update.</param>
