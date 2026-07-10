@@ -71,6 +71,12 @@ public class DeviceInfo : IDeviceInfo
     public string? DevicePath { get; set; }
 
     /// <summary>
+    /// Gets or sets the USB physical-location key (e.g. <c>Port_#0001.Hub_#0001</c>), or null
+    /// if it could not be resolved. See <see cref="IDeviceInfo.LocationKey"/>.
+    /// </summary>
+    public string? LocationKey { get; set; }
+
+    /// <summary>
     /// Returns a string representation of the device info.
     /// </summary>
     /// <returns>A string describing the device.</returns>

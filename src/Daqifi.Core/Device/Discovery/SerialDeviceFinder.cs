@@ -48,6 +48,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private readonly int _baudRate;
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private readonly IUsbPortDescriptorProvider _usbPortDescriptorProvider;
+    private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly Func<string[]>? _portNameProvider;
     private bool _disposed;
 
@@ -103,15 +104,23 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// Lets unit tests deterministically exercise the descriptor / probe
     /// path on hosts (CI containers) that have no real serial ports.
     /// </param>
+    /// <param name="usbLocationProvider">
+    /// Provider used to resolve a discovered device's USB physical-location
+    /// key. When null, a platform-default provider is used (Windows → WMI,
+    /// others → no-op fallback).
+    /// </param>
     internal SerialDeviceFinder(
         int baudRate,
         IUsbPortDescriptorProvider? usbPortDescriptorProvider,
-        Func<string[]>? portNameProvider = null)
+        Func<string[]>? portNameProvider = null,
+        IUsbLocationProvider? usbLocationProvider = null)
     {
         _baudRate = baudRate;
         _usbPortDescriptorProvider = usbPortDescriptorProvider
             ?? UsbPortDescriptorProviderFactory.CreateForCurrentPlatform();
         _portNameProvider = portNameProvider;
+        _usbLocationProvider = usbLocationProvider
+            ?? UsbLocationProviderFactory.CreateForCurrentPlatform();
     }
 
     #endregion
@@ -345,21 +354,22 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
                 return null; // Not a DAQiFi device or device not responding
             }
 
-            // Extract device information from the status message
-            var deviceInfo = new DeviceInfo
+            string? locationKey;
+            try
             {
-                Name = !string.IsNullOrWhiteSpace(statusMessage.DevicePn)
-                    ? statusMessage.DevicePn
-                    : portName,
-                SerialNumber = statusMessage.DeviceSn.ToString(),
-                FirmwareVersion = statusMessage.DeviceFwRev ?? "Unknown",
-                ConnectionType = ConnectionType.Serial,
-                PortName = portName,
-                Type = ConvertDeviceType(DeviceTypeDetector.DetectFromPartNumber(statusMessage.DevicePn)),
-                IsPowerOn = true
-            };
+                locationKey = _usbLocationProvider.GetLocationKey(portName);
+            }
+            catch
+            {
+                // Location resolution is enrichment metadata, not identification — a
+                // misbehaving custom IUsbLocationProvider must never discard an otherwise
+                // successfully-probed device by throwing into the broad catch below.
+                // Mirrors FilterByUsbDescriptor's handling of a throwing
+                // IUsbPortDescriptorProvider.
+                locationKey = null;
+            }
 
-            return deviceInfo;
+            return BuildDeviceInfo(statusMessage, portName, locationKey);
         }
         catch (UnauthorizedAccessException)
         {
@@ -521,6 +531,32 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             Device.DeviceType.Nyquist2 => DeviceType.Nyquist2,
             Device.DeviceType.Nyquist3 => DeviceType.Nyquist3,
             _ => DeviceType.Unknown
+        };
+    }
+
+    /// <summary>
+    /// Maps a device's status message to <see cref="DeviceInfo"/>. Pure mapping logic split out
+    /// from <see cref="TryGetDeviceInfoAsync"/> (which owns the SerialPort probe and any
+    /// IUsbLocationProvider error handling) so it can be unit tested directly with a
+    /// hand-constructed <see cref="DaqifiOutMessage"/> — no real serial port required.
+    /// </summary>
+    /// <param name="statusMessage">The device's SYSInfo status response.</param>
+    /// <param name="portName">The serial port name the device was probed on.</param>
+    /// <param name="locationKey">The already-resolved USB physical-location key, or null.</param>
+    internal static DeviceInfo BuildDeviceInfo(DaqifiOutMessage statusMessage, string portName, string? locationKey)
+    {
+        return new DeviceInfo
+        {
+            Name = !string.IsNullOrWhiteSpace(statusMessage.DevicePn)
+                ? statusMessage.DevicePn
+                : portName,
+            SerialNumber = statusMessage.DeviceSn.ToString(),
+            FirmwareVersion = statusMessage.DeviceFwRev ?? "Unknown",
+            ConnectionType = ConnectionType.Serial,
+            PortName = portName,
+            Type = ConvertDeviceType(DeviceTypeDetector.DetectFromPartNumber(statusMessage.DevicePn)),
+            IsPowerOn = true,
+            LocationKey = locationKey
         };
     }
 
