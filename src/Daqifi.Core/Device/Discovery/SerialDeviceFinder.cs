@@ -513,11 +513,12 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// </summary>
     /// <param name="deviceType">The Device namespace DeviceType.</param>
     /// <returns>The Discovery namespace DeviceType.</returns>
-    private static DeviceType ConvertDeviceType(Device.DeviceType deviceType)
+    internal static DeviceType ConvertDeviceType(Device.DeviceType deviceType)
     {
         return deviceType switch
         {
             Device.DeviceType.Nyquist1 => DeviceType.Nyquist1,
+            Device.DeviceType.Nyquist2 => DeviceType.Nyquist2,
             Device.DeviceType.Nyquist3 => DeviceType.Nyquist3,
             _ => DeviceType.Unknown
         };

@@ -344,7 +344,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     /// <summary>
     /// Determines device type from part number.
     /// </summary>
-    private static DeviceType GetDeviceType(string partNumber)
+    internal static DeviceType GetDeviceType(string partNumber)
     {
         if (string.IsNullOrWhiteSpace(partNumber))
             return DeviceType.Unknown;
@@ -352,6 +352,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         return partNumber.ToLowerInvariant() switch
         {
             "nq1" => DeviceType.Nyquist1,
+            "nq2" => DeviceType.Nyquist2,
             "nq3" => DeviceType.Nyquist3,
             _ => DeviceType.Unknown
         };

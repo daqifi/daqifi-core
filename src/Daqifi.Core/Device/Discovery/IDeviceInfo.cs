@@ -87,6 +87,11 @@ public enum DeviceType
     Nyquist1,
 
     /// <summary>
+    /// Nyquist 2 device.
+    /// </summary>
+    Nyquist2,
+
+    /// <summary>
     /// Nyquist 3 device.
     /// </summary>
     Nyquist3
