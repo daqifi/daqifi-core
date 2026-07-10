@@ -83,6 +83,24 @@ public class DeviceInfoTests
         Assert.Equal(ConnectionType.Unknown, deviceInfo.ConnectionType);
         Assert.True(deviceInfo.IsPowerOn); // Default should be true
         Assert.Null(deviceInfo.LocalInterfaceAddress); // Default should be null
+        Assert.Null(deviceInfo.LocationKey); // Default should be null
+    }
+
+    [Fact]
+    public void DeviceInfo_LocationKey_CanBeSetAndRetrieved()
+    {
+        // Arrange
+        var deviceInfo = new DeviceInfo
+        {
+            Name = "DAQiFi",
+            SerialNumber = "67890",
+            PortName = "COM3",
+            ConnectionType = ConnectionType.Serial,
+            LocationKey = "Port_#0001.Hub_#0001"
+        };
+
+        // Act & Assert
+        Assert.Equal("Port_#0001.Hub_#0001", deviceInfo.LocationKey);
     }
 
     [Fact]
