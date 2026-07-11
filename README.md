@@ -23,7 +23,7 @@ DAQiFi builds wireless data acquisition hardware designed to get out of the way 
 
 Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
 
-Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, set the sample rate, and run SD-card logging through plain conversation.
+Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O and PWM outputs, set the sample rate, and run SD-card logging through plain conversation.
 
 ## See it in 30 seconds
 
@@ -33,24 +33,24 @@ dotnet add package Daqifi.Core
 
 ```csharp
 using Daqifi.Core.Device;
-using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Channel;
 
-// Connect — transport and device initialization handled for you
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+// Connect — transport and device initialization handled for you. The factory returns the base
+// DaqifiDevice type, but the constructed instance is always a DaqifiStreamingDevice.
+using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-// Subscribe to incoming samples
-device.MessageReceived += (_, e) =>
-{
-    if (e.Message.Data is DaqifiOutMessage msg)
-        Console.WriteLine($"{msg.MsgTimeStamp}: {string.Join(", ", msg.AnalogInData)}");
-};
+// Subscribe to decoded, per-channel samples
+var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+ai0.SampleReceived += (_, e) => Console.WriteLine($"{e.Sample.Timestamp}: {e.Sample.Value} V");
 
-// Enable analog channels via bitmask (0b11 = first 2 channels), then stream at 100 Hz
-device.Send(ScpiMessageProducer.EnableAdcChannels("3"));
-device.Send(ScpiMessageProducer.StartStreaming(100));
+// Enable channel 0, then stream at 100 Hz
+device.EnableChannel(ai0);
+device.StreamingFrequency = 100;
+device.StartStreaming();
 ```
 
-A real, working program — no GUI required.
+A real, working program — no GUI required. Prefer the raw protobuf frame instead? Subscribe to
+`device.MessageReceived` — see [Streaming Data](docs/DEVICE_INTERFACES.md#streaming-data).
 
 ## Common applications
 
@@ -71,7 +71,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
 | **SDK** | **DAQiFi Core — this library** |
 | App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
-| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client |
+| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM, and SD logging |
 | Your code | Custom apps, dashboards, pipelines, test rigs |
 
 ## What you can do
@@ -80,7 +80,7 @@ More examples at [daqifi.com](https://daqifi.com).
 |---|---|
 | **Auto-discovery** | Find any DAQiFi on WiFi or USB in seconds — no IP hunting, no config files |
 | **One-line connect** | `DaqifiDeviceFactory.ConnectTcpAsync(...)` wraps transport setup and device init; retries are opt-in via `DeviceConnectionOptions` |
-| **Real-time streaming** | Event-driven async API; no polling loops to write |
+| **Real-time streaming** | Per-channel `IChannel.SampleReceived` events with decoded, scaled values — or subscribe to the raw protobuf frame directly; no polling loops to write |
 | **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
 | **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
 | **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |

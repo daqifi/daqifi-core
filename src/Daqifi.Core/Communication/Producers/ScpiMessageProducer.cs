@@ -13,10 +13,10 @@ namespace Daqifi.Core.Communication.Producers;
 /// Example usage:
 /// <code>
 /// // Send a command
-/// messageProducer.Send(ScpiMessageProducer.Reboot);
-/// 
+/// messageProducer.Send(ScpiMessageProducer.RebootDevice);
+///
 /// // Send a query
-/// messageProducer.Send(ScpiMessageProducer.SystemInfo);
+/// messageProducer.Send(ScpiMessageProducer.GetDeviceInfo);
 /// </code>
 /// </remarks>
 public class ScpiMessageProducer
@@ -27,7 +27,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// This command will cause the device to perform a complete restart.
     /// Command: SYSTem:REboot
-    /// Example: messageProducer.Send(ScpiMessageProducer.Reboot);
+    /// Example: messageProducer.Send(ScpiMessageProducer.RebootDevice);
     /// </remarks>
     public static IOutboundMessage<string> RebootDevice => new ScpiMessage("SYSTem:REboot");
 
@@ -37,7 +37,7 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Returns device information including firmware version, serial number, and capabilities.
     /// Command: SYSTem:SYSInfoPB?
-    /// Example: messageProducer.Send(ScpiMessageProducer.SystemInfo);
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetDeviceInfo);
     /// </remarks>
     public static IOutboundMessage<string> GetDeviceInfo => new ScpiMessage("SYSTem:SYSInfoPB?");
 
