@@ -317,10 +317,11 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
             if (winner != probeTask)
             {
-                // Either the caller cancelled (surface that) or the port timed out.
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // Quarantine the port until the abandoned attempt actually finishes.
+                // Whether the wait ended by timeout or by caller cancellation, the
+                // uncancellable probe may still be blocked in native I/O — track and
+                // observe it BEFORE surfacing cancellation, so a cancelled sweep
+                // can't abandon an untracked probe that a later sweep would then
+                // stack a fresh blocked thread on (Qodo PR #295 pass 2 #1).
                 _quarantinedPorts[portName] = probeTask;
 
                 // Observe the abandoned task's eventual fault/cancellation so it
@@ -330,6 +331,9 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
                     CancellationToken.None,
                     TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
+
+                // Surface caller cancellation only after tracking the abandoned probe.
+                cancellationToken.ThrowIfCancellationRequested();
                 return null;
             }
 
