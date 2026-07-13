@@ -63,13 +63,25 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private readonly Func<string[]>? _portNameProvider;
     private readonly Func<string, CancellationToken, Task<IDeviceInfo?>>? _probeOverride;
     // Ports whose timed-out probe is still blocked in uncancellable I/O. While that
-    // abandoned task lives, re-probing the port on the next sweep would just stack
-    // another blocked thread-pool thread — the desktop apps sweep every 2-3s, so a
-    // port that stays wedged for hours would otherwise accumulate hundreds of
-    // blocked threads (Qodo PR #295 review #1). Entries clear themselves when the
-    // kernel finally completes (or fails) the abandoned I/O.
-    private readonly ConcurrentDictionary<string, Task> _quarantinedPorts = new();
+    // abandoned task lives, re-probing the port would just stack another blocked
+    // thread-pool thread — the desktop apps sweep every 2-3s, so a port that stays
+    // wedged for hours would otherwise accumulate hundreds of blocked threads
+    // (Qodo PR #295 review #1). Entries clear themselves when the kernel finally
+    // completes (or fails) the abandoned I/O.
+    //
+    // STATIC on purpose (step-3.5 audit, PR #295): a wedged COM port is
+    // machine-global state, not finder state — callers like the MCP
+    // DaqifiAgent construct and dispose a fresh finder per discovery call, and
+    // a per-instance dictionary would forget the stuck probe every call,
+    // re-leaking one blocked thread per request against the same dead port.
+    private static readonly ConcurrentDictionary<string, Task> QuarantinedPorts = new();
     private bool _disposed;
+
+    /// <summary>
+    /// Test seam: clears the process-wide port quarantine so hang-simulation
+    /// tests can't contaminate each other through the shared dictionary.
+    /// </summary>
+    internal static void ResetPortQuarantineForTests() => QuarantinedPorts.Clear();
 
     // Internal so tests can shrink the hard timeout instead of waiting 8s per case.
     internal int PortProbeHardTimeoutMs { get; set; } = DefaultPortProbeHardTimeoutMs;
@@ -289,13 +301,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
         {
             // Quarantine: skip a port whose previous timed-out probe is still stuck.
             // One wedged port costs at most ONE blocked thread, not one per sweep.
-            if (_quarantinedPorts.TryGetValue(portName, out var abandoned))
+            if (QuarantinedPorts.TryGetValue(portName, out var abandoned))
             {
                 if (!abandoned.IsCompleted)
                 {
                     return null;
                 }
-                _quarantinedPorts.TryRemove(portName, out _);
+                QuarantinedPorts.TryRemove(portName, out _);
             }
 
             var probe = _probeOverride ?? TryGetDeviceInfoAsync;
@@ -325,7 +337,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
                 // observe it BEFORE surfacing cancellation, so a cancelled sweep
                 // can't abandon an untracked probe that a later sweep would then
                 // stack a fresh blocked thread on (Qodo PR #295 pass 2 #1).
-                _quarantinedPorts[portName] = probeTask;
+                QuarantinedPorts[portName] = probeTask;
 
                 // Observe the abandoned task's eventual fault/cancellation so it
                 // can't surface as an UnobservedTaskException later.
