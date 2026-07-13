@@ -62,29 +62,49 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly Func<string[]>? _portNameProvider;
     private readonly Func<string, CancellationToken, Task<IDeviceInfo?>>? _probeOverride;
-    // Ports whose timed-out probe is still blocked in uncancellable I/O. While that
-    // abandoned task lives, re-probing the port would just stack another blocked
-    // thread-pool thread — the desktop apps sweep every 2-3s, so a port that stays
-    // wedged for hours would otherwise accumulate hundreds of blocked threads
-    // (Qodo PR #295 review #1). An entry is removed by a continuation the moment
-    // the abandoned I/O finally completes (device replug usually errors the stale
-    // handle), and QuarantineRetryTtlMs bounds the worst case: even if the stuck
-    // Open never returns, the port gets ONE fresh probe per TTL window, so a
-    // recovered device re-appears within the TTL instead of being suppressed
-    // until process restart (Qodo pass 4 #3) at a bounded leak rate.
+    // Process-wide per-port probe claims. A port is CLAIMED (atomically, via
+    // GetOrAdd) before its probe starts and released when the probe completes,
+    // so at most one probe can ever be in flight or abandoned per port across
+    // ALL finder instances — the desktop apps sweep every 2-3s and the MCP
+    // DaqifiAgent constructs a fresh finder per call, so without this a port
+    // whose SerialPort.Open() wedges in uncancellable native I/O would leak one
+    // blocked thread-pool thread per sweep/call (Qodo PR #295 review #1;
+    // step-3.5 audit x2: per-instance state lost the bound for per-call finders,
+    // and a non-atomic check-then-act lost it for concurrent instances).
     //
-    // STATIC on purpose (step-3.5 audit, PR #295): a wedged COM port is
-    // machine-global state, not finder state — callers like the MCP
-    // DaqifiAgent construct and dispose a fresh finder per discovery call, and
-    // a per-instance dictionary would forget the stuck probe every call,
-    // re-leaking one blocked thread per request against the same dead port.
-    // Concurrent finder INSTANCES can race the check-then-act below; the worst
-    // case is one extra blocked thread at first collision on a wedged port
-    // (bounded, non-accumulating), which is accepted over a claim protocol.
-    private static readonly ConcurrentDictionary<string, QuarantineEntry> QuarantinedPorts = new();
+    // Lifecycle: claim -> probe -> (completes: released by owner) or (times out:
+    // claim marked abandoned; a continuation releases it the moment the stuck
+    // I/O finally completes — device replug usually errors the stale handle —
+    // and QuarantineRetryTtlMs bounds the worst case by letting ONE fresh
+    // attempt replace a still-stuck claim per TTL window, so a recovered port
+    // re-appears without a process restart at a bounded leak rate).
+    //
+    // STATIC on purpose: a wedged COM port is machine-global state, not finder
+    // state.
+    private static readonly ConcurrentDictionary<string, PortProbeClaim> PortClaims = new();
     private bool _disposed;
 
-    private sealed record QuarantineEntry(Task Probe, long QuarantinedAtTicks);
+    private sealed class PortProbeClaim
+    {
+        /// <summary>Set right after Task.Run; null means claimed-but-starting.</summary>
+        public volatile Task<IDeviceInfo?>? Probe;
+
+        // -1 = in flight; >= 0 = abandoned at this Environment.TickCount64.
+        private long _abandonedAtTicks = -1;
+        public long AbandonedAtTicks
+        {
+            get => Interlocked.Read(ref _abandonedAtTicks);
+            set => Interlocked.Exchange(ref _abandonedAtTicks, value);
+        }
+    }
+
+    private static void ReleaseClaimIfOwned(string portName, PortProbeClaim claim)
+    {
+        // Atomic remove-only-if-same-claim: a TTL retry may have replaced the
+        // entry with a newer claim that must survive this release.
+        ((ICollection<KeyValuePair<string, PortProbeClaim>>)PortClaims)
+            .Remove(new KeyValuePair<string, PortProbeClaim>(portName, claim));
+    }
 
     // One fresh probe per wedged port per this window (monotonic ms).
     private const int DefaultQuarantineRetryTtlMs = 30_000;
@@ -98,7 +118,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// </summary>
     internal static void ResetPortQuarantineForTests()
     {
-        QuarantinedPorts.Clear();
+        PortClaims.Clear();
         QuarantineRetryTtlMs = DefaultQuarantineRetryTtlMs;
     }
 
@@ -316,21 +336,32 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// short-circuits when the caller's token is canceled.</returns>
     private async Task<IDeviceInfo?> ProbeSafelyAsync(string portName, CancellationToken cancellationToken)
     {
+        PortProbeClaim? claim = null;
+        var claimHandedToContinuation = false;
         try
         {
-            // Quarantine: skip a port whose previous timed-out probe is still stuck —
-            // one wedged port costs at most ONE blocked thread per TTL window, not one
-            // per sweep. A completed entry is cleared here as a fallback (its own
-            // continuation normally removed it already); an expired-TTL entry lets one
-            // fresh attempt through so a recovered port re-appears without a restart.
-            if (QuarantinedPorts.TryGetValue(portName, out var quarantined))
+            // Claim the port BEFORE probing (atomic): at most one probe may be in
+            // flight or abandoned per port process-wide, so one wedged port costs at
+            // most ONE blocked thread per TTL window regardless of how many finder
+            // instances sweep concurrently.
+            claim = new PortProbeClaim();
+            var existing = PortClaims.GetOrAdd(portName, claim);
+            if (!ReferenceEquals(existing, claim))
             {
-                if (quarantined.Probe.IsCompleted)
+                var abandonedAt = existing.AbandonedAtTicks;
+                if (existing.Probe is { IsCompleted: true })
                 {
-                    QuarantinedPorts.TryRemove(portName, out _);
+                    // Stale completed claim (continuation raced us) — clear and skip
+                    // this sweep; the next sweep probes cleanly.
+                    ReleaseClaimIfOwned(portName, existing);
+                    return null;
                 }
-                else if (Environment.TickCount64 - quarantined.QuarantinedAtTicks < QuarantineRetryTtlMs)
+                if (abandonedAt < 0
+                    || Environment.TickCount64 - abandonedAt < QuarantineRetryTtlMs
+                    || !PortClaims.TryUpdate(portName, claim, existing))
                 {
+                    // In flight elsewhere, still inside the TTL window, or another
+                    // instance won the TTL-retry race — the port is spoken for.
                     return null;
                 }
             }
@@ -345,6 +376,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // cancels the probe's delays; we never want "cancelled before start"
             // to look like a probe fault.
             var probeTask = Task.Run(() => probe(portName, cancellationToken), CancellationToken.None);
+            claim.Probe = probeTask;
 
             // Hard per-port ceiling: a wedged CDC device hangs Open() inside native
             // GetCommState with no exception, so the catch below never fires and,
@@ -358,25 +390,22 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             if (winner != probeTask)
             {
                 // Whether the wait ended by timeout or by caller cancellation, the
-                // uncancellable probe may still be blocked in native I/O — track and
-                // observe it BEFORE surfacing cancellation, so a cancelled sweep
-                // can't abandon an untracked probe that a later sweep would then
-                // stack a fresh blocked thread on (Qodo PR #295 pass 2 #1).
-                QuarantinedPorts[portName] = new QuarantineEntry(probeTask, Environment.TickCount64);
+                // uncancellable probe may still be blocked in native I/O — mark the
+                // claim abandoned BEFORE surfacing cancellation, so a cancelled sweep
+                // can't walk away from an untracked probe (Qodo PR #295 pass 2 #1).
+                claim.AbandonedAtTicks = Environment.TickCount64;
+                claimHandedToContinuation = true;
 
                 // When the abandoned I/O finally completes (any way), observe its
-                // fault so it can't surface as an UnobservedTaskException, and clear
-                // the port's quarantine entry — but only if the entry still refers to
-                // THIS probe (a TTL retry may have replaced it with a newer attempt).
+                // fault so it can't surface as an UnobservedTaskException, and release
+                // the claim — atomically only if it's still ours (a TTL retry may have
+                // replaced it with a newer attempt that must survive).
+                var abandonedClaim = claim;
                 _ = probeTask.ContinueWith(
                     t =>
                     {
                         _ = t.Exception;
-                        if (QuarantinedPorts.TryGetValue(portName, out var current)
-                            && ReferenceEquals(current.Probe, t))
-                        {
-                            QuarantinedPorts.TryRemove(portName, out _);
-                        }
+                        ReleaseClaimIfOwned(portName, abandonedClaim);
                     },
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,
@@ -401,6 +430,17 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // expected for non-DAQiFi serial devices — keep the rest of the
             // concurrent probe set going and return no device for this port.
             return null;
+        }
+        finally
+        {
+            // Release our claim unless the abandonment continuation now owns it
+            // (it releases when the stuck I/O eventually completes). Claims we
+            // never won (ReferenceEquals miss) were never inserted under our
+            // identity, so ReleaseClaimIfOwned is a no-op for them.
+            if (claim != null && !claimHandedToContinuation)
+            {
+                ReleaseClaimIfOwned(portName, claim);
+            }
         }
     }
 

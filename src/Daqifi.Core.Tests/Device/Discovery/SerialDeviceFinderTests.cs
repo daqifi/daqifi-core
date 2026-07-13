@@ -495,6 +495,42 @@ public class SerialDeviceFinderTests
         }
     }
 
+    [Fact]
+    public async Task DiscoverAsync_ConcurrentFinderInstances_OnlyOneProbePerWedgedPort()
+    {
+        // Step-3.5 re-gate on PR #295: the check-then-act quarantine raced across
+        // CONCURRENT finder instances — both passed the empty check and each leaked
+        // a blocked thread on the same wedged port while the dictionary tracked only
+        // one. The claim protocol reserves the port atomically (GetOrAdd) BEFORE the
+        // probe starts, so exactly one probe can exist per port process-wide.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        var hungProbeCalls = 0;
+        Func<string, CancellationToken, Task<IDeviceInfo?>> probe = (port, _) =>
+        {
+            if (port == "COM_HUNG_CONC")
+            {
+                Interlocked.Increment(ref hungProbeCalls);
+                return hungForever.Task;
+            }
+            return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
+        };
+
+        using var finderA = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 400);
+        using var finderB = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 400);
+
+        var results = await Task.WhenAll(
+            Task.Run(() => finderA.DiscoverAsync(CancellationToken.None)),
+            Task.Run(() => finderB.DiscoverAsync(CancellationToken.None)));
+
+        // Both sweeps complete; at most one probe ever touched the wedged port.
+        Assert.True(Volatile.Read(ref hungProbeCalls) <= 1,
+            $"Wedged port probed {hungProbeCalls} times across two CONCURRENT finder instances — the claim protocol did not hold.");
+        // The healthy port is reported by at least one sweep (the loser of a
+        // healthy-port claim race skips it for that sweep by design).
+        Assert.Contains(results, r => r.Any(d => d.PortName == "COM_OK_CONC"));
+    }
+
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
     {
         private readonly Func<string, UsbPortDescriptor?> _classifier;
