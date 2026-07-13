@@ -5,6 +5,13 @@ using Daqifi.Core.Device.Discovery;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
+// The hang-simulation tests mutate process-wide state (PortClaims via
+// ResetPortQuarantineForTests, QuarantineRetryTtlMs). A dedicated xUnit collection
+// keeps them serialized relative to any other test class that joins it; xUnit
+// already serializes tests WITHIN a class. Any future test class that constructs
+// SerialDeviceFinder against fake wedged ports should join this collection
+// (Qodo pass 5 #2).
+[Collection("SerialDeviceFinder static port-claim state")]
 public class SerialDeviceFinderTests
 {
     // Issue #283: Discovery.DeviceType lacked a Nyquist2 member, so

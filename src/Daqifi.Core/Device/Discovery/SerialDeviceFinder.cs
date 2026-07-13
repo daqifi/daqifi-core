@@ -345,25 +345,45 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             // most ONE blocked thread per TTL window regardless of how many finder
             // instances sweep concurrently.
             claim = new PortProbeClaim();
-            var existing = PortClaims.GetOrAdd(portName, claim);
-            if (!ReferenceEquals(existing, claim))
+            var claimed = false;
+            // Two attempts: the second handles exactly one stale-completed claim
+            // (its release continuation raced us) by clearing it and re-claiming
+            // immediately, so an available port isn't skipped for a whole sweep —
+            // that miss is invisible to the 2-3s desktop sweeps but real for
+            // one-shot MCP discovery calls (Qodo pass 5 #3).
+            for (var attempt = 0; attempt < 2 && !claimed; attempt++)
             {
-                var abandonedAt = existing.AbandonedAtTicks;
+                var existing = PortClaims.GetOrAdd(portName, claim);
+                if (ReferenceEquals(existing, claim))
+                {
+                    claimed = true;
+                    break;
+                }
+
                 if (existing.Probe is { IsCompleted: true })
                 {
-                    // Stale completed claim (continuation raced us) — clear and skip
-                    // this sweep; the next sweep probes cleanly.
+                    // Stale completed claim — clear it and retry the claim once.
                     ReleaseClaimIfOwned(portName, existing);
-                    return null;
+                    continue;
                 }
-                if (abandonedAt < 0
-                    || Environment.TickCount64 - abandonedAt < QuarantineRetryTtlMs
-                    || !PortClaims.TryUpdate(portName, claim, existing))
+
+                var abandonedAt = existing.AbandonedAtTicks;
+                if (abandonedAt >= 0
+                    && Environment.TickCount64 - abandonedAt >= QuarantineRetryTtlMs
+                    && PortClaims.TryUpdate(portName, claim, existing))
                 {
-                    // In flight elsewhere, still inside the TTL window, or another
-                    // instance won the TTL-retry race — the port is spoken for.
-                    return null;
+                    // TTL elapsed on a still-stuck claim — we won the retry.
+                    claimed = true;
+                    break;
                 }
+
+                // In flight elsewhere, inside the TTL window, or another instance
+                // won the race — the port is spoken for.
+                return null;
+            }
+            if (!claimed)
+            {
+                return null;
             }
 
             var probe = _probeOverride ?? TryGetDeviceInfoAsync;
@@ -389,6 +409,15 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
             if (winner != probeTask)
             {
+                if (probeTask.IsCompletedSuccessfully)
+                {
+                    // The probe finished right at the timeout/cancellation boundary —
+                    // honor DiscoverAsync's "settle for whatever probes already
+                    // finished cleanly" contract instead of discarding a completed
+                    // result (Qodo pass 5 #4). The finally releases our claim.
+                    return await probeTask.ConfigureAwait(false);
+                }
+
                 // Whether the wait ended by timeout or by caller cancellation, the
                 // uncancellable probe may still be blocked in native I/O — mark the
                 // claim abandoned BEFORE surfacing cancellation, so a cancelled sweep
