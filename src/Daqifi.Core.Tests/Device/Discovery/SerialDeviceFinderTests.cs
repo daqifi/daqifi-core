@@ -274,6 +274,112 @@ public class SerialDeviceFinderTests
             "Throwing descriptor provider was never invoked — the exception-handling path is not exercised by this test.");
     }
 
+    // --- #294: hang immunity -------------------------------------------------
+
+    private static SerialDeviceFinder CreateFinderWithProbes(
+        string[] ports,
+        Func<string, CancellationToken, Task<IDeviceInfo?>> probe,
+        int hardTimeoutMs)
+    {
+        var daqifiProvider = new RecordingUsbPortDescriptorProvider(_ =>
+            new UsbPortDescriptor(DaqifiUsbIds.VendorId, DaqifiUsbIds.CdcProductId));
+        var finder = new SerialDeviceFinder(
+            9600,
+            daqifiProvider,
+            portNameProvider: () => ports,
+            probeOverride: probe);
+        finder.PortProbeHardTimeoutMs = hardTimeoutMs;
+        return finder;
+    }
+
+    private static IDeviceInfo FakeDevice(string portName) => new DeviceInfo
+    {
+        Name = "Nq1",
+        SerialNumber = "1234",
+        FirmwareVersion = "1.0.0",
+        ConnectionType = ConnectionType.Serial,
+        PortName = portName,
+        IsPowerOn = true
+    };
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_TimesOutAndStillReturnsHealthyDevices()
+    {
+        // Closes #294: a wedged CDC device hangs SerialPort.Open() forever (no
+        // exception). Pre-fix, Task.WhenAll never settled and the healthy port's
+        // device was never reported. The hung probe is simulated with a
+        // never-completing task; the hard per-port timeout must abandon it.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG", "COM_OK" },
+            (port, _) => port == "COM_HUNG"
+                ? hungForever.Task
+                : Task.FromResult<IDeviceInfo?>(FakeDevice(port)),
+            hardTimeoutMs: 300);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var devices = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
+        stopwatch.Stop();
+
+        var device = Assert.Single(devices);
+        Assert.Equal("COM_OK", device.PortName);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+            $"Discovery took {stopwatch.ElapsedMilliseconds}ms — the hard timeout did not abandon the hung probe.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_HealthyDeviceEventFiresBeforeSweepSettles()
+    {
+        // Closes #294 (event half): DeviceDiscovered must fire per-probe, not
+        // after Task.WhenAll, so a hung port can't delay/silence healthy ones.
+        // The hung probe here outlives the sweep (released only at the end) and
+        // the healthy device's event is awaited while the hung probe is pending.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        var discovered = new TaskCompletionSource<IDeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG", "COM_OK" },
+            (port, _) => port == "COM_HUNG"
+                ? hungForever.Task
+                : Task.FromResult<IDeviceInfo?>(FakeDevice(port)),
+            hardTimeoutMs: 2000);
+        finder.DeviceDiscovered += (_, args) => discovered.TrySetResult(args.DeviceInfo);
+
+        var sweep = finder.DiscoverAsync(CancellationToken.None);
+
+        // The healthy device's event must arrive while COM_HUNG is still pending
+        // (well before the 2s hard timeout settles the sweep).
+        var winner = await Task.WhenAny(discovered.Task, Task.Delay(1000));
+        Assert.Same(discovered.Task, winner);
+        Assert.False(sweep.IsCompleted,
+            "Sweep settled before the hung probe timed out — hang simulation is not wired as intended.");
+        Assert.Equal("COM_OK", (await discovered.Task).PortName);
+
+        hungForever.TrySetResult(null);
+        await sweep;
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_CallerCancellationStillPropagates()
+    {
+        // Cancelling the caller token during a hung probe must cancel the sweep
+        // (OCE surfaces as the documented "settle for finished probes" path),
+        // not wait out the hard timeout.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG" },
+            (_, _) => hungForever.Task,
+            hardTimeoutMs: 60_000);
+        using var cts = new CancellationTokenSource(200);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var devices = await finder.DiscoverAsync(cts.Token);
+        stopwatch.Stop();
+
+        Assert.Empty(devices);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Cancellation did not short-circuit the hung probe ({stopwatch.ElapsedMilliseconds}ms).");
+    }
+
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
     {
         private readonly Func<string, UsbPortDescriptor?> _classifier;

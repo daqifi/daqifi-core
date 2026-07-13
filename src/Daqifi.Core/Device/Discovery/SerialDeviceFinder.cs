@@ -40,6 +40,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     // beyond that, IO failures and slow opens stack up. Common case (with
     // VID/PID classifier) leaves 0-1 candidates so this cap rarely engages.
     private const int MaxParallelProbes = 4;
+    // Hard ceiling on a single port probe. A wedged USB CDC device can hang
+    // SerialPort.Open() inside native GetCommState indefinitely — no exception,
+    // no cancellation (Open is uncancellable blocking I/O) — observed live on a
+    // hung-firmware Nq1 (#294). The normal probe path completes in well under
+    // 3s (open + DeviceWakeUpDelayMs + EchoDisableSettleMs + ResponseTimeoutMs),
+    // so 8s only ever fires on a genuinely stuck port.
+    private const int DefaultPortProbeHardTimeoutMs = 8000;
 
     #endregion
 
@@ -50,7 +57,11 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private readonly IUsbPortDescriptorProvider _usbPortDescriptorProvider;
     private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly Func<string[]>? _portNameProvider;
+    private readonly Func<string, CancellationToken, Task<IDeviceInfo?>>? _probeOverride;
     private bool _disposed;
+
+    // Internal so tests can shrink the hard timeout instead of waiting 8s per case.
+    internal int PortProbeHardTimeoutMs { get; set; } = DefaultPortProbeHardTimeoutMs;
 
     #endregion
 
@@ -109,11 +120,17 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// key. When null, a platform-default provider is used (Windows → WMI,
     /// others → no-op fallback).
     /// </param>
+    /// <param name="probeOverride">
+    /// Test seam: when non-null, replaces <see cref="TryGetDeviceInfoAsync"/>
+    /// as the per-port probe. Lets unit tests simulate hung, slow, failing,
+    /// or succeeding ports without real serial hardware (#294).
+    /// </param>
     internal SerialDeviceFinder(
         int baudRate,
         IUsbPortDescriptorProvider? usbPortDescriptorProvider,
         Func<string[]>? portNameProvider = null,
-        IUsbLocationProvider? usbLocationProvider = null)
+        IUsbLocationProvider? usbLocationProvider = null,
+        Func<string, CancellationToken, Task<IDeviceInfo?>>? probeOverride = null)
     {
         _baudRate = baudRate;
         _usbPortDescriptorProvider = usbPortDescriptorProvider
@@ -121,6 +138,7 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
         _portNameProvider = portNameProvider;
         _usbLocationProvider = usbLocationProvider
             ?? UsbLocationProviderFactory.CreateForCurrentPlatform();
+        _probeOverride = probeOverride;
     }
 
     #endregion
@@ -173,7 +191,17 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
                 await probeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    return await ProbeSafelyAsync(portName, cancellationToken).ConfigureAwait(false);
+                    var deviceInfo = await ProbeSafelyAsync(portName, cancellationToken).ConfigureAwait(false);
+                    if (deviceInfo != null)
+                    {
+                        // Raise per-probe rather than after Task.WhenAll: one hung port
+                        // must not silence every healthy device on the system (#294).
+                        // Fires on a worker thread, possibly concurrently with other
+                        // probes' events — handlers own their thread marshaling (both
+                        // desktop apps already dispatch to their UI thread).
+                        OnDeviceDiscovered(deviceInfo);
+                    }
+                    return deviceInfo;
                 }
                 finally
                 {
@@ -200,12 +228,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
                     .ToArray();
             }
 
+            // Events already fired per-probe above; this loop only aggregates the
+            // return value.
             foreach (var deviceInfo in probeResults)
             {
                 if (deviceInfo != null)
                 {
                     discoveredDevices.Add(deviceInfo);
-                    OnDeviceDiscovered(deviceInfo);
                 }
             }
 
@@ -247,7 +276,42 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     {
         try
         {
-            return await TryGetDeviceInfoAsync(portName, cancellationToken).ConfigureAwait(false);
+            var probe = _probeOverride ?? TryGetDeviceInfoAsync;
+
+            // Task.Run: SerialPort.Open() (and DiscardInBuffer etc.) are synchronous
+            // blocking I/O that would otherwise run on the CALLING thread up to the
+            // probe's first await — in the desktop apps that thread is the UI thread,
+            // and a slow or stuck open froze the whole window (#294). Pass
+            // CancellationToken.None to Task.Run itself: the inner token still
+            // cancels the probe's delays; we never want "cancelled before start"
+            // to look like a probe fault.
+            var probeTask = Task.Run(() => probe(portName, cancellationToken), CancellationToken.None);
+
+            // Hard per-port ceiling: a wedged CDC device hangs Open() inside native
+            // GetCommState with no exception, so the catch below never fires and,
+            // pre-#294, Task.WhenAll in DiscoverAsync never settled. Open() is
+            // uncancellable, so on timeout the stuck task is ABANDONED — its own
+            // finally block closes the port if the kernel ever completes the I/O.
+            var winner = await Task.WhenAny(
+                probeTask,
+                Task.Delay(PortProbeHardTimeoutMs, cancellationToken)).ConfigureAwait(false);
+
+            if (winner != probeTask)
+            {
+                // Either the caller cancelled (surface that) or the port timed out.
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Observe the abandoned task's eventual fault/cancellation so it
+                // can't surface as an UnobservedTaskException later.
+                _ = probeTask.ContinueWith(
+                    static t => _ = t.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return null;
+            }
+
+            return await probeTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
