@@ -412,7 +412,12 @@ public class SerialDeviceFinderTests
 
         Assert.Equal("COM_OK", Assert.Single(firstSweep).PortName);
         Assert.Equal("COM_OK", Assert.Single(secondSweep).PortName);
-        Assert.Equal(1, Volatile.Read(ref hungProbeCalls));
+        // <= 1, not == 1: under thread-pool contention the hung probe may not have
+        // STARTED before the first sweep's hard timeout fires — the invariant under
+        // test is "no pile-up" (2+ would be the regression), not "exactly once"
+        // (Qodo pass 4 #2).
+        Assert.True(Volatile.Read(ref hungProbeCalls) <= 1,
+            $"Hung port probed {hungProbeCalls} times across two sweeps — quarantine did not hold.");
     }
 
     [Fact]
@@ -447,7 +452,47 @@ public class SerialDeviceFinderTests
             Assert.Equal("COM_OK_X", Assert.Single(await second.DiscoverAsync(CancellationToken.None)).PortName);
         }
 
-        Assert.Equal(1, Volatile.Read(ref hungProbeCalls));
+        // <= 1 for the same no-pile-up reason as the cross-sweep test (Qodo pass 4 #2).
+        Assert.True(Volatile.Read(ref hungProbeCalls) <= 1,
+            $"Hung port probed {hungProbeCalls} times across two finder instances — static quarantine did not hold.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_QuarantineTtl_AllowsPeriodicRetry()
+    {
+        // Qodo pass 4 #3: if the stuck Open never completes, the port must not be
+        // suppressed until process restart — after the retry TTL elapses, one fresh
+        // probe is allowed per window so a recovered device re-appears.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        SerialDeviceFinder.QuarantineRetryTtlMs = 100;
+        try
+        {
+            var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+            var probeStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var hungProbeCalls = 0;
+            using var finder = CreateFinderWithProbes(
+                new[] { "COM_HUNG_TTL" },
+                (_, _) =>
+                {
+                    Interlocked.Increment(ref hungProbeCalls);
+                    probeStarted.TrySetResult(true);
+                    return hungForever.Task;
+                },
+                hardTimeoutMs: 100);
+
+            await finder.DiscoverAsync(CancellationToken.None);
+            await probeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)); // first attempt definitely ran
+            await Task.Delay(300); // let the TTL window lapse
+
+            await finder.DiscoverAsync(CancellationToken.None);
+
+            Assert.True(Volatile.Read(ref hungProbeCalls) >= 2,
+                "TTL elapsed but the quarantined port was never re-probed — recovery requires app restart.");
+        }
+        finally
+        {
+            SerialDeviceFinder.ResetPortQuarantineForTests();
+        }
     }
 
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider

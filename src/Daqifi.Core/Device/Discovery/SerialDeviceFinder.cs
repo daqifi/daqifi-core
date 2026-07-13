@@ -66,22 +66,41 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     // abandoned task lives, re-probing the port would just stack another blocked
     // thread-pool thread — the desktop apps sweep every 2-3s, so a port that stays
     // wedged for hours would otherwise accumulate hundreds of blocked threads
-    // (Qodo PR #295 review #1). Entries clear themselves when the kernel finally
-    // completes (or fails) the abandoned I/O.
+    // (Qodo PR #295 review #1). An entry is removed by a continuation the moment
+    // the abandoned I/O finally completes (device replug usually errors the stale
+    // handle), and QuarantineRetryTtlMs bounds the worst case: even if the stuck
+    // Open never returns, the port gets ONE fresh probe per TTL window, so a
+    // recovered device re-appears within the TTL instead of being suppressed
+    // until process restart (Qodo pass 4 #3) at a bounded leak rate.
     //
     // STATIC on purpose (step-3.5 audit, PR #295): a wedged COM port is
     // machine-global state, not finder state — callers like the MCP
     // DaqifiAgent construct and dispose a fresh finder per discovery call, and
     // a per-instance dictionary would forget the stuck probe every call,
     // re-leaking one blocked thread per request against the same dead port.
-    private static readonly ConcurrentDictionary<string, Task> QuarantinedPorts = new();
+    // Concurrent finder INSTANCES can race the check-then-act below; the worst
+    // case is one extra blocked thread at first collision on a wedged port
+    // (bounded, non-accumulating), which is accepted over a claim protocol.
+    private static readonly ConcurrentDictionary<string, QuarantineEntry> QuarantinedPorts = new();
     private bool _disposed;
+
+    private sealed record QuarantineEntry(Task Probe, long QuarantinedAtTicks);
+
+    // One fresh probe per wedged port per this window (monotonic ms).
+    private const int DefaultQuarantineRetryTtlMs = 30_000;
+
+    // Internal so tests can exercise the TTL retry without waiting 30s.
+    internal static int QuarantineRetryTtlMs { get; set; } = DefaultQuarantineRetryTtlMs;
 
     /// <summary>
     /// Test seam: clears the process-wide port quarantine so hang-simulation
     /// tests can't contaminate each other through the shared dictionary.
     /// </summary>
-    internal static void ResetPortQuarantineForTests() => QuarantinedPorts.Clear();
+    internal static void ResetPortQuarantineForTests()
+    {
+        QuarantinedPorts.Clear();
+        QuarantineRetryTtlMs = DefaultQuarantineRetryTtlMs;
+    }
 
     // Internal so tests can shrink the hard timeout instead of waiting 8s per case.
     internal int PortProbeHardTimeoutMs { get; set; } = DefaultPortProbeHardTimeoutMs;
@@ -299,15 +318,21 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     {
         try
         {
-            // Quarantine: skip a port whose previous timed-out probe is still stuck.
-            // One wedged port costs at most ONE blocked thread, not one per sweep.
-            if (QuarantinedPorts.TryGetValue(portName, out var abandoned))
+            // Quarantine: skip a port whose previous timed-out probe is still stuck —
+            // one wedged port costs at most ONE blocked thread per TTL window, not one
+            // per sweep. A completed entry is cleared here as a fallback (its own
+            // continuation normally removed it already); an expired-TTL entry lets one
+            // fresh attempt through so a recovered port re-appears without a restart.
+            if (QuarantinedPorts.TryGetValue(portName, out var quarantined))
             {
-                if (!abandoned.IsCompleted)
+                if (quarantined.Probe.IsCompleted)
+                {
+                    QuarantinedPorts.TryRemove(portName, out _);
+                }
+                else if (Environment.TickCount64 - quarantined.QuarantinedAtTicks < QuarantineRetryTtlMs)
                 {
                     return null;
                 }
-                QuarantinedPorts.TryRemove(portName, out _);
             }
 
             var probe = _probeOverride ?? TryGetDeviceInfoAsync;
@@ -337,14 +362,24 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
                 // observe it BEFORE surfacing cancellation, so a cancelled sweep
                 // can't abandon an untracked probe that a later sweep would then
                 // stack a fresh blocked thread on (Qodo PR #295 pass 2 #1).
-                QuarantinedPorts[portName] = probeTask;
+                QuarantinedPorts[portName] = new QuarantineEntry(probeTask, Environment.TickCount64);
 
-                // Observe the abandoned task's eventual fault/cancellation so it
-                // can't surface as an UnobservedTaskException later.
+                // When the abandoned I/O finally completes (any way), observe its
+                // fault so it can't surface as an UnobservedTaskException, and clear
+                // the port's quarantine entry — but only if the entry still refers to
+                // THIS probe (a TTL retry may have replaced it with a newer attempt).
                 _ = probeTask.ContinueWith(
-                    static t => _ = t.Exception,
+                    t =>
+                    {
+                        _ = t.Exception;
+                        if (QuarantinedPorts.TryGetValue(portName, out var current)
+                            && ReferenceEquals(current.Probe, t))
+                        {
+                            QuarantinedPorts.TryRemove(portName, out _);
+                        }
+                    },
                     CancellationToken.None,
-                    TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
 
                 // Surface caller cancellation only after tracking the abandoned probe.
