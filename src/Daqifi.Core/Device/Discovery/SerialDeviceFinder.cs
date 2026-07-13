@@ -44,10 +44,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     // Hard ceiling on a single port probe. A wedged USB CDC device can hang
     // SerialPort.Open() inside native GetCommState indefinitely — no exception,
     // no cancellation (Open is uncancellable blocking I/O) — observed live on a
-    // hung-firmware Nq1 (#294). The normal probe path completes in well under
-    // 3s (open + DeviceWakeUpDelayMs + EchoDisableSettleMs + ResponseTimeoutMs),
-    // so 8s only ever fires on a genuinely stuck port.
-    private const int DefaultPortProbeHardTimeoutMs = 8000;
+    // hung-firmware Nq1 (#294). The healthy probe worst case is ~1.5s
+    // (DeviceWakeUpDelayMs 200 + EchoDisableSettleMs 250 + ResponseTimeoutMs 1000)
+    // plus Open() itself; 3s gives ~2x headroom for a slow open (fresh
+    // enumeration, parallel opens) while abandoning a genuinely stuck port fast
+    // enough that discovery feels responsive (bench QA feedback 2026-07-13:
+    // 8s felt sluggish next to the 2-3s sweep cadence).
+    private const int DefaultPortProbeHardTimeoutMs = 3000;
 
     #endregion
 
