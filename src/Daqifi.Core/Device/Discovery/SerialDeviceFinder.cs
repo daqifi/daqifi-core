@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO.Ports;
 using System.Linq;
@@ -58,6 +59,13 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly Func<string[]>? _portNameProvider;
     private readonly Func<string, CancellationToken, Task<IDeviceInfo?>>? _probeOverride;
+    // Ports whose timed-out probe is still blocked in uncancellable I/O. While that
+    // abandoned task lives, re-probing the port on the next sweep would just stack
+    // another blocked thread-pool thread — the desktop apps sweep every 2-3s, so a
+    // port that stays wedged for hours would otherwise accumulate hundreds of
+    // blocked threads (Qodo PR #295 review #1). Entries clear themselves when the
+    // kernel finally completes (or fails) the abandoned I/O.
+    private readonly ConcurrentDictionary<string, Task> _quarantinedPorts = new();
     private bool _disposed;
 
     // Internal so tests can shrink the hard timeout instead of waiting 8s per case.
@@ -276,6 +284,17 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     {
         try
         {
+            // Quarantine: skip a port whose previous timed-out probe is still stuck.
+            // One wedged port costs at most ONE blocked thread, not one per sweep.
+            if (_quarantinedPorts.TryGetValue(portName, out var abandoned))
+            {
+                if (!abandoned.IsCompleted)
+                {
+                    return null;
+                }
+                _quarantinedPorts.TryRemove(portName, out _);
+            }
+
             var probe = _probeOverride ?? TryGetDeviceInfoAsync;
 
             // Task.Run: SerialPort.Open() (and DiscardInBuffer etc.) are synchronous
@@ -300,6 +319,9 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             {
                 // Either the caller cancelled (surface that) or the port timed out.
                 cancellationToken.ThrowIfCancellationRequested();
+
+                // Quarantine the port until the abandoned attempt actually finishes.
+                _quarantinedPorts[portName] = probeTask;
 
                 // Observe the abandoned task's eventual fault/cancellation so it
                 // can't surface as an UnobservedTaskException later.

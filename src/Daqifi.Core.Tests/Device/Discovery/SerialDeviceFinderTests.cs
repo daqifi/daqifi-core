@@ -380,6 +380,37 @@ public class SerialDeviceFinderTests
             $"Cancellation did not short-circuit the hung probe ({stopwatch.ElapsedMilliseconds}ms).");
     }
 
+    [Fact]
+    public async Task DiscoverAsync_HungPort_QuarantinedAcrossSweeps_NoThreadPileUp()
+    {
+        // Qodo PR #295 review #1: a port whose timed-out probe is still blocked
+        // must NOT be re-probed on subsequent sweeps — the desktop apps sweep
+        // every 2-3s, so without quarantine a long-wedged port stacks one
+        // blocked thread-pool thread per sweep. The hung probe here never
+        // completes, so the second sweep must skip the port entirely.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        var hungProbeCalls = 0;
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG", "COM_OK" },
+            (port, _) =>
+            {
+                if (port == "COM_HUNG")
+                {
+                    Interlocked.Increment(ref hungProbeCalls);
+                    return hungForever.Task;
+                }
+                return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
+            },
+            hardTimeoutMs: 200);
+
+        var firstSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
+        var secondSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
+
+        Assert.Equal("COM_OK", Assert.Single(firstSweep).PortName);
+        Assert.Equal("COM_OK", Assert.Single(secondSweep).PortName);
+        Assert.Equal(1, Volatile.Read(ref hungProbeCalls));
+    }
+
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
     {
         private readonly Func<string, UsbPortDescriptor?> _classifier;
