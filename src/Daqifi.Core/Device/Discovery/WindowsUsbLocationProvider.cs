@@ -60,12 +60,17 @@ internal sealed class WindowsUsbLocationProvider : IUsbLocationProvider
         // same query shape as WindowsUsbPortDescriptorProvider.
         using var searcher = new System.Management.ManagementObjectSearcher(
             $"SELECT DeviceID FROM Win32_PnPEntity WHERE PNPClass = 'Ports' AND Caption LIKE '%({portName})%'");
-        var deviceId = FindDeviceId(searcher);
-        return deviceId != null ? LocationParentWalker.Resolve(deviceId, QueryLocationAndParent) : null;
+        var deviceId = FindDeviceId(searcher)?.ToUpperInvariant();
+        return deviceId != null ? QueryLocationByDeviceId(deviceId) : null;
     }
 
     private static string? QueryLocationByDeviceId(string instanceId)
     {
+        // Both this and LocationParentWalker.Resolve validate: the walker enforces the contract
+        // on every hop it re-queries internally, but the FIRST id comes from two different
+        // sources here (a caller-supplied HID path vs. whatever WMI's Caption match returns for
+        // a COM port) — validating it before the walker ever sees it is what stops an unexpected
+        // DeviceID shape from reaching the WQL interpolation in QueryLocationAndParent at all.
         return LocationParentWalker.InstanceIdRegex.IsMatch(instanceId)
             ? LocationParentWalker.Resolve(instanceId, QueryLocationAndParent)
             : null;
@@ -73,8 +78,13 @@ internal sealed class WindowsUsbLocationProvider : IUsbLocationProvider
 
     private static (string? Location, string? ParentId) QueryLocationAndParent(string instanceId)
     {
-        // WQL requires backslashes in string literals to be escaped as "\\".
-        var escaped = instanceId.Replace(@"\", @"\\", StringComparison.Ordinal);
+        // WQL requires backslashes in string literals escaped as "\\" and embedded single quotes
+        // escaped as "''"; the caller already validates instanceId against InstanceIdRegex (which
+        // permits neither a literal quote nor other WQL metacharacters), but escaping quotes here
+        // too is defense-in-depth against a future caller that skips that validation.
+        var escaped = instanceId
+            .Replace(@"\", @"\\", StringComparison.Ordinal)
+            .Replace("'", "''", StringComparison.Ordinal);
         using var searcher = new System.Management.ManagementObjectSearcher(
             $"SELECT DeviceID FROM Win32_PnPEntity WHERE DeviceID = '{escaped}'");
         using var results = searcher.Get();
