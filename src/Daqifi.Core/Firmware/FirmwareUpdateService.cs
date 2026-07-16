@@ -399,17 +399,35 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             TransitionToState(FirmwareUpdateState.Connecting, "Connecting to HID bootloader.");
             ReportProgress(progress, FirmwareUpdateState.Connecting, 10, _currentOperation, 0, totalBytes);
 
-            await ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Connecting,
-                "connect HID transport",
-                ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, targetLocationKey, ct),
-                cancellationToken).ConfigureAwait(false);
+            string version;
+            try
+            {
+                await ExecuteWithStateTimeoutAsync(
+                    FirmwareUpdateState.Connecting,
+                    "connect HID transport",
+                    ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, targetLocationKey, ct),
+                    cancellationToken).ConfigureAwait(false);
 
-            var version = await ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Connecting,
-                "request bootloader version",
-                RequestBootloaderVersionAsync,
-                cancellationToken).ConfigureAwait(false);
+                version = await ExecuteWithStateTimeoutAsync(
+                    FirmwareUpdateState.Connecting,
+                    "request bootloader version",
+                    RequestBootloaderVersionAsync,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // #298: a dirty HID bootloader handle left behind by another
+                // program (or a previous run) can make the connect or the
+                // version health check fail even though the device is
+                // physically present. Nothing has been erased yet, so it's
+                // safe to attempt one JMP_TO_APP soft reset to force a clean
+                // re-enumeration before giving up.
+                version = await RecoverBootloaderHealthWithSoftResetAsync(
+                    ex,
+                    targetDevicePath,
+                    targetLocationKey,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             _logger.LogInformation("Bootloader version response: {BootloaderVersion}", version);
 
@@ -1397,6 +1415,82 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             },
             ex => ex is IOException or TimeoutException or InvalidOperationException,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Recovers from a failed <see cref="FirmwareUpdateState.Connecting"/> health
+    /// check (bad connect or a garbage version response) by issuing one
+    /// <c>JMP_TO_APP</c> soft reset, waiting for the bootloader to re-enumerate,
+    /// and retrying the connect + version check exactly once. See #298: the
+    /// observed failure is a dirty HID bootloader handle left behind by another
+    /// program, which a clean reset clears without touching flash.
+    /// </summary>
+    private async Task<string> RecoverBootloaderHealthWithSoftResetAsync(
+        Exception originalFailure,
+        string? targetDevicePath,
+        string? targetLocationKey,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            originalFailure,
+            "Bootloader connect/health-check failed in {State}; attempting a JMP_TO_APP soft-reset recovery before giving up.",
+            FirmwareUpdateState.Connecting);
+
+        try
+        {
+            // Best-effort: the handle may already be unusable (that's often why
+            // the health check failed in the first place), so a write failure
+            // here just falls through to the original failure below rather than
+            // surfacing a new unhandled exception.
+            if (_hidTransport.IsConnected)
+            {
+                await _hidTransport
+                    .WriteAsync(_bootloaderProtocol.CreateJumpToApplicationMessage(), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "JMP_TO_APP soft-reset write failed; the bootloader handle is likely already unusable.");
+            throw originalFailure;
+        }
+        finally
+        {
+            await SafeDisconnectHidAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            var recoveredDevice = await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.WaitingForBootloader,
+                "wait for HID bootloader re-enumeration after soft reset",
+                ct => WaitForBootloaderDeviceAsync(targetDevicePath, targetLocationKey, ct),
+                cancellationToken).ConfigureAwait(false);
+
+            await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.Connecting,
+                "reconnect HID transport after soft reset",
+                ct => ConnectToBootloaderWithRetryAsync(recoveredDevice, targetDevicePath, targetLocationKey, ct),
+                cancellationToken).ConfigureAwait(false);
+
+            var version = await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.Connecting,
+                "request bootloader version after soft reset",
+                RequestBootloaderVersionAsync,
+                cancellationToken).ConfigureAwait(false);
+
+            _logger.LogInformation("Bootloader health restored after JMP_TO_APP soft reset.");
+            return version;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Bootloader is still unhealthy after the JMP_TO_APP soft-reset recovery attempt.");
+            throw originalFailure;
+        }
     }
 
     private async Task<string> RequestBootloaderVersionAsync(CancellationToken cancellationToken)
