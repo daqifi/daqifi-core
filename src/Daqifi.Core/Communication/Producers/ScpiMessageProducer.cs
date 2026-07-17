@@ -29,14 +29,14 @@ public class ScpiMessageProducer
     /// <summary>
     /// Validates a candidate device friendly name against firmware's acceptance rule.
     /// </summary>
-    /// <param name="name">The candidate name.</param>
+    /// <param name="name">The candidate name. <c>null</c> is always invalid.</param>
     /// <remarks>
     /// Mirrors firmware's <c>daqifi_settings_FriendlyNameIsValid</c> exactly: 1-<see cref="MaxFriendlyNameLength"/>
     /// printable ASCII characters (0x20-0x7E), excluding <c>"</c> and <c>\</c> (which would break the
     /// SCPI string literal and the JSON info-message encoding).
     /// </remarks>
     /// <returns><c>true</c> if <paramref name="name"/> would be accepted by the device; otherwise <c>false</c>.</returns>
-    public static bool IsFriendlyNameValid(string name)
+    public static bool IsFriendlyNameValid(string? name)
     {
         if (name is null || name.Length is 0 or > MaxFriendlyNameLength)
         {
@@ -59,7 +59,7 @@ public class ScpiMessageProducer
     /// </summary>
     /// <param name="name">
     /// 1-<see cref="MaxFriendlyNameLength"/> printable ASCII characters (0x20-0x7E); cannot contain
-    /// <c>"</c> or <c>\</c>. See <see cref="IsFriendlyNameValid"/>.
+    /// <c>"</c> or <c>\</c>. See <see cref="IsFriendlyNameValid"/>. <c>null</c> is always invalid.
     /// </param>
     /// <remarks>
     /// The new name is staged into the device's runtime settings and takes effect immediately, but
@@ -68,7 +68,7 @@ public class ScpiMessageProducer
     /// Example: messageProducer.Send(ScpiMessageProducer.SetDeviceName("My Device"));
     /// </remarks>
     /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> fails validation.</exception>
-    public static IOutboundMessage<string> SetDeviceName(string name)
+    public static IOutboundMessage<string> SetDeviceName(string? name)
     {
         if (!IsFriendlyNameValid(name))
         {

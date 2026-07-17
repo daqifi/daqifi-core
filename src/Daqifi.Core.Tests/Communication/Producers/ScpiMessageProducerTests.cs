@@ -744,7 +744,7 @@ public class ScpiMessageProducerTests
     [InlineData("has a \ncontrol char")]
     public void SetDeviceName_WithInvalidName_Throws(string? name)
     {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetDeviceName(name!));
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetDeviceName(name));
     }
 
     [Fact]
@@ -785,7 +785,7 @@ public class ScpiMessageProducerTests
     [InlineData("has a \ncontrol char")]
     public void IsFriendlyNameValid_WithInvalidName_ReturnsFalse(string? name)
     {
-        Assert.False(ScpiMessageProducer.IsFriendlyNameValid(name!));
+        Assert.False(ScpiMessageProducer.IsFriendlyNameValid(name));
     }
 
     private static void AssertMessageFormat(IOutboundMessage<string> message)
