@@ -122,8 +122,10 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Gets the last PWM frequency commanded through <see cref="SetPwmFrequency"/> this
-        /// session, in hertz, or 0 when none has been set. Local bookkeeping only — a device
-        /// keeps its PWM state across host disconnects, so 0 does not prove the device is unset.
+        /// session, in hertz. Local bookkeeping only — a device keeps its PWM state across host
+        /// disconnects, so this defaults to a commandable value (see
+        /// <see cref="DaqifiStreamingDevice.DefaultPwmFrequencyHz"/>) rather than 0, and does not
+        /// prove the device is actually running at that frequency.
         /// </summary>
         int PwmFrequencyHz { get; }
 

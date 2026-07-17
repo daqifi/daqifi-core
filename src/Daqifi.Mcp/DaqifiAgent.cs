@@ -284,20 +284,13 @@ public sealed class DaqifiAgent
             var (device, streaming) = RequireStreaming(deviceId);
             var ch = RequireDigitalChannel(device, channel);
 
-            if (frequencyHz == 0 && streaming.PwmFrequencyHz == 0)
-            {
-                throw new InvalidOperationException(
-                    "No PWM frequency has been set this session. Pass frequency_hz (6-50000). " +
-                    "The frequency is shared by all PWM channels.");
-            }
-
             // Duty before frequency before enable: the firmware applies a stored duty when the
             // frequency is (re)programmed, so this order never leaves a stale compare value.
+            // Core.PwmFrequencyHz always holds a commandable value (a session default when
+            // nothing has been set yet), so a caller-supplied frequencyHz of 0 just means "use
+            // that value" rather than requiring special-casing here.
             streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
-            if (frequencyHz != 0)
-            {
-                streaming.SetPwmFrequency(frequencyHz);
-            }
+            streaming.SetPwmFrequency(frequencyHz != 0 ? frequencyHz : streaming.PwmFrequencyHz);
             streaming.SetPwmEnabled(ch, true);
 
             return PwmResult.From(deviceId, streaming, ch);
