@@ -1178,12 +1178,44 @@ namespace Daqifi.Core.Device
             PopulateChannelsFromStatus(message);
 
             // Raise the classified event first so consumers that only care about status
-            // messages can react before the undifferentiated MessageReceived below.
-            StatusMessageReceived?.Invoke(message);
+            // messages can react before the undifferentiated MessageReceived below. A
+            // misbehaving subscriber must not prevent MessageReceived from firing for this
+            // frame — the consumer loop that calls in here does not retry a failed frame,
+            // so an uncaught exception here would silently drop it for every other consumer.
+            RaiseClassifiedEvent(StatusMessageReceived, message, nameof(StatusMessageReceived));
 
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
             OnMessageReceived(inboundMessage);
+        }
+
+        /// <summary>
+        /// Invokes a classified message event, isolating the caller from a subscriber exception.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="OnStatusMessageReceived"/> and <see cref="OnStreamMessageReceived"/> still have
+        /// work to do after raising their classified event (the undifferentiated <see cref="MessageReceived"/>
+        /// event, and for <see cref="DaqifiStreamingDevice"/> the per-channel sample decode) — an exception
+        /// escaping a classified-event subscriber must not skip that remaining work for the frame.
+        /// </remarks>
+        /// <param name="handler">The event delegate to invoke, or <c>null</c> if unsubscribed.</param>
+        /// <param name="message">The message to pass to subscribers.</param>
+        /// <param name="eventName">The event name, for the trace log if a subscriber throws.</param>
+        private static void RaiseClassifiedEvent(Action<DaqifiOutMessage>? handler, DaqifiOutMessage message, string eventName)
+        {
+            if (handler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handler(message);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[{eventName}] Subscriber threw: {ex}");
+            }
         }
 
         /// <summary>
@@ -1378,8 +1410,10 @@ namespace Daqifi.Core.Device
         protected virtual void OnStreamMessageReceived(DaqifiOutMessage message)
         {
             // Raise the classified event first so consumers that only care about streaming
-            // frames can react before the undifferentiated MessageReceived below.
-            StreamMessageReceived?.Invoke(message);
+            // frames can react before the undifferentiated MessageReceived below. See
+            // RaiseClassifiedEvent for why a subscriber exception must not skip that (or, for
+            // DaqifiStreamingDevice, the per-channel decode that runs after this base call).
+            RaiseClassifiedEvent(StreamMessageReceived, message, nameof(StreamMessageReceived));
 
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
