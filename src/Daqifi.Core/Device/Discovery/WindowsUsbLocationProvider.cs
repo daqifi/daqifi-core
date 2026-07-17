@@ -15,19 +15,13 @@ namespace Daqifi.Core.Device.Discovery;
 internal sealed class WindowsUsbLocationProvider : IUsbLocationProvider
 {
     private const string LocationInfoKeyName = "DEVPKEY_Device_LocationInfo";
+    private const string ParentKeyName = "DEVPKEY_Device_Parent";
 
     // SerialPort.GetPortNames() returns "COM<n>" on Windows; validated before
     // interpolation into the WQL query string below.
     private static readonly Regex PortNameRegex = new(
         @"^COM\d+$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    // A parsed PnP instance ID is composed of hex/word segments separated by backslashes
-    // (e.g. "HID\VID_04D8&PID_003C\7&1A2B3C4D&0&0000"). Validated before interpolation into
-    // a WQL query string so a malformed device path can never inject WQL syntax.
-    private static readonly Regex InstanceIdRegex = new(
-        @"^[A-Z0-9_&]+(\\[A-Z0-9_&]+)+$",
-        RegexOptions.Compiled);
 
     public string? GetLocationKey(string portNameOrDevicePath)
     {
@@ -66,25 +60,33 @@ internal sealed class WindowsUsbLocationProvider : IUsbLocationProvider
         // same query shape as WindowsUsbPortDescriptorProvider.
         using var searcher = new System.Management.ManagementObjectSearcher(
             $"SELECT DeviceID FROM Win32_PnPEntity WHERE PNPClass = 'Ports' AND Caption LIKE '%({portName})%'");
-        return FindLocationInfo(searcher);
+        var deviceId = FindDeviceId(searcher)?.ToUpperInvariant();
+        return deviceId != null ? QueryLocationByDeviceId(deviceId) : null;
     }
 
     private static string? QueryLocationByDeviceId(string instanceId)
     {
-        if (!InstanceIdRegex.IsMatch(instanceId))
-        {
-            return null;
-        }
-
-        // WQL requires backslashes in string literals to be escaped as "\\".
-        var escaped = instanceId.Replace(@"\", @"\\", StringComparison.Ordinal);
-        using var searcher = new System.Management.ManagementObjectSearcher(
-            $"SELECT DeviceID FROM Win32_PnPEntity WHERE DeviceID = '{escaped}'");
-        return FindLocationInfo(searcher);
+        // Both this and LocationParentWalker.Resolve validate: the walker enforces the contract
+        // on every hop it re-queries internally, but the FIRST id comes from two different
+        // sources here (a caller-supplied HID path vs. whatever WMI's Caption match returns for
+        // a COM port) — validating it before the walker ever sees it is what stops an unexpected
+        // DeviceID shape from reaching the WQL interpolation in QueryLocationAndParent at all.
+        return LocationParentWalker.InstanceIdRegex.IsMatch(instanceId)
+            ? LocationParentWalker.Resolve(instanceId, QueryLocationAndParent)
+            : null;
     }
 
-    private static string? FindLocationInfo(System.Management.ManagementObjectSearcher searcher)
+    private static (string? Location, string? ParentId) QueryLocationAndParent(string instanceId)
     {
+        // WQL requires backslashes in string literals escaped as "\\" and embedded single quotes
+        // escaped as "''"; the caller already validates instanceId against InstanceIdRegex (which
+        // permits neither a literal quote nor other WQL metacharacters), but escaping quotes here
+        // too is defense-in-depth against a future caller that skips that validation.
+        var escaped = instanceId
+            .Replace(@"\", @"\\", StringComparison.Ordinal)
+            .Replace("'", "''", StringComparison.Ordinal);
+        using var searcher = new System.Management.ManagementObjectSearcher(
+            $"SELECT DeviceID FROM Win32_PnPEntity WHERE DeviceID = '{escaped}'");
         using var results = searcher.Get();
         foreach (var entity in results)
         {
@@ -92,43 +94,79 @@ internal sealed class WindowsUsbLocationProvider : IUsbLocationProvider
             {
                 if (entity is System.Management.ManagementObject managementObject)
                 {
-                    var location = GetLocationInfoProperty(managementObject);
-                    if (location != null)
-                    {
-                        return location;
-                    }
+                    return GetDeviceProperties(managementObject);
                 }
+            }
+        }
+
+        return (null, null);
+    }
+
+    private static string? FindDeviceId(System.Management.ManagementObjectSearcher searcher)
+    {
+        using var results = searcher.Get();
+        foreach (var entity in results)
+        {
+            using (entity)
+            {
+                return entity["DeviceID"] as string;
             }
         }
 
         return null;
     }
 
-    private static string? GetLocationInfoProperty(System.Management.ManagementObject entity)
+    private static (string? Location, string? ParentId) GetDeviceProperties(System.Management.ManagementObject entity)
     {
         using var inParams = entity.GetMethodParameters("GetDeviceProperties");
-        inParams["devicePropertyKeys"] = new[] { LocationInfoKeyName };
+        inParams["devicePropertyKeys"] = new[] { LocationInfoKeyName, ParentKeyName };
 
         using var outParams = entity.InvokeMethod("GetDeviceProperties", inParams, null);
         if (outParams?["deviceProperties"] is not System.Management.ManagementBaseObject[] deviceProperties)
         {
-            return null;
+            return (null, null);
         }
 
+        string? location = null;
+        string? parentId = null;
         foreach (var property in deviceProperties)
         {
             using (property)
             {
-                var keyName = property["KeyName"] as string;
-                if (!string.Equals(keyName, LocationInfoKeyName, StringComparison.Ordinal))
+                // A key WMI couldn't resolve on this node comes back as a property object whose
+                // "Type"/"KeyName"/"Data" members throw ManagementException("Not found") on access
+                // instead of yielding null — requesting the LocationInfo and Parent keys together
+                // means one can legitimately be absent (a HID collection's own node never has
+                // LocationInfo) while the other resolves, so each read must tolerate that per-entry.
+                var keyName = TryGetStringProperty(property, "KeyName");
+                if (keyName == null)
                 {
                     continue;
                 }
 
-                return property["Data"] as string;
+                if (string.Equals(keyName, LocationInfoKeyName, StringComparison.Ordinal))
+                {
+                    location = TryGetStringProperty(property, "Data");
+                }
+                else if (string.Equals(keyName, ParentKeyName, StringComparison.Ordinal))
+                {
+                    parentId = TryGetStringProperty(property, "Data");
+                }
             }
         }
 
-        return null;
+        return (location, parentId);
+    }
+
+    private static string? TryGetStringProperty(System.Management.ManagementBaseObject obj, string propertyName)
+    {
+        try
+        {
+            return obj[propertyName] as string;
+        }
+        catch (System.Management.ManagementException)
+        {
+            return null;
+        }
     }
 }

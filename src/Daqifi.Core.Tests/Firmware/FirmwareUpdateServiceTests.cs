@@ -872,6 +872,138 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_WhenBootloaderHealthCheckFails_SoftResetsAndCompletes()
+    {
+        // #298: a dirty HID bootloader handle (left behind by another program)
+        // makes the initial version health check fail even though the device is
+        // physically present. One JMP_TO_APP soft reset forces a clean
+        // re-enumeration; the retried health check then succeeds and the update
+        // proceeds normally.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0xEE]);       // initial version check -> "Error" (dirty handle)
+        hidTransport.EnqueueRead([0x01, 0x10]); // version check after soft reset -> healthy
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0x01, 0x10]); // verify version (no CRC regions configured)
+
+        var bootloaderDevice = new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader");
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [bootloaderDevice],
+            [bootloaderDevice] // re-enumeration after the JMP_TO_APP soft reset
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions());
+
+        var stateTransitions = new List<FirmwareUpdateState>();
+        service.StateChanged += (_, args) => stateTransitions.Add(args.CurrentState);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(
+            [
+                FirmwareUpdateState.PreparingDevice,
+                FirmwareUpdateState.WaitingForBootloader,
+                FirmwareUpdateState.Connecting,
+                FirmwareUpdateState.ErasingFlash,
+                FirmwareUpdateState.Programming,
+                FirmwareUpdateState.Verifying,
+                FirmwareUpdateState.JumpingToApp,
+                FirmwareUpdateState.Complete
+            ],
+            stateTransitions);
+
+        // The JMP_TO_APP soft-reset message was written exactly once, before the
+        // successful jump-to-application write at the end of the update.
+        Assert.Equal(2, hidTransport.Writes.Count(w => w.Length > 0 && w[0] == 0x55));
+        // The version request was sent twice: the failed initial check and the
+        // successful retry after the soft reset.
+        Assert.Equal(3, hidTransport.Writes.Count(w => w.Length > 0 && w[0] == 0x11));
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenSoftResetRecoveryAlsoFails_FallsThroughToFailedWithGuidance()
+    {
+        // #298: when the JMP_TO_APP soft-reset recovery does not restore a
+        // healthy bootloader session (health check fails again after the
+        // reset), the update must fall through to today's Connecting-state
+        // failure/guidance behavior rather than throwing an unrelated error.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0xEE]); // initial version check -> "Error"
+        hidTransport.EnqueueRead([0xEE]); // version check after soft reset -> still "Error"
+
+        var bootloaderDevice = new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader");
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [bootloaderDevice],
+            [bootloaderDevice] // re-enumeration after the JMP_TO_APP soft reset
+        ]);
+
+        var bootloaderProtocol = new FakeBootloaderProtocol([[0xA1, 0x01], [0xA1, 0x02]]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            bootloaderProtocol,
+            enumerator,
+            CreateFastOptions());
+
+        var stateTransitions = new List<FirmwareUpdateState>();
+        service.StateChanged += (_, args) => stateTransitions.Add(args.CurrentState);
+
+        var hexPath = CreateTempFile();
+        FirmwareUpdateException exception;
+        try
+        {
+            exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Connecting, exception.FailedState);
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.DoesNotContain(FirmwareUpdateState.CleaningUp, stateTransitions);
+        Assert.DoesNotContain(FirmwareUpdateState.Recovered, stateTransitions);
+
+        // The original (pre-recovery) failure surfaces to the caller, not a new
+        // exception type introduced by the recovery attempt.
+        var inner = Assert.IsType<InvalidDataException>(exception.InnerException);
+        Assert.Contains("invalid version response", inner.Message);
+
+        // The soft reset was still attempted before giving up.
+        Assert.Contains(hidTransport.Writes, w => w.Length > 0 && w[0] == 0x55);
+
+        Assert.NotNull(exception.RecoveryGuidance);
+        Assert.Contains("Bootloader was found but HID connection failed", exception.RecoveryGuidance);
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_WhenCanceled_ThrowsOperationCanceledExceptionAndTransitionsToFailed()
     {
         // Cancellation BEFORE flash is touched (here during WaitingForBootloader)
