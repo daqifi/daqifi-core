@@ -47,11 +47,11 @@ public static class WifiBridgeActivator
         WaitOrCancel(DtrSettleDelay, cancellationToken);
 
         // Re-assert the FW-update-requested flag (idempotent with the earlier handshake).
-        WriteCommand(transport, ScpiMessageProducer.SetLanFirmwareUpdateMode);
+        WriteCommand(transport, ScpiMessageProducer.SetLanFirmwareUpdateMode, cancellationToken);
         WaitOrCancel(InterCommandDelay, cancellationToken);
 
         // Trigger the WiFi manager REINIT to bridge-mode state machine.
-        WriteCommand(transport, ScpiMessageProducer.ApplyNetworkLan);
+        WriteCommand(transport, ScpiMessageProducer.ApplyNetworkLan, cancellationToken);
 
         // Give firmware time to enqueue APPLY before the port closes.
         WaitOrCancel(ApplySettleDelay, cancellationToken);
@@ -78,18 +78,20 @@ public static class WifiBridgeActivator
         WaitOrCancel(DtrSettleDelay, cancellationToken);
 
         // Turn off transparent mode so the port goes back to the SCPI console.
-        WriteCommand(transport, ScpiMessageProducer.SetUsbTransparencyMode(0));
+        WriteCommand(transport, ScpiMessageProducer.SetUsbTransparencyMode(0), cancellationToken);
         WaitOrCancel(InterCommandDelay, cancellationToken);
 
         // Trigger the WiFi manager REINIT out of bridge-mode state machine.
-        WriteCommand(transport, ScpiMessageProducer.ApplyNetworkLan);
+        WriteCommand(transport, ScpiMessageProducer.ApplyNetworkLan, cancellationToken);
 
         // Give firmware time to enqueue APPLY before the port closes.
         WaitOrCancel(ApplySettleDelay, cancellationToken);
     }
 
-    private static void WriteCommand(SerialStreamTransport transport, IOutboundMessage<string> message)
+    private static void WriteCommand(SerialStreamTransport transport, IOutboundMessage<string> message, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var bytes = message.GetBytes();
         var stream = transport.Stream;
         stream.Write(bytes, 0, bytes.Length);
