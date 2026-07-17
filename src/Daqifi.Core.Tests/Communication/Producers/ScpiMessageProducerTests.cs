@@ -720,6 +720,74 @@ public class ScpiMessageProducerTests
         Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetLogLevel("STREAM", level));
     }
 
+    [Fact]
+    public void SetDeviceName_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetDeviceName("My Device");
+        Assert.Equal("SYSTem:DEVice:NAME \"My Device\"", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SaveDeviceName_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SaveDeviceName;
+        Assert.Equal("SYSTem:DEVice:NAME:SAVE", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("has a \"quote")]
+    [InlineData("has a \\backslash")]
+    [InlineData("has a \ncontrol char")]
+    public void SetDeviceName_WithInvalidName_Throws(string? name)
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetDeviceName(name));
+    }
+
+    [Fact]
+    public void SetDeviceName_TooLong_Throws()
+    {
+        var name = new string('a', ScpiMessageProducer.MaxFriendlyNameLength + 1);
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetDeviceName(name));
+    }
+
+    [Theory]
+    [InlineData("A")]
+    [InlineData("My Device")]
+    [InlineData("~!@#$%^&*()_+-=[]{}|;:,.<>/?")]
+    public void IsFriendlyNameValid_WithValidName_ReturnsTrue(string name)
+    {
+        Assert.True(ScpiMessageProducer.IsFriendlyNameValid(name));
+    }
+
+    [Fact]
+    public void IsFriendlyNameValid_AtMaxLength_ReturnsTrue()
+    {
+        var name = new string('a', ScpiMessageProducer.MaxFriendlyNameLength);
+        Assert.True(ScpiMessageProducer.IsFriendlyNameValid(name));
+    }
+
+    [Fact]
+    public void IsFriendlyNameValid_OverMaxLength_ReturnsFalse()
+    {
+        var name = new string('a', ScpiMessageProducer.MaxFriendlyNameLength + 1);
+        Assert.False(ScpiMessageProducer.IsFriendlyNameValid(name));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("has a \"quote")]
+    [InlineData("has a \\backslash")]
+    [InlineData("has a \ncontrol char")]
+    public void IsFriendlyNameValid_WithInvalidName_ReturnsFalse(string? name)
+    {
+        Assert.False(ScpiMessageProducer.IsFriendlyNameValid(name));
+    }
+
     private static void AssertMessageFormat(IOutboundMessage<string> message)
     {
         var bytes = message.GetBytes();

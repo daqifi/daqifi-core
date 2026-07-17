@@ -22,6 +22,75 @@ namespace Daqifi.Core.Communication.Producers;
 public class ScpiMessageProducer
 {
     /// <summary>
+    /// Maximum length, in characters, of a device friendly name accepted by firmware.
+    /// </summary>
+    public const int MaxFriendlyNameLength = 31;
+
+    /// <summary>
+    /// Validates a candidate device friendly name against firmware's acceptance rule.
+    /// </summary>
+    /// <param name="name">The candidate name. <c>null</c> is always invalid.</param>
+    /// <remarks>
+    /// Mirrors firmware's <c>daqifi_settings_FriendlyNameIsValid</c> exactly: 1-<see cref="MaxFriendlyNameLength"/>
+    /// printable ASCII characters (0x20-0x7E), excluding <c>"</c> and <c>\</c> (which would break the
+    /// SCPI string literal and the JSON info-message encoding).
+    /// </remarks>
+    /// <returns><c>true</c> if <paramref name="name"/> would be accepted by the device; otherwise <c>false</c>.</returns>
+    public static bool IsFriendlyNameValid(string? name)
+    {
+        if (name is null || name.Length is 0 or > MaxFriendlyNameLength)
+        {
+            return false;
+        }
+
+        foreach (var c in name)
+        {
+            if (c is < (char)0x20 or > (char)0x7E or '"' or '\\')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Creates a command message to set the device's friendly name.
+    /// </summary>
+    /// <param name="name">
+    /// 1-<see cref="MaxFriendlyNameLength"/> printable ASCII characters (0x20-0x7E); cannot contain
+    /// <c>"</c> or <c>\</c>. See <see cref="IsFriendlyNameValid"/>. <c>null</c> is always invalid.
+    /// </param>
+    /// <remarks>
+    /// The new name is staged into the device's runtime settings and takes effect immediately, but
+    /// is not persisted across reboots until <see cref="SaveDeviceName"/> is also sent.
+    /// Command: SYSTem:DEVice:NAME "name"
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetDeviceName("My Device"));
+    /// </remarks>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> fails validation.</exception>
+    public static IOutboundMessage<string> SetDeviceName(string? name)
+    {
+        if (!IsFriendlyNameValid(name))
+        {
+            throw new ArgumentException(
+                $"Device name must be 1-{MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
+                nameof(name));
+        }
+
+        return new ScpiMessage($"SYSTem:DEVice:NAME \"{name}\"");
+    }
+
+    /// <summary>
+    /// Creates a command message to persist the device's friendly name to NVM.
+    /// </summary>
+    /// <remarks>
+    /// Send after <see cref="SetDeviceName"/> so the staged name survives a reboot.
+    /// Command: SYSTem:DEVice:NAME:SAVE
+    /// Example: messageProducer.Send(ScpiMessageProducer.SaveDeviceName);
+    /// </remarks>
+    public static IOutboundMessage<string> SaveDeviceName => new ScpiMessage("SYSTem:DEVice:NAME:SAVE");
+
+    /// <summary>
     /// Creates a command message to reboot the device.
     /// </summary>
     /// <remarks>
