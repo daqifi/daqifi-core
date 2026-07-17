@@ -96,4 +96,23 @@ public class DeviceCapabilities
             _ => new DeviceCapabilities()
         };
     }
+
+    /// <summary>
+    /// Creates a deep copy of this <see cref="DeviceCapabilities"/> instance.
+    /// </summary>
+    /// <returns>A new <see cref="DeviceCapabilities"/> instance with the same field values.</returns>
+    public DeviceCapabilities Clone()
+    {
+        return new DeviceCapabilities
+        {
+            SupportsStreaming = SupportsStreaming,
+            HasSdCard = HasSdCard,
+            HasWiFi = HasWiFi,
+            HasUsb = HasUsb,
+            AnalogInputChannels = AnalogInputChannels,
+            AnalogOutputChannels = AnalogOutputChannels,
+            DigitalChannels = DigitalChannels,
+            MaxSamplingRate = MaxSamplingRate
+        };
+    }
 }
