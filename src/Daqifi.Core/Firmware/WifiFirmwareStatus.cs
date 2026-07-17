@@ -59,6 +59,18 @@ public enum WifiFirmwareStatusReason
     /// <summary>Querying the device for chip info failed.</summary>
     ChipInfoUnavailable,
 
+    /// <summary>
+    /// The WiFi module's saved settings report enabled (<c>LAN:ENAbled? = 1</c>) but
+    /// its state machine was still not initialized (SCPI <c>-200</c>) after exhausting
+    /// the retry budget. When <see cref="FirmwareUpdateServiceOptions.KickLanApplyOnNotInitialized"/>
+    /// is enabled and the device was connected, Core also attempted a one-shot
+    /// <c>LAN:APPLY</c> kick before giving up — but this reason is reported either way,
+    /// so it does not by itself confirm a kick was sent. Distinct from
+    /// <see cref="ChipInfoUnavailable"/> so callers can tell "known not-yet-ready
+    /// state" apart from a genuinely unresponsive device.
+    /// </summary>
+    LanNotInitialized,
+
     /// <summary>Looking up the latest release on GitHub failed.</summary>
     LatestReleaseUnavailable,
 
