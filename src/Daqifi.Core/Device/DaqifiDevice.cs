@@ -204,6 +204,24 @@ namespace Daqifi.Core.Device
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
 
         /// <summary>
+        /// Occurs when an inbound protobuf message is classified as a status message by the
+        /// internal <see cref="ProtobufProtocolHandler"/>. Raised in addition to the
+        /// undifferentiated <see cref="MessageReceived"/> event, so consumers that only need
+        /// the status/stream classification don't have to re-run <c>CanHandle</c> /
+        /// <c>DetectMessageType</c> over the same frame themselves.
+        /// </summary>
+        public event Action<DaqifiOutMessage>? StatusMessageReceived;
+
+        /// <summary>
+        /// Occurs when an inbound protobuf message is classified as a streaming data message by
+        /// the internal <see cref="ProtobufProtocolHandler"/>. Raised in addition to the
+        /// undifferentiated <see cref="MessageReceived"/> event, so consumers that only need
+        /// the status/stream classification don't have to re-run <c>CanHandle</c> /
+        /// <c>DetectMessageType</c> over the same frame themselves.
+        /// </summary>
+        public event Action<DaqifiOutMessage>? StreamMessageReceived;
+
+        /// <summary>
         /// Occurs when channels have been populated from a device status message.
         /// </summary>
         public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated;
@@ -1159,6 +1177,10 @@ namespace Daqifi.Core.Device
             // Populate channels from the status message
             PopulateChannelsFromStatus(message);
 
+            // Raise the classified event first so consumers that only care about status
+            // messages can react before the undifferentiated MessageReceived below.
+            StatusMessageReceived?.Invoke(message);
+
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
             OnMessageReceived(inboundMessage);
@@ -1355,6 +1377,10 @@ namespace Daqifi.Core.Device
         /// <param name="message">The streaming message from the device.</param>
         protected virtual void OnStreamMessageReceived(DaqifiOutMessage message)
         {
+            // Raise the classified event first so consumers that only care about streaming
+            // frames can react before the undifferentiated MessageReceived below.
+            StreamMessageReceived?.Invoke(message);
+
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
             OnMessageReceived(inboundMessage);

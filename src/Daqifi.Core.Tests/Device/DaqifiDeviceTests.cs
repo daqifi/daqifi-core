@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using System.Collections.Generic;
 using System.Net;
@@ -78,5 +79,50 @@ namespace Daqifi.Core.Tests.Device
             // Act & Assert
             Assert.Throws<System.InvalidOperationException>(() => device.Send(new Daqifi.Core.Communication.Messages.ScpiMessage("")));
         }
+
+        [Fact]
+        public void OnStatusMessageReceived_RaisesClassifiedStatusMessageReceived()
+        {
+            // Arrange
+            var device = new TestableDaqifiDevice("TestDevice");
+            DaqifiOutMessage? classified = null;
+            device.StatusMessageReceived += m => classified = m;
+
+            var status = new DaqifiOutMessage { AnalogInPortNum = 1 };
+
+            // Act
+            device.InvokeStatusMessage(status);
+
+            // Assert
+            Assert.Same(status, classified);
+        }
+
+        [Fact]
+        public void OnStreamMessageReceived_RaisesClassifiedStreamMessageReceived()
+        {
+            // Arrange
+            var device = new TestableDaqifiDevice("TestDevice");
+            DaqifiOutMessage? classified = null;
+            device.StreamMessageReceived += m => classified = m;
+
+            var stream = new DaqifiOutMessage { MsgTimeStamp = 1 };
+
+            // Act
+            device.InvokeStreamMessage(stream);
+
+            // Assert
+            Assert.Same(stream, classified);
+        }
+
+        private sealed class TestableDaqifiDevice : DaqifiDevice
+        {
+            public TestableDaqifiDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+            {
+            }
+
+            public void InvokeStatusMessage(DaqifiOutMessage message) => OnStatusMessageReceived(message);
+
+            public void InvokeStreamMessage(DaqifiOutMessage message) => OnStreamMessageReceived(message);
+        }
     }
-} 
+}

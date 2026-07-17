@@ -298,6 +298,25 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
+    public void Decode_RaisesClassifiedStreamMessageReceived()
+    {
+        // Classified event should fire in addition to the undifferentiated MessageReceived.
+        var device = CreateStreamingDevice(analogCount: 1);
+        AnalogChannel(device, 0).IsEnabled = true;
+        device.StartStreaming();
+
+        DaqifiOutMessage? classified = null;
+        device.StreamMessageReceived += m => classified = m;
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        frame.AnalogInDataFloat.Add(1f);
+
+        device.InvokeStreamMessage(frame);
+
+        Assert.Same(frame, classified);
+    }
+
+    [Fact]
     public void Decode_MoreValuesThanChannels_MapsAvailableWithoutThrowing()
     {
         var device = CreateStreamingDevice(analogCount: 1);
