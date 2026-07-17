@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +12,11 @@ namespace Daqifi.Core.Device.SdCard;
 /// </summary>
 public static class SdCardFileParserFactory
 {
+    /// <summary>
+    /// The file extensions supported for format auto-detection, in the order they are checked.
+    /// </summary>
+    public static IReadOnlyList<string> SupportedExtensions { get; } = new[] { ".bin", ".json", ".csv" };
+
     /// <summary>
     /// Parses an SD card log file with format auto-detection from file extension.
     /// </summary>
@@ -93,12 +99,39 @@ public static class SdCardFileParserFactory
     {
         ArgumentNullException.ThrowIfNull(fileName);
 
-        return Path.GetExtension(fileName).ToLowerInvariant() switch
+        if (!TryDetectFormat(fileName, out var format))
         {
-            ".bin" => SdCardLogFormat.Protobuf,
-            ".json" => SdCardLogFormat.Json,
-            ".csv" => SdCardLogFormat.Csv,
-            var ext => throw new ArgumentException($"Unsupported file extension: {ext}. Supported extensions are .bin, .json, .csv", nameof(fileName))
-        };
+            var ext = Path.GetExtension(fileName);
+            throw new ArgumentException($"Unsupported file extension: {ext}. Supported extensions are .bin, .json, .csv", nameof(fileName));
+        }
+
+        return format;
+    }
+
+    /// <summary>
+    /// Attempts to detect the SD card log file format from the file extension.
+    /// </summary>
+    /// <param name="fileName">The file name or path.</param>
+    /// <param name="format">The detected <see cref="SdCardLogFormat"/>, if the extension is supported.</param>
+    /// <returns><c>true</c> if the extension was recognized; otherwise <c>false</c>.</returns>
+    public static bool TryDetectFormat(string fileName, out SdCardLogFormat format)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+
+        switch (Path.GetExtension(fileName).ToLowerInvariant())
+        {
+            case ".bin":
+                format = SdCardLogFormat.Protobuf;
+                return true;
+            case ".json":
+                format = SdCardLogFormat.Json;
+                return true;
+            case ".csv":
+                format = SdCardLogFormat.Csv;
+                return true;
+            default:
+                format = default;
+                return false;
+        }
     }
 }
