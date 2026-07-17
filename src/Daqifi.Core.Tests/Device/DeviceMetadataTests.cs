@@ -317,4 +317,28 @@ public class DeviceMetadataTests
         Assert.Equal("Nq3", target.PartNumber);
         Assert.Equal(0, target.Capabilities.AnalogInputChannels);
     }
+
+    [Fact]
+    public void CopyFrom_NullSource_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var target = new DeviceMetadata();
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() => target.CopyFrom(null!));
+    }
+
+    [Fact]
+    public void CopyFrom_SourceWithNullCapabilities_DefaultsToNewCapabilities()
+    {
+        // Arrange
+        var source = new DeviceMetadata { Capabilities = null! };
+        var target = new DeviceMetadata();
+
+        // Act
+        target.CopyFrom(source);
+
+        // Assert
+        Assert.NotNull(target.Capabilities);
+    }
 }

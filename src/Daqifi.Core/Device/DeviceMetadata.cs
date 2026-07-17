@@ -81,14 +81,17 @@ public class DeviceMetadata
     /// Copies all field values from another <see cref="DeviceMetadata"/> instance into this one.
     /// </summary>
     /// <param name="source">The instance to copy field values from.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> is <c>null</c>.</exception>
     public void CopyFrom(DeviceMetadata source)
     {
+        ArgumentNullException.ThrowIfNull(source);
+
         PartNumber = source.PartNumber;
         SerialNumber = source.SerialNumber;
         FirmwareVersion = source.FirmwareVersion;
         HardwareRevision = source.HardwareRevision;
         DeviceType = source.DeviceType;
-        Capabilities = source.Capabilities.Clone();
+        Capabilities = source.Capabilities?.Clone() ?? new DeviceCapabilities();
         IpAddress = source.IpAddress;
         MacAddress = source.MacAddress;
         Ssid = source.Ssid;
