@@ -93,19 +93,22 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public async Task InitializeAsync_WhenDeviceReturnsScpiError_Throws()
+        public async Task InitializeAsync_WhenDeviceReturnsScpiError_ThrowsTypedExceptionAfterRetry()
         {
-            // Arrange — device returns a -200 error line during init
+            // Arrange — device returns a -200 error line on every attempt (persistent, not transient)
             var device = new TestableDaqifiDevice("TestDevice",
                 textCommandResponse: new[] { "**ERROR: -200, \"Execution error\"\r\n" });
             device.Connect();
 
             // Act & Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<ScpiInitializationErrorException>(
                 () => device.InitializeAsync());
 
             Assert.Contains("-200", ex.Message);
+            Assert.Equal("**ERROR: -200, \"Execution error\"", ex.LastScpiError);
             Assert.Equal(DeviceState.Error, device.State);
+            // One initial attempt plus one retry.
+            Assert.Equal(2, device.TextCommandAttemptCount);
         }
 
         [Fact]
@@ -117,10 +120,28 @@ namespace Daqifi.Core.Tests.Device
             device.Connect();
 
             // Act
-            try { await device.InitializeAsync(); } catch (InvalidOperationException) { }
+            try { await device.InitializeAsync(); } catch (ScpiInitializationErrorException) { }
 
             // Assert
             Assert.Equal(DeviceState.Error, device.State);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenDeviceReturnsTransientScpiError_RetriesAndSucceeds()
+        {
+            // Arrange — the first attempt returns a SCPI error, the retry succeeds, simulating
+            // the narrow timing race described in issue #310.
+            var device = new TestableDaqifiDevice("TestDevice",
+                textCommandResponse: Array.Empty<string>(),
+                failFirstAttempt: true);
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(2, device.TextCommandAttemptCount);
         }
 
         [Fact]
@@ -236,13 +257,33 @@ namespace Daqifi.Core.Tests.Device
         [Fact]
         public async Task InitializeAsync_StreamingUsb_WhenUsbStepReturnsScpiError_SetsErrorNotReady()
         {
-            // Arrange — the USB SetStreamInterface step fails after base init populated channels
+            // Arrange — the USB SetStreamInterface step fails on every attempt (persistent, not
+            // transient) after base init populated channels
             var device = new TestableStreamingDevice("TestDevice", UsbStepBehavior.ScpiError);
             device.Connect();
 
-            // Act & Assert — failure in the override must not leave the device falsely Ready
-            await Assert.ThrowsAsync<InvalidOperationException>(() => device.InitializeAsync());
+            // Act & Assert — failure in the override must not leave the device falsely Ready,
+            // and surfaces as the typed exception rather than a bare InvalidOperationException
+            var ex = await Assert.ThrowsAsync<ScpiInitializationErrorException>(() => device.InitializeAsync());
             Assert.Equal(DeviceState.Error, device.State);
+            Assert.Equal(2, device.UsbStepAttemptCount);
+            Assert.NotNull(ex.LastScpiError);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_StreamingUsb_WhenUsbStepReturnsTransientScpiError_RetriesAndSucceeds()
+        {
+            // Arrange — the USB SetStreamInterface step fails once, then succeeds on retry,
+            // simulating the narrow timing race described in issue #310.
+            var device = new TestableStreamingDevice("TestDevice", UsbStepBehavior.ScpiErrorThenSucceed);
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(2, device.UsbStepAttemptCount);
         }
 
         [Fact]
@@ -283,6 +324,7 @@ namespace Daqifi.Core.Tests.Device
         private class TestableDaqifiDevice : DaqifiDevice
         {
             private readonly IReadOnlyList<string> _textCommandResponse;
+            private readonly bool _failFirstAttempt;
 
             /// <summary>
             /// All messages sent via direct Send() calls.
@@ -293,6 +335,11 @@ namespace Daqifi.Core.Tests.Device
             /// Number of GetDeviceInfo (SYSInfoPB?) requests observed.
             /// </summary>
             public int DeviceInfoRequestCount { get; private set; }
+
+            /// <summary>
+            /// Number of times the init SCPI setup sequence's ExecuteTextCommandAsync was invoked.
+            /// </summary>
+            public int TextCommandAttemptCount { get; private set; }
 
             /// <summary>
             /// When true, a GetDeviceInfo request synchronously populates channels (simulating
@@ -313,11 +360,13 @@ namespace Daqifi.Core.Tests.Device
                 string name,
                 IPAddress? ipAddress = null,
                 IReadOnlyList<string>? textCommandResponse = null,
-                bool populateChannelsOnDeviceInfo = true)
+                bool populateChannelsOnDeviceInfo = true,
+                bool failFirstAttempt = false)
                 : base(name, ipAddress)
             {
                 _textCommandResponse = textCommandResponse ?? Array.Empty<string>();
                 PopulateChannelsOnDeviceInfo = populateChannelsOnDeviceInfo;
+                _failFirstAttempt = failFirstAttempt;
             }
 
             public override void Send<T>(IOutboundMessage<T> message)
@@ -367,6 +416,14 @@ namespace Daqifi.Core.Tests.Device
             {
                 // Run the setup action so that Send() calls inside it are captured
                 setupAction();
+                TextCommandAttemptCount++;
+
+                if (_failFirstAttempt && TextCommandAttemptCount == 1)
+                {
+                    return Task.FromResult<IReadOnlyList<string>>(
+                        new[] { "**ERROR: -200, \"Execution error\"\r\n" });
+                }
+
                 return Task.FromResult(_textCommandResponse);
             }
         }
@@ -379,6 +436,7 @@ namespace Daqifi.Core.Tests.Device
         {
             Succeed,
             ScpiError,
+            ScpiErrorThenSucceed,
             Cancel
         }
 
@@ -393,6 +451,11 @@ namespace Daqifi.Core.Tests.Device
             private readonly List<string> _sent = new();
 
             public IReadOnlyList<string> SentData => _sent;
+
+            /// <summary>
+            /// Number of times the USB SetStreamInterface step's ExecuteTextCommandAsync was invoked.
+            /// </summary>
+            public int UsbStepAttemptCount { get; private set; }
 
             public override bool IsUsbConnection => true;
 
@@ -431,11 +494,20 @@ namespace Daqifi.Core.Tests.Device
 
                 if (isUsbStep)
                 {
+                    UsbStepAttemptCount++;
+
                     switch (_usbStepBehavior)
                     {
                         case UsbStepBehavior.ScpiError:
                             return Task.FromResult<IReadOnlyList<string>>(
                                 new[] { "**ERROR: -200, \"Execution error\"\r\n" });
+                        case UsbStepBehavior.ScpiErrorThenSucceed:
+                            if (UsbStepAttemptCount == 1)
+                            {
+                                return Task.FromResult<IReadOnlyList<string>>(
+                                    new[] { "**ERROR: -200, \"Execution error\"\r\n" });
+                            }
+                            break;
                         case UsbStepBehavior.Cancel:
                             throw new OperationCanceledException();
                     }

@@ -145,6 +145,20 @@ namespace Daqifi.Core.Device
         /// </summary>
         private static readonly TimeSpan ChannelPopulationPollInterval = TimeSpan.FromSeconds(1);
 
+        /// <summary>
+        /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
+        /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
+        /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
+        /// state (e.g. stream interface) within the tight response window right after connect.
+        /// </summary>
+        private const int InitScpiErrorMaxRetries = 1;
+
+        /// <summary>
+        /// Delay in milliseconds before retrying the <see cref="InitializeAsync"/> SCPI setup
+        /// sequence after a transient SCPI error.
+        /// </summary>
+        private const int InitScpiErrorRetryDelayMs = 150;
+
         // Serializes ExecuteTextCommandAsync calls device-wide (closes #186).
         // Multiple callers — e.g. concurrent GetSdCardFilesAsync /
         // DrainErrorQueueAsync / GetSystemInfoAsync — would otherwise race the
@@ -879,7 +893,8 @@ namespace Daqifi.Core.Device
         /// surfaces a <see cref="TimeoutException"/>).
         /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected, or the device returns a SCPI error during initialization.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="ScpiInitializationErrorException">Thrown when the device returns a SCPI error during initialization that persists after an internal retry.</exception>
         /// <exception cref="TimeoutException">Thrown when the device does not report its channel configuration within <paramref name="channelPopulationTimeout"/>.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public virtual async Task InitializeAsync(
@@ -935,28 +950,52 @@ namespace Daqifi.Core.Device
                 // by the protobuf consumer.  The protobuf consumer is stopped for the duration
                 // of this call and restarted afterward, leaving the device in protobuf mode
                 // and ready to receive the SYSInfoPB? response.
-                var initLines = await ExecuteTextCommandAsync(() =>
+                //
+                // A SCPI error here is often transient — e.g. the firmware rejecting a command
+                // tied to a persisted prior-session state within the tight response window right
+                // after connect — so retry the whole sequence with a settle delay before treating
+                // it as a hard failure (mirrors the retry already used for SD card operations).
+                IReadOnlyList<string> initLines = Array.Empty<string>();
+                string? errorLine = null;
+                for (var attempt = 0; attempt <= InitScpiErrorMaxRetries; attempt++)
                 {
-                    Send(ScpiMessageProducer.DisableDeviceEcho);
-                    Thread.Sleep(100);
+                    if (attempt > 0)
+                    {
+                        await Task.Delay(InitScpiErrorRetryDelayMs, cancellationToken).ConfigureAwait(false);
+                    }
 
-                    Send(ScpiMessageProducer.StopStreaming);
-                    Thread.Sleep(100);
+                    initLines = await ExecuteTextCommandAsync(() =>
+                    {
+                        Send(ScpiMessageProducer.DisableDeviceEcho);
+                        Thread.Sleep(100);
 
-                    Send(ScpiMessageProducer.TurnDeviceOn);
-                    Thread.Sleep(100);
+                        Send(ScpiMessageProducer.StopStreaming);
+                        Thread.Sleep(100);
 
-                    Send(ScpiMessageProducer.SetProtobufStreamFormat);
-                }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
+                        Send(ScpiMessageProducer.TurnDeviceOn);
+                        Thread.Sleep(100);
 
-                // Surface any SCPI error that occurred during initialization so callers
-                // know the device is not in the expected state.
-                var errorLine = initLines.FirstOrDefault(
-                    l => l.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
+                        Send(ScpiMessageProducer.SetProtobufStreamFormat);
+                    }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    errorLine = initLines.FirstOrDefault(
+                        l => l.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
+                    if (errorLine == null)
+                    {
+                        break;
+                    }
+                }
+
+                // Surface any SCPI error that survived the retry so callers know the device
+                // is not in the expected state, via a typed exception so it can be classified
+                // without matching on the message.
                 if (errorLine != null)
                 {
-                    throw new InvalidOperationException(
-                        $"Device returned a SCPI error during initialization: {errorLine.Trim()}");
+                    var trimmedErrorLine = errorLine.Trim();
+                    throw new ScpiInitializationErrorException(
+                        $"Device returned a SCPI error during initialization: {trimmedErrorLine}",
+                        initLines,
+                        trimmedErrorLine);
                 }
 
                 // Query device info and block until the device reports its channel

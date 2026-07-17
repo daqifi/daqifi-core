@@ -46,6 +46,19 @@ namespace Daqifi.Core.Device
         private const int SD_LIST_MAX_RETRIES = 1;
 
         /// <summary>
+        /// Maximum number of retry attempts for the USB stream-interface command sent during
+        /// <see cref="OnDeviceInitializingAsync"/> when the device returns a transient SCPI error
+        /// (e.g. because the firmware still has the interface set from a prior WiFi session).
+        /// </summary>
+        private const int UsbStreamInterfaceMaxRetries = 1;
+
+        /// <summary>
+        /// Delay in milliseconds before retrying the USB stream-interface command after a
+        /// transient SCPI error.
+        /// </summary>
+        private const int UsbStreamInterfaceRetryDelayMs = 150;
+
+        /// <summary>
         /// libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c> — the code the firmware returns for a
         /// command it doesn't recognize (e.g. a command that postdates the connected firmware).
         /// This is the wire-level signal behind the <see cref="FeatureNotSupportedException"/>
@@ -146,6 +159,12 @@ namespace Daqifi.Core.Device
         /// </remarks>
         /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
         /// <returns>A task representing the asynchronous initialization operation.</returns>
+        /// <exception cref="ScpiInitializationErrorException">
+        /// Thrown when the device returns a SCPI error while setting the stream interface to USB
+        /// that persists after an internal retry. A common trigger is the firmware rejecting the
+        /// command because it still has the interface set from a prior WiFi-streaming session,
+        /// within the tight response window right after connect.
+        /// </exception>
         protected override async Task OnDeviceInitializingAsync(CancellationToken cancellationToken)
         {
             if (!IsUsbConnection)
@@ -156,16 +175,34 @@ namespace Daqifi.Core.Device
             // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
             // command is sent in text mode (protobuf consumer temporarily stopped) and any
             // SCPI error response is captured rather than garbling the protobuf stream.
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
-                responseTimeoutMs: 500,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (ContainsScpiError(lines))
+            //
+            // The firmware persists the last-used stream interface across sessions, so this can
+            // transiently reject with a -200 "Execution error" right after connect. Retry with a
+            // settle delay before treating it as a hard failure (mirrors the SD card retry).
+            IReadOnlyList<string> lines = Array.Empty<string>();
+            for (var attempt = 0; attempt <= UsbStreamInterfaceMaxRetries; attempt++)
             {
-                throw new InvalidOperationException(
-                    "Device returned a SCPI error while setting stream interface to USB.");
+                if (attempt > 0)
+                {
+                    await Task.Delay(UsbStreamInterfaceRetryDelayMs, cancellationToken).ConfigureAwait(false);
+                }
+
+                lines = await ExecuteTextCommandAsync(
+                    () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
+                    responseTimeoutMs: 500,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (!ContainsScpiError(lines))
+                {
+                    return;
+                }
             }
+
+            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
+            throw new ScpiInitializationErrorException(
+                "Device returned a SCPI error while setting stream interface to USB.",
+                lines,
+                lastScpiError);
         }
 
         /// <summary>
