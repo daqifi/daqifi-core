@@ -810,6 +810,39 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             };
         }
 
+        // Closes #301: right after a PIC32 reflash the WINC module comes back
+        // powered off, so the first GETChipInfo? probe below would always fail,
+        // report ChipInfoUnavailable, and send the caller into a needless
+        // multi-minute WiFi reflash. Powering it on first (mirroring what
+        // daqifi-desktop's FirmwareUpdateCoordinator does today) closes that gap.
+        // Skipped when the device isn't connected — Send would throw, and a
+        // disconnected device will fail the chip-info probe regardless.
+        if (_options.PowerOnWifiModuleBeforeProbe && device.IsConnected)
+        {
+            // Observe cancellation before this state-changing Send: a
+            // pre-cancelled call must not power on the device before the
+            // cancellation is surfaced to the caller.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                device.Send(ScpiMessageProducer.TurnDeviceOn);
+                if (_options.PowerOnWifiModuleSettleDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(_options.PowerOnWifiModuleSettleDelay, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: the chip-info probe below has its own bounded
+                // retry and gracefully degrades to ChipInfoUnavailable, so a
+                // failure to send the power-on command must not abort the
+                // whole status check. Skip the settle delay too — there is
+                // nothing to settle if the send itself failed.
+                _logger.LogDebug(ex, "Failed to send WINC power-on command before chip-info probe; continuing without it.");
+            }
+        }
+
         // Bounded retry for the LAN chip-info probe (closes #144). Right
         // after a PIC32 firmware update the application is up while WiFi
         // is still finishing startup, so the first chip-info query can
