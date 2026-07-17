@@ -5,6 +5,13 @@ using Daqifi.Core.Device.Discovery;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
+// The hang-simulation tests mutate process-wide state (PortClaims via
+// ResetPortQuarantineForTests, QuarantineRetryTtlMs). A dedicated xUnit collection
+// keeps them serialized relative to any other test class that joins it; xUnit
+// already serializes tests WITHIN a class. Any future test class that constructs
+// SerialDeviceFinder against fake wedged ports should join this collection
+// (Qodo pass 5 #2).
+[Collection("SerialDeviceFinder static port-claim state")]
 public class SerialDeviceFinderTests
 {
     // Issue #283: Discovery.DeviceType lacked a Nyquist2 member, so
@@ -272,6 +279,263 @@ public class SerialDeviceFinderTests
 
         Assert.True(fakeProvider.CallCount > 0,
             "Throwing descriptor provider was never invoked — the exception-handling path is not exercised by this test.");
+    }
+
+    // --- #294: hang immunity -------------------------------------------------
+
+    private static SerialDeviceFinder CreateFinderWithProbes(
+        string[] ports,
+        Func<string, CancellationToken, Task<IDeviceInfo?>> probe,
+        int hardTimeoutMs)
+    {
+        var daqifiProvider = new RecordingUsbPortDescriptorProvider(_ =>
+            new UsbPortDescriptor(DaqifiUsbIds.VendorId, DaqifiUsbIds.CdcProductId));
+        var finder = new SerialDeviceFinder(
+            9600,
+            daqifiProvider,
+            portNameProvider: () => ports,
+            probeOverride: probe);
+        finder.PortProbeHardTimeoutMs = hardTimeoutMs;
+        return finder;
+    }
+
+    private static IDeviceInfo FakeDevice(string portName) => new DeviceInfo
+    {
+        Name = "Nq1",
+        SerialNumber = "1234",
+        FirmwareVersion = "1.0.0",
+        ConnectionType = ConnectionType.Serial,
+        PortName = portName,
+        IsPowerOn = true
+    };
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_TimesOutAndStillReturnsHealthyDevices()
+    {
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        // Closes #294: a wedged CDC device hangs SerialPort.Open() forever (no
+        // exception). Pre-fix, Task.WhenAll never settled and the healthy port's
+        // device was never reported. The hung probe is simulated with a
+        // never-completing task; the hard per-port timeout must abandon it.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG", "COM_OK" },
+            (port, _) => port == "COM_HUNG"
+                ? hungForever.Task
+                : Task.FromResult<IDeviceInfo?>(FakeDevice(port)),
+            hardTimeoutMs: 300);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var devices = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
+        stopwatch.Stop();
+
+        var device = Assert.Single(devices);
+        Assert.Equal("COM_OK", device.PortName);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+            $"Discovery took {stopwatch.ElapsedMilliseconds}ms — the hard timeout did not abandon the hung probe.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_HealthyDeviceEventFiresBeforeSweepSettles()
+    {
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        // Closes #294 (event half): DeviceDiscovered must fire per-probe, not
+        // after Task.WhenAll, so a hung port can't delay/silence healthy ones.
+        // The hung probe here outlives the sweep (released only at the end) and
+        // the healthy device's event is awaited while the hung probe is pending.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        var discovered = new TaskCompletionSource<IDeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG", "COM_OK" },
+            (port, _) => port == "COM_HUNG"
+                ? hungForever.Task
+                : Task.FromResult<IDeviceInfo?>(FakeDevice(port)),
+            hardTimeoutMs: 2000);
+        finder.DeviceDiscovered += (_, args) => discovered.TrySetResult(args.DeviceInfo);
+
+        var sweep = finder.DiscoverAsync(CancellationToken.None);
+
+        // The healthy device's event must arrive while COM_HUNG is still pending
+        // (well before the 2s hard timeout settles the sweep).
+        var winner = await Task.WhenAny(discovered.Task, Task.Delay(1000));
+        Assert.Same(discovered.Task, winner);
+        Assert.False(sweep.IsCompleted,
+            "Sweep settled before the hung probe timed out — hang simulation is not wired as intended.");
+        Assert.Equal("COM_OK", (await discovered.Task).PortName);
+
+        hungForever.TrySetResult(null);
+        await sweep;
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_CallerCancellationStillPropagates()
+    {
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        // Cancelling the caller token during a hung probe must cancel the sweep
+        // (OCE surfaces as the documented "settle for finished probes" path),
+        // not wait out the hard timeout.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG" },
+            (_, _) => hungForever.Task,
+            hardTimeoutMs: 60_000);
+        using var cts = new CancellationTokenSource(200);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var devices = await finder.DiscoverAsync(cts.Token);
+        stopwatch.Stop();
+
+        Assert.Empty(devices);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"Cancellation did not short-circuit the hung probe ({stopwatch.ElapsedMilliseconds}ms).");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_QuarantinedAcrossSweeps_NoThreadPileUp()
+    {
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        // Qodo PR #295 review #1: a port whose timed-out probe is still blocked
+        // must NOT be re-probed on subsequent sweeps — the desktop apps sweep
+        // every 2-3s, so without quarantine a long-wedged port stacks one
+        // blocked thread-pool thread per sweep. The hung probe here never
+        // completes, so the second sweep must skip the port entirely.
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        var hungProbeCalls = 0;
+        using var finder = CreateFinderWithProbes(
+            new[] { "COM_HUNG", "COM_OK" },
+            (port, _) =>
+            {
+                if (port == "COM_HUNG")
+                {
+                    Interlocked.Increment(ref hungProbeCalls);
+                    return hungForever.Task;
+                }
+                return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
+            },
+            hardTimeoutMs: 200);
+
+        var firstSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
+        var secondSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
+
+        Assert.Equal("COM_OK", Assert.Single(firstSweep).PortName);
+        Assert.Equal("COM_OK", Assert.Single(secondSweep).PortName);
+        // <= 1, not == 1: under thread-pool contention the hung probe may not have
+        // STARTED before the first sweep's hard timeout fires — the invariant under
+        // test is "no pile-up" (2+ would be the regression), not "exactly once"
+        // (Qodo pass 4 #2).
+        Assert.True(Volatile.Read(ref hungProbeCalls) <= 1,
+            $"Hung port probed {hungProbeCalls} times across two sweeps — quarantine did not hold.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_HungPort_QuarantineSurvivesFinderRecreation()
+    {
+        // Step-3.5 audit on PR #295: the MCP DaqifiAgent constructs and disposes a
+        // fresh SerialDeviceFinder per discovery call. A per-instance quarantine
+        // forgot the stuck probe every call, re-leaking one blocked thread per
+        // request against the same wedged port — the dictionary is process-wide
+        // (static) so the one-blocked-thread bound holds across finder instances.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        var hungProbeCalls = 0;
+        Func<string, CancellationToken, Task<IDeviceInfo?>> probe = (port, _) =>
+        {
+            if (port == "COM_HUNG_X")
+            {
+                Interlocked.Increment(ref hungProbeCalls);
+                return hungForever.Task;
+            }
+            return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
+        };
+
+        using (var first = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 200))
+        {
+            Assert.Equal("COM_OK_X", Assert.Single(await first.DiscoverAsync(CancellationToken.None)).PortName);
+        }
+
+        // Fresh instance, same process: the wedged port must stay quarantined.
+        using (var second = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 200))
+        {
+            Assert.Equal("COM_OK_X", Assert.Single(await second.DiscoverAsync(CancellationToken.None)).PortName);
+        }
+
+        // <= 1 for the same no-pile-up reason as the cross-sweep test (Qodo pass 4 #2).
+        Assert.True(Volatile.Read(ref hungProbeCalls) <= 1,
+            $"Hung port probed {hungProbeCalls} times across two finder instances — static quarantine did not hold.");
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_QuarantineTtl_AllowsPeriodicRetry()
+    {
+        // Qodo pass 4 #3: if the stuck Open never completes, the port must not be
+        // suppressed until process restart — after the retry TTL elapses, one fresh
+        // probe is allowed per window so a recovered device re-appears.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        SerialDeviceFinder.QuarantineRetryTtlMs = 100;
+        try
+        {
+            var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+            var probeStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var hungProbeCalls = 0;
+            using var finder = CreateFinderWithProbes(
+                new[] { "COM_HUNG_TTL" },
+                (_, _) =>
+                {
+                    Interlocked.Increment(ref hungProbeCalls);
+                    probeStarted.TrySetResult(true);
+                    return hungForever.Task;
+                },
+                hardTimeoutMs: 100);
+
+            await finder.DiscoverAsync(CancellationToken.None);
+            await probeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)); // first attempt definitely ran
+            await Task.Delay(300); // let the TTL window lapse
+
+            await finder.DiscoverAsync(CancellationToken.None);
+
+            Assert.True(Volatile.Read(ref hungProbeCalls) >= 2,
+                "TTL elapsed but the quarantined port was never re-probed — recovery requires app restart.");
+        }
+        finally
+        {
+            SerialDeviceFinder.ResetPortQuarantineForTests();
+        }
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ConcurrentFinderInstances_OnlyOneProbePerWedgedPort()
+    {
+        // Step-3.5 re-gate on PR #295: the check-then-act quarantine raced across
+        // CONCURRENT finder instances — both passed the empty check and each leaked
+        // a blocked thread on the same wedged port while the dictionary tracked only
+        // one. The claim protocol reserves the port atomically (GetOrAdd) BEFORE the
+        // probe starts, so exactly one probe can exist per port process-wide.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        var hungProbeCalls = 0;
+        Func<string, CancellationToken, Task<IDeviceInfo?>> probe = (port, _) =>
+        {
+            if (port == "COM_HUNG_CONC")
+            {
+                Interlocked.Increment(ref hungProbeCalls);
+                return hungForever.Task;
+            }
+            return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
+        };
+
+        using var finderA = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 400);
+        using var finderB = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 400);
+
+        var results = await Task.WhenAll(
+            Task.Run(() => finderA.DiscoverAsync(CancellationToken.None)),
+            Task.Run(() => finderB.DiscoverAsync(CancellationToken.None)));
+
+        // Both sweeps complete; at most one probe ever touched the wedged port.
+        Assert.True(Volatile.Read(ref hungProbeCalls) <= 1,
+            $"Wedged port probed {hungProbeCalls} times across two CONCURRENT finder instances — the claim protocol did not hold.");
+        // The healthy port is reported by at least one sweep (the loser of a
+        // healthy-port claim race skips it for that sweep by design).
+        Assert.Contains(results, r => r.Any(d => d.PortName == "COM_OK_CONC"));
     }
 
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
