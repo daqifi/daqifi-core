@@ -527,10 +527,17 @@ namespace Daqifi.Core.Device
         public const int MaxPwmFrequencyHz = 50_000;
 
         /// <summary>
-        /// Gets the last commanded device-wide PWM frequency in hertz, or 0 when none has been
-        /// set this session. Local bookkeeping mirroring <see cref="SetPwmFrequency"/>.
+        /// Default device-wide PWM frequency, in hertz, used until a frequency has been
+        /// commanded via <see cref="SetPwmFrequency"/>.
         /// </summary>
-        public int PwmFrequencyHz { get; private set; }
+        public const int DefaultPwmFrequencyHz = 1_000;
+
+        /// <summary>
+        /// Gets the last commanded device-wide PWM frequency in hertz. Local bookkeeping
+        /// mirroring <see cref="SetPwmFrequency"/>; defaults to <see cref="DefaultPwmFrequencyHz"/>
+        /// (a commandable value) until a frequency has been set this session.
+        /// </summary>
+        public int PwmFrequencyHz { get; private set; } = DefaultPwmFrequencyHz;
 
         /// <inheritdoc />
         public void SetPwmEnabled(IChannel channel, bool enabled)

@@ -411,6 +411,27 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public void PwmDutyCyclePercent_DefaultsToCommandableValue()
+        {
+            var channel = new DigitalChannel(0, isPwmCapable: true);
+
+            Assert.Equal(50, channel.PwmDutyCyclePercent);
+        }
+
+        [Theory]
+        [InlineData(-5, 1)]
+        [InlineData(0, 1)]
+        [InlineData(1, 1)]
+        [InlineData(100, 100)]
+        [InlineData(150, 100)]
+        public void PwmDutyCyclePercent_ClampsToCommandableRangeOnAssignment(int assigned, int expected)
+        {
+            var channel = new DigitalChannel(0, isPwmCapable: true) { PwmDutyCyclePercent = assigned };
+
+            Assert.Equal(expected, channel.PwmDutyCyclePercent);
+        }
+
+        [Fact]
         public void SetPwmDutyCycle_OnCapableChannel_SetsBookkeepingAndSendsCommand()
         {
             var device = CreateConnectedDevice(digitalChannels: 8);
@@ -513,6 +534,18 @@ namespace Daqifi.Core.Tests.Device
             var foreign = new DigitalChannel(4, isPwmCapable: true);
 
             Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(foreign, true));
+        }
+
+        [Fact]
+        public void PwmFrequencyHz_DefaultsToCommandableValueBeforeAnySetPwmFrequencyCall()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+
+            Assert.Equal(DaqifiStreamingDevice.DefaultPwmFrequencyHz, device.PwmFrequencyHz);
+            Assert.InRange(
+                device.PwmFrequencyHz,
+                DaqifiStreamingDevice.MinPwmFrequencyHz,
+                DaqifiStreamingDevice.MaxPwmFrequencyHz);
         }
 
         [Fact]
