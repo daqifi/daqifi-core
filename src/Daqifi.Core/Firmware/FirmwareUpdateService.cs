@@ -819,10 +819,27 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         // disconnected device will fail the chip-info probe regardless.
         if (_options.PowerOnWifiModuleBeforeProbe && device.IsConnected)
         {
-            device.Send(ScpiMessageProducer.TurnDeviceOn);
-            if (_options.PowerOnWifiModuleSettleDelay > TimeSpan.Zero)
+            // Observe cancellation before this state-changing Send: a
+            // pre-cancelled call must not power on the device before the
+            // cancellation is surfaced to the caller.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
             {
-                await Task.Delay(_options.PowerOnWifiModuleSettleDelay, cancellationToken).ConfigureAwait(false);
+                device.Send(ScpiMessageProducer.TurnDeviceOn);
+                if (_options.PowerOnWifiModuleSettleDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(_options.PowerOnWifiModuleSettleDelay, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: the chip-info probe below has its own bounded
+                // retry and gracefully degrades to ChipInfoUnavailable, so a
+                // failure to send the power-on command must not abort the
+                // whole status check. Skip the settle delay too — there is
+                // nothing to settle if the send itself failed.
+                _logger.LogDebug(ex, "Failed to send WINC power-on command before chip-info probe; continuing without it.");
             }
         }
 

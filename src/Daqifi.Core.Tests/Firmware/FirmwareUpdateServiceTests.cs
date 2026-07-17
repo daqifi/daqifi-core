@@ -2899,12 +2899,21 @@ public class FirmwareUpdateServiceTests
             new FakeHidDeviceEnumerator([]),
             options);
 
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await service.CheckWifiFirmwareStatusAsync(device);
-        stopwatch.Stop();
 
-        Assert.True(stopwatch.Elapsed >= TimeSpan.FromMilliseconds(180),
-            $"Expected the probe to wait out the settle delay, but only took {stopwatch.ElapsedMilliseconds}ms.");
+        // Assert against the fake's own recorded event timestamps rather than
+        // the whole call's wall-clock duration — this isolates the assertion
+        // to the actual gap between the two operations under test instead of
+        // being sensitive to unrelated CI/test-framework overhead.
+        Assert.NotNull(device.TurnDeviceOnSentAt);
+        Assert.NotNull(device.FirstGetLanChipInfoCallAt);
+        Assert.True(
+            device.FirstGetLanChipInfoCallAt > device.TurnDeviceOnSentAt,
+            "Expected the chip-info probe to happen after the power-on command.");
+
+        var gap = device.FirstGetLanChipInfoCallAt!.Value - device.TurnDeviceOnSentAt!.Value;
+        Assert.True(gap >= TimeSpan.FromMilliseconds(180),
+            $"Expected the probe to wait out the settle delay between power-on and chip-info query, but the gap was only {gap.TotalMilliseconds}ms.");
     }
 
     private sealed class SyncProgress<T> : IProgress<T>
@@ -3070,6 +3079,8 @@ public class FirmwareUpdateServiceTests
             }
         }
 
+        private readonly System.Diagnostics.Stopwatch _eventStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
         public int GetLanChipInfoCallCount { get; private set; }
 
         public string Name { get; }
@@ -3080,6 +3091,12 @@ public class FirmwareUpdateServiceTests
         public bool IsStreaming { get; private set; }
 
         public List<string> SentCommands { get; } = [];
+
+        /// <summary>Elapsed time (from construction) at which "SYSTem:POWer:STATe 1" was sent, if any.</summary>
+        public TimeSpan? TurnDeviceOnSentAt { get; private set; }
+
+        /// <summary>Elapsed time (from construction) at which the first <see cref="GetLanChipInfoAsync"/> call landed.</summary>
+        public TimeSpan? FirstGetLanChipInfoCallAt { get; private set; }
 
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived
@@ -3107,6 +3124,10 @@ public class FirmwareUpdateServiceTests
             if (message is IOutboundMessage<string> textMessage)
             {
                 SentCommands.Add(textMessage.Data);
+                if (textMessage.Data == "SYSTem:POWer:STATe 1")
+                {
+                    TurnDeviceOnSentAt = _eventStopwatch.Elapsed;
+                }
             }
         }
 
@@ -3127,6 +3148,7 @@ public class FirmwareUpdateServiceTests
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
+            FirstGetLanChipInfoCallAt ??= _eventStopwatch.Elapsed;
             GetLanChipInfoCallCount++;
             if (_remainingTransientFailures > 0)
             {
