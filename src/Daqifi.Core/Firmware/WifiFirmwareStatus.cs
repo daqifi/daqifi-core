@@ -59,6 +59,15 @@ public enum WifiFirmwareStatusReason
     /// <summary>Querying the device for chip info failed.</summary>
     ChipInfoUnavailable,
 
+    /// <summary>
+    /// The WiFi module's saved settings report enabled (<c>LAN:ENAbled? = 1</c>) but
+    /// its state machine was still not initialized (SCPI <c>-200</c>) even after a
+    /// single <c>LAN:APPLY</c> kick and exhausting the retry budget. Distinct from
+    /// <see cref="ChipInfoUnavailable"/> so callers can tell "known not-yet-ready
+    /// state, already nudged" apart from a genuinely unresponsive device.
+    /// </summary>
+    LanNotInitialized,
+
     /// <summary>Looking up the latest release on GitHub failed.</summary>
     LatestReleaseUnavailable,
 

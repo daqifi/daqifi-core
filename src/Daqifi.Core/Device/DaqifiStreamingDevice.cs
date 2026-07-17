@@ -1749,8 +1749,24 @@ namespace Daqifi.Core.Device
                 responseTimeoutMs: 2000,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            LanChipInfoParser.TryParseLines(lines, out var info);
-            return info;
+            if (LanChipInfoParser.TryParseLines(lines, out var info))
+            {
+                return info;
+            }
+
+            // Closes #203: LAN:ENAbled=1 in saved settings but the WINC1500 state
+            // machine hasn't reached INITIALIZED yet (steady-state, not the
+            // post-reboot transient #144 already retries for) makes GETChipInfo?
+            // return this specific SCPI error instead of JSON. Surface it distinctly
+            // so the caller's retry loop can react (kick LAN:APPLY) instead of just
+            // waiting out a blind delay.
+            var errorLine = lines.LastOrDefault(IsScpiErrorLine);
+            if (errorLine != null && TryParseScpiErrorCode(errorLine, out var errorCode) && errorCode == -200)
+            {
+                throw new LanNotInitializedException(errorLine.Trim());
+            }
+
+            return null;
         }
 
         // -----------------------------------------------------------------

@@ -2657,6 +2657,123 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLanNotInitialized_KicksLanApplyOnceAndRecovers()
+    {
+        // Closes #203: LAN:ENAbled=1 in saved settings but the WINC1500 state
+        // machine hasn't reached INITIALIZED yet makes GETChipInfo? return
+        // SCPI -200 instead of JSON. A single LAN:APPLY resolves it; the
+        // retry loop must send that kick exactly once and then recover.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 7, 7, null, 0),
+            TagName = "19.7.7",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM22",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1377184,
+                FwVersion = "19.7.7",
+                BuildDate = "Mar 30 2022"
+            },
+            lanNotInitializedFailuresBeforeSuccess: 2);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickLanApplyOnNotInitialized = true;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(1, device.LanApplySentCount);
+        Assert.True(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.UpToDate, status.Reason);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLanNotInitializedExhaustsRetries_ReturnsLanNotInitialized()
+    {
+        // If the kick doesn't help within the retry budget, the caller should
+        // get the more specific LanNotInitialized reason instead of the
+        // generic ChipInfoUnavailable — same "proceed with flash" behavior,
+        // better diagnostics.
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM23",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1377184,
+                FwVersion = "19.7.7",
+                BuildDate = "Mar 30 2022"
+            },
+            lanNotInitializedFailuresBeforeSuccess: 99);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickLanApplyOnNotInitialized = true;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(1, device.LanApplySentCount);
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.LanNotInitialized, status.Reason);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_KickLanApplyDisabled_DoesNotSendApplyOnNotInitialized()
+    {
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM24",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1377184,
+                FwVersion = "19.7.7",
+                BuildDate = "Mar 30 2022"
+            },
+            lanNotInitializedFailuresBeforeSuccess: 99);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickLanApplyOnNotInitialized = false;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(0, device.LanApplySentCount);
+        Assert.Equal(WifiFirmwareStatusReason.LanNotInitialized, status.Reason);
+    }
+
+    [Fact]
     public async Task CheckWifiFirmwareStatusAsync_TotalTimeoutHit_ShortCircuitsToChipInfoUnavailable()
     {
         // Closes a Qodo follow-up on PR #199: per-attempt query timeouts
@@ -3062,22 +3179,28 @@ public class FirmwareUpdateServiceTests
         private readonly LanChipInfo? _chipInfo;
         private ConnectionStatus _status = ConnectionStatus.Connected;
         private int _remainingTransientFailures;
+        private int _remainingLanNotInitializedFailures;
 
         public FakeLanChipInfoStreamingDevice(
             string name,
             LanChipInfo? chipInfo,
             int transientFailuresBeforeSuccess = 0,
-            bool isConnected = true)
+            bool isConnected = true,
+            int lanNotInitializedFailuresBeforeSuccess = 0)
         {
             Name = name;
             _chipInfo = chipInfo;
             _remainingTransientFailures = transientFailuresBeforeSuccess;
+            _remainingLanNotInitializedFailures = lanNotInitializedFailuresBeforeSuccess;
             IsConnected = isConnected;
             if (!isConnected)
             {
                 _status = ConnectionStatus.Disconnected;
             }
         }
+
+        /// <summary>Number of times <c>SYSTem:COMMunicate:LAN:APPLY</c> was sent.</summary>
+        public int LanApplySentCount { get; private set; }
 
         private readonly System.Diagnostics.Stopwatch _eventStopwatch = System.Diagnostics.Stopwatch.StartNew();
 
@@ -3128,6 +3251,10 @@ public class FirmwareUpdateServiceTests
                 {
                     TurnDeviceOnSentAt = _eventStopwatch.Elapsed;
                 }
+                else if (textMessage.Data == "SYSTem:COMMunicate:LAN:APPLY")
+                {
+                    LanApplySentCount++;
+                }
             }
         }
 
@@ -3158,6 +3285,12 @@ public class FirmwareUpdateServiceTests
                 // genuinely-async exception path.
                 return Task.FromException<LanChipInfo?>(
                     new InvalidOperationException("Simulated transient post-reboot failure."));
+            }
+            if (_remainingLanNotInitializedFailures > 0)
+            {
+                _remainingLanNotInitializedFailures--;
+                return Task.FromException<LanChipInfo?>(
+                    new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
             }
             return Task.FromResult(_chipInfo);
         }
