@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Daqifi.Core.Communication.Producers;
@@ -1454,7 +1455,11 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             _logger.LogWarning(
                 ex,
                 "JMP_TO_APP soft-reset write failed; the bootloader handle is likely already unusable.");
-            throw originalFailure;
+            // Rethrow via ExceptionDispatchInfo (not `throw originalFailure;`) so the
+            // original exception's stack trace still points at the actual
+            // connect/health-check failure site, not this recovery method.
+            ExceptionDispatchInfo.Capture(originalFailure).Throw();
+            throw; // unreachable; satisfies flow analysis
         }
         finally
         {
@@ -1489,7 +1494,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             _logger.LogWarning(
                 ex,
                 "Bootloader is still unhealthy after the JMP_TO_APP soft-reset recovery attempt.");
-            throw originalFailure;
+            ExceptionDispatchInfo.Capture(originalFailure).Throw();
+            throw; // unreachable; satisfies flow analysis
         }
     }
 
