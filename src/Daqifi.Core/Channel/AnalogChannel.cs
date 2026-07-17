@@ -16,6 +16,7 @@ public class AnalogChannel : IAnalogChannel
     private double _calibrationB;
     private double _internalScaleM;
     private double _portRange;
+    private uint _resolution;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -89,7 +90,16 @@ public class AnalogChannel : IAnalogChannel
     /// <summary>
     /// Gets the resolution of the ADC (e.g., 65535 for 16-bit).
     /// </summary>
-    public uint Resolution { get; }
+    /// <remarks>
+    /// The setter is internal so that <see cref="Device.DaqifiDevice.PopulateChannelsFromStatus"/>
+    /// can refresh this value in place on a status re-population without recreating the channel
+    /// instance, keeping <see cref="IChannel"/> references stable for consumers.
+    /// </remarks>
+    public uint Resolution
+    {
+        get { lock (_lock) { return _resolution; } }
+        internal set { lock (_lock) { _resolution = value; } }
+    }
 
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
@@ -146,7 +156,7 @@ public class AnalogChannel : IAnalogChannel
             throw new ArgumentOutOfRangeException(nameof(resolution), "Resolution must be greater than zero.");
 
         ChannelNumber = channelNumber;
-        Resolution = resolution;
+        _resolution = resolution;
         _name = $"Analog Channel {channelNumber}";
         _isEnabled = false;
         _direction = ChannelDirection.Input;

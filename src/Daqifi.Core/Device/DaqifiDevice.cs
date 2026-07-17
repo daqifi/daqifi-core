@@ -1159,57 +1159,32 @@ namespace Daqifi.Core.Device
             // half-cleared or torn list.
             lock (_channelsLock)
             {
-                // Capture the prior per-channel configuration before recreating instances.
-                // A status refresh (e.g. a later GetDeviceInfo on reconnect / metadata refresh)
-                // would otherwise reset every channel to IsEnabled=false, silently discarding
-                // the enable/direction/output state the device-level channel-management API
-                // computes its ADC mask and DIO state from. Keyed by (type, number) since the
-                // channel instances themselves are replaced.
-                var priorState = new Dictionary<(ChannelType, int), (bool IsEnabled, ChannelDirection Direction, bool OutputValue, bool IsPwmEnabled, int PwmDutyCyclePercent)>();
+                // Index existing channels by identity (type, number). Channels whose identity
+                // is unchanged are updated in place rather than replaced below, so consumer-held
+                // IChannel references — and the configuration on them (enable/direction/output/
+                // PWM state) — survive a routine status re-population untouched.
+                var existingByKey = new Dictionary<(ChannelType, int), IChannel>();
                 foreach (var existing in _channels)
                 {
-                    var digitalExisting = existing as IDigitalChannel;
-                    priorState[(existing.Type, existing.ChannelNumber)] = (
-                        existing.IsEnabled,
-                        existing.Direction,
-                        digitalExisting?.OutputValue ?? false,
-                        digitalExisting?.IsPwmEnabled ?? false,
-                        digitalExisting?.PwmDutyCyclePercent ?? 0);
+                    existingByKey[(existing.Type, existing.ChannelNumber)] = existing;
                 }
 
-                // Clear existing channels before repopulating
-                _channels.Clear();
+                var updatedChannels = new List<IChannel>();
 
                 // Populate analog input channels
                 if (message.AnalogInPortNum > 0)
                 {
-                    analogCount = PopulateAnalogChannels(message);
+                    analogCount = PopulateAnalogChannels(message, existingByKey, updatedChannels);
                 }
 
                 // Populate digital channels
                 if (message.DigitalPortNum > 0)
                 {
-                    digitalCount = PopulateDigitalChannels(message);
+                    digitalCount = PopulateDigitalChannels(message, existingByKey, updatedChannels);
                 }
 
-                // Reapply the captured state to the freshly created channels so configuration
-                // survives the refresh. Channels with no prior entry keep their defaults.
-                foreach (var channel in _channels)
-                {
-                    if (!priorState.TryGetValue((channel.Type, channel.ChannelNumber), out var state))
-                    {
-                        continue;
-                    }
-
-                    channel.IsEnabled = state.IsEnabled;
-                    channel.Direction = state.Direction;
-                    if (channel is IDigitalChannel digitalChannel)
-                    {
-                        digitalChannel.OutputValue = state.OutputValue;
-                        digitalChannel.IsPwmEnabled = state.IsPwmEnabled;
-                        digitalChannel.PwmDutyCyclePercent = state.PwmDutyCyclePercent;
-                    }
-                }
+                _channels.Clear();
+                _channels.AddRange(updatedChannels);
 
                 channelsSnapshot = _channels.ToArray();
             }
@@ -1224,11 +1199,14 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Populates analog channels from the protobuf message.
+        /// Populates analog channels from the protobuf message, updating existing channel
+        /// instances in place where their identity (type, number) is unchanged.
         /// </summary>
         /// <param name="message">The protobuf message containing analog channel data.</param>
-        /// <returns>The number of analog channels created.</returns>
-        private int PopulateAnalogChannels(DaqifiOutMessage message)
+        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
+        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
+        /// <returns>The number of analog channels populated.</returns>
+        private int PopulateAnalogChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
         {
             var analogInPortRanges = message.AnalogInPortRange;
             var analogInCalibrationBValues = message.AnalogInCalB;
@@ -1237,21 +1215,38 @@ namespace Daqifi.Core.Device
             var analogInResolution = message.AnalogInRes;
 
             var count = (int)message.AnalogInPortNum;
+            var resolution = analogInResolution > 0 ? analogInResolution : 65535;
 
             for (var i = 0; i < count; i++)
             {
-                var channel = new AnalogChannel(i, analogInResolution > 0 ? analogInResolution : 65535)
+                var calibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f);
+                var calibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f);
+                var internalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f);
+                var portRange = GetWithDefault(analogInPortRanges, i, 1.0f);
+
+                if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
+                {
+                    existingAnalog.Resolution = resolution;
+                    existingAnalog.CalibrationB = calibrationB;
+                    existingAnalog.CalibrationM = calibrationM;
+                    existingAnalog.InternalScaleM = internalScaleM;
+                    existingAnalog.PortRange = portRange;
+                    destination.Add(existingAnalog);
+                    continue;
+                }
+
+                var channel = new AnalogChannel(i, resolution)
                 {
                     Name = $"AI{i}",
                     Direction = ChannelDirection.Input,
                     IsEnabled = false,
-                    CalibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f),
-                    CalibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f),
-                    InternalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f),
-                    PortRange = GetWithDefault(analogInPortRanges, i, 1.0f)
+                    CalibrationB = calibrationB,
+                    CalibrationM = calibrationM,
+                    InternalScaleM = internalScaleM,
+                    PortRange = portRange
                 };
 
-                _channels.Add(channel);
+                destination.Add(channel);
             }
 
             return count;
@@ -1265,17 +1260,28 @@ namespace Daqifi.Core.Device
         private const int PwmCapableChannelMask = 0x00F9;
 
         /// <summary>
-        /// Populates digital channels from the protobuf message.
+        /// Populates digital channels from the protobuf message, updating existing channel
+        /// instances in place where their identity (type, number) is unchanged.
         /// </summary>
         /// <param name="message">The protobuf message containing digital channel data.</param>
-        /// <returns>The number of digital channels created.</returns>
-        private int PopulateDigitalChannels(DaqifiOutMessage message)
+        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
+        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
+        /// <returns>The number of digital channels populated.</returns>
+        private int PopulateDigitalChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
         {
             var count = (int)message.DigitalPortNum;
 
             for (var i = 0; i < count; i++)
             {
                 var isPwmCapable = i < 32 && (PwmCapableChannelMask & (1 << i)) != 0;
+
+                if (existingByKey.TryGetValue((ChannelType.Digital, i), out var existing) && existing is DigitalChannel existingDigital)
+                {
+                    existingDigital.IsPwmCapable = isPwmCapable;
+                    destination.Add(existingDigital);
+                    continue;
+                }
+
                 var channel = new DigitalChannel(i, isPwmCapable)
                 {
                     Name = $"DIO{i}",
@@ -1283,7 +1289,7 @@ namespace Daqifi.Core.Device
                     IsEnabled = false
                 };
 
-                _channels.Add(channel);
+                destination.Add(channel);
             }
 
             return count;
