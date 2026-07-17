@@ -1004,13 +1004,20 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
                 if (_options.KickLanApplyOnNotInitialized && !hasSentLanApply && device.IsConnected)
                 {
+                    // Observe cancellation before this state-changing Send, mirroring
+                    // the WINC power-on guard above: a cancelled probe must not still
+                    // kick APPLY on the device. Uses the caller's token (not the
+                    // linked timeout token) so a total-timeout expiry alone doesn't
+                    // suppress a kick the caller never actually asked to cancel.
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     hasSentLanApply = true;
                     try
                     {
                         device.Send(ScpiMessageProducer.ApplyNetworkLan);
                         _logger.LogDebug("Sent LAN:APPLY to initialize the WINC state machine after a not-initialized chip-info response.");
                     }
-                    catch (Exception sendEx)
+                    catch (Exception sendEx) when (sendEx is not OperationCanceledException)
                     {
                         // Best-effort: falling through to the normal retry delay/loop
                         // below still gives the device a chance to recover on its own.

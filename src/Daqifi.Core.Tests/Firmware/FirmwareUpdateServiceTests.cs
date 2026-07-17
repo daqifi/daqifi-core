@@ -2774,6 +2774,96 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_CancelledDuringLanNotInitializedHandling_DoesNotSendLanApply()
+    {
+        // A cancellation race between the LanNotInitialized detection and the
+        // APPLY kick must not still send the state-changing command — mirrors
+        // the guard already required before the WINC power-on Send.
+        using var cts = new CancellationTokenSource();
+        var device = new CancelingLanChipInfoStreamingDevice("COM25", cts);
+
+        var options = CreateFastOptions();
+        options.LanChipInfoMaxAttempts = 3;
+        options.LanChipInfoRetryDelay = TimeSpan.FromMilliseconds(5);
+        options.KickLanApplyOnNotInitialized = true;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => service.CheckWifiFirmwareStatusAsync(device, cts.Token));
+
+        Assert.Equal(0, device.LanApplySentCount);
+    }
+
+    /// <summary>
+    /// Cancels the supplied <see cref="CancellationTokenSource"/> as soon as
+    /// <see cref="GetLanChipInfoAsync"/> is called, then throws
+    /// <see cref="LanNotInitializedException"/> — simulates cancellation racing
+    /// with the not-initialized detection, before the retry loop's APPLY kick.
+    /// </summary>
+    private sealed class CancelingLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
+    {
+        private readonly CancellationTokenSource _cts;
+
+        public CancelingLanChipInfoStreamingDevice(string name, CancellationTokenSource cts)
+        {
+            Name = name;
+            _cts = cts;
+            IsConnected = true;
+        }
+
+        public int LanApplySentCount { get; private set; }
+
+        public string Name { get; }
+        public IPAddress? IpAddress => null;
+        public bool IsConnected { get; private set; }
+        public ConnectionStatus Status => ConnectionStatus.Connected;
+        public int StreamingFrequency { get; set; }
+        public bool IsStreaming { get; private set; }
+        public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
+        public void Connect() => IsConnected = true;
+        public void Disconnect() => IsConnected = false;
+
+        public void Send<T>(IOutboundMessage<T> message)
+        {
+            if (message is IOutboundMessage<string> textMessage && textMessage.Data == "SYSTem:COMMunicate:LAN:APPLY")
+            {
+                LanApplySentCount++;
+            }
+        }
+
+        public void StartStreaming() => IsStreaming = true;
+        public void StopStreaming() => IsStreaming = false;
+        public void EnableChannel(IChannel channel) { }
+        public void EnableChannels(IEnumerable<IChannel> channels) { }
+        public void DisableChannel(IChannel channel) { }
+        public void DisableAllChannels() { }
+        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
+        public void SetDioValue(IChannel channel, bool value) { }
+        public void SetPwmEnabled(IChannel channel, bool enabled) { }
+        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
+        public void SetPwmFrequency(int frequencyHz) { }
+        public int PwmFrequencyHz => 0;
+        public void SetAnalogOutput(int channelNumber, double voltage) { }
+        public void Reboot() => IsConnected = false;
+
+        public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+        {
+            _cts.Cancel();
+            return Task.FromException<LanChipInfo?>(
+                new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
+        }
+    }
+
+    [Fact]
     public async Task CheckWifiFirmwareStatusAsync_TotalTimeoutHit_ShortCircuitsToChipInfoUnavailable()
     {
         // Closes a Qodo follow-up on PR #199: per-attempt query timeouts
