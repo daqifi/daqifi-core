@@ -2,6 +2,7 @@ using System.IO;
 using System.Net;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
@@ -2777,6 +2778,144 @@ public class FirmwareUpdateServiceTests
         Assert.Equal(1, device.GetLanChipInfoCallCount);
     }
 
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_PowerOnBeforeProbeEnabled_SendsTurnDeviceOnBeforeChipInfoProbe()
+    {
+        // Closes #301: right after a PIC32 reflash the WINC comes back powered
+        // off, so the probe must power it on before the first GETChipInfo?
+        // query, not merely rely on retrying a powered-off module.
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM18",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            });
+
+        var options = CreateFastOptions();
+        options.PowerOnWifiModuleBeforeProbe = true;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Contains("SYSTem:POWer:STATe 1", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_PowerOnBeforeProbeDisabled_DoesNotSendTurnDeviceOn()
+    {
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM19",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            });
+
+        var options = CreateFastOptions();
+        options.PowerOnWifiModuleBeforeProbe = false;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.DoesNotContain("SYSTem:POWer:STATe 1", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_DeviceNotConnected_SkipsPowerOnAndDoesNotThrow()
+    {
+        // FakeLanChipInfoStreamingDevice.Send does not itself throw when
+        // disconnected (unlike the real DaqifiDevice), so this asserts the
+        // guard on the caller side: CheckWifiFirmwareStatusAsync must not
+        // attempt to send TurnDeviceOn to a device it knows is disconnected.
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM20",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            },
+            isConnected: false);
+
+        var options = CreateFastOptions();
+        options.PowerOnWifiModuleBeforeProbe = true;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.DoesNotContain("SYSTem:POWer:STATe 1", device.SentCommands);
+        Assert.NotNull(status);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_PowerOnBeforeProbe_WaitsSettleDelayBeforeProbing()
+    {
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM21",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            });
+
+        var options = CreateFastOptions();
+        options.PowerOnWifiModuleBeforeProbe = true;
+        options.PowerOnWifiModuleSettleDelay = TimeSpan.FromMilliseconds(200);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        await service.CheckWifiFirmwareStatusAsync(device);
+
+        // Assert against the fake's own recorded event timestamps rather than
+        // the whole call's wall-clock duration — this isolates the assertion
+        // to the actual gap between the two operations under test instead of
+        // being sensitive to unrelated CI/test-framework overhead.
+        Assert.NotNull(device.TurnDeviceOnSentAt);
+        Assert.NotNull(device.FirstGetLanChipInfoCallAt);
+        Assert.True(
+            device.FirstGetLanChipInfoCallAt > device.TurnDeviceOnSentAt,
+            "Expected the chip-info probe to happen after the power-on command.");
+
+        var gap = device.FirstGetLanChipInfoCallAt!.Value - device.TurnDeviceOnSentAt!.Value;
+        Assert.True(gap >= TimeSpan.FromMilliseconds(180),
+            $"Expected the probe to wait out the settle delay between power-on and chip-info query, but the gap was only {gap.TotalMilliseconds}ms.");
+    }
+
     private sealed class SyncProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;
@@ -2812,7 +2951,11 @@ public class FirmwareUpdateServiceTests
             // Disable the macOS USB CDC stale-handle settling delay for unit
             // tests — FakeStreamingDevice doesn't reproduce the re-enum race,
             // so the dance is pure latency that would blow the fast budgets.
-            PostReconnectStaleHandleDelay = TimeSpan.Zero
+            PostReconnectStaleHandleDelay = TimeSpan.Zero,
+            // Skip the WINC power-on settle wait — fakes don't model power state,
+            // so the delay is pure latency here. Individual tests re-enable it
+            // where the power-on behavior itself is under test.
+            PowerOnWifiModuleSettleDelay = TimeSpan.Zero
         };
     }
 
@@ -2920,13 +3063,23 @@ public class FirmwareUpdateServiceTests
         private ConnectionStatus _status = ConnectionStatus.Connected;
         private int _remainingTransientFailures;
 
-        public FakeLanChipInfoStreamingDevice(string name, LanChipInfo? chipInfo, int transientFailuresBeforeSuccess = 0)
+        public FakeLanChipInfoStreamingDevice(
+            string name,
+            LanChipInfo? chipInfo,
+            int transientFailuresBeforeSuccess = 0,
+            bool isConnected = true)
         {
             Name = name;
             _chipInfo = chipInfo;
             _remainingTransientFailures = transientFailuresBeforeSuccess;
-            IsConnected = true;
+            IsConnected = isConnected;
+            if (!isConnected)
+            {
+                _status = ConnectionStatus.Disconnected;
+            }
         }
+
+        private readonly System.Diagnostics.Stopwatch _eventStopwatch = System.Diagnostics.Stopwatch.StartNew();
 
         public int GetLanChipInfoCallCount { get; private set; }
 
@@ -2938,6 +3091,12 @@ public class FirmwareUpdateServiceTests
         public bool IsStreaming { get; private set; }
 
         public List<string> SentCommands { get; } = [];
+
+        /// <summary>Elapsed time (from construction) at which "SYSTem:POWer:STATe 1" was sent, if any.</summary>
+        public TimeSpan? TurnDeviceOnSentAt { get; private set; }
+
+        /// <summary>Elapsed time (from construction) at which the first <see cref="GetLanChipInfoAsync"/> call landed.</summary>
+        public TimeSpan? FirstGetLanChipInfoCallAt { get; private set; }
 
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived
@@ -2965,6 +3124,10 @@ public class FirmwareUpdateServiceTests
             if (message is IOutboundMessage<string> textMessage)
             {
                 SentCommands.Add(textMessage.Data);
+                if (textMessage.Data == "SYSTem:POWer:STATe 1")
+                {
+                    TurnDeviceOnSentAt = _eventStopwatch.Elapsed;
+                }
             }
         }
 
@@ -2985,6 +3148,7 @@ public class FirmwareUpdateServiceTests
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
+            FirstGetLanChipInfoCallAt ??= _eventStopwatch.Elapsed;
             GetLanChipInfoCallCount++;
             if (_remainingTransientFailures > 0)
             {

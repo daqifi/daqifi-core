@@ -21,6 +21,16 @@ public class DeviceCapabilities
     public bool HasWiFi { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the device's WiFi connectivity is provided by a
+    /// discrete WINC1500 module (as opposed to, e.g., a future SoC-integrated WiFi part). Lets
+    /// consumers ask Core whether WINC-specific handling (power-on-before-probe, the WINC flash
+    /// tool, bridge-mode activation) applies to a device instead of pattern-matching
+    /// <see cref="DeviceType"/> themselves. Distinct from <see cref="HasWiFi"/>, which only
+    /// indicates WiFi connectivity in general.
+    /// </summary>
+    public bool HasWincWifiModule { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the device supports USB connectivity.
     /// </summary>
     public bool HasUsb { get; set; }
@@ -53,6 +63,7 @@ public class DeviceCapabilities
         SupportsStreaming = true;
         HasSdCard = false;
         HasWiFi = false;
+        HasWincWifiModule = false;
         HasUsb = false;
         AnalogInputChannels = 0;
         AnalogOutputChannels = 0;
@@ -74,6 +85,7 @@ public class DeviceCapabilities
                 SupportsStreaming = true,
                 HasSdCard = true,
                 HasWiFi = true,
+                HasWincWifiModule = true,
                 HasUsb = true,
                 MaxSamplingRate = 1000
             },
@@ -82,6 +94,7 @@ public class DeviceCapabilities
                 SupportsStreaming = true,
                 HasSdCard = true,
                 HasWiFi = true,
+                HasWincWifiModule = true,
                 HasUsb = true,
                 MaxSamplingRate = 1000
             },
@@ -90,6 +103,7 @@ public class DeviceCapabilities
                 SupportsStreaming = true,
                 HasSdCard = true,
                 HasWiFi = true,
+                HasWincWifiModule = true,
                 HasUsb = true,
                 MaxSamplingRate = 1000
             },
