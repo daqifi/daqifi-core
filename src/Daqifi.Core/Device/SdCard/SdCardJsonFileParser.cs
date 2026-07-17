@@ -136,7 +136,8 @@ public sealed class SdCardJsonFileParser
 
             // Reconstruct absolute timestamp
             var absoluteTime = baseTime;
-            if (tickPeriod > 0)
+            var hasDeviceTimestamp = tickPeriod > 0;
+            if (hasDeviceTimestamp)
             {
                 if (previousTimestamp == null)
                 {
@@ -152,7 +153,10 @@ public sealed class SdCardJsonFileParser
                 absoluteTime = baseTime.AddSeconds(elapsedSeconds);
             }
 
-            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, null);
+            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, null)
+            {
+                HasDeviceTimestamp = hasDeviceTimestamp
+            };
 
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)

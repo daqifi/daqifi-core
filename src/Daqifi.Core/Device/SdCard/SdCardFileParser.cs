@@ -278,7 +278,8 @@ public sealed class SdCardFileParser
 
             // Reconstruct timestamp
             var timestamp = baseTime;
-            if (msg.MsgTimeStamp != 0 && tickPeriod > 0)
+            var hasDeviceTimestamp = msg.MsgTimeStamp != 0 && tickPeriod > 0;
+            if (hasDeviceTimestamp)
             {
                 if (previousTimestamp == null)
                 {
@@ -326,7 +327,10 @@ public sealed class SdCardFileParser
                 ? msg.AnalogInDataTs.ToArray()
                 : null;
 
-            yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps);
+            yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps)
+            {
+                HasDeviceTimestamp = hasDeviceTimestamp
+            };
         }
     }
 #pragma warning restore CS1998

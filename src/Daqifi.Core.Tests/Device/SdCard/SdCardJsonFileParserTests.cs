@@ -408,6 +408,49 @@ public sealed class SdCardJsonFileParserTests
         Assert.Equal(16.0, samples[0].AnalogValues[1], precision: 5);
     }
 
+    [Fact]
+    public async Task ParseAsync_WithTimestampFrequency_MarksHasDeviceTimestampTrue()
+    {
+        // Arrange
+        await using var stream = SdCardTestJsonFileBuilder.BuildJsonFile(
+            (100u, new[] { 1.0 }, ""),
+            (200u, new[] { 2.0 }, "")
+        );
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.True(s.HasDeviceTimestamp));
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithoutTimestampFrequency_MarksHasDeviceTimestampFalse()
+    {
+        // Arrange — no timestamp frequency available, so ticks can't be converted
+        // and every entry falls back to the session base time.
+        await using var stream = SdCardTestJsonFileBuilder.BuildJsonFile(
+            (100u, new[] { 1.0 }, ""),
+            (200u, new[] { 2.0 }, "")
+        );
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 0 };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.False(s.HasDeviceTimestamp));
+    }
+
     private static async Task<List<T>> ToListAsync<T>(IAsyncEnumerable<T> source)
     {
         var list = new List<T>();
