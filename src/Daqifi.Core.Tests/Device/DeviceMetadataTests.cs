@@ -26,6 +26,7 @@ public class DeviceMetadataTests
         Assert.Equal(string.Empty, metadata.MacAddress);
         Assert.Equal(string.Empty, metadata.Ssid);
         Assert.Equal(string.Empty, metadata.HostName);
+        Assert.Equal(string.Empty, metadata.FriendlyName);
         Assert.Equal(0, metadata.DevicePort);
     }
 
@@ -190,5 +191,39 @@ public class DeviceMetadataTests
         Assert.Equal(string.Empty, metadata.Ssid);
         Assert.Equal(string.Empty, metadata.HostName);
         Assert.Equal(0, metadata.DevicePort);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_UpdatesFriendlyName()
+    {
+        // Arrange
+        var metadata = new DeviceMetadata();
+        var message = new DaqifiOutMessage
+        {
+            FriendlyDeviceName = "My Device"
+        };
+
+        // Act
+        metadata.UpdateFromProtobuf(message);
+
+        // Assert
+        Assert.Equal("My Device", metadata.FriendlyName);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_WithEmptyFriendlyName_LeavesFriendlyNameUnchanged()
+    {
+        // Arrange
+        var metadata = new DeviceMetadata { FriendlyName = "Previous Name" };
+        var message = new DaqifiOutMessage
+        {
+            FriendlyDeviceName = ""
+        };
+
+        // Act
+        metadata.UpdateFromProtobuf(message);
+
+        // Assert
+        Assert.Equal("Previous Name", metadata.FriendlyName);
     }
 }
