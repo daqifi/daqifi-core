@@ -16,6 +16,7 @@ public class AnalogChannel : IAnalogChannel
     private double _calibrationB;
     private double _internalScaleM;
     private double _portRange;
+    private uint _resolution;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -89,7 +90,16 @@ public class AnalogChannel : IAnalogChannel
     /// <summary>
     /// Gets the resolution of the ADC (e.g., 65535 for 16-bit).
     /// </summary>
-    public uint Resolution { get; }
+    /// <remarks>
+    /// Updated only via <see cref="UpdateScalingFromStatus"/>, which
+    /// <see cref="Device.DaqifiDevice.PopulateChannelsFromStatus"/> uses to refresh this value in
+    /// place on a status re-population without recreating the channel instance, keeping
+    /// <see cref="IChannel"/> references stable for consumers.
+    /// </remarks>
+    public uint Resolution
+    {
+        get { lock (_lock) { return _resolution; } }
+    }
 
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).
@@ -146,7 +156,7 @@ public class AnalogChannel : IAnalogChannel
             throw new ArgumentOutOfRangeException(nameof(resolution), "Resolution must be greater than zero.");
 
         ChannelNumber = channelNumber;
-        Resolution = resolution;
+        _resolution = resolution;
         _name = $"Analog Channel {channelNumber}";
         _isEnabled = false;
         _direction = ChannelDirection.Input;
@@ -156,6 +166,27 @@ public class AnalogChannel : IAnalogChannel
         _calibrationB = 0.0;
         _internalScaleM = 1.0;
         _portRange = 1.0;
+    }
+
+    /// <summary>
+    /// Atomically updates the resolution and calibration/scaling metadata under a single lock.
+    /// </summary>
+    /// <remarks>
+    /// Used by <see cref="Device.DaqifiDevice.PopulateChannelsFromStatus"/> when refreshing a
+    /// reused channel instance in place, so a concurrent reader (e.g. via
+    /// <see cref="Device.DaqifiDevice.GetChannelsSnapshot"/> on another thread) can never observe
+    /// a torn mix of old and new scaling values from <see cref="GetScaledValue"/>.
+    /// </remarks>
+    internal void UpdateScalingFromStatus(uint resolution, double calibrationB, double calibrationM, double internalScaleM, double portRange)
+    {
+        lock (_lock)
+        {
+            _resolution = resolution;
+            _calibrationB = calibrationB;
+            _calibrationM = calibrationM;
+            _internalScaleM = internalScaleM;
+            _portRange = portRange;
+        }
     }
 
     /// <summary>

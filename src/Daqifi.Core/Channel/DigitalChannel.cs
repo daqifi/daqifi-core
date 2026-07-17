@@ -13,6 +13,7 @@ public class DigitalChannel : IDigitalChannel
     private bool _outputValue;
     private bool _isPwmEnabled;
     private int _pwmDutyCyclePercent;
+    private bool _isPwmCapable;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -99,7 +100,16 @@ public class DigitalChannel : IDigitalChannel
     /// <summary>
     /// Gets whether this channel's hardware supports PWM output.
     /// </summary>
-    public bool IsPwmCapable { get; }
+    /// <remarks>
+    /// The setter is internal so that <see cref="Device.DaqifiDevice.PopulateChannelsFromStatus"/>
+    /// can refresh this value in place on a status re-population without recreating the channel
+    /// instance, keeping <see cref="IChannel"/> references stable for consumers.
+    /// </remarks>
+    public bool IsPwmCapable
+    {
+        get { lock (_lock) { return _isPwmCapable; } }
+        internal set { lock (_lock) { _isPwmCapable = value; } }
+    }
 
     /// <summary>
     /// Gets or sets whether PWM output is enabled on this channel (local bookkeeping mirroring
@@ -137,7 +147,7 @@ public class DigitalChannel : IDigitalChannel
             throw new ArgumentOutOfRangeException(nameof(channelNumber), "Channel number must be non-negative.");
 
         ChannelNumber = channelNumber;
-        IsPwmCapable = isPwmCapable;
+        _isPwmCapable = isPwmCapable;
         _name = $"Digital Channel {channelNumber}";
         _isEnabled = false;
         _direction = ChannelDirection.Input;

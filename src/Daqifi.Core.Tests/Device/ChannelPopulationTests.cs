@@ -76,9 +76,9 @@ public class ChannelPopulationTests
     [Fact]
     public void PopulateChannelsFromStatus_PreservesEnableDirectionAndOutputAcrossRepopulation()
     {
-        // A later status refresh (e.g. reconnect / metadata re-query) recreates channel
-        // instances; previously-applied configuration must survive, keyed by (type, number),
-        // so the device-level channel API does not silently lose enable/direction/output state.
+        // A later status refresh (e.g. reconnect / metadata re-query) updates channel instances
+        // whose identity (type, number) is unchanged in place, so previously-applied
+        // configuration — and the IChannel reference itself — survives untouched.
         var device = new DaqifiDevice("TestDevice");
         var message = new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535, DigitalPortNum = 2 };
         device.PopulateChannelsFromStatus(message);
@@ -90,13 +90,15 @@ public class ChannelPopulationTests
         digital1.Direction = ChannelDirection.Output;
         digital1.OutputValue = true;
 
-        // Repopulate with the same shape — produces a fresh generation of channel instances.
+        // Repopulate with the same shape — identity is unchanged, so instances are reused.
         device.PopulateChannelsFromStatus(message);
 
         var newAnalog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        Assert.Same(analog0, newAnalog0);
         Assert.True(newAnalog0.IsEnabled);
 
         var newDigital1 = (IDigitalChannel)device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+        Assert.Same(digital1, newDigital1);
         Assert.True(newDigital1.IsEnabled);
         Assert.Equal(ChannelDirection.Output, newDigital1.Direction);
         Assert.True(newDigital1.OutputValue);
@@ -500,6 +502,43 @@ public class ChannelPopulationTests
         Assert.Equal(12, device.Channels.Count);
         Assert.Equal(4, device.Channels.Count(c => c.Type == ChannelType.Analog));
         Assert.Equal(8, device.Channels.Count(c => c.Type == ChannelType.Digital));
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_ReusesExistingChannelInstancesWhenIdentityUnchanged()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage { AnalogInPortNum = 4, AnalogInRes = 65535, DigitalPortNum = 4 };
+        device.PopulateChannelsFromStatus(message);
+        var originalChannels = device.Channels.ToList();
+
+        // Act - repopulate with the same channel shape (identity unchanged)
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert - every channel instance is reused, not replaced
+        var refreshedChannels = device.Channels;
+        Assert.Equal(originalChannels.Count, refreshedChannels.Count);
+        for (var i = 0; i < originalChannels.Count; i++)
+        {
+            Assert.Same(originalChannels[i], refreshedChannels[i]);
+        }
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_DropsChannelsNoLongerPresent()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 4, AnalogInRes = 65535 });
+        var analog2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
+
+        // Act - a subsequent status report fewer channels
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 });
+
+        // Assert - the dropped channel is no longer part of the collection
+        Assert.Equal(2, device.Channels.Count);
+        Assert.DoesNotContain(device.Channels, c => ReferenceEquals(c, analog2));
     }
 
     [Fact]

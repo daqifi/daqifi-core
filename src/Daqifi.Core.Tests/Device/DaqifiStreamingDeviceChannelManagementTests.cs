@@ -563,7 +563,9 @@ namespace Daqifi.Core.Tests.Device
             });
 
             var refreshed = (IDigitalChannel)DigitalChannelAt(device, 4);
-            Assert.NotSame(channel, refreshed);
+            // Channel identity (type, number) is unchanged across the refresh, so the same
+            // instance is updated in place rather than replaced.
+            Assert.Same(channel, refreshed);
             Assert.True(refreshed.IsPwmEnabled);
             Assert.Equal(42, refreshed.PwmDutyCyclePercent);
         }
