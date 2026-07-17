@@ -39,11 +39,80 @@ public sealed class SdCardFileParserFactoryTests
     }
 
     [Fact]
+    public void DetectFormat_UnsupportedExtension_MessageIsLowercased()
+    {
+        // Act & Assert
+        var exception = Assert.Throws<ArgumentException>(() =>
+            global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.DetectFormat("log.TXT"));
+
+        Assert.Contains(".txt", exception.Message);
+    }
+
+    [Fact]
     public void DetectFormat_NullFileName_ThrowsArgumentNullException()
     {
         // Act & Assert
         Assert.Throws<ArgumentNullException>(() =>
             global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.DetectFormat(null!));
+    }
+
+    [Theory]
+    [InlineData("log.bin", global::Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf)]
+    [InlineData("log.BIN", global::Daqifi.Core.Device.SdCard.SdCardLogFormat.Protobuf)]
+    [InlineData("log.json", global::Daqifi.Core.Device.SdCard.SdCardLogFormat.Json)]
+    [InlineData("log.csv", global::Daqifi.Core.Device.SdCard.SdCardLogFormat.Csv)]
+    public void TryDetectFormat_ValidExtensions_ReturnsTrueAndCorrectFormat(string fileName, global::Daqifi.Core.Device.SdCard.SdCardLogFormat expectedFormat)
+    {
+        // Act
+        var result = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.TryDetectFormat(fileName, out var format);
+
+        // Assert
+        Assert.True(result);
+        Assert.Equal(expectedFormat, format);
+    }
+
+    [Theory]
+    [InlineData("log.txt")]
+    [InlineData("log.dat")]
+    [InlineData("log")]
+    [InlineData("log.")]
+    public void TryDetectFormat_UnsupportedExtension_ReturnsFalse(string fileName)
+    {
+        // Act
+        var result = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.TryDetectFormat(fileName, out var format);
+
+        // Assert
+        Assert.False(result);
+        Assert.Equal(default, format);
+    }
+
+    [Fact]
+    public void TryDetectFormat_NullFileName_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() =>
+            global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.TryDetectFormat(null!, out _));
+    }
+
+    [Fact]
+    public void SupportedExtensions_ContainsExpectedExtensions()
+    {
+        // Act
+        var extensions = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.SupportedExtensions;
+
+        // Assert
+        Assert.Equal(new[] { ".bin", ".json", ".csv" }, extensions);
+    }
+
+    [Fact]
+    public void SupportedExtensions_IsNotMutableViaDowncast()
+    {
+        // Act
+        var extensions = global::Daqifi.Core.Device.SdCard.SdCardFileParserFactory.SupportedExtensions;
+
+        // Assert
+        Assert.False(extensions is string[], "SupportedExtensions should not be backed by a directly mutable array.");
+        Assert.Throws<NotSupportedException>(() => ((IList<string>)extensions)[0] = ".mutated");
     }
 
     [Fact]
