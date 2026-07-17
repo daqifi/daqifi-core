@@ -12,10 +12,12 @@ namespace Daqifi.Core.Device.SdCard;
 /// </summary>
 public static class SdCardFileParserFactory
 {
+    private static readonly string[] _supportedExtensions = { ".bin", ".json", ".csv" };
+
     /// <summary>
     /// The file extensions supported for format auto-detection, in the order they are checked.
     /// </summary>
-    public static IReadOnlyList<string> SupportedExtensions { get; } = new[] { ".bin", ".json", ".csv" };
+    public static IReadOnlyList<string> SupportedExtensions { get; } = Array.AsReadOnly(_supportedExtensions);
 
     /// <summary>
     /// Parses an SD card log file with format auto-detection from file extension.
@@ -101,7 +103,7 @@ public static class SdCardFileParserFactory
 
         if (!TryDetectFormat(fileName, out var format))
         {
-            var ext = Path.GetExtension(fileName);
+            var ext = Path.GetExtension(fileName).ToLowerInvariant();
             throw new ArgumentException($"Unsupported file extension: {ext}. Supported extensions are .bin, .json, .csv", nameof(fileName));
         }
 
