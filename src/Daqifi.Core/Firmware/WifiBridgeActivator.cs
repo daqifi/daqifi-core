@@ -57,6 +57,37 @@ public static class WifiBridgeActivator
         WaitOrCancel(ApplySettleDelay, cancellationToken);
     }
 
+    /// <summary>
+    /// Briefly opens <paramref name="portName"/>, sends the SCPI sequence that
+    /// takes the device's WiFi module back out of bridge mode after a firmware
+    /// update, then closes the port.
+    /// </summary>
+    /// <param name="portName">The serial port name (e.g. <c>COM5</c>, <c>/dev/cu.usbmodem1</c>).</param>
+    /// <param name="cancellationToken">Cancellation token observed between port-open, each command write, and each inter-command delay.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="portName"/> is null.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+    public static void Deactivate(string portName, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(portName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var transport = new SerialStreamTransport(portName);
+        transport.Connect();
+
+        // Allow firmware to recognise DTR before sending commands.
+        WaitOrCancel(DtrSettleDelay, cancellationToken);
+
+        // Turn off transparent mode so the port goes back to the SCPI console.
+        WriteCommand(transport, ScpiMessageProducer.SetUsbTransparencyMode(0));
+        WaitOrCancel(InterCommandDelay, cancellationToken);
+
+        // Trigger the WiFi manager REINIT out of bridge-mode state machine.
+        WriteCommand(transport, ScpiMessageProducer.ApplyNetworkLan);
+
+        // Give firmware time to enqueue APPLY before the port closes.
+        WaitOrCancel(ApplySettleDelay, cancellationToken);
+    }
+
     private static void WriteCommand(SerialStreamTransport transport, IOutboundMessage<string> message)
     {
         var bytes = message.GetBytes();
