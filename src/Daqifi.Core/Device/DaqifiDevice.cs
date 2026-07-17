@@ -978,8 +978,11 @@ namespace Daqifi.Core.Device
                         Send(ScpiMessageProducer.SetProtobufStreamFormat);
                     }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-                    errorLine = initLines.FirstOrDefault(
-                        l => l.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
+                    // Shared with DaqifiStreamingDevice's SCPI error detection so both sites
+                    // recognize the same set of delimiter-separated error formats — a bare
+                    // "**ERROR"-prefix check would miss "ERROR: ..." and space/tab-delimited
+                    // variants like "ERROR -200,..." or "ERROR\t-200,...".
+                    errorLine = initLines.FirstOrDefault(ScpiResponseClassifier.IsScpiErrorLine);
                     if (errorLine == null)
                     {
                         break;

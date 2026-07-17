@@ -111,6 +111,26 @@ namespace Daqifi.Core.Tests.Device
             Assert.Equal(2, device.TextCommandAttemptCount);
         }
 
+        [Theory]
+        [InlineData("ERROR -200,\"Execution error\"\r\n")]
+        [InlineData("ERROR\t-200,\"Execution error\"\r\n")]
+        [InlineData("ERROR: -200,\"Execution error\"\r\n")]
+        public async Task InitializeAsync_WhenDeviceReturnsBareErrorWithNonColonDelimiter_ThrowsTypedException(string errorLine)
+        {
+            // Arrange — a bare "ERROR" token (no "**" prefix) using a space/tab/colon delimiter
+            // rather than "**ERROR" must still be recognized as a real SCPI error.
+            var device = new TestableDaqifiDevice("TestDevice",
+                textCommandResponse: new[] { errorLine });
+            device.Connect();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ScpiInitializationErrorException>(
+                () => device.InitializeAsync());
+
+            Assert.Contains("-200", ex.Message);
+            Assert.Equal(DeviceState.Error, device.State);
+        }
+
         [Fact]
         public async Task InitializeAsync_WhenDeviceReturnsScpiError_SetsStateToError()
         {

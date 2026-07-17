@@ -1590,15 +1590,16 @@ namespace Daqifi.Core.Device
             return lines.Any(IsScpiErrorLine);
         }
 
-        // Strict SCPI error format: "**ERROR..." or "ERROR: ...". The colon (or **
-        // prefix) distinguishes a true SCPI error from firmware status text like
-        // "Error !! No SD Card Detected", which should not be surfaced as
-        // SdCardOperationException.LastScpiError.
+        // Strict SCPI error format: "**ERROR" or bare "ERROR" followed by a SCPI delimiter
+        // (":", space, tab, or end-of-line). Distinguishes a true SCPI error from firmware
+        // status text like "Error !! No SD Card Detected", which should not be surfaced as
+        // SdCardOperationException.LastScpiError. Shared with ScpiInitializationErrorException
+        // classification in DaqifiDevice.InitializeAsync so both sites recognize the same set
+        // of delimiter-separated error formats (closes a gap where "ERROR -200,..." or
+        // "ERROR\t-200,..." without a colon went undetected).
         private static bool IsScpiErrorLine(string line)
         {
-            var trimmed = line.TrimStart();
-            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
-                || trimmed.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase);
+            return ScpiResponseClassifier.IsScpiErrorLine(line);
         }
 
         /// <summary>
