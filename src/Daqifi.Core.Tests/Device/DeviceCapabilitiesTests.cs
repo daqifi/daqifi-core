@@ -80,4 +80,62 @@ public class DeviceCapabilitiesTests
         Assert.Equal(16, capabilities.DigitalChannels);
         Assert.Equal(2000, capabilities.MaxSamplingRate);
     }
+
+    [Fact]
+    public void Clone_CopiesAllFieldValues()
+    {
+        // Arrange
+        var capabilities = new DeviceCapabilities
+        {
+            SupportsStreaming = false,
+            HasSdCard = true,
+            HasWiFi = true,
+            HasUsb = true,
+            AnalogInputChannels = 8,
+            AnalogOutputChannels = 2,
+            DigitalChannels = 16,
+            MaxSamplingRate = 5000
+        };
+
+        // Act
+        var clone = capabilities.Clone();
+
+        // Assert
+        Assert.Equal(capabilities.SupportsStreaming, clone.SupportsStreaming);
+        Assert.Equal(capabilities.HasSdCard, clone.HasSdCard);
+        Assert.Equal(capabilities.HasWiFi, clone.HasWiFi);
+        Assert.Equal(capabilities.HasUsb, clone.HasUsb);
+        Assert.Equal(capabilities.AnalogInputChannels, clone.AnalogInputChannels);
+        Assert.Equal(capabilities.AnalogOutputChannels, clone.AnalogOutputChannels);
+        Assert.Equal(capabilities.DigitalChannels, clone.DigitalChannels);
+        Assert.Equal(capabilities.MaxSamplingRate, clone.MaxSamplingRate);
+    }
+
+    [Fact]
+    public void Clone_ReturnsDistinctInstance()
+    {
+        // Arrange
+        var capabilities = new DeviceCapabilities();
+
+        // Act
+        var clone = capabilities.Clone();
+
+        // Assert
+        Assert.NotSame(capabilities, clone);
+    }
+
+    [Fact]
+    public void Clone_MutatingCloneDoesNotAffectOriginal()
+    {
+        // Arrange
+        var capabilities = new DeviceCapabilities { AnalogInputChannels = 8 };
+        var clone = capabilities.Clone();
+
+        // Act
+        clone.AnalogInputChannels = 16;
+
+        // Assert
+        Assert.Equal(8, capabilities.AnalogInputChannels);
+        Assert.Equal(16, clone.AnalogInputChannels);
+    }
 }
