@@ -1226,11 +1226,7 @@ namespace Daqifi.Core.Device
 
                 if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
                 {
-                    existingAnalog.Resolution = resolution;
-                    existingAnalog.CalibrationB = calibrationB;
-                    existingAnalog.CalibrationM = calibrationM;
-                    existingAnalog.InternalScaleM = internalScaleM;
-                    existingAnalog.PortRange = portRange;
+                    existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange);
                     destination.Add(existingAnalog);
                     continue;
                 }
