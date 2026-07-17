@@ -307,7 +307,10 @@ public sealed class SdCardCsvFileParser
                 absoluteTime = baseTime.AddSeconds(elapsedSeconds);
             }
 
-            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps, hasDeviceTimestamp);
+            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps)
+            {
+                HasDeviceTimestamp = hasDeviceTimestamp
+            };
 
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)

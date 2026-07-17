@@ -327,7 +327,10 @@ public sealed class SdCardFileParser
                 ? msg.AnalogInDataTs.ToArray()
                 : null;
 
-            yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps, hasDeviceTimestamp);
+            yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps)
+            {
+                HasDeviceTimestamp = hasDeviceTimestamp
+            };
         }
     }
 #pragma warning restore CS1998

@@ -153,7 +153,10 @@ public sealed class SdCardJsonFileParser
                 absoluteTime = baseTime.AddSeconds(elapsedSeconds);
             }
 
-            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, null, hasDeviceTimestamp);
+            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, null)
+            {
+                HasDeviceTimestamp = hasDeviceTimestamp
+            };
 
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)
