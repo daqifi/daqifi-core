@@ -58,6 +58,11 @@ public class DeviceMetadata
     public string HostName { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets the user-defined friendly name of the device.
+    /// </summary>
+    public string FriendlyName { get; set; } = string.Empty;
+
+    /// <summary>
     /// Gets or sets the TCP port for device communication.
     /// </summary>
     public int DevicePort { get; set; }
@@ -108,6 +113,11 @@ public class DeviceMetadata
         if (!string.IsNullOrWhiteSpace(message.HostName))
         {
             HostName = message.HostName;
+        }
+
+        if (!string.IsNullOrEmpty(message.FriendlyDeviceName))
+        {
+            FriendlyName = message.FriendlyDeviceName;
         }
 
         if (message.DevicePort != 0)
