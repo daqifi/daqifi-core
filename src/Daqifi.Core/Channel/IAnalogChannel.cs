@@ -16,6 +16,13 @@ public interface IAnalogChannel : IChannel
     double MaxValue { get; set; }
 
     /// <summary>
+    /// Gets whether the configured display range (<see cref="MinValue"/>..<see cref="MaxValue"/>) is
+    /// bipolar (spans negative voltages, as ±1V/±5V/±10V differential ranges do) rather than unipolar
+    /// (0V-and-up). Lets range-selection UI branch on polarity without hardcoding per-device assumptions.
+    /// </summary>
+    bool IsBipolar { get; }
+
+    /// <summary>
     /// Gets the resolution of the ADC, expressed as the maximum raw count (e.g., 65535 for 16-bit,
     /// 262143 for 18-bit) — i.e. 2^bits - 1, not 2^bits. This value is a direct divisor in
     /// <see cref="GetScaledValue"/>.

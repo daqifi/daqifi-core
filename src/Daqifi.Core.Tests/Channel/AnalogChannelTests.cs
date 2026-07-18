@@ -276,6 +276,196 @@ public class AnalogChannelTests
         Assert.Equal(5.0, channel.PortRange);
     }
 
+    // ---------------------------------------------------------------------
+    // Bounds validation (daqifi-core#300)
+    // ---------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(254u)]        // just below the 8-bit max-count floor
+    [InlineData(16_777_217u)] // just above the 24-bit max-count ceiling
+    public void Constructor_WithOutOfRangeResolution_ThrowsException(uint resolution)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AnalogChannel(channelNumber: 0, resolution: resolution));
+    }
+
+    [Theory]
+    [InlineData(255u)]         // 8-bit max-count floor
+    [InlineData(16_777_216u)]  // 24-bit ceiling
+    public void Constructor_WithBoundaryResolution_IsAccepted(uint resolution)
+    {
+        var channel = new AnalogChannel(channelNumber: 0, resolution: resolution);
+        Assert.Equal(resolution, channel.Resolution);
+    }
+
+    [Theory]
+    [InlineData(0.0)]                        // zero range
+    [InlineData(-5.0)]                       // negative range
+    [InlineData(AnalogChannel.MaxPortRangeVolts + 0.1)] // beyond max
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void PortRange_WithInvalidValue_ThrowsException(double value)
+    {
+        var channel = new AnalogChannel(0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.PortRange = value);
+    }
+
+    [Theory]
+    [InlineData(0.0)]  // zero scale factor discards the measurement
+    [InlineData(double.NaN)]
+    [InlineData(double.NegativeInfinity)]
+    [InlineData(AnalogChannel.MaxCalibrationMagnitude * 2)]
+    public void CalibrationM_WithInvalidValue_ThrowsException(double value)
+    {
+        var channel = new AnalogChannel(0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.CalibrationM = value);
+    }
+
+    [Fact]
+    public void CalibrationM_WithNegativeValue_IsAccepted()
+    {
+        // A negative slope legitimately inverts the signal (e.g. reversed wiring).
+        var channel = new AnalogChannel(0) { CalibrationM = -2.5 };
+        Assert.Equal(-2.5, channel.CalibrationM);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(AnalogChannel.MaxCalibrationMagnitude * 2)]
+    public void CalibrationB_WithInvalidValue_ThrowsException(double value)
+    {
+        var channel = new AnalogChannel(0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.CalibrationB = value);
+    }
+
+    [Fact]
+    public void CalibrationB_WithZero_IsAccepted()
+    {
+        // Zero is a valid offset (it's the default).
+        var channel = new AnalogChannel(0) { CalibrationB = 0.0 };
+        Assert.Equal(0.0, channel.CalibrationB);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void InternalScaleM_WithInvalidValue_ThrowsException(double value)
+    {
+        var channel = new AnalogChannel(0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.InternalScaleM = value);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.NegativeInfinity)]
+    public void MinValue_WithNonFinite_ThrowsException(double value)
+    {
+        var channel = new AnalogChannel(0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MinValue = value);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void MaxValue_WithNonFinite_ThrowsException(double value)
+    {
+        var channel = new AnalogChannel(0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => channel.MaxValue = value);
+    }
+
+    [Fact]
+    public void PortRange_AtMaxBoundary_IsAccepted()
+    {
+        var channel = new AnalogChannel(0) { PortRange = AnalogChannel.MaxPortRangeVolts };
+        Assert.Equal(AnalogChannel.MaxPortRangeVolts, channel.PortRange);
+    }
+
+    // ---------------------------------------------------------------------
+    // Bipolar / signed scaling (daqifi-core#297)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public void GetScaledValue_WithNegativeRawValue_ProducesNegativeVoltage()
+    {
+        // ±10V bipolar range: signed two's-complement raw counts should map straight through
+        // to signed voltages with no unipolar-only assumption in the formula.
+        var channel = new AnalogChannel(0, 262143)
+        {
+            PortRange = 10.0,
+            CalibrationM = 1.0,
+            CalibrationB = 0.0,
+            InternalScaleM = 1.0,
+            MinValue = -10.0,
+            MaxValue = 10.0
+        };
+
+        // -full scale -> -PortRange
+        Assert.Equal(-10.0, channel.GetScaledValue(-262143), precision: 6);
+        // -half scale -> -PortRange/2
+        Assert.Equal(-5.0, channel.GetScaledValue(-131072), precision: 2);
+        // zero raw -> 0 V (no offset)
+        Assert.Equal(0.0, channel.GetScaledValue(0), precision: 6);
+    }
+
+    [Fact]
+    public void GetScaledValue_IsSymmetricAboutZeroForBipolarRange()
+    {
+        var channel = new AnalogChannel(0, 65535)
+        {
+            PortRange = 5.0,
+            CalibrationM = 1.0,
+            CalibrationB = 0.0,
+            InternalScaleM = 1.0
+        };
+
+        var positive = channel.GetScaledValue(20000);
+        var negative = channel.GetScaledValue(-20000);
+
+        Assert.Equal(-positive, negative, precision: 9);
+    }
+
+    [Fact]
+    public void GetScaledValue_WithNegativeRawAndOffset_AppliesOffsetAfterSignedGain()
+    {
+        // Formula: (raw/Res * PortRange * M + B) * InternalScaleM.
+        // At -full scale with M=1, B=1: (-1 * 10 * 1 + 1) = -9.
+        var channel = new AnalogChannel(0, 262143)
+        {
+            PortRange = 10.0,
+            CalibrationM = 1.0,
+            CalibrationB = 1.0,
+            InternalScaleM = 1.0
+        };
+
+        Assert.Equal(-9.0, channel.GetScaledValue(-262143), precision: 6);
+    }
+
+    [Fact]
+    public void GetScaledValue_WithNegativeCalibrationM_InvertsSign()
+    {
+        var channel = new AnalogChannel(0, 65535)
+        {
+            PortRange = 10.0,
+            CalibrationM = -1.0,
+            CalibrationB = 0.0,
+            InternalScaleM = 1.0
+        };
+
+        // A negative raw with an inverting slope yields a positive voltage.
+        Assert.Equal(10.0, channel.GetScaledValue(-65535), precision: 6);
+    }
+
+    [Fact]
+    public void IsBipolar_ReflectsConfiguredMinValue()
+    {
+        var bipolar = new AnalogChannel(0) { MinValue = -10.0, MaxValue = 10.0 };
+        Assert.True(bipolar.IsBipolar);
+
+        var unipolar = new AnalogChannel(0) { MinValue = 0.0, MaxValue = 10.0 };
+        Assert.False(unipolar.IsBipolar);
+    }
+
     [Fact]
     public void ToString_ReturnsChannelName()
     {
