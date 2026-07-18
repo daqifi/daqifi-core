@@ -102,7 +102,7 @@ public class WifiBridgeActivatorTests
         var ran = false;
 
         await WifiBridgeActivator.RunWithHardTimeoutAsync(
-            () => ran = true,
+            _ => ran = true,
             "TestOp",
             CancellationToken.None);
 
@@ -114,7 +114,7 @@ public class WifiBridgeActivatorTests
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             WifiBridgeActivator.RunWithHardTimeoutAsync(
-                () => throw new InvalidOperationException("boom"),
+                _ => throw new InvalidOperationException("boom"),
                 "TestOp",
                 CancellationToken.None));
     }
@@ -130,7 +130,7 @@ public class WifiBridgeActivatorTests
 
             var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
                 WifiBridgeActivator.RunWithHardTimeoutAsync(
-                    () =>
+                    _ =>
                     {
                         // Simulates SerialPort.Open()'s uncancellable native hang: this
                         // blocking wait ignores the hard timeout entirely and only
@@ -167,7 +167,7 @@ public class WifiBridgeActivatorTests
             var released = new ManualResetEventSlim(false);
 
             var runTask = WifiBridgeActivator.RunWithHardTimeoutAsync(
-                () =>
+                _ =>
                 {
                     released.Wait();
                 },
@@ -179,6 +179,49 @@ public class WifiBridgeActivatorTests
             await Assert.ThrowsAsync<OperationCanceledException>(() => runTask);
 
             released.Set();
+        }
+        finally
+        {
+            WifiBridgeActivator.HardTimeoutMs = originalTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task RunWithHardTimeoutAsync_HardTimeoutElapses_StopsWorkerBeforeLateStep()
+    {
+        // Qodo review #326 finding #2: once the hard timeout fires, an operation that
+        // is still running (e.g. Open() returned late) must observe cancellation via
+        // the token it was given and stop before performing a further state-changing
+        // step, rather than being left free to run to completion after the caller
+        // already received a TimeoutException.
+        var originalTimeout = WifiBridgeActivator.HardTimeoutMs;
+        WifiBridgeActivator.HardTimeoutMs = 50;
+        try
+        {
+            var lateStepRan = false;
+            var lateStepGate = new ManualResetEventSlim(false);
+
+            var runTask = WifiBridgeActivator.RunWithHardTimeoutAsync(
+                token =>
+                {
+                    // Simulates Open() blocking well past the hard timeout, then
+                    // finally returning — the operation must check the token before
+                    // doing anything further.
+                    lateStepGate.Wait();
+                    token.ThrowIfCancellationRequested();
+                    lateStepRan = true;
+                },
+                "TestOp",
+                CancellationToken.None);
+
+            await Assert.ThrowsAsync<TimeoutException>(() => runTask);
+
+            // Only now let the blocked operation proceed, well after the internal
+            // hard-timeout token should already be cancelled.
+            lateStepGate.Set();
+            await Task.Delay(50);
+
+            Assert.False(lateStepRan);
         }
         finally
         {

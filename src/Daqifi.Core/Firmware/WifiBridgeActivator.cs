@@ -129,7 +129,7 @@ public static class WifiBridgeActivator
         cancellationToken.ThrowIfCancellationRequested();
 
         return RunWithHardTimeoutAsync(
-            () => Activate(portName, cancellationToken),
+            token => Activate(portName, token),
             nameof(ActivateAsync),
             cancellationToken);
     }
@@ -151,7 +151,7 @@ public static class WifiBridgeActivator
         cancellationToken.ThrowIfCancellationRequested();
 
         return RunWithHardTimeoutAsync(
-            () => Deactivate(portName, cancellationToken),
+            token => Deactivate(portName, token),
             nameof(DeactivateAsync),
             cancellationToken);
     }
@@ -164,46 +164,91 @@ public static class WifiBridgeActivator
     /// abandonment path directly with a synthetic hang, without needing a real
     /// wedged serial port.
     /// </summary>
-    /// <param name="operation">The synchronous operation to isolate.</param>
+    /// <param name="operation">
+    /// The synchronous operation to isolate. Receives a token that is already
+    /// cancelled once the hard timeout elapses — <see cref="Activate(string, CancellationToken)"/>
+    /// / <see cref="Deactivate(string, CancellationToken)"/> observe it between
+    /// port-open and each subsequent delay/write, so a late-returning
+    /// <see cref="System.IO.Ports.SerialPort.Open"/> still stops the sequence
+    /// before it sends any SCPI command (Qodo review #326 #2: a late open must
+    /// not let an abandoned worker mutate device state after the caller already
+    /// received a <see cref="TimeoutException"/>).
+    /// </param>
     /// <param name="operationName">Used only in the <see cref="TimeoutException"/> message.</param>
     /// <param name="cancellationToken">Cancellation token observed while waiting for the worker task.</param>
-    internal static async Task RunWithHardTimeoutAsync(Action operation, string operationName, CancellationToken cancellationToken)
+    internal static async Task RunWithHardTimeoutAsync(Action<CancellationToken> operation, string operationName, CancellationToken cancellationToken)
     {
+        var hardTimeoutMs = HardTimeoutMs;
+
+        // hardTimeoutCts fires on its own timer independent of the Task.Delay race
+        // below, so it reaches the worker even if Open() only returns long after
+        // the race has already been decided. linkedCts is what the worker actually
+        // observes: caller cancellation OR the hard timeout, whichever comes first.
+        var hardTimeoutCts = new CancellationTokenSource(hardTimeoutMs);
+        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardTimeoutCts.Token);
+
         // Task.Run: the operation's SerialPort.Open() and blocking stream writes
         // would otherwise run on the CALLING thread up to first await — on a UI
         // thread that means a stuck open freezes the window. Pass
         // CancellationToken.None to Task.Run itself: the inner token still
         // cancels the operation's own delays; we never want "cancelled before
         // start" to look like an operation fault.
-        var workerTask = Task.Run(operation, CancellationToken.None);
+        var workerTask = Task.Run(() => operation(linkedCts.Token), CancellationToken.None);
 
-        var winner = await Task.WhenAny(
-            workerTask,
-            Task.Delay(HardTimeoutMs, cancellationToken)).ConfigureAwait(false);
-
-        if (winner == workerTask)
+        try
         {
+            var winner = await Task.WhenAny(
+                workerTask,
+                Task.Delay(hardTimeoutMs, cancellationToken)).ConfigureAwait(false);
+
+            // Only abandon when the worker is genuinely still running. WhenAny can
+            // return the delay/cancellation task even though workerTask completed
+            // right at that same boundary — awaiting it below instead of throwing
+            // honors that result instead of discarding it (Qodo review #326 #1,
+            // same race SerialDeviceFinder guards against per #295).
+            if (winner != workerTask && !workerTask.IsCompleted)
+            {
+                // Open() is uncancellable, so on timeout/cancellation the worker task
+                // is ABANDONED rather than awaited — it may still be blocked in native
+                // I/O. Observe its eventual fault so it can't surface as an
+                // UnobservedTaskException once the stuck I/O finally completes, and
+                // dispose the token sources only once the worker is done with them
+                // (disposing early would make its still-pending WaitOrCancel/
+                // WriteCommand calls throw ObjectDisposedException instead of
+                // observing cancellation).
+                _ = workerTask.ContinueWith(
+                    t =>
+                    {
+                        _ = t.Exception;
+                        linkedCts.Dispose();
+                        hardTimeoutCts.Dispose();
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+
+                // Prefer surfacing caller cancellation over a generic timeout when
+                // both raced at once.
+                cancellationToken.ThrowIfCancellationRequested();
+
+                throw new TimeoutException(
+                    $"{operationName} did not complete within {hardTimeoutMs}ms; the serial port open may be permanently blocked.");
+            }
+
             // Propagate success or the operation's own exception unchanged.
             await workerTask.ConfigureAwait(false);
-            return;
         }
-
-        // Open() is uncancellable, so on timeout/cancellation the worker task is
-        // ABANDONED rather than awaited — it may still be blocked in native I/O.
-        // Observe its eventual fault so it can't surface as an
-        // UnobservedTaskException once the stuck I/O finally completes.
-        _ = workerTask.ContinueWith(
-            t => { _ = t.Exception; },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-
-        // Prefer surfacing caller cancellation over a generic timeout when both
-        // raced at once.
-        cancellationToken.ThrowIfCancellationRequested();
-
-        throw new TimeoutException(
-            $"{operationName} did not complete within {HardTimeoutMs}ms; the serial port open may be permanently blocked.");
+        finally
+        {
+            // The abandon path above transfers disposal ownership to its own
+            // continuation instead — only dispose here when the worker already
+            // finished (the common, non-hung case).
+            if (workerTask.IsCompleted)
+            {
+                linkedCts.Dispose();
+                hardTimeoutCts.Dispose();
+            }
+        }
     }
 
     private static void WriteCommand(SerialStreamTransport transport, IOutboundMessage<string> message, CancellationToken cancellationToken)
