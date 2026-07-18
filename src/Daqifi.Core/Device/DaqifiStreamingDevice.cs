@@ -1461,6 +1461,11 @@ namespace Daqifi.Core.Device
         /// <returns>Metadata about the downloaded file.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardEmptyTransferException">
+        /// Thrown when the device serves a marker-only (0-byte) transfer for the file across all
+        /// retry attempts, indicating its SD subsystem is not ready rather than the file being
+        /// legitimately empty.
+        /// </exception>
         public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             Stream destinationStream,
@@ -1514,14 +1519,32 @@ namespace Daqifi.Core.Device
                     // Send the SCPI command to request the file
                     Send(ScpiMessageProducer.GetSdFile(fileName));
 
-                    // Receive the file data
+                    // Receive the file data. A marker-only (0-byte) transfer means the device's
+                    // SD subsystem wasn't ready when it opened the file - the same kind of
+                    // transient condition GetSdCardFilesAsync's LIST retry already absorbs - so
+                    // retry the GET a bounded number of times before giving up (see #264).
                     var receiver = new SdCardFileReceiver(stream);
-                    var bytesReceived = await receiver.ReceiveAsync(
-                        destinationStream,
-                        fileName,
-                        progress,
-                        timeout: TimeSpan.FromMinutes(30),
-                        cancellationToken: ct).ConfigureAwait(false);
+                    long bytesReceived;
+                    var attempt = 0;
+                    while (true)
+                    {
+                        try
+                        {
+                            bytesReceived = await receiver.ReceiveAsync(
+                                destinationStream,
+                                fileName,
+                                progress,
+                                timeout: TimeSpan.FromMinutes(30),
+                                cancellationToken: ct).ConfigureAwait(false);
+                            break;
+                        }
+                        catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
+                        {
+                            attempt++;
+                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
+                            Send(ScpiMessageProducer.GetSdFile(fileName));
+                        }
+                    }
 
                     fileSize = bytesReceived;
                 }, cancellationToken).ConfigureAwait(false);
