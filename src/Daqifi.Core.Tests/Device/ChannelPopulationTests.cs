@@ -270,6 +270,40 @@ public class ChannelPopulationTests
         Assert.Equal(5.0, analogChannels[1].PortRange, 3);
     }
 
+    [Theory]
+    [InlineData(0u)]            // missing resolution
+    [InlineData(1u)]            // non-zero but below MinResolution
+    [InlineData(uint.MaxValue)] // above MaxResolution
+    public void PopulateChannelsFromStatus_WithUnusableResolution_FallsBackWithoutThrowing(uint reportedResolution)
+    {
+        // A non-zero but out-of-range AnalogInRes must not reach the AnalogChannel constructor
+        // (which now rejects it) and abort channel population — it should fall back to the assumed
+        // default and flag ResolutionIsAssumed, on both the new-channel and reuse paths.
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 2,
+            AnalogInRes = reportedResolution
+        };
+
+        // First population creates the channels; second re-populates (exercises the reuse path via
+        // UpdateScalingFromStatus) — neither should throw.
+        device.PopulateChannelsFromStatus(message);
+        device.PopulateChannelsFromStatus(message);
+
+        var analogChannels = device.Channels
+            .Where(c => c.Type == ChannelType.Analog)
+            .Cast<IAnalogChannel>()
+            .ToList();
+
+        Assert.Equal(2, analogChannels.Count);
+        foreach (var ch in analogChannels)
+        {
+            Assert.Equal(65535u, ch.Resolution);
+            Assert.True(ch.ResolutionIsAssumed);
+        }
+    }
+
     [Fact]
     public void PopulateChannelsFromStatus_AnalogChannelsHaveCorrectResolution()
     {

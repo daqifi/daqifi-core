@@ -1328,12 +1328,19 @@ namespace Daqifi.Core.Device
             var analogInResolution = message.AnalogInRes;
 
             var count = (int)message.AnalogInPortNum;
-            var resolutionIsAssumed = analogInResolution == 0;
-            var resolution = analogInResolution > 0 ? analogInResolution : 65535;
+
+            // Treat both a missing (0) and a physically-implausible out-of-range resolution as
+            // "assumed": the AnalogChannel constructor/setters now reject anything outside
+            // [MinResolution, MaxResolution], so passing a corrupt non-zero value straight through
+            // would throw and abort channel population mid-stream. Fall back to a safe default and
+            // log instead, so a corrupted status frame can neither crash population nor silently
+            // corrupt every scaled sample on the reuse path (UpdateScalingFromStatus below).
+            var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinResolution or > AnalogChannel.MaxResolution;
+            var resolution = resolutionIsAssumed ? 65535u : analogInResolution;
 
             if (resolutionIsAssumed && count > 0)
             {
-                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported no ADC resolution (analog_in_res=0) for {count} analog channel(s); assuming {resolution}. Scaled samples on this device may be systematically wrong.");
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported no usable ADC resolution (analog_in_res={analogInResolution}) for {count} analog channel(s); assuming {resolution}. Scaled samples on this device may be systematically wrong.");
             }
 
             for (var i = 0; i < count; i++)
