@@ -322,6 +322,27 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
+        public async Task UpdateNetworkConfigurationAsync_OverWifi_StillReEnablesLan()
+        {
+            // Regression: network reconfiguration must bring the LAN back up after ApplyNetworkLan
+            // even over a non-USB (WiFi/TCP) control transport — it owns the LAN state and must NOT
+            // rely on the transport-aware PrepareLanInterface (which leaves LAN alone over WiFi).
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.SelfHosted,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (unconditional)
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);       // DisableStorageSd
+        }
+
+        [Fact]
         public void PrepareSdInterface_WhenDisconnected_ThrowsInvalidOperationException()
         {
             // Arrange

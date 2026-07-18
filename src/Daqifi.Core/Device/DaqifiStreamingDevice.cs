@@ -881,8 +881,14 @@ namespace Daqifi.Core.Device
             // Wait for WiFi module to restart
             await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
 
-            // Re-enable LAN interface (SD card and LAN share SPI bus)
-            PrepareLanInterface();
+            // Re-enable the LAN interface after the reconfig. ApplyNetworkLan restarts the WiFi
+            // module, so this is a network-configuration step that OWNS the LAN state and must
+            // bring LAN back up regardless of the control transport. It deliberately does NOT call
+            // PrepareLanInterface() — that is the transport-aware SD-operation restore, which
+            // leaves the LAN alone over WiFi (where #598/#599 keep it up). Here the LAN enable is
+            // unconditional.
+            Send(ScpiMessageProducer.DisableStorageSd);
+            Send(ScpiMessageProducer.EnableNetworkLan);
 
             // Save configuration to persist across restarts
             Send(ScpiMessageProducer.SaveNetworkLan);
