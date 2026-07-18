@@ -69,20 +69,29 @@ namespace Daqifi.Core.Device.Network
         Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Prepares the SD card interface for use by disabling the LAN interface.
+        /// Prepares the SD card interface for use. Over USB the LAN interface is disabled first to
+        /// free the shared SPI bus for the SD card. Over WiFi/TCP the LAN is left enabled.
         /// </summary>
         /// <remarks>
-        /// The SD card and LAN interfaces share the same SPI bus on the device hardware
-        /// and cannot be used simultaneously. Call this method before accessing the SD card.
+        /// On older firmware the SD card and LAN interfaces share the same SPI bus and cannot be
+        /// used simultaneously, so over USB the LAN is disabled before accessing the SD card. On
+        /// firmware &gt;= v3.7.0 (#598/#599) the Harmony SPI driver arbitrates SD/WiFi transactions
+        /// on the shared bus, so over a WiFi/TCP control transport the LAN MUST stay enabled (the
+        /// SD reply routes back over that channel). Call this method before accessing the SD card.
         /// </remarks>
         void PrepareSdInterface();
 
         /// <summary>
-        /// Prepares the LAN interface for use by disabling the SD card interface.
+        /// Prepares the LAN interface for use by disabling the SD card interface. Over USB the LAN
+        /// is re-enabled; over WiFi/TCP the LAN (never disabled) is left untouched.
         /// </summary>
         /// <remarks>
-        /// The SD card and LAN interfaces share the same SPI bus on the device hardware
-        /// and cannot be used simultaneously. Call this method before using network communication.
+        /// The mirror of <see cref="PrepareSdInterface"/> for restoring the interface after an SD
+        /// card operation. Over USB it disables the SD subsystem and re-enables the LAN. Over a
+        /// WiFi/TCP control transport the LAN was never disabled, so it is left alone (re-enabling
+        /// it would re-initialize the WiFi module and drop the connection). Note: a
+        /// network-reconfiguration flow that must unconditionally bring the LAN back up should
+        /// enable it explicitly rather than rely on this transport-aware helper.
         /// </remarks>
         void PrepareLanInterface();
     }

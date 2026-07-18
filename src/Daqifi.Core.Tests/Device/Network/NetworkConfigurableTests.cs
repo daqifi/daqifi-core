@@ -322,6 +322,27 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
+        public async Task UpdateNetworkConfigurationAsync_OverWifi_StillReEnablesLan()
+        {
+            // Regression: network reconfiguration must bring the LAN back up after ApplyNetworkLan
+            // even over a non-USB (WiFi/TCP) control transport — it owns the LAN state and must NOT
+            // rely on the transport-aware PrepareLanInterface (which leaves LAN alone over WiFi).
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.SelfHosted,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (unconditional)
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);       // DisableStorageSd
+        }
+
+        [Fact]
         public void PrepareSdInterface_WhenDisconnected_ThrowsInvalidOperationException()
         {
             // Arrange
@@ -377,6 +398,37 @@ namespace Daqifi.Core.Tests.Device.Network
             Assert.Equal(2, sentCommands.Count);
             Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[0]); // Disable SD
             Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[1]); // Enable LAN
+        }
+
+        [Fact]
+        public void PrepareSdInterface_OverWifi_LeavesLanEnabled()
+        {
+            // Over WiFi/TCP (fw >= v3.7.0, #598/#599) the LAN must stay enabled — the SPI driver
+            // arbitrates SD/WiFi transactions, and disabling LAN would drop the TCP channel that
+            // carries the SD reply. Only the SD subsystem is enabled.
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+
+            device.PrepareSdInterface();
+
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 0", sent); // no DisableNetworkLan
+            Assert.Contains("SYSTem:STORage:SD:ENAble 1", sent);             // SD still enabled
+        }
+
+        [Fact]
+        public void PrepareLanInterface_OverWifi_LeavesLanUntouched()
+        {
+            // Over WiFi the LAN was never disabled, so it must not be re-enabled (that would
+            // re-initialize the WiFi module and drop the connection). SD is still returned to idle.
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+
+            device.PrepareLanInterface();
+
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // no EnableNetworkLan
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sent);             // SD disabled
         }
 
         [Fact]
@@ -523,10 +575,39 @@ namespace Daqifi.Core.Tests.Device.Network
             {
             }
 
+            /// <summary>
+            /// Reports a USB connection so the interface-prep tests assert the USB sequence
+            /// (LAN disabled to free the shared SPI bus, then restored). The WiFi sequence — where
+            /// the LAN is left enabled — is covered by <see cref="PrepareSdInterface_OverWifi_LeavesLanEnabled"/>
+            /// and the SD-over-WiFi operation tests.
+            /// </summary>
+            public override bool IsUsbConnection => true;
+
             public override void Send<T>(IOutboundMessage<T> message)
             {
                 // Override to capture the message instead of sending it.
                 // This avoids the base class's check for a real connection.
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    SentMessages.Add(stringMessage);
+                }
+            }
+        }
+
+        /// <summary>Non-USB (WiFi/TCP) variant for the transport-aware interface-prep tests.</summary>
+        private class TestableNonUsbDaqifiStreamingDevice : DaqifiStreamingDevice
+        {
+            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+
+            public TestableNonUsbDaqifiStreamingDevice(string name, IPAddress? ipAddress = null)
+                : base(name, ipAddress)
+            {
+            }
+
+            public override bool IsUsbConnection => false;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
                 if (message is IOutboundMessage<string> stringMessage)
                 {
                     SentMessages.Add(stringMessage);

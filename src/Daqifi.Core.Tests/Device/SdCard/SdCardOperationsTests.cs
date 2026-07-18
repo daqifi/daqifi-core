@@ -2,6 +2,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
+using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -1430,18 +1431,174 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task DownloadSdCardFileAsync_WhenNotSerialTransport_Throws()
+        public async Task DownloadSdCardFileAsync_OverWifi_BelowMinFirmware_ThrowsFeatureNotSupported()
         {
-            // Arrange — use a device that reports IsUsbConnection = false
+            // Over WiFi (non-USB), SD file transfer requires firmware >= v3.7.0 (#598/#599).
+            // A below-minimum reported version gets the typed, actionable feature exception —
+            // superseding the old blanket "only supported over USB" InvalidOperationException.
             var device = new TestableNonUsbStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = "3.6.3";
             device.Connect();
             using var stream = new MemoryStream();
 
             // Act & Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
                 () => device.DownloadSdCardFileAsync("test.bin", stream));
-            Assert.Contains("USB", ex.Message);
+            Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
+            Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), ex.RequiredVersion);
         }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_OverWifi_UnparseableFirmware_ThrowsFeatureNotSupported()
+        {
+            // An unset / unparseable reported version is treated as unsupported over WiFi.
+            var device = new TestableNonUsbStreamingDevice("TestDevice");
+            device.Connect();
+            using var stream = new MemoryStream();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.DownloadSdCardFileAsync("test.bin", stream));
+            Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
+        }
+
+        #region SD-over-WiFi firmware gate (#598/#599 — requires firmware >= v3.7.0)
+
+        [Theory]
+        [InlineData("3.7.0")]
+        [InlineData("3.7.2")]
+        [InlineData("3.8.0")]
+        public async Task GetSdCardFilesAsync_OverWifi_AtOrAboveMinFirmware_Succeeds(string firmware)
+        {
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = firmware;
+            device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            Assert.Single(files);
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:LIST?", sent);
+            // Over WiFi the LAN interface must NOT be toggled — disabling it would drop the TCP
+            // channel carrying the SD reply (#598/#599: the SPI driver arbitrates instead).
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 0", sent); // DisableNetworkLan
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
+            // The SD subsystem is still toggled (that does not touch the LAN).
+            Assert.Contains("SYSTem:STORage:SD:ENAble 1", sent);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_OverUsb_TogglesLanInterface()
+        {
+            // Regression: over USB the LAN interface IS disabled (free the shared SPI bus) and
+            // restored — the transport-aware PrepareSdInterface/PrepareLanInterface must keep this.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
+            device.Connect();
+
+            await device.GetSdCardFilesAsync();
+
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sent); // DisableNetworkLan
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan (restore)
+        }
+
+        [Theory]
+        [InlineData("3.6.3")]
+        [InlineData("3.5.0")]
+        [InlineData("")]
+        [InlineData("not-a-version")]
+        [InlineData("999999999999999999.0.0")] // overflows Int32 — must fail closed, not crash
+        public async Task GetSdCardFilesAsync_OverWifi_BelowMinOrUnparseableFirmware_ThrowsFeatureNotSupported(string firmware)
+        {
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = firmware;
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.GetSdCardFilesAsync());
+            Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
+            Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), ex.RequiredVersion);
+            // The gate short-circuits up front — no SD command should have been dispatched over
+            // a transport the firmware can't service (else it would stall on the shared SPI bus).
+            Assert.DoesNotContain("SYSTem:STORage:SD:LIST?", device.SentMessages.Select(m => m.Data));
+        }
+
+        [Theory]
+        [InlineData("3.4.3")]
+        [InlineData("3.0.0b0")]
+        public async Task GetSdCardFilesAsync_OverUsb_IsNotFirmwareGated(string oldFirmware)
+        {
+            // Over USB the SD file ops are available on all SD-capable firmware — the WiFi gate
+            // must NOT apply, even for firmware far below v3.7.0.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = oldFirmware;
+            device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            Assert.Single(files);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_OverWifi_AtMinFirmware_Succeeds()
+        {
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = "3.7.0";
+            device.CannedFileData = Encoding.ASCII.GetBytes("hello");
+            device.Connect();
+            using var stream = new MemoryStream();
+
+            await device.DownloadSdCardFileAsync("data.bin", stream);
+
+            Assert.Equal("hello", Encoding.ASCII.GetString(stream.ToArray()));
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_OverWifi_BelowMinFirmware_ThrowsFeatureNotSupported()
+        {
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = "3.6.3";
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+            Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_OverWifi_AtMinFirmware_Succeeds()
+        {
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = "3.7.2";
+            device.Connect();
+
+            // Passes the gate and completes (no FeatureNotSupportedException).
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            Assert.NotEmpty(device.SentMessages);
+        }
+
+        [Theory]
+        [InlineData("3.6.3")]
+        [InlineData("")]
+        public async Task GetSdCardStorageAsync_OverWifi_BelowMinFirmware_ThrowsFeatureNotSupported(string firmware)
+        {
+            // The storage-space query drives the SD card through the same transport-aware interface
+            // prep, so it carries the same SD-over-WiFi firmware requirement and must be gated too.
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = firmware;
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.GetSdCardStorageAsync());
+            Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
+            // The gate short-circuits before any SD command touches the shared SPI bus.
+            Assert.DoesNotContain("SYSTem:STORage:SD:SPACe?", device.SentMessages.Select(m => m.Data));
+        }
+
+        #endregion
 
         [Theory]
         [InlineData(null)]
@@ -1646,6 +1803,12 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 : base(name, ipAddress)
             {
             }
+
+            /// <summary>
+            /// Reports a USB connection so these LIST retry/parsing tests are not subject to the
+            /// SD-over-WiFi firmware gate (which is exercised separately by the non-USB doubles).
+            /// </summary>
+            public override bool IsUsbConnection => true;
 
             public override void Send<T>(IOutboundMessage<T> message)
             {
@@ -1942,6 +2105,68 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             public override void Send<T>(IOutboundMessage<T> message)
             {
+            }
+        }
+
+        /// <summary>
+        /// A testable device that reports <see cref="DaqifiStreamingDevice.IsUsbConnection"/> = false
+        /// (WiFi/TCP) but can still service SD file operations (list/get/delete), so the
+        /// firmware-version gate for SD-over-WiFi can be exercised on the *success* path. Mirrors
+        /// <c>TestableDownloadDevice</c> but over a non-USB transport.
+        /// </summary>
+        private class TestableNonUsbSdCardStreamingDevice : DaqifiStreamingDevice
+        {
+            private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
+
+            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+            public List<string> CannedTextResponse { get; set; } = new();
+            public byte[] CannedFileData { get; set; } = Array.Empty<byte>();
+
+            public TestableNonUsbSdCardStreamingDevice(string name, IPAddress? ipAddress = null)
+                : base(name, ipAddress)
+            {
+            }
+
+            public override bool IsUsbConnection => false;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    SentMessages.Add(stringMessage);
+                }
+            }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                setupAction();
+                return Task.FromResult<IReadOnlyList<string>>(CannedTextResponse);
+            }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                await setupActionAsync(cancellationToken).ConfigureAwait(false);
+                return CannedTextResponse;
+            }
+
+            protected override async Task ExecuteRawCaptureAsync(
+                Func<Stream, CancellationToken, Task> rawAction,
+                CancellationToken cancellationToken = default)
+            {
+                var data = new byte[CannedFileData.Length + EofMarker.Length];
+                Array.Copy(CannedFileData, 0, data, 0, CannedFileData.Length);
+                Array.Copy(EofMarker, 0, data, CannedFileData.Length, EofMarker.Length);
+
+                using var fakeStream = new MemoryStream(data);
+                await rawAction(fakeStream, cancellationToken);
             }
         }
     }

@@ -36,8 +36,10 @@ client-relevant boundary, not the commit date.
 
 **Release timeline (tag → date):** v3.0.0b0 (2025-01-14) → v3.0.0b2 (2025-08-04) →
 v3.1.0b2 (2025-10-09) → v3.2.0 (2025-11-06) → v3.4.3 (2026-01-30) → v3.4.4 (2026-02-06) →
-v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → **v3.6.1**
-(pending; HEAD as of 2026-06-18, not yet a published git tag).
+v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → v3.6.1 → v3.6.3 →
+**v3.7.0** → v3.7.1 → **v3.7.2** (current firmware HEAD). SD file transfer over WiFi
+(firmware #598/#599, commit `bf105585` = `git describe` v3.6.3-6) first shipped in the
+**v3.7.0** release tag (`git tag --contains bf105585`).
 
 **Feature → first released firmware (× board variant):**
 
@@ -55,14 +57,21 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → **v3.6
 | WiFi associated-AP MAC | `SYSTem:COMMunicate:LAN:BSSID?` | v3.5.0 | WiFi | #516 |
 | WiFi throughput finder | `SYSTem:STReam:WIFI:FINd?` | v3.5.0 | WiFi | #521 |
 | In-firmware iperf2 | `SYSTem:WIFI:IPERF:*` | v3.5.0 | WiFi | #377 |
+| **SD file transfer over WiFi** (list/get/delete routed to the requesting interface) | `SYSTem:STORage:SD:LIST?` / `:GET` / `:DELete` over TCP | **v3.7.0** | **WiFi + SD HW** | [#598/#599](https://github.com/daqifi/daqifi-nyquist-firmware/pull/598) |
 
-> **Read this table through the v3.5.0 floor (Decision 1).** Every command daqifi-core
-> currently issues first shipped **at or before v3.5.0**. So on *supported* firmware there
-> is **no live firmware-version gate today** — the only differences left are *hardware*
-> capability (NQ3 for DAC, SD-card presence, WiFi presence), which is board-derived and
-> already handled by `DeviceCapabilities.FromDeviceType`. The version-gating layer below is
-> **forward-looking**: it earns its keep when we start consuming a command introduced
-> *after* the floor (v3.6.0+).
+> **Read this table through the v3.5.0 floor (Decision 1).** Every command daqifi-core issues
+> over USB first shipped **at or before v3.5.0**, so over USB on *supported* firmware the only
+> differences left are *hardware* capability (NQ3 for DAC, SD-card presence, WiFi presence),
+> board-derived and already handled by `DeviceCapabilities.FromDeviceType`.
+>
+> **The first live, above-floor firmware-version gate is now active:** SD file transfer over
+> **WiFi/TCP** requires firmware **≥ v3.7.0** (#598/#599). This is not a hardware gate — the same
+> SD-capable WiFi device supports it on v3.7.0+ and rejects it below — so it is enforced at the
+> transport in `EnsureSdFileTransferSupportedOnTransport()` (LIST/GET/DELETE), which throws
+> `FeatureNotSupportedException(SdFileTransferOverWifi, v3.7.0, …)` when the active transport is
+> not USB and the reported firmware is older/unparseable. Over USB these operations are
+> unchanged (available on all SD-capable firmware). This is exactly the forward-looking case the
+> version-gating layer was built for — a command consumed *after* the floor.
 
 **Breaking changes (behavior), by released version:**
 

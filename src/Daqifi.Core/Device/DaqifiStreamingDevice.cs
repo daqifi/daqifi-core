@@ -997,8 +997,14 @@ namespace Daqifi.Core.Device
             // Wait for WiFi module to restart
             await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
 
-            // Re-enable LAN interface (SD card and LAN share SPI bus)
-            PrepareLanInterface();
+            // Re-enable the LAN interface after the reconfig. ApplyNetworkLan restarts the WiFi
+            // module, so this is a network-configuration step that OWNS the LAN state and must
+            // bring LAN back up regardless of the control transport. It deliberately does NOT call
+            // PrepareLanInterface() — that is the transport-aware SD-operation restore, which
+            // leaves the LAN alone over WiFi (where #598/#599 keep it up). Here the LAN enable is
+            // unconditional.
+            Send(ScpiMessageProducer.DisableStorageSd);
+            Send(ScpiMessageProducer.EnableNetworkLan);
 
             // Save configuration to persist across restarts
             Send(ScpiMessageProducer.SaveNetworkLan);
@@ -1071,7 +1077,12 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Prepares the SD card interface for use by disabling the LAN interface.
+        /// Prepares the SD-card interface for a file operation. Over USB the LAN interface is
+        /// disabled first to free the shared SPI bus for the SD card. Over WiFi/TCP (firmware
+        /// &gt;= v3.7.0, #598/#599) the LAN interface MUST stay enabled — the Harmony SPI driver
+        /// arbitrates SD/WiFi transactions on the shared bus, and the SD reply routes back over the
+        /// very TCP channel that requested it, so disabling LAN would drop the control channel
+        /// mid-operation. Only the SD subsystem is enabled in that case.
         /// </summary>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         public void PrepareSdInterface()
@@ -1081,12 +1092,19 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
-            Send(ScpiMessageProducer.DisableNetworkLan);
+            if (IsUsbConnection)
+            {
+                Send(ScpiMessageProducer.DisableNetworkLan);
+            }
+
             Send(ScpiMessageProducer.EnableStorageSd);
         }
 
         /// <summary>
-        /// Prepares the LAN interface for use by disabling the SD card interface.
+        /// Restores the interface after an SD-card file operation. The SD subsystem is disabled in
+        /// both cases. Over USB the LAN interface is re-enabled (it was disabled by
+        /// <see cref="PrepareSdInterface"/>). Over WiFi/TCP the LAN was never disabled, so it is
+        /// left alone — re-enabling it would re-initialize the WiFi module and drop the connection.
         /// </summary>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         public void PrepareLanInterface()
@@ -1097,7 +1115,50 @@ namespace Daqifi.Core.Device
             }
 
             Send(ScpiMessageProducer.DisableStorageSd);
-            Send(ScpiMessageProducer.EnableNetworkLan);
+
+            if (IsUsbConnection)
+            {
+                Send(ScpiMessageProducer.EnableNetworkLan);
+            }
+        }
+
+        /// <summary>
+        /// Minimum firmware for SD-card file transfer (LIST / GET / DELETE) over a WiFi/TCP
+        /// connection. Firmware <c>#598/#599</c> (first released <b>v3.7.0</b>) route the SD reply
+        /// to the requesting interface; before that the SD card and WiFi contend for the shared SPI
+        /// bus, so these operations are USB-only on older firmware. See
+        /// <see cref="DeviceFeature.SdFileTransferOverWifi"/> and ADR 0001.
+        /// </summary>
+        internal static readonly FirmwareVersion SdOverWifiMinFirmware = new(3, 7, 0, null, 0);
+
+        /// <summary>
+        /// Guards an SD-card file operation (LIST / GET / DELETE) against the transport it will run
+        /// on. Over USB (serial) these are always available on SD-capable firmware. Over WiFi/TCP
+        /// they require firmware &gt;= <see cref="SdOverWifiMinFirmware"/> — an unparseable or older
+        /// reported version is treated as unsupported and throws a typed, actionable
+        /// <see cref="FeatureNotSupportedException"/> up front (ADR 0001) rather than dispatching a
+        /// command the firmware cannot service over WiFi (which would stall on the shared SPI bus).
+        /// </summary>
+        /// <exception cref="FeatureNotSupportedException">
+        /// Thrown when the active transport is not USB and the device firmware predates
+        /// <see cref="SdOverWifiMinFirmware"/>.
+        /// </exception>
+        private void EnsureSdFileTransferSupportedOnTransport()
+        {
+            if (IsUsbConnection)
+            {
+                return;
+            }
+
+            if (!FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var firmware)
+                || firmware < SdOverWifiMinFirmware)
+            {
+                throw new FeatureNotSupportedException(
+                    DeviceFeature.SdFileTransferOverWifi,
+                    SdOverWifiMinFirmware,
+                    Metadata.FirmwareVersion,
+                    Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
+            }
         }
 
         /// <summary>
@@ -1116,6 +1177,8 @@ namespace Daqifi.Core.Device
             {
                 throw new InvalidOperationException("Device is not connected.");
             }
+
+            EnsureSdFileTransferSupportedOnTransport();
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1186,7 +1249,13 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
-        /// <exception cref="FeatureNotSupportedException">Thrown when the device's firmware does not recognize the storage query (SCPI -113 "Undefined header"), typically because it predates <see cref="DaqifiDevice.MinSupportedFirmware"/>.</exception>
+        /// <exception cref="FeatureNotSupportedException">
+        /// Thrown when the device's firmware does not recognize the storage query (SCPI -113
+        /// "Undefined header"), typically because it predates <see cref="DaqifiDevice.MinSupportedFirmware"/>;
+        /// or, over a WiFi/TCP transport, when the firmware predates SD-over-WiFi support
+        /// (<see cref="DeviceFeature.SdFileTransferOverWifi"/>) — the storage query drives the SD
+        /// card through the same transport gate as the file operations.
+        /// </exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
         public async Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
         {
@@ -1199,6 +1268,13 @@ namespace Daqifi.Core.Device
             {
                 throw new InvalidOperationException("Cannot query SD card storage while logging to SD card.");
             }
+
+            // The storage-space query drives the SD card through the same transport-aware
+            // PrepareSdInterface() as LIST/GET/DELETE, so it carries the identical SD-over-WiFi
+            // requirement: over WiFi it needs firmware >= v3.7.0 (#598/#599 SPI arbitration) — else
+            // it would access the SD card with the LAN still enabled on firmware that never learned
+            // to arbitrate the shared bus. Gate it up front for the same reason as its siblings.
+            EnsureSdFileTransferSupportedOnTransport();
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1500,6 +1576,8 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Cannot delete files while logging to SD card.");
             }
 
+            EnsureSdFileTransferSupportedOnTransport();
+
             cancellationToken.ThrowIfCancellationRequested();
 
             if (string.IsNullOrWhiteSpace(fileName))
@@ -1615,12 +1693,10 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
-            if (!IsUsbConnection)
-            {
-                throw new InvalidOperationException(
-                    "SD card file download is only supported over USB (serial) connections. " +
-                    "The SD card and WiFi/LAN share the SPI bus, so file downloads require a USB connection.");
-            }
+            // Over WiFi/TCP this requires firmware >= v3.7.0 (#598/#599); over USB it is always
+            // available on SD-capable firmware. Older firmware over WiFi gets a typed
+            // FeatureNotSupportedException instead of the old blanket USB-only rejection (ADR 0001).
+            EnsureSdFileTransferSupportedOnTransport();
 
             if (string.IsNullOrWhiteSpace(fileName))
             {
