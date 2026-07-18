@@ -32,17 +32,30 @@ public class DeviceMetadata
     /// </summary>
     public DeviceType DeviceType { get; set; } = DeviceType.Unknown;
 
+    private DeviceCapabilities _capabilities = new();
+    private DeviceHealth _health = new();
+
     /// <summary>
-    /// Gets or sets the device capabilities.
+    /// Gets or sets the device capabilities. Assigning <c>null</c> is coerced to a fresh instance so
+    /// the status-processing path (which populates channel counts here) can never dereference null.
     /// </summary>
-    public DeviceCapabilities Capabilities { get; set; } = new DeviceCapabilities();
+    public DeviceCapabilities Capabilities
+    {
+        get => _capabilities;
+        set => _capabilities = value ?? new DeviceCapabilities();
+    }
 
     /// <summary>
     /// Gets or sets the most recent device health telemetry (battery, board temperature,
     /// power/device status) decoded from a status message. Updated on each status message,
-    /// including the periodic ones emitted during streaming.
+    /// including the periodic ones emitted during streaming. Assigning <c>null</c> is coerced to a
+    /// fresh instance so <see cref="UpdateFromProtobuf"/> can never dereference null on the status path.
     /// </summary>
-    public DeviceHealth Health { get; set; } = new DeviceHealth();
+    public DeviceHealth Health
+    {
+        get => _health;
+        set => _health = value ?? new DeviceHealth();
+    }
 
     /// <summary>
     /// Gets or sets the IP address of the device.
@@ -199,7 +212,12 @@ public class DeviceMetadata
         // Update health telemetry. proto3 scalars have no explicit presence, so a value of 0
         // is indistinguishable from "not reported"; guard on non-zero (consistent with the
         // other fields above) so a partial status message never clobbers a known reading.
-        if (message.BattStatus != 0)
+
+        // BattStatus is a uint documented as a battery percentage. Only accept an in-contract
+        // 1..100 reading: this both filters nonsensical values (>100) and avoids the uint->int
+        // wrap-to-negative a very large value would produce. Out-of-range readings are ignored
+        // (treated as not reported), leaving the last-known value in place.
+        if (message.BattStatus is >= 1 and <= 100)
         {
             Health.BatteryPercent = (int)message.BattStatus;
         }

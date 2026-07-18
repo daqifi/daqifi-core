@@ -16,8 +16,9 @@ namespace Daqifi.Core.Device;
 public class DeviceHealth
 {
     /// <summary>
-    /// Gets or sets the battery charge as a percentage (0-100), or <c>null</c> if the most
-    /// recent status message did not report it.
+    /// Gets or sets the battery charge as a percentage (1-100), or <c>null</c> if the most
+    /// recent status message did not report it. Populated only from in-contract readings; an
+    /// out-of-range value from the device is ignored rather than surfaced.
     /// </summary>
     public int? BatteryPercent { get; set; }
 

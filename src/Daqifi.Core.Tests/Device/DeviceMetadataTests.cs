@@ -190,6 +190,67 @@ public class DeviceMetadataTests
     }
 
     [Fact]
+    public void UpdateFromProtobuf_FromSerializedStatusPayload_DecodesHealthTelemetry()
+    {
+        // Arrange: build a status message, serialize it to the wire bytes a device would send,
+        // then decode it back through the protobuf parser — exercising the real frame decode path
+        // (issue #335 asks for a captured/serialized payload, not just an in-memory message).
+        var original = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            BattStatus = 87,
+            TempStatus = -5,
+            PwrStatus = 2,
+            DeviceStatus = 5
+        };
+        byte[] payload = original.ToByteArray();
+        var decoded = DaqifiOutMessage.Parser.ParseFrom(payload);
+
+        var metadata = new DeviceMetadata();
+
+        // Act
+        metadata.UpdateFromProtobuf(decoded);
+
+        // Assert
+        Assert.Equal(87, metadata.Health.BatteryPercent);
+        Assert.Equal(-5, metadata.Health.BoardTemperatureCelsius);
+        Assert.Equal(2u, metadata.Health.PowerStatus);
+        Assert.Equal(5u, metadata.Health.DeviceStatus);
+    }
+
+    [Theory]
+    [InlineData(101u)]      // above the documented 0-100 range
+    [InlineData(500u)]      // clearly nonsensical
+    [InlineData(uint.MaxValue)] // would wrap to -1 if cast straight to int
+    public void UpdateFromProtobuf_OutOfRangeBattery_IsIgnored(uint battStatus)
+    {
+        // Arrange: a prior valid reading, then a bad one.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 60 });
+
+        // Act
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = battStatus });
+
+        // Assert: out-of-range battery never surfaces (and never wraps negative); last-known kept.
+        Assert.Equal(60, metadata.Health.BatteryPercent);
+    }
+
+    [Fact]
+    public void Health_SetToNull_IsCoercedToInstance_AndStatusUpdateDoesNotThrow()
+    {
+        // Health has a public setter; a consumer assigning null must not break the status path.
+        var metadata = new DeviceMetadata { Health = null! };
+
+        Assert.NotNull(metadata.Health);
+
+        var exception = Record.Exception(() =>
+            metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 42 }));
+
+        Assert.Null(exception);
+        Assert.Equal(42, metadata.Health.BatteryPercent);
+    }
+
+    [Fact]
     public void UpdateFromProtobuf_NegativeBoardTemperature_IsPreserved()
     {
         // TempStatus is a signed field; sub-zero board temperatures must round-trip.
