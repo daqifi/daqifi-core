@@ -248,6 +248,11 @@ public class StreamMessageConsumerIntegrationTests
     /// and clears the internal message buffer. This is essential for reconnection scenarios
     /// where residual partial data from a previous session needs to be discarded.
     /// </summary>
+    /// <remarks>
+    /// While the consumer thread is running, ClearBuffer() marshals the clear onto that thread
+    /// (issue #332) rather than mutating the buffer from the caller — so the clear takes effect on
+    /// the next consumer-loop iteration rather than synchronously on return. The test polls for it.
+    /// </remarks>
     [Fact]
     public void ClearBuffer_CalledViaInterface_ClearsInternalBuffer()
     {
@@ -262,21 +267,125 @@ public class StreamMessageConsumerIntegrationTests
         consumer.Start();
         Thread.Sleep(50); // Brief pause to allow consumer to read data
 
-        // Verify data was buffered (QueuedMessageCount tracks internal buffer size)
-        // Note: The exact count depends on timing, but buffer should have some data
-        var bufferCountBeforeClear = consumer.QueuedMessageCount;
-
         // Act - Call ClearBuffer via interface (as desktop would do during reconnection)
         IMessageConsumer<DaqifiOutMessage> interfaceRef = consumer;
         interfaceRef.ClearBuffer();
 
-        // Assert - Internal buffer should be cleared
-        Assert.Equal(0, consumer.QueuedMessageCount);
+        // Assert - Internal buffer should be cleared once the consumer thread honors the request.
+        var cleared = WaitFor(() => consumer.QueuedMessageCount == 0, TimeSpan.FromSeconds(1));
+        Assert.True(cleared, "ClearBuffer() should drain the internal buffer within the timeout.");
 
         // Additional verification: consumer should still be functional after clear
         Assert.True(consumer.IsRunning);
 
         consumer.Stop();
+    }
+
+    /// <summary>
+    /// Exercises the reconnection race directly (issue #332): hammer ClearBuffer() from the caller
+    /// thread while the consumer thread is actively reading and parsing a continuous stream. Before
+    /// the fix this concurrently mutated the underlying <see cref="System.Collections.Generic.List{T}"/>
+    /// and issued a second overlapping Stream.Read; now the clear is marshaled onto the consumer
+    /// thread, so no concurrency exception should ever surface and the consumer should keep running.
+    /// </summary>
+    [Fact]
+    public void ClearBuffer_DuringActiveConsumption_IsThreadSafe()
+    {
+        // Arrange - a stream that never ends, so the consumer thread is continuously reading. A
+        // benign parser keeps a running remainder buffered (returns no messages, consumes only part
+        // of the data) so the internal List<byte> is genuinely being appended to and drained while
+        // we hammer it — without protobuf parse errors confounding the concurrency assertion.
+        using var stream = new ContinuousDataStream();
+        var parser = new PartialConsumingParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        var errors = new List<Exception>();
+        consumer.ErrorOccurred += (_, e) =>
+        {
+            lock (errors) { errors.Add(e.Error); }
+        };
+
+        consumer.Start();
+
+        // Act - hammer ClearBuffer AND QueuedMessageCount from this thread (both touch the shared
+        // buffer state) while the consumer thread appends/drains it.
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(500);
+        var clearCalls = 0;
+        while (DateTime.UtcNow < deadline)
+        {
+            consumer.ClearBuffer();
+            _ = consumer.QueuedMessageCount;
+            clearCalls++;
+        }
+
+        // Give the consumer a moment to process any final clears, then stop.
+        Thread.Sleep(50);
+        var stoppedCleanly = consumer.StopSafely(2000);
+
+        // Assert - no concurrency exceptions (List corruption, torn reads) were ever reported.
+        lock (errors)
+        {
+            Assert.True(errors.Count == 0,
+                $"Consumer reported {errors.Count} error(s) during concurrent ClearBuffer; first: {(errors.Count > 0 ? errors[0].ToString() : "none")}");
+        }
+        Assert.True(clearCalls > 0);
+        Assert.True(stoppedCleanly);
+    }
+
+    private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return true;
+            Thread.Sleep(5);
+        }
+        return condition();
+    }
+
+    /// <summary>
+    /// A read-only stream that always returns bytes, so the consumer thread stays in a tight
+    /// read/parse loop for the duration of the concurrency test.
+    /// </summary>
+    private sealed class ContinuousDataStream : Stream
+    {
+        private byte _next;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            // Return a modest chunk each call so the buffer both grows and gets parsed/drained.
+            var n = Math.Min(count, 64);
+            for (var i = 0; i < n; i++)
+            {
+                buffer[offset + i] = _next++;
+            }
+            return n;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A parser that never throws: it consumes all but a small trailing remainder each pass and
+    /// yields no messages, so the consumer keeps a non-empty buffer to append/drain under load.
+    /// </summary>
+    private sealed class PartialConsumingParser : IMessageParser<DaqifiOutMessage>
+    {
+        public IEnumerable<IInboundMessage<DaqifiOutMessage>> ParseMessages(byte[] data, out int consumedBytes)
+        {
+            // Leave a few bytes "pending" so the buffer never fully empties between reads.
+            consumedBytes = data.Length > 4 ? data.Length - 4 : 0;
+            return Array.Empty<IInboundMessage<DaqifiOutMessage>>();
+        }
     }
 
     /// <summary>

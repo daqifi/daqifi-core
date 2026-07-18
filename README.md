@@ -257,7 +257,11 @@ if (device is INetworkConfigurable networkDevice)
 | **Nyquist 1** | 16 analog in | 12-bit | 0–5 V |
 | **Nyquist 3** | 8 analog in | 18-bit | ±10 V |
 
-Both are auto-detected by part number during discovery.
+These are auto-detected by part number during discovery. The SDK also recognizes and
+supports **Nyquist 2** (`Nq2` → `DeviceType.Nyquist2`); it's left out of the spec table
+above rather than listed with fabricated headline numbers. For any connected device the
+authoritative channel counts, resolution, and ranges are reported by the hardware and
+surfaced on `device.Metadata.Capabilities` after initialization.
 
 Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
