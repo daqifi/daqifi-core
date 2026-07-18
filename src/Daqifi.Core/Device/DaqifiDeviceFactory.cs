@@ -283,6 +283,70 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
+    /// Discovers DAQiFi devices across all transports (WiFi + serial) concurrently and connects to
+    /// the first match — the one-call "find any DAQiFi and connect" path.
+    /// </summary>
+    /// <param name="filter">
+    /// Optional predicate to select among discovered devices (e.g. by serial number or transport).
+    /// When null, the first discovered device is used.
+    /// </param>
+    /// <param name="timeout">Discovery timeout. Defaults to 5 seconds when null.</param>
+    /// <param name="options">Optional connection options passed through to the connect step.</param>
+    /// <param name="finder">
+    /// Optional finder to discover with (e.g. a serial-only finder, or a preconfigured
+    /// <see cref="Discovery.AllTransportsDeviceFinder"/>). When null, a default all-transports finder
+    /// is created and disposed internally.
+    /// </param>
+    /// <param name="cancellationToken">A cancellation token to cancel discovery and connection.</param>
+    /// <returns>A connected and optionally initialized <see cref="DaqifiDevice"/>.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when no matching device is discovered.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when the caller cancels the operation.</exception>
+    public static async Task<DaqifiDevice> DiscoverAndConnectAsync(
+        Func<IDeviceInfo, bool>? filter = null,
+        TimeSpan? timeout = null,
+        DeviceConnectionOptions? options = null,
+        IDeviceFinder? finder = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var ownsFinder = finder == null;
+        var actualFinder = finder ?? Discovery.AllTransportsDeviceFinder.CreateDefault();
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(timeout ?? TimeSpan.FromSeconds(5));
+
+            IEnumerable<IDeviceInfo> devices;
+            try
+            {
+                devices = await actualFinder.DiscoverAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The discovery timeout elapsed — treat as "nothing found" rather than an error.
+                devices = Enumerable.Empty<IDeviceInfo>();
+            }
+
+            var selected = (filter != null ? devices.Where(filter) : devices).FirstOrDefault();
+            if (selected == null)
+            {
+                throw new InvalidOperationException(
+                    "No matching DAQiFi device was discovered on any transport within the timeout.");
+            }
+
+            return await ConnectFromDeviceInfoAsync(selected, options, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (ownsFinder && actualFinder is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
     /// Connects to a WiFi device using the provided device info.
     /// </summary>
     private static async Task<DaqifiDevice> ConnectWiFiDeviceAsync(
