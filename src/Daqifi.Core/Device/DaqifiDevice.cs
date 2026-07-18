@@ -1311,7 +1311,13 @@ namespace Daqifi.Core.Device
             var analogInResolution = message.AnalogInRes;
 
             var count = (int)message.AnalogInPortNum;
+            var resolutionIsAssumed = analogInResolution == 0;
             var resolution = analogInResolution > 0 ? analogInResolution : 65535;
+
+            if (resolutionIsAssumed && count > 0)
+            {
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported no ADC resolution (analog_in_res=0) for {count} analog channel(s); assuming {resolution}. Scaled samples on this device may be systematically wrong.");
+            }
 
             for (var i = 0; i < count; i++)
             {
@@ -1322,12 +1328,12 @@ namespace Daqifi.Core.Device
 
                 if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
                 {
-                    existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange);
+                    existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange, resolutionIsAssumed);
                     destination.Add(existingAnalog);
                     continue;
                 }
 
-                var channel = new AnalogChannel(i, resolution)
+                var channel = new AnalogChannel(i, resolution, resolutionIsAssumed)
                 {
                     Name = $"AI{i}",
                     Direction = ChannelDirection.Input,

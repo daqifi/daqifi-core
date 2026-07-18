@@ -17,6 +17,7 @@ public class AnalogChannel : IAnalogChannel
     private double _internalScaleM;
     private double _portRange;
     private uint _resolution;
+    private bool _resolutionIsAssumed;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -88,7 +89,9 @@ public class AnalogChannel : IAnalogChannel
     }
 
     /// <summary>
-    /// Gets the resolution of the ADC (e.g., 65535 for 16-bit).
+    /// Gets the resolution of the ADC, expressed as the maximum raw count (e.g., 65535 for 16-bit,
+    /// 262143 for 18-bit) — i.e. 2^bits - 1, not 2^bits. This value is a direct divisor in
+    /// <see cref="GetScaledValue"/>.
     /// </summary>
     /// <remarks>
     /// Updated only via <see cref="UpdateScalingFromStatus"/>, which
@@ -99,6 +102,15 @@ public class AnalogChannel : IAnalogChannel
     public uint Resolution
     {
         get { lock (_lock) { return _resolution; } }
+    }
+
+    /// <summary>
+    /// Gets whether <see cref="Resolution"/> is a fallback guess rather than a value the device
+    /// actually reported.
+    /// </summary>
+    public bool ResolutionIsAssumed
+    {
+        get { lock (_lock) { return _resolutionIsAssumed; } }
     }
 
     /// <summary>
@@ -147,7 +159,10 @@ public class AnalogChannel : IAnalogChannel
     /// </summary>
     /// <param name="channelNumber">The channel number/index.</param>
     /// <param name="resolution">The ADC resolution (e.g., 65535 for 16-bit).</param>
-    public AnalogChannel(int channelNumber, uint resolution = 65535)
+    /// <param name="resolutionIsAssumed">
+    /// Whether <paramref name="resolution"/> is a fallback guess rather than a device-reported value.
+    /// </param>
+    public AnalogChannel(int channelNumber, uint resolution = 65535, bool resolutionIsAssumed = false)
     {
         if (channelNumber < 0)
             throw new ArgumentOutOfRangeException(nameof(channelNumber), "Channel number must be non-negative.");
@@ -157,6 +172,7 @@ public class AnalogChannel : IAnalogChannel
 
         ChannelNumber = channelNumber;
         _resolution = resolution;
+        _resolutionIsAssumed = resolutionIsAssumed;
         _name = $"Analog Channel {channelNumber}";
         _isEnabled = false;
         _direction = ChannelDirection.Input;
@@ -177,11 +193,12 @@ public class AnalogChannel : IAnalogChannel
     /// <see cref="Device.DaqifiDevice.GetChannelsSnapshot"/> on another thread) can never observe
     /// a torn mix of old and new scaling values from <see cref="GetScaledValue"/>.
     /// </remarks>
-    internal void UpdateScalingFromStatus(uint resolution, double calibrationB, double calibrationM, double internalScaleM, double portRange)
+    internal void UpdateScalingFromStatus(uint resolution, double calibrationB, double calibrationM, double internalScaleM, double portRange, bool resolutionIsAssumed = false)
     {
         lock (_lock)
         {
             _resolution = resolution;
+            _resolutionIsAssumed = resolutionIsAssumed;
             _calibrationB = calibrationB;
             _calibrationM = calibrationM;
             _internalScaleM = internalScaleM;

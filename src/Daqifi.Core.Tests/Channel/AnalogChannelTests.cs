@@ -38,6 +38,61 @@ public class AnalogChannelTests
     }
 
     [Fact]
+    public void Constructor_DefaultsResolutionIsAssumedToFalse()
+    {
+        // Arrange & Act
+        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535);
+
+        // Assert
+        Assert.False(channel.ResolutionIsAssumed);
+    }
+
+    [Fact]
+    public void Constructor_WithResolutionIsAssumedTrue_SetsResolutionIsAssumed()
+    {
+        // Arrange & Act
+        var channel = new AnalogChannel(channelNumber: 0, resolution: 65535, resolutionIsAssumed: true);
+
+        // Assert
+        Assert.True(channel.ResolutionIsAssumed);
+    }
+
+    [Theory]
+    [InlineData(4095u)]   // 12-bit
+    [InlineData(262143u)] // 18-bit (AD7609, e.g. Nyquist 3)
+    [InlineData(16777215u)] // 24-bit
+    public void Constructor_WithVariousBitDepthResolutions_InitializesCorrectly(uint resolution)
+    {
+        // Arrange & Act
+        var channel = new AnalogChannel(channelNumber: 0, resolution: resolution);
+
+        // Assert
+        Assert.Equal(resolution, channel.Resolution);
+    }
+
+    [Theory]
+    [InlineData(4095u)]   // 12-bit
+    [InlineData(262143u)] // 18-bit (AD7609, e.g. Nyquist 3)
+    [InlineData(16777215u)] // 24-bit
+    public void GetScaledValue_WithVariousBitDepthResolutions_ScalesToFullRange(uint resolution)
+    {
+        // Arrange
+        var channel = new AnalogChannel(0, resolution)
+        {
+            PortRange = 10.0,
+            CalibrationM = 1.0,
+            CalibrationB = 0.0,
+            InternalScaleM = 1.0
+        };
+
+        // Act
+        var result = channel.GetScaledValue((int)resolution);
+
+        // Assert - the formula is bit-depth agnostic, so max raw value always scales to PortRange.
+        Assert.Equal(10.0, result, precision: 6);
+    }
+
+    [Fact]
     public void GetScaledValue_WithDefaultCalibration_ScalesCorrectly()
     {
         // Arrange
