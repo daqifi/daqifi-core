@@ -1,10 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.Discovery;
+using Google.Protobuf;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
@@ -191,5 +196,130 @@ public class WiFiDeviceFinderTests
             var actual = WiFiDeviceFinder.ShouldIncludeInterface(nic.Name, nic.Description, nic.Status, nic.Type, nic.IPv4);
             Assert.True(actual == nic.Expected, $"NIC '{nic.Name}' expected {nic.Expected} but got {actual}");
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // TCP data-port resolution (daqifi-core#244)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public void DefaultTcpDataPort_IsFirmwareDefault()
+    {
+        Assert.Equal(9760, Daqifi.Core.Device.DaqifiDeviceFactory.DefaultTcpDataPort);
+    }
+
+    [Fact]
+    public async Task ProbeTcpDataPortAsync_WithNullHost_Throws()
+    {
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(null!, TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public async Task ProbeTcpDataPortAsync_WithNonPositiveTimeout_Throws()
+    {
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress.Loopback, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task ProbeTcpDataPortAsync_WithOutOfRangeDiscoveryPort_Throws()
+    {
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress.Loopback, 70000, TimeSpan.FromSeconds(1)));
+    }
+
+    // The probe now binds the local socket to the discovery port itself (so it catches firmware that
+    // replies to the well-known port). A test responder therefore occupies that port on IPAddress.Any,
+    // which deterministically forces the probe's own bind to fail over to an ephemeral local port —
+    // and the responder then replies to the probe's source endpoint, modelling firmware that answers
+    // to the sender's port. Binding the responder on Any (not Loopback) guarantees the bind conflict.
+    [Fact]
+    public async Task ProbeTcpDataPortAsync_WhenHostAnswers_ReturnsAdvertisedDataPort()
+    {
+        const int advertisedPort = 12345;
+
+        using var responder = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+        var discoveryPort = ((IPEndPoint)responder.Client.LocalEndPoint!).Port;
+        using var responderDone = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var replyBytes = BuildDiscoveryReply(devicePort: advertisedPort, hostName: "ProbeTestDevice");
+        var responderTask = Task.Run(async () =>
+        {
+            var query = await responder.ReceiveAsync(responderDone.Token);
+            await responder.SendAsync(replyBytes, replyBytes.Length, query.RemoteEndPoint);
+        });
+
+        var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
+            IPAddress.Loopback, discoveryPort, TimeSpan.FromSeconds(3));
+
+        await responderTask;
+        Assert.Equal(advertisedPort, resolved);
+    }
+
+    [Fact]
+    public async Task ProbeTcpDataPortAsync_WhenHostAdvertisesOutOfRangePort_ReturnsNull()
+    {
+        // A device reporting a DevicePort outside the valid 1..65535 TCP range is not a usable port;
+        // the probe must not hand it back (which would defeat the caller's default-port fallback).
+        using var responder = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+        var discoveryPort = ((IPEndPoint)responder.Client.LocalEndPoint!).Port;
+        using var responderDone = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var replyBytes = BuildDiscoveryReply(devicePort: 70000, hostName: "BadPortDevice");
+        var responderTask = Task.Run(async () =>
+        {
+            var query = await responder.ReceiveAsync(responderDone.Token);
+            await responder.SendAsync(replyBytes, replyBytes.Length, query.RemoteEndPoint);
+        });
+
+        var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
+            IPAddress.Loopback, discoveryPort, TimeSpan.FromMilliseconds(600));
+
+        try { await responderTask; } catch (OperationCanceledException) { /* responder may outlive the probe */ }
+        responderDone.Cancel();
+        Assert.Null(resolved);
+    }
+
+    [Fact]
+    public async Task ProbeTcpDataPortAsync_WhenNoHostAnswers_ReturnsNull()
+    {
+        // Bind (but never read from) a socket so the port is occupied yet silent — nothing answers
+        // the query, so the probe should time out and return null rather than throw.
+        using var silent = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+        var discoveryPort = ((IPEndPoint)silent.Client.LocalEndPoint!).Port;
+
+        var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
+            IPAddress.Loopback, discoveryPort, TimeSpan.FromMilliseconds(500));
+
+        Assert.Null(resolved);
+    }
+
+    [Fact]
+    public async Task ProbeTcpDataPortAsync_WhenCallerCancels_ThrowsOperationCanceled()
+    {
+        using var silent = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+        var discoveryPort = ((IPEndPoint)silent.Client.LocalEndPoint!).Port;
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => WiFiDeviceFinder.ProbeTcpDataPortAsync(
+                IPAddress.Loopback, discoveryPort, TimeSpan.FromSeconds(5), cts.Token));
+    }
+
+    private static byte[] BuildDiscoveryReply(int devicePort, string hostName)
+    {
+        var message = new DaqifiOutMessage
+        {
+            HostName = hostName,
+            DevicePort = (uint)devicePort,
+            DeviceSn = 1,
+            DevicePn = "nq1"
+        };
+
+        using var stream = new MemoryStream();
+        message.WriteDelimitedTo(stream);
+        return stream.ToArray();
     }
 }

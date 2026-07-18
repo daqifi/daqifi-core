@@ -114,6 +114,123 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         return await DiscoverAsync(timeout, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Resolves a single host's TCP data port by unicasting the discovery query directly to it and
+    /// reading the <c>DevicePort</c> from its reply. Use this for a manually-entered IP address that
+    /// never answered the broadcast sweep, so its data port need not be assumed.
+    /// </summary>
+    /// <param name="host">The device IP address to probe.</param>
+    /// <param name="timeout">How long to wait for the host to answer before giving up.</param>
+    /// <param name="cancellationToken">A cancellation token to abort the probe.</param>
+    /// <returns>
+    /// The device's advertised TCP data port, or <c>null</c> if the host did not answer within
+    /// <paramref name="timeout"/> (or answered without a usable port). On <c>null</c>, callers can fall
+    /// back to <see cref="DaqifiDeviceFactory.DefaultTcpDataPort"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="host"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="timeout"/> is not positive.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
+    public static Task<int?> ProbeTcpDataPortAsync(
+        IPAddress host,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        return ProbeTcpDataPortAsync(host, DefaultDiscoveryPort, timeout, cancellationToken);
+    }
+
+    /// <inheritdoc cref="ProbeTcpDataPortAsync(IPAddress, TimeSpan, CancellationToken)"/>
+    /// <param name="host">The device IP address to probe.</param>
+    /// <param name="discoveryPort">The UDP discovery port to query (defaults to 30303 in the other overload).</param>
+    /// <param name="timeout">How long to wait for the host to answer before giving up.</param>
+    /// <param name="cancellationToken">A cancellation token to abort the probe.</param>
+    public static async Task<int?> ProbeTcpDataPortAsync(
+        IPAddress host,
+        int discoveryPort,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (host is null)
+        {
+            throw new ArgumentNullException(nameof(host));
+        }
+
+        if (discoveryPort is < IPEndPoint.MinPort or > IPEndPoint.MaxPort)
+        {
+            throw new ArgumentOutOfRangeException(nameof(discoveryPort), discoveryPort, "Discovery port is out of range.");
+        }
+
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "Timeout must be positive.");
+        }
+
+        var query = Encoding.ASCII.GetBytes(DaqifiFinderQuery);
+        var target = new IPEndPoint(host, discoveryPort);
+
+        using var udp = new UdpClient(host.AddressFamily);
+
+        // Bind the local socket to the discovery port (not an ephemeral one) so replies reach us even
+        // when the firmware answers to the well-known port rather than our source port — the same
+        // reason the broadcast sweep binds to it. ReuseAddress lets this coexist with a concurrent
+        // broadcast discovery already holding the port; if the bind still fails, fall back to an
+        // ephemeral port (devices that do reply to the source port are then still handled).
+        var bindAddress = host.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any;
+        udp.ExclusiveAddressUse = false;
+        udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        try
+        {
+            udp.Client.Bind(new IPEndPoint(bindAddress, discoveryPort));
+        }
+        catch (SocketException)
+        {
+            udp.Client.Bind(new IPEndPoint(bindAddress, 0));
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(timeout);
+
+        try
+        {
+            await udp.SendAsync(query, query.Length, target).ConfigureAwait(false);
+
+            // The reply may be broadcast, and other DAQiFi devices on the segment could answer the
+            // same query, so keep reading until we hear from the exact host we probed (or time out).
+            while (true)
+            {
+                var result = await udp.ReceiveAsync(cts.Token).ConfigureAwait(false);
+
+                if (!result.RemoteEndPoint.Address.Equals(host))
+                {
+                    continue; // a different device answered; ignore it
+                }
+
+                var receivedText = Encoding.ASCII.GetString(result.Buffer);
+                if (!IsValidDiscoveryMessage(receivedText))
+                {
+                    continue; // our own query echoed back or a non-device frame
+                }
+
+                var info = ParseDeviceInfo(result.Buffer, result.RemoteEndPoint, null);
+                if (info?.Port is int port and > 0 and <= IPEndPoint.MaxPort)
+                {
+                    return port;
+                }
+                // Parsed but no usable port (missing, or out of the valid 1..65535 TCP range);
+                // keep waiting within the timeout window so callers can fall back to the default.
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Our own timeout elapsed (not a caller cancellation) — the host did not answer.
+            return null;
+        }
+        catch (SocketException)
+        {
+            // Host unreachable / no route — treat as "did not answer" so callers can fall back.
+            return null;
+        }
+    }
+
     #endregion
 
     #region Private Methods
