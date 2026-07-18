@@ -20,9 +20,6 @@ namespace Daqifi.Mcp;
 /// </remarks>
 public sealed class DaqifiAgent
 {
-    /// <summary>The maximum sample rate the Nyquist hardware accepts (SCPI range is 1–1000 Hz).</summary>
-    public const int HardwareMaxSampleRateHz = 1000;
-
     private readonly ServerOptions _options;
     private readonly ConcurrentDictionary<string, IDeviceInfo> _discovered = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DaqifiDevice> _connected = new(StringComparer.Ordinal);
@@ -357,13 +354,15 @@ public sealed class DaqifiAgent
         try
         {
             RequireControl();
-            var (_, streaming) = RequireStreaming(deviceId);
+            var (device, streaming) = RequireStreaming(deviceId);
 
-            // The hardware ceiling (1000 Hz) always applies; --max-sample-rate-hz can only lower it.
+            // The device's advertised hardware ceiling always applies (Core validates
+            // StreamingFrequency against it too); --max-sample-rate-hz can only lower it.
             // Guard against a non-positive cap so the applied rate is always a valid >= 1 value.
+            var hardwareMax = Math.Max(1, device.Metadata.Capabilities.MaxSamplingRate);
             var cap = _options.MaxSampleRateHz is { } max
-                ? Math.Clamp(max, 1, HardwareMaxSampleRateHz)
-                : HardwareMaxSampleRateHz;
+                ? Math.Clamp(max, 1, hardwareMax)
+                : hardwareMax;
 
             var applied = Math.Min(rateHz, cap);
             streaming.StreamingFrequency = applied;
@@ -393,17 +392,13 @@ public sealed class DaqifiAgent
             var (device, streaming) = RequireStreaming(deviceId);
             var sd = RequireSdCard(device);
 
-            // Generate the name in this layer so the result reports the real on-card filename.
-            // Core honors a non-empty fileName verbatim; channels use the device's current config.
-            var effectiveName = string.IsNullOrWhiteSpace(fileName)
-                ? $"log_{DateTime.Now:yyyyMMdd_HHmmss}{ExtensionFor(fmt)}"
-                : fileName!;
-
-            await sd.StartSdCardLoggingAsync(effectiveName, channelMask: null, format: fmt, cancellationToken)
+            // Core owns the naming convention and reports the effective on-card filename back to
+            // us, so we no longer duplicate the log_{timestamp} generation here.
+            var session = await sd.StartSdCardLoggingSessionAsync(fileName, channelMask: null, format: fmt, cancellationToken)
                 .ConfigureAwait(false);
 
             return new StartLoggingResult(
-                deviceId, effectiveName, fmt.ToString(), streaming.StreamingFrequency, EnabledAnalog(device));
+                deviceId, session.FileName, session.Format.ToString(), streaming.StreamingFrequency, EnabledAnalog(device));
         }
         finally
         {
@@ -543,13 +538,6 @@ public sealed class DaqifiAgent
         "input" or "in" => ChannelDirection.Input,
         "output" or "out" => ChannelDirection.Output,
         _ => throw new InvalidOperationException($"Unknown direction '{direction}'. Use 'input' or 'output'."),
-    };
-
-    private static string ExtensionFor(SdCardLogFormat format) => format switch
-    {
-        SdCardLogFormat.Json => ".json",
-        SdCardLogFormat.Csv => ".csv",
-        _ => ".bin",
     };
 
     private static SdCardLogFormat ParseFormat(string? format) => (format ?? string.Empty).Trim().ToLowerInvariant() switch
