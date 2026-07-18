@@ -167,6 +167,54 @@ public class DeviceMetadataTests
     }
 
     [Fact]
+    public void UpdateFromProtobuf_UpdatesHealthTelemetry()
+    {
+        // Arrange
+        var metadata = new DeviceMetadata();
+        var message = new DaqifiOutMessage
+        {
+            BattStatus = 87,
+            TempStatus = 42,
+            PwrStatus = 2,
+            DeviceStatus = 5
+        };
+
+        // Act
+        metadata.UpdateFromProtobuf(message);
+
+        // Assert
+        Assert.Equal(87, metadata.Health.BatteryPercent);
+        Assert.Equal(42, metadata.Health.BoardTemperatureCelsius);
+        Assert.Equal(2u, metadata.Health.PowerStatus);
+        Assert.Equal(5u, metadata.Health.DeviceStatus);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_NegativeBoardTemperature_IsPreserved()
+    {
+        // TempStatus is a signed field; sub-zero board temperatures must round-trip.
+        var metadata = new DeviceMetadata();
+        var message = new DaqifiOutMessage { TempStatus = -10 };
+
+        metadata.UpdateFromProtobuf(message);
+
+        Assert.Equal(-10, metadata.Health.BoardTemperatureCelsius);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_ZeroHealthFields_LeaveLastKnownValues()
+    {
+        // A partial status message (all health fields 0) must not clobber a prior reading.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 90, TempStatus = 30 });
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { AnalogInPortNum = 8 });
+
+        Assert.Equal(90, metadata.Health.BatteryPercent);
+        Assert.Equal(30, metadata.Health.BoardTemperatureCelsius);
+    }
+
+    [Fact]
     public void UpdateFromProtobuf_IgnoresEmptyOrZeroValues()
     {
         // Arrange
@@ -249,6 +297,13 @@ public class DeviceMetadataTests
                 DigitalChannels = 16,
                 MaxSamplingRate = 5000
             },
+            Health = new DeviceHealth
+            {
+                BatteryPercent = 75,
+                BoardTemperatureCelsius = 33,
+                PowerStatus = 1,
+                DeviceStatus = 4
+            },
             IpAddress = "192.168.1.100",
             MacAddress = "AA-BB-CC-DD-EE-FF",
             Ssid = "TestNetwork",
@@ -285,6 +340,26 @@ public class DeviceMetadataTests
         Assert.Equal(source.Capabilities.HasWiFi, target.Capabilities.HasWiFi);
         Assert.Equal(source.Capabilities.HasUsb, target.Capabilities.HasUsb);
         Assert.Equal(source.Capabilities.SupportsStreaming, target.Capabilities.SupportsStreaming);
+        Assert.Equal(source.Health.BatteryPercent, target.Health.BatteryPercent);
+        Assert.Equal(source.Health.BoardTemperatureCelsius, target.Health.BoardTemperatureCelsius);
+        Assert.Equal(source.Health.PowerStatus, target.Health.PowerStatus);
+        Assert.Equal(source.Health.DeviceStatus, target.Health.DeviceStatus);
+    }
+
+    [Fact]
+    public void CopyFrom_HealthIsDeepCopiedNotShared()
+    {
+        // Arrange
+        var source = new DeviceMetadata { Health = new DeviceHealth { BatteryPercent = 50 } };
+        var target = new DeviceMetadata();
+
+        // Act
+        target.CopyFrom(source);
+        source.Health.BatteryPercent = 10;
+
+        // Assert
+        Assert.NotSame(source.Health, target.Health);
+        Assert.Equal(50, target.Health.BatteryPercent);
     }
 
     [Fact]

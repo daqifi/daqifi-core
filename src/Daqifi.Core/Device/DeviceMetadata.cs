@@ -38,6 +38,13 @@ public class DeviceMetadata
     public DeviceCapabilities Capabilities { get; set; } = new DeviceCapabilities();
 
     /// <summary>
+    /// Gets or sets the most recent device health telemetry (battery, board temperature,
+    /// power/device status) decoded from a status message. Updated on each status message,
+    /// including the periodic ones emitted during streaming.
+    /// </summary>
+    public DeviceHealth Health { get; set; } = new DeviceHealth();
+
+    /// <summary>
     /// Gets or sets the IP address of the device.
     /// </summary>
     public string IpAddress { get; set; } = string.Empty;
@@ -92,6 +99,7 @@ public class DeviceMetadata
         HardwareRevision = source.HardwareRevision;
         DeviceType = source.DeviceType;
         Capabilities = source.Capabilities?.Clone() ?? new DeviceCapabilities();
+        Health = source.Health?.Clone() ?? new DeviceHealth();
         IpAddress = source.IpAddress;
         MacAddress = source.MacAddress;
         Ssid = source.Ssid;
@@ -186,6 +194,29 @@ public class DeviceMetadata
         if (message.DigitalPortNum > 0)
         {
             Capabilities.DigitalChannels = (int)message.DigitalPortNum;
+        }
+
+        // Update health telemetry. proto3 scalars have no explicit presence, so a value of 0
+        // is indistinguishable from "not reported"; guard on non-zero (consistent with the
+        // other fields above) so a partial status message never clobbers a known reading.
+        if (message.BattStatus != 0)
+        {
+            Health.BatteryPercent = (int)message.BattStatus;
+        }
+
+        if (message.TempStatus != 0)
+        {
+            Health.BoardTemperatureCelsius = message.TempStatus;
+        }
+
+        if (message.PwrStatus != 0)
+        {
+            Health.PowerStatus = message.PwrStatus;
+        }
+
+        if (message.DeviceStatus != 0)
+        {
+            Health.DeviceStatus = message.DeviceStatus;
         }
     }
 }
