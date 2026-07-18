@@ -407,6 +407,54 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
+    public void LoadNetworkLan_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.LoadNetworkLan;
+        Assert.Equal("SYSTem:COMMunicate:LAN:LOAD", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void FactoryResetNetworkLan_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.FactoryResetNetworkLan;
+        Assert.Equal("SYSTem:COMMunicate:LAN:FACRESET", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SaveAdcCalibration_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SaveAdcCalibration;
+        Assert.Equal("CONFigure:ADC:SAVEcal", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void LoadAdcCalibration_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.LoadAdcCalibration;
+        Assert.Equal("CONFigure:ADC:LOADcal", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SaveVoltagePrecision_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SaveVoltagePrecision;
+        Assert.Equal("CONFigure:VOLTage:SAVE", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void LoadVoltagePrecision_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.LoadVoltagePrecision;
+        Assert.Equal("CONFigure:VOLTage:LOAD", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
     public void SetLanFirmwareUpdateMode_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.SetLanFirmwareUpdateMode;

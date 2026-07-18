@@ -149,5 +149,39 @@ namespace Daqifi.Core.Device
         /// drops its link while restarting. Reconnect once the device is back online.
         /// </remarks>
         void Reboot();
+
+        /// <summary>
+        /// Persists the device's current ADC calibration coefficients to NVM so they survive a reboot.
+        /// </summary>
+        /// <remarks>
+        /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:ADC:SAVEcal</c>). Pair with
+        /// <see cref="LoadAdcCalibration"/> to restore them.
+        /// </remarks>
+        void SaveAdcCalibration();
+
+        /// <summary>
+        /// Restores the device's ADC calibration coefficients from NVM into its runtime.
+        /// </summary>
+        /// <remarks>
+        /// The inverse of <see cref="SaveAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADcal</c>).
+        /// </remarks>
+        void LoadAdcCalibration();
+
+        /// <summary>
+        /// Persists the device's current voltage precision setting to NVM so it survives a reboot.
+        /// </summary>
+        /// <remarks>
+        /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:VOLTage:SAVE</c>). Pair with
+        /// <see cref="LoadVoltagePrecision"/> to restore it.
+        /// </remarks>
+        void SaveVoltagePrecision();
+
+        /// <summary>
+        /// Restores the device's voltage precision setting from NVM into its runtime.
+        /// </summary>
+        /// <remarks>
+        /// The inverse of <see cref="SaveVoltagePrecision"/> (firmware primitive <c>CONFigure:VOLTage:LOAD</c>).
+        /// </remarks>
+        void LoadVoltagePrecision();
     }
 }

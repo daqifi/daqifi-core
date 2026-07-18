@@ -614,6 +614,53 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> UpdateDacOutputs => new ScpiMessage("CONFigure:DAC:UPDATE");
 
+    // ---------------------------------------------------------------------
+    // ADC calibration & voltage-precision persistence
+    //
+    // Firmware persists the ADC calibration coefficients and the voltage
+    // precision setting in NVM. These commands are thin wrappers over those
+    // firmware primitives — save writes the current runtime values to NVM,
+    // load restores them from NVM into the runtime.
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Creates a command message to persist the current ADC calibration coefficients to NVM.
+    /// </summary>
+    /// <remarks>
+    /// Command: CONFigure:ADC:SAVEcal
+    /// Example: messageProducer.Send(ScpiMessageProducer.SaveAdcCalibration);
+    /// </remarks>
+    public static IOutboundMessage<string> SaveAdcCalibration => new ScpiMessage("CONFigure:ADC:SAVEcal");
+
+    /// <summary>
+    /// Creates a command message to restore the ADC calibration coefficients from NVM into the runtime.
+    /// </summary>
+    /// <remarks>
+    /// The inverse of <see cref="SaveAdcCalibration"/>.
+    /// Command: CONFigure:ADC:LOADcal
+    /// Example: messageProducer.Send(ScpiMessageProducer.LoadAdcCalibration);
+    /// </remarks>
+    public static IOutboundMessage<string> LoadAdcCalibration => new ScpiMessage("CONFigure:ADC:LOADcal");
+
+    /// <summary>
+    /// Creates a command message to persist the current voltage precision setting to NVM.
+    /// </summary>
+    /// <remarks>
+    /// Command: CONFigure:VOLTage:SAVE
+    /// Example: messageProducer.Send(ScpiMessageProducer.SaveVoltagePrecision);
+    /// </remarks>
+    public static IOutboundMessage<string> SaveVoltagePrecision => new ScpiMessage("CONFigure:VOLTage:SAVE");
+
+    /// <summary>
+    /// Creates a command message to restore the voltage precision setting from NVM into the runtime.
+    /// </summary>
+    /// <remarks>
+    /// The inverse of <see cref="SaveVoltagePrecision"/>.
+    /// Command: CONFigure:VOLTage:LOAD
+    /// Example: messageProducer.Send(ScpiMessageProducer.LoadVoltagePrecision);
+    /// </remarks>
+    public static IOutboundMessage<string> LoadVoltagePrecision => new ScpiMessage("CONFigure:VOLTage:LOAD");
+
     /// <summary>
     /// Creates a command message to set the device to create its own WiFi network (Self-Hosted mode).
     /// </summary>
@@ -813,6 +860,29 @@ public class ScpiMessageProducer
     /// Command: SYSTem:COMMunicate:LAN:SAVE
     /// </remarks>
     public static IOutboundMessage<string> SaveNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:SAVE");
+
+    /// <summary>
+    /// Creates a command message to load the persisted LAN configuration from NVM into the device's
+    /// runtime WiFi settings.
+    /// </summary>
+    /// <remarks>
+    /// The inverse of <see cref="SaveNetworkLan"/>: it repopulates the runtime settings from the last
+    /// saved values. Apply the loaded values to the interface with <see cref="ApplyNetworkLan"/> (or a
+    /// reboot) for them to take effect on the live connection.
+    /// Command: SYSTem:COMMunicate:LAN:LOAD
+    /// </remarks>
+    public static IOutboundMessage<string> LoadNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:LOAD");
+
+    /// <summary>
+    /// Creates a command message to reset the LAN configuration to firmware defaults.
+    /// </summary>
+    /// <remarks>
+    /// Restores the factory default WiFi settings into the device's runtime settings. Persist the
+    /// reset with <see cref="SaveNetworkLan"/> and/or apply it with <see cref="ApplyNetworkLan"/> for
+    /// it to take effect.
+    /// Command: SYSTem:COMMunicate:LAN:FACRESET
+    /// </remarks>
+    public static IOutboundMessage<string> FactoryResetNetworkLan => new ScpiMessage("SYSTem:COMMunicate:LAN:FACRESET");
 
     /// <summary>
     /// Creates a command message to set the LAN firmware update mode.
