@@ -229,14 +229,17 @@ public class WiFiDeviceFinderTests
             () => WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress.Loopback, 70000, TimeSpan.FromSeconds(1)));
     }
 
+    // The probe now binds the local socket to the discovery port itself (so it catches firmware that
+    // replies to the well-known port). A test responder therefore occupies that port on IPAddress.Any,
+    // which deterministically forces the probe's own bind to fail over to an ephemeral local port —
+    // and the responder then replies to the probe's source endpoint, modelling firmware that answers
+    // to the sender's port. Binding the responder on Any (not Loopback) guarantees the bind conflict.
     [Fact]
     public async Task ProbeTcpDataPortAsync_WhenHostAnswers_ReturnsAdvertisedDataPort()
     {
         const int advertisedPort = 12345;
 
-        // A loopback stand-in for a device: it answers the DAQiFi discovery query with a delimited
-        // status protobuf carrying its DevicePort, exactly as real firmware replies over UDP-30303.
-        using var responder = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        using var responder = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
         var discoveryPort = ((IPEndPoint)responder.Client.LocalEndPoint!).Port;
         using var responderDone = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
@@ -255,11 +258,35 @@ public class WiFiDeviceFinderTests
     }
 
     [Fact]
+    public async Task ProbeTcpDataPortAsync_WhenHostAdvertisesOutOfRangePort_ReturnsNull()
+    {
+        // A device reporting a DevicePort outside the valid 1..65535 TCP range is not a usable port;
+        // the probe must not hand it back (which would defeat the caller's default-port fallback).
+        using var responder = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+        var discoveryPort = ((IPEndPoint)responder.Client.LocalEndPoint!).Port;
+        using var responderDone = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var replyBytes = BuildDiscoveryReply(devicePort: 70000, hostName: "BadPortDevice");
+        var responderTask = Task.Run(async () =>
+        {
+            var query = await responder.ReceiveAsync(responderDone.Token);
+            await responder.SendAsync(replyBytes, replyBytes.Length, query.RemoteEndPoint);
+        });
+
+        var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
+            IPAddress.Loopback, discoveryPort, TimeSpan.FromMilliseconds(600));
+
+        try { await responderTask; } catch (OperationCanceledException) { /* responder may outlive the probe */ }
+        responderDone.Cancel();
+        Assert.Null(resolved);
+    }
+
+    [Fact]
     public async Task ProbeTcpDataPortAsync_WhenNoHostAnswers_ReturnsNull()
     {
         // Bind (but never read from) a socket so the port is occupied yet silent — nothing answers
         // the query, so the probe should time out and return null rather than throw.
-        using var silent = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        using var silent = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
         var discoveryPort = ((IPEndPoint)silent.Client.LocalEndPoint!).Port;
 
         var resolved = await WiFiDeviceFinder.ProbeTcpDataPortAsync(
@@ -271,7 +298,7 @@ public class WiFiDeviceFinderTests
     [Fact]
     public async Task ProbeTcpDataPortAsync_WhenCallerCancels_ThrowsOperationCanceled()
     {
-        using var silent = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        using var silent = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
         var discoveryPort = ((IPEndPoint)silent.Client.LocalEndPoint!).Port;
         using var cts = new CancellationTokenSource();
         cts.Cancel();

@@ -168,6 +168,24 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         var target = new IPEndPoint(host, discoveryPort);
 
         using var udp = new UdpClient(host.AddressFamily);
+
+        // Bind the local socket to the discovery port (not an ephemeral one) so replies reach us even
+        // when the firmware answers to the well-known port rather than our source port — the same
+        // reason the broadcast sweep binds to it. ReuseAddress lets this coexist with a concurrent
+        // broadcast discovery already holding the port; if the bind still fails, fall back to an
+        // ephemeral port (devices that do reply to the source port are then still handled).
+        var bindAddress = host.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any;
+        udp.ExclusiveAddressUse = false;
+        udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        try
+        {
+            udp.Client.Bind(new IPEndPoint(bindAddress, discoveryPort));
+        }
+        catch (SocketException)
+        {
+            udp.Client.Bind(new IPEndPoint(bindAddress, 0));
+        }
+
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeout);
 
@@ -193,11 +211,12 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                 }
 
                 var info = ParseDeviceInfo(result.Buffer, result.RemoteEndPoint, null);
-                if (info?.Port is int port and > 0)
+                if (info?.Port is int port and > 0 and <= IPEndPoint.MaxPort)
                 {
                     return port;
                 }
-                // Parsed but no usable port; keep waiting within the timeout window.
+                // Parsed but no usable port (missing, or out of the valid 1..65535 TCP range);
+                // keep waiting within the timeout window so callers can fall back to the default.
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
