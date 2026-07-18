@@ -230,6 +230,47 @@ public class ChannelPopulationTests
     }
 
     [Fact]
+    public void PopulateChannelsFromStatus_WithCorruptScalingValues_SubstitutesSafeDefaultsWithoutThrowing()
+    {
+        // A corrupted device response can carry NaN/Infinity or nonsensical coefficients. Population
+        // must not throw (which would abort channel population mid-stream) and must fall back to safe
+        // defaults rather than propagating garbage into every scaled sample (daqifi-core#300).
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 2,
+            AnalogInRes = 65535
+        };
+        message.AnalogInCalM.Add(float.NaN);            // ch0: invalid -> default 1.0
+        message.AnalogInCalM.Add(2.0f);                 // ch1: valid
+        message.AnalogInCalB.Add(float.PositiveInfinity); // ch0: invalid -> default 0.0
+        message.AnalogInCalB.Add(0.2f);                 // ch1: valid
+        message.AnalogInIntScaleM.Add(0.0f);            // ch0: zero scale -> default 1.0
+        message.AnalogInIntScaleM.Add(1.2f);            // ch1: valid
+        message.AnalogInPortRange.Add(-10.0f);          // ch0: negative range -> default 1.0
+        message.AnalogInPortRange.Add(5.0f);            // ch1: valid
+
+        device.PopulateChannelsFromStatus(message);
+
+        var analogChannels = device.Channels
+            .Where(c => c.Type == ChannelType.Analog)
+            .Cast<IAnalogChannel>()
+            .ToList();
+
+        // ch0 fell back to defaults across the board
+        Assert.Equal(1.0, analogChannels[0].CalibrationM, 3);
+        Assert.Equal(0.0, analogChannels[0].CalibrationB, 3);
+        Assert.Equal(1.0, analogChannels[0].InternalScaleM, 3);
+        Assert.Equal(1.0, analogChannels[0].PortRange, 3);
+
+        // ch1's valid values were preserved
+        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(1.2, analogChannels[1].InternalScaleM, 3);
+        Assert.Equal(5.0, analogChannels[1].PortRange, 3);
+    }
+
+    [Fact]
     public void PopulateChannelsFromStatus_AnalogChannelsHaveCorrectResolution()
     {
         // Arrange

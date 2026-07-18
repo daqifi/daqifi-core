@@ -1343,6 +1343,16 @@ namespace Daqifi.Core.Device
                 var internalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f);
                 var portRange = GetWithDefault(analogInPortRanges, i, 1.0f);
 
+                // A corrupted device response can carry NaN/Infinity or physically nonsensical
+                // scaling coefficients. Feeding those into AnalogChannel would either throw from its
+                // validating setters (killing channel population mid-stream) or silently propagate
+                // garbage into every scaled sample. Fall back to safe defaults and log instead —
+                // mirroring the analog_in_res=0 handling above.
+                calibrationB = (float)SanitizeScalingValue(calibrationB, 0.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationB));
+                calibrationM = (float)SanitizeScalingValue(calibrationM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationM));
+                internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
+                portRange = (float)SanitizePortRange(portRange, i);
+
                 if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
                 {
                     existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange, resolutionIsAssumed);
@@ -1365,6 +1375,42 @@ namespace Daqifi.Core.Device
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// Clamps a device-reported calibration/scale coefficient to a value <see cref="AnalogChannel"/>
+        /// will accept, substituting <paramref name="fallback"/> and logging when the reported value is
+        /// non-finite, out of magnitude range, or (when <paramref name="requireNonZero"/>) zero.
+        /// </summary>
+        private double SanitizeScalingValue(double value, double fallback, double maxMagnitude, bool requireNonZero, int channelIndex, string fieldName)
+        {
+            var invalid = !double.IsFinite(value)
+                || Math.Abs(value) > maxMagnitude
+                || (requireNonZero && value == 0.0);
+
+            if (invalid)
+            {
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported invalid {fieldName}={value} for analog channel {channelIndex}; substituting {fallback}. Scaled samples on this channel may be affected.");
+                return fallback;
+            }
+
+            return value;
+        }
+
+        /// <summary>
+        /// Clamps a device-reported port range to a value <see cref="AnalogChannel"/> will accept,
+        /// substituting the 1.0 default and logging when the reported value is non-finite, non-positive,
+        /// or beyond <see cref="AnalogChannel.MaxPortRangeVolts"/>.
+        /// </summary>
+        private double SanitizePortRange(double value, int channelIndex)
+        {
+            if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaxPortRangeVolts)
+            {
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported invalid portRange={value} for analog channel {channelIndex}; substituting 1.0. Scaled samples on this channel may be affected.");
+                return 1.0;
+            }
+
+            return value;
         }
 
         /// <summary>
