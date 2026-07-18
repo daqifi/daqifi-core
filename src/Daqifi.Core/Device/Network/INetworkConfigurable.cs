@@ -43,6 +43,32 @@ namespace Daqifi.Core.Device.Network
         Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Loads the persisted LAN configuration from the device's NVM back into its runtime settings.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <remarks>
+        /// The inverse of the save step performed by <see cref="UpdateNetworkConfigurationAsync"/>. This is a
+        /// thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:LOAD</c>): it repopulates
+        /// the device's runtime WiFi settings from the last saved values but does not itself re-apply them to
+        /// the live interface — send an apply/reboot afterwards if the loaded values must take effect on the
+        /// active connection. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
+        /// </remarks>
+        Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Resets the device's LAN configuration to firmware factory defaults.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <remarks>
+        /// A thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:FACRESET</c>): it restores
+        /// the default WiFi settings into the device's runtime settings. Persist and/or apply them afterwards
+        /// for the reset to take effect. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
+        /// </remarks>
+        Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Prepares the SD card interface for use by disabling the LAN interface.
         /// </summary>
         /// <remarks>

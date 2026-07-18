@@ -704,6 +704,50 @@ namespace Daqifi.Core.Device
             Disconnect();
         }
 
+        /// <inheritdoc />
+        public void SaveAdcCalibration()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SaveAdcCalibration);
+        }
+
+        /// <inheritdoc />
+        public void LoadAdcCalibration()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.LoadAdcCalibration);
+        }
+
+        /// <inheritdoc />
+        public void SaveVoltagePrecision()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SaveVoltagePrecision);
+        }
+
+        /// <inheritdoc />
+        public void LoadVoltagePrecision()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.LoadVoltagePrecision);
+        }
+
         /// <summary>
         /// Sets the enabled state for a set of channels, then sends one device command per affected
         /// channel type (the ADC enable bitmask for analog, the global DIO enable for digital).
@@ -950,6 +994,46 @@ namespace Daqifi.Core.Device
             {
                 _networkConfiguration.Gateway = configuration.Gateway;
             }
+        }
+
+        /// <summary>
+        /// Loads the persisted LAN configuration from the device's NVM back into its runtime settings.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.LoadNetworkLan);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Resets the device's LAN configuration to firmware factory defaults.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.FactoryResetNetworkLan);
+            return Task.CompletedTask;
         }
 
         /// <summary>

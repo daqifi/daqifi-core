@@ -2854,6 +2854,10 @@ public class FirmwareUpdateServiceTests
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
         public void Reboot() => IsConnected = false;
+        public void SaveAdcCalibration() { }
+        public void LoadAdcCalibration() { }
+        public void SaveVoltagePrecision() { }
+        public void LoadVoltagePrecision() { }
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
@@ -2941,6 +2945,10 @@ public class FirmwareUpdateServiceTests
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
         public void Reboot() => IsConnected = false;
+        public void SaveAdcCalibration() { }
+        public void LoadAdcCalibration() { }
+        public void SaveVoltagePrecision() { }
+        public void LoadVoltagePrecision() { }
         public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
             await Task.Delay(_attemptLatency, cancellationToken).ConfigureAwait(false);
@@ -3262,6 +3270,10 @@ public class FirmwareUpdateServiceTests
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
         public void Reboot() => Disconnect();
+        public void SaveAdcCalibration() { }
+        public void LoadAdcCalibration() { }
+        public void SaveVoltagePrecision() { }
+        public void LoadVoltagePrecision() { }
     }
 
     private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
@@ -3362,6 +3374,10 @@ public class FirmwareUpdateServiceTests
         public int PwmFrequencyHz => 0;
         public void SetAnalogOutput(int channelNumber, double voltage) { }
         public void Reboot() => Disconnect();
+        public void SaveAdcCalibration() { }
+        public void LoadAdcCalibration() { }
+        public void SaveVoltagePrecision() { }
+        public void LoadVoltagePrecision() { }
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
