@@ -109,9 +109,13 @@ namespace Daqifi.Core.Device.SdCard
         /// </param>
         /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <returns>
+        /// A task that resolves to an <see cref="SdCardLoggingSession"/> carrying the effective on-card
+        /// file name (supplied or auto-generated) and the logging format, so callers can report, download,
+        /// or later delete the log without re-deriving Core's naming convention.
+        /// </returns>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
-        Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
+        Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Stops logging data to the SD card.

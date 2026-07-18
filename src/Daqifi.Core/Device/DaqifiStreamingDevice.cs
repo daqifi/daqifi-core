@@ -86,10 +86,35 @@ namespace Daqifi.Core.Device
         /// </summary>
         public bool IsStreaming { get; private set; }
 
+        private int _streamingFrequency;
+
         /// <summary>
-        /// Gets or sets the streaming frequency in Hz (samples per second).
+        /// Gets or sets the streaming frequency in Hz (samples per second). The value is
+        /// validated against the device's advertised maximum sampling rate
+        /// (<see cref="DeviceCapabilities.MaxSamplingRate"/>) so a silently-wrong rate never
+        /// reaches the hardware — consistent with the client-side guards Core already applies
+        /// to PWM (#306) and channel bounds (#300).
         /// </summary>
-        public int StreamingFrequency { get; set; }
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when the value is less than 1 or greater than the device's maximum sampling rate.
+        /// </exception>
+        public int StreamingFrequency
+        {
+            get => _streamingFrequency;
+            set
+            {
+                var maxSamplingRate = Metadata.Capabilities.MaxSamplingRate;
+                if (value < 1 || value > maxSamplingRate)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(StreamingFrequency),
+                        value,
+                        $"Streaming frequency must be between 1 and {maxSamplingRate} Hz (the device's maximum sampling rate).");
+                }
+
+                _streamingFrequency = value;
+            }
+        }
 
         /// <summary>
         /// Gets a value indicating whether the device is currently logging data to the SD card.
@@ -1329,10 +1354,13 @@ namespace Daqifi.Core.Device
         /// </param>
         /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <returns>
+        /// A task that resolves to an <see cref="SdCardLoggingSession"/> carrying the effective on-card
+        /// file name (supplied or auto-generated) and the logging format.
+        /// </returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public async Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+        public async Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
@@ -1392,6 +1420,8 @@ namespace Daqifi.Core.Device
 
             _isLoggingToSdCard = true;
             IsStreaming = true;
+
+            return new SdCardLoggingSession(logFileName, format);
         }
 
         /// <summary>

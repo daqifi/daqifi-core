@@ -20,6 +20,63 @@ namespace Daqifi.Core.Tests.Device
             Assert.False(device.IsStreaming);
         }
 
+        [Theory]
+        [InlineData(1)]
+        [InlineData(500)]
+        [InlineData(1000)] // MaxSamplingRate for all Nyquist types
+        public void StreamingFrequency_WithinRange_IsAccepted(int frequency)
+        {
+            // Arrange
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            // Act
+            device.StreamingFrequency = frequency;
+
+            // Assert
+            Assert.Equal(frequency, device.StreamingFrequency);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        [InlineData(1001)] // MaxSamplingRate + 1
+        [InlineData(50000)]
+        public void StreamingFrequency_OutOfRange_ThrowsArgumentOutOfRangeException(int frequency)
+        {
+            // Arrange
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            // Act & Assert
+            var exception = Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = frequency);
+            Assert.Contains("1000", exception.Message); // valid range surfaced from DeviceCapabilities.MaxSamplingRate
+        }
+
+        [Fact]
+        public void StreamingFrequency_OutOfRange_LeavesPreviousValueUnchanged()
+        {
+            // Arrange
+            var device = new DaqifiStreamingDevice("TestDevice") { StreamingFrequency = 250 };
+
+            // Act
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = 5000);
+
+            // Assert
+            Assert.Equal(250, device.StreamingFrequency);
+        }
+
+        [Fact]
+        public void StreamingFrequency_UsesCapabilitiesMaxSamplingRate_NotAHardcodedConstant()
+        {
+            // Arrange: lower the device's advertised max and confirm the guard tracks it.
+            var device = new DaqifiStreamingDevice("TestDevice");
+            device.Metadata.Capabilities.MaxSamplingRate = 200;
+
+            // Act & Assert: 200 is now the ceiling, 201 is rejected.
+            device.StreamingFrequency = 200;
+            Assert.Equal(200, device.StreamingFrequency);
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = 201);
+        }
+
         [Fact]
         public void StartStreaming_WhenConnected_SendsCorrectCommandAndSetsIsStreaming()
         {
