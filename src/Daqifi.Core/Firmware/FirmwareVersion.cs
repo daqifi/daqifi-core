@@ -54,16 +54,18 @@ public readonly record struct FirmwareVersion(
         var m = VersionRegex.Match(input.Trim());
         if (!m.Success) return false;
 
-        // The regex matches an unbounded digit run for the major component, so a value that
-        // overflows Int32 (e.g. a corrupted/spoofed DeviceFwRev wire string) must NOT throw — a
-        // TryParse honors its no-throw contract and reports an out-of-range version as unparseable
-        // (callers fail closed on it). Use TryParse for all three numeric parts, symmetrically.
-        if (!int.TryParse(m.Groups["maj"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var major))
+        // The regex matches an unbounded digit run per component, so a value that overflows Int32
+        // (e.g. a corrupted/spoofed DeviceFwRev wire string) must NOT throw — a TryParse honors its
+        // no-throw contract and reports an out-of-range version as unparseable so callers fail
+        // closed on it. All three components are handled symmetrically: an ABSENT optional
+        // minor/patch defaults to 0 (so "3" == 3.0.0), but a PRESENT component that overflows
+        // rejects the whole version rather than silently truncating to 0.
+        if (!TryParseComponent(m.Groups["maj"].Value, out var major)
+            || !TryParseComponent(m.Groups["min"].Value, out var minor)
+            || !TryParseComponent(m.Groups["pat"].Value, out var patch))
         {
             return false;
         }
-        var minor = int.TryParse(m.Groups["min"].Value, out var mi) ? mi : 0;
-        var patch = int.TryParse(m.Groups["pat"].Value, out var pa) ? pa : 0;
 
         var suffix = m.Groups["suffix"].Success ? m.Groups["suffix"].Value : null;
         string? label = null;
@@ -78,6 +80,18 @@ public readonly record struct FirmwareVersion(
 
         version = new FirmwareVersion(major, minor, patch, label, preNum);
         return true;
+    }
+
+    /// <summary>
+    /// Parses one numeric version component. An empty value (an absent optional minor/patch group)
+    /// yields 0; a non-empty value must fit <see cref="int"/> — one that overflows makes the whole
+    /// version unparseable (returns false) rather than silently truncating to 0.
+    /// </summary>
+    private static bool TryParseComponent(string value, out int result)
+    {
+        result = 0;
+        return value.Length == 0
+            || int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out result);
     }
 
     /// <summary>

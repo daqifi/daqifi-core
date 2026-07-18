@@ -52,6 +52,10 @@ public class FirmwareVersionTests
     // int.Parse/int.TryParse asymmetry on the major component).
     [InlineData("999999999999999999.0.0")]
     [InlineData("2147483648.0.0")]
+    // A PRESENT minor/patch that overflows rejects the whole version too (symmetric with major) —
+    // it must not silently truncate to 0. (An ABSENT minor/patch still defaults to 0, e.g. "3".)
+    [InlineData("3.999999999999999999.0")]
+    [InlineData("3.0.999999999999999999")]
     public void TryParse_Invalid_ReturnsFalse(string? input)
     {
         Assert.False(FirmwareVersion.TryParse(input, out _));

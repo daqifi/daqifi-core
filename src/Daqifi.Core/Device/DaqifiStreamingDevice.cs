@@ -1095,6 +1095,13 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Cannot query SD card storage while logging to SD card.");
             }
 
+            // The storage-space query drives the SD card through the same transport-aware
+            // PrepareSdInterface() as LIST/GET/DELETE, so it carries the identical SD-over-WiFi
+            // requirement: over WiFi it needs firmware >= v3.7.0 (#598/#599 SPI arbitration) — else
+            // it would access the SD card with the LAN still enabled on firmware that never learned
+            // to arbitrate the shared bus. Gate it up front for the same reason as its siblings.
+            EnsureSdFileTransferSupportedOnTransport();
+
             cancellationToken.ThrowIfCancellationRequested();
 
             // Defensive: always send stop command even if IsStreaming is stale (see issue #118)

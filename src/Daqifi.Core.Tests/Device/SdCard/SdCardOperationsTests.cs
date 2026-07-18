@@ -1544,6 +1544,24 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.NotEmpty(device.SentMessages);
         }
 
+        [Theory]
+        [InlineData("3.6.3")]
+        [InlineData("")]
+        public async Task GetSdCardStorageAsync_OverWifi_BelowMinFirmware_ThrowsFeatureNotSupported(string firmware)
+        {
+            // The storage-space query drives the SD card through the same transport-aware interface
+            // prep, so it carries the same SD-over-WiFi firmware requirement and must be gated too.
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Metadata.FirmwareVersion = firmware;
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
+                () => device.GetSdCardStorageAsync());
+            Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
+            // The gate short-circuits before any SD command touches the shared SPI bus.
+            Assert.DoesNotContain("SYSTem:STORage:SD:SPACe?", device.SentMessages.Select(m => m.Data));
+        }
+
         #endregion
 
         [Theory]
