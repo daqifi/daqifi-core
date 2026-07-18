@@ -1441,7 +1441,30 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var files = await device.GetSdCardFilesAsync();
 
             Assert.Single(files);
-            Assert.Contains("SYSTem:STORage:SD:LIST?", device.SentMessages.Select(m => m.Data));
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:LIST?", sent);
+            // Over WiFi the LAN interface must NOT be toggled — disabling it would drop the TCP
+            // channel carrying the SD reply (#598/#599: the SPI driver arbitrates instead).
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 0", sent); // DisableNetworkLan
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
+            // The SD subsystem is still toggled (that does not touch the LAN).
+            Assert.Contains("SYSTem:STORage:SD:ENAble 1", sent);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_OverUsb_TogglesLanInterface()
+        {
+            // Regression: over USB the LAN interface IS disabled (free the shared SPI bus) and
+            // restored — the transport-aware PrepareSdInterface/PrepareLanInterface must keep this.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
+            device.Connect();
+
+            await device.GetSdCardFilesAsync();
+
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sent); // DisableNetworkLan
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan (restore)
         }
 
         [Theory]
@@ -1449,6 +1472,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         [InlineData("3.5.0")]
         [InlineData("")]
         [InlineData("not-a-version")]
+        [InlineData("999999999999999999.0.0")] // overflows Int32 — must fail closed, not crash
         public async Task GetSdCardFilesAsync_OverWifi_BelowMinOrUnparseableFirmware_ThrowsFeatureNotSupported(string firmware)
         {
             var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");

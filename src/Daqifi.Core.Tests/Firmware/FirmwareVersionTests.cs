@@ -47,6 +47,11 @@ public class FirmwareVersionTests
     [InlineData("   ")]
     [InlineData("not-a-version")]
     [InlineData("abc")]
+    // A digit run that overflows Int32 matches the regex but must NOT throw from a TryParse —
+    // it is reported as unparseable so version-gated callers fail closed (regression for the
+    // int.Parse/int.TryParse asymmetry on the major component).
+    [InlineData("999999999999999999.0.0")]
+    [InlineData("2147483648.0.0")]
     public void TryParse_Invalid_ReturnsFalse(string? input)
     {
         Assert.False(FirmwareVersion.TryParse(input, out _));

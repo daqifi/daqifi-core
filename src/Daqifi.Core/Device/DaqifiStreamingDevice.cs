@@ -909,7 +909,12 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Prepares the SD card interface for use by disabling the LAN interface.
+        /// Prepares the SD-card interface for a file operation. Over USB the LAN interface is
+        /// disabled first to free the shared SPI bus for the SD card. Over WiFi/TCP (firmware
+        /// &gt;= v3.7.0, #598/#599) the LAN interface MUST stay enabled — the Harmony SPI driver
+        /// arbitrates SD/WiFi transactions on the shared bus, and the SD reply routes back over the
+        /// very TCP channel that requested it, so disabling LAN would drop the control channel
+        /// mid-operation. Only the SD subsystem is enabled in that case.
         /// </summary>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         public void PrepareSdInterface()
@@ -919,12 +924,19 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
-            Send(ScpiMessageProducer.DisableNetworkLan);
+            if (IsUsbConnection)
+            {
+                Send(ScpiMessageProducer.DisableNetworkLan);
+            }
+
             Send(ScpiMessageProducer.EnableStorageSd);
         }
 
         /// <summary>
-        /// Prepares the LAN interface for use by disabling the SD card interface.
+        /// Restores the interface after an SD-card file operation. The SD subsystem is disabled in
+        /// both cases. Over USB the LAN interface is re-enabled (it was disabled by
+        /// <see cref="PrepareSdInterface"/>). Over WiFi/TCP the LAN was never disabled, so it is
+        /// left alone — re-enabling it would re-initialize the WiFi module and drop the connection.
         /// </summary>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         public void PrepareLanInterface()
@@ -935,7 +947,11 @@ namespace Daqifi.Core.Device
             }
 
             Send(ScpiMessageProducer.DisableStorageSd);
-            Send(ScpiMessageProducer.EnableNetworkLan);
+
+            if (IsUsbConnection)
+            {
+                Send(ScpiMessageProducer.EnableNetworkLan);
+            }
         }
 
         /// <summary>
