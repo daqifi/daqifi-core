@@ -182,8 +182,14 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         // Not running — but a just-stopped reader may still be finishing its final Read during the
         // stop path's time-bounded Join window. Drain the stream ourselves only once that thread
         // has provably exited, so our Read can't overlap its Read.
+        //
+        // Exception: if we ARE the consumer thread (ClearBuffer called from a MessageReceived
+        // callback after another thread requested stop), there is no other reader — joining would
+        // just wait on ourselves until the timeout. Skip the join and clear directly in that case.
         var thread = _consumerThread;
-        if (thread is { IsAlive: true } && !thread.Join(1000))
+        if (thread is { IsAlive: true }
+            && !ReferenceEquals(thread, Thread.CurrentThread)
+            && !thread.Join(1000))
         {
             // Reader still alive; don't risk an overlapping Stream.Read. Clear just the in-memory
             // buffer (always lock-guarded) and skip the stream drain.

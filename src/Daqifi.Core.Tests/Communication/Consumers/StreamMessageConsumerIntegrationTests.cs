@@ -408,8 +408,11 @@ public class StreamMessageConsumerIntegrationTests
     private sealed class BlockingReadStream : Stream
     {
         private readonly ManualResetEventSlim _gate = new(false);
+        private volatile bool _isBlockedInRead;
 
-        public bool IsBlockedInRead { get; private set; }
+        // volatile-backed so the polling test thread is guaranteed to observe the consumer
+        // thread's write (a plain auto-property has no happens-before guarantee here).
+        public bool IsBlockedInRead => _isBlockedInRead;
 
         public void Release() => _gate.Set();
 
@@ -422,7 +425,7 @@ public class StreamMessageConsumerIntegrationTests
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            IsBlockedInRead = true;
+            _isBlockedInRead = true;
             _gate.Wait();
             return 0;
         }
@@ -470,6 +473,38 @@ public class StreamMessageConsumerIntegrationTests
 
         Assert.Null(exception);
         Assert.Equal(0, consumer.QueuedMessageCount);
+    }
+
+    /// <summary>
+    /// <see cref="StreamMessageConsumer{T}.MessageReceived"/> is raised on the consumer thread, so a
+    /// subscriber can legally call back into <see cref="StreamMessageConsumer{T}.ClearBuffer"/>. That
+    /// must never block the consumer thread (issue #332 round 2: the not-running path must not
+    /// <c>Join</c> the current thread on itself).
+    /// </summary>
+    [Fact]
+    public void ClearBuffer_CalledFromMessageReceivedCallback_DoesNotBlockConsumerThread()
+    {
+        var oneMessage = SerializeWithLengthPrefix(new DaqifiOutMessage { MsgTimeStamp = 42 });
+        using var stream = new MemoryStream(oneMessage);
+        var parser = new ProtobufMessageParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        var handlerReturned = new ManualResetEventSlim(false);
+        Exception? handlerError = null;
+        consumer.MessageReceived += (_, _) =>
+        {
+            try { consumer.ClearBuffer(); }
+            catch (Exception ex) { handlerError = ex; }
+            finally { handlerReturned.Set(); }
+        };
+
+        consumer.Start();
+
+        Assert.True(handlerReturned.Wait(TimeSpan.FromSeconds(2)),
+            "ClearBuffer() invoked from the consumer-thread callback must return promptly, not self-join.");
+        Assert.Null(handlerError);
+
+        consumer.Stop();
     }
 
     /// <summary>
