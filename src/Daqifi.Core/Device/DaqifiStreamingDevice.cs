@@ -939,6 +939,45 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Minimum firmware for SD-card file transfer (LIST / GET / DELETE) over a WiFi/TCP
+        /// connection. Firmware <c>#598/#599</c> (first released <b>v3.7.0</b>) route the SD reply
+        /// to the requesting interface; before that the SD card and WiFi contend for the shared SPI
+        /// bus, so these operations are USB-only on older firmware. See
+        /// <see cref="DeviceFeature.SdFileTransferOverWifi"/> and ADR 0001.
+        /// </summary>
+        internal static readonly FirmwareVersion SdOverWifiMinFirmware = new(3, 7, 0, null, 0);
+
+        /// <summary>
+        /// Guards an SD-card file operation (LIST / GET / DELETE) against the transport it will run
+        /// on. Over USB (serial) these are always available on SD-capable firmware. Over WiFi/TCP
+        /// they require firmware &gt;= <see cref="SdOverWifiMinFirmware"/> — an unparseable or older
+        /// reported version is treated as unsupported and throws a typed, actionable
+        /// <see cref="FeatureNotSupportedException"/> up front (ADR 0001) rather than dispatching a
+        /// command the firmware cannot service over WiFi (which would stall on the shared SPI bus).
+        /// </summary>
+        /// <exception cref="FeatureNotSupportedException">
+        /// Thrown when the active transport is not USB and the device firmware predates
+        /// <see cref="SdOverWifiMinFirmware"/>.
+        /// </exception>
+        private void EnsureSdFileTransferSupportedOnTransport()
+        {
+            if (IsUsbConnection)
+            {
+                return;
+            }
+
+            if (!FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var firmware)
+                || firmware < SdOverWifiMinFirmware)
+            {
+                throw new FeatureNotSupportedException(
+                    DeviceFeature.SdFileTransferOverWifi,
+                    SdOverWifiMinFirmware,
+                    Metadata.FirmwareVersion,
+                    Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
+            }
+        }
+
+        /// <summary>
         /// Retrieves the list of files stored on the device's SD card.
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
@@ -954,6 +993,8 @@ namespace Daqifi.Core.Device
             {
                 throw new InvalidOperationException("Device is not connected.");
             }
+
+            EnsureSdFileTransferSupportedOnTransport();
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1318,6 +1359,8 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Cannot delete files while logging to SD card.");
             }
 
+            EnsureSdFileTransferSupportedOnTransport();
+
             cancellationToken.ThrowIfCancellationRequested();
 
             if (string.IsNullOrWhiteSpace(fileName))
@@ -1428,12 +1471,10 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
-            if (!IsUsbConnection)
-            {
-                throw new InvalidOperationException(
-                    "SD card file download is only supported over USB (serial) connections. " +
-                    "The SD card and WiFi/LAN share the SPI bus, so file downloads require a USB connection.");
-            }
+            // Over WiFi/TCP this requires firmware >= v3.7.0 (#598/#599); over USB it is always
+            // available on SD-capable firmware. Older firmware over WiFi gets a typed
+            // FeatureNotSupportedException instead of the old blanket USB-only rejection (ADR 0001).
+            EnsureSdFileTransferSupportedOnTransport();
 
             if (string.IsNullOrWhiteSpace(fileName))
             {
