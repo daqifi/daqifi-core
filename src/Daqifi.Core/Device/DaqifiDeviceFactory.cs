@@ -22,6 +22,19 @@ internal static class SerialDefaults
 public static class DaqifiDeviceFactory
 {
     /// <summary>
+    /// The firmware-default TCP data port DAQiFi devices listen on for streaming connections.
+    /// </summary>
+    /// <remarks>
+    /// Discovery normally reports each device's actual data port via the UDP-30303 broadcast
+    /// (<c>IDeviceInfo.Port</c>), so prefer that when available. For a manually-entered IP address that
+    /// never answered the broadcast, resolve the real port with
+    /// <see cref="Discovery.WiFiDeviceFinder.ProbeTcpDataPortAsync(IPAddress, System.TimeSpan, System.Threading.CancellationToken)"/>
+    /// and fall back to this constant only when the probe returns <c>null</c>. Use it instead of a
+    /// hardcoded literal so a single place documents the default.
+    /// </remarks>
+    public const int DefaultTcpDataPort = 9760;
+
+    /// <summary>
     /// Connects to a DAQiFi device over TCP asynchronously using a hostname.
     /// </summary>
     /// <param name="host">The hostname or IP address string to connect to.</param>
