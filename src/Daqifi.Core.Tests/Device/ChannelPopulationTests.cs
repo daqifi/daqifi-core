@@ -1,5 +1,8 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device;
@@ -339,6 +342,63 @@ public class ChannelPopulationTests
         Assert.Same(analog0, newAnalog0);
         Assert.False(((IAnalogChannel)newAnalog0).ResolutionIsAssumed);
         Assert.Equal(4095u, ((IAnalogChannel)newAnalog0).Resolution);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_RepeatedZeroResolution_LogsAssumedResolutionWarningOnlyOnce()
+    {
+        // A device that never reports analog_in_res must not spam Trace on every status
+        // refresh — the warning is only useful the first time (PR #325 review).
+        var deviceName = $"TraceThrottleTest-{nameof(PopulateChannelsFromStatus_RepeatedZeroResolution_LogsAssumedResolutionWarningOnlyOnce)}";
+        var device = new DaqifiDevice(deviceName);
+        var message = new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 0 };
+
+        var writer = new StringWriter();
+        var listener = new TextWriterTraceListener(writer);
+        Trace.Listeners.Add(listener);
+        try
+        {
+            device.PopulateChannelsFromStatus(message);
+            device.PopulateChannelsFromStatus(message);
+            device.PopulateChannelsFromStatus(message);
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+
+        var occurrences = writer.ToString()
+            .Split('\n')
+            .Count(line => line.Contains($"Device '{deviceName}'"));
+        Assert.Equal(1, occurrences);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_ResolutionReportedThenOmittedAgain_ReArmsAssumedResolutionWarning()
+    {
+        // If a real resolution shows up (e.g. a firmware fix) and later disappears again,
+        // the warning should fire again rather than staying silenced forever.
+        var deviceName = $"TraceReArmTest-{nameof(PopulateChannelsFromStatus_ResolutionReportedThenOmittedAgain_ReArmsAssumedResolutionWarning)}";
+        var device = new DaqifiDevice(deviceName);
+
+        var writer = new StringWriter();
+        var listener = new TextWriterTraceListener(writer);
+        Trace.Listeners.Add(listener);
+        try
+        {
+            device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 0 });
+            device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 4095 });
+            device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 0 });
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+
+        var occurrences = writer.ToString()
+            .Split('\n')
+            .Count(line => line.Contains($"Device '{deviceName}'"));
+        Assert.Equal(2, occurrences);
     }
 
     #endregion

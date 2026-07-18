@@ -126,6 +126,9 @@ namespace Daqifi.Core.Device
         private bool _disposed;
         private bool _isDisconnecting;
         private bool _isInitialized;
+        // Set once the first assumed-resolution warning has been logged, so a device that
+        // never reports analog_in_res doesn't spam Trace on every status refresh (#325 review).
+        private bool _loggedAssumedResolutionWarning;
         private readonly List<IChannel> _channels = new();
 
         // Guards structural access to _channels: the consumer thread repopulates it
@@ -1331,9 +1334,16 @@ namespace Daqifi.Core.Device
             var resolutionIsAssumed = analogInResolution == 0;
             var resolution = analogInResolution > 0 ? analogInResolution : 65535;
 
-            if (resolutionIsAssumed && count > 0)
+            if (resolutionIsAssumed && count > 0 && !_loggedAssumedResolutionWarning)
             {
-                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported no ADC resolution (analog_in_res=0) for {count} analog channel(s); assuming {resolution}. Scaled samples on this device may be systematically wrong.");
+                _loggedAssumedResolutionWarning = true;
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported no ADC resolution (analog_in_res=0) for {count} analog channel(s); assuming {resolution}. Scaled samples on this device may be systematically wrong. (This warning is logged once per device instance.)");
+            }
+            else if (!resolutionIsAssumed)
+            {
+                // A later status refresh reporting a real resolution means the warning is no
+                // longer stale — re-arm it in case the device regresses to omitting it again.
+                _loggedAssumedResolutionWarning = false;
             }
 
             for (var i = 0; i < count; i++)
