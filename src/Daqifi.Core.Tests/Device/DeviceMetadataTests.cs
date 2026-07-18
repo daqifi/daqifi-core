@@ -167,6 +167,115 @@ public class DeviceMetadataTests
     }
 
     [Fact]
+    public void UpdateFromProtobuf_UpdatesHealthTelemetry()
+    {
+        // Arrange
+        var metadata = new DeviceMetadata();
+        var message = new DaqifiOutMessage
+        {
+            BattStatus = 87,
+            TempStatus = 42,
+            PwrStatus = 2,
+            DeviceStatus = 5
+        };
+
+        // Act
+        metadata.UpdateFromProtobuf(message);
+
+        // Assert
+        Assert.Equal(87, metadata.Health.BatteryPercent);
+        Assert.Equal(42, metadata.Health.BoardTemperatureCelsius);
+        Assert.Equal(2u, metadata.Health.PowerStatus);
+        Assert.Equal(5u, metadata.Health.DeviceStatus);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_FromSerializedStatusPayload_DecodesHealthTelemetry()
+    {
+        // Arrange: build a status message, serialize it to the wire bytes a device would send,
+        // then decode it back through the protobuf parser — exercising the real frame decode path
+        // (issue #335 asks for a captured/serialized payload, not just an in-memory message).
+        var original = new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            BattStatus = 87,
+            TempStatus = -5,
+            PwrStatus = 2,
+            DeviceStatus = 5
+        };
+        byte[] payload = original.ToByteArray();
+        var decoded = DaqifiOutMessage.Parser.ParseFrom(payload);
+
+        var metadata = new DeviceMetadata();
+
+        // Act
+        metadata.UpdateFromProtobuf(decoded);
+
+        // Assert
+        Assert.Equal(87, metadata.Health.BatteryPercent);
+        Assert.Equal(-5, metadata.Health.BoardTemperatureCelsius);
+        Assert.Equal(2u, metadata.Health.PowerStatus);
+        Assert.Equal(5u, metadata.Health.DeviceStatus);
+    }
+
+    [Theory]
+    [InlineData(101u)]      // above the documented 0-100 range
+    [InlineData(500u)]      // clearly nonsensical
+    [InlineData(uint.MaxValue)] // would wrap to -1 if cast straight to int
+    public void UpdateFromProtobuf_OutOfRangeBattery_IsIgnored(uint battStatus)
+    {
+        // Arrange: a prior valid reading, then a bad one.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 60 });
+
+        // Act
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = battStatus });
+
+        // Assert: out-of-range battery never surfaces (and never wraps negative); last-known kept.
+        Assert.Equal(60, metadata.Health.BatteryPercent);
+    }
+
+    [Fact]
+    public void Health_SetToNull_IsCoercedToInstance_AndStatusUpdateDoesNotThrow()
+    {
+        // Health has a public setter; a consumer assigning null must not break the status path.
+        var metadata = new DeviceMetadata { Health = null! };
+
+        Assert.NotNull(metadata.Health);
+
+        var exception = Record.Exception(() =>
+            metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 42 }));
+
+        Assert.Null(exception);
+        Assert.Equal(42, metadata.Health.BatteryPercent);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_NegativeBoardTemperature_IsPreserved()
+    {
+        // TempStatus is a signed field; sub-zero board temperatures must round-trip.
+        var metadata = new DeviceMetadata();
+        var message = new DaqifiOutMessage { TempStatus = -10 };
+
+        metadata.UpdateFromProtobuf(message);
+
+        Assert.Equal(-10, metadata.Health.BoardTemperatureCelsius);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_ZeroHealthFields_LeaveLastKnownValues()
+    {
+        // A partial status message (all health fields 0) must not clobber a prior reading.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { BattStatus = 90, TempStatus = 30 });
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { AnalogInPortNum = 8 });
+
+        Assert.Equal(90, metadata.Health.BatteryPercent);
+        Assert.Equal(30, metadata.Health.BoardTemperatureCelsius);
+    }
+
+    [Fact]
     public void UpdateFromProtobuf_IgnoresEmptyOrZeroValues()
     {
         // Arrange
@@ -249,6 +358,13 @@ public class DeviceMetadataTests
                 DigitalChannels = 16,
                 MaxSamplingRate = 5000
             },
+            Health = new DeviceHealth
+            {
+                BatteryPercent = 75,
+                BoardTemperatureCelsius = 33,
+                PowerStatus = 1,
+                DeviceStatus = 4
+            },
             IpAddress = "192.168.1.100",
             MacAddress = "AA-BB-CC-DD-EE-FF",
             Ssid = "TestNetwork",
@@ -285,6 +401,26 @@ public class DeviceMetadataTests
         Assert.Equal(source.Capabilities.HasWiFi, target.Capabilities.HasWiFi);
         Assert.Equal(source.Capabilities.HasUsb, target.Capabilities.HasUsb);
         Assert.Equal(source.Capabilities.SupportsStreaming, target.Capabilities.SupportsStreaming);
+        Assert.Equal(source.Health.BatteryPercent, target.Health.BatteryPercent);
+        Assert.Equal(source.Health.BoardTemperatureCelsius, target.Health.BoardTemperatureCelsius);
+        Assert.Equal(source.Health.PowerStatus, target.Health.PowerStatus);
+        Assert.Equal(source.Health.DeviceStatus, target.Health.DeviceStatus);
+    }
+
+    [Fact]
+    public void CopyFrom_HealthIsDeepCopiedNotShared()
+    {
+        // Arrange
+        var source = new DeviceMetadata { Health = new DeviceHealth { BatteryPercent = 50 } };
+        var target = new DeviceMetadata();
+
+        // Act
+        target.CopyFrom(source);
+        source.Health.BatteryPercent = 10;
+
+        // Assert
+        Assert.NotSame(source.Health, target.Health);
+        Assert.Equal(50, target.Health.BatteryPercent);
     }
 
     [Fact]

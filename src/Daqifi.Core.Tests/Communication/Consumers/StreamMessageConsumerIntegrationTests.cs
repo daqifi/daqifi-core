@@ -248,6 +248,11 @@ public class StreamMessageConsumerIntegrationTests
     /// and clears the internal message buffer. This is essential for reconnection scenarios
     /// where residual partial data from a previous session needs to be discarded.
     /// </summary>
+    /// <remarks>
+    /// While the consumer thread is running, ClearBuffer() marshals the clear onto that thread
+    /// (issue #332) rather than mutating the buffer from the caller — so the clear takes effect on
+    /// the next consumer-loop iteration rather than synchronously on return. The test polls for it.
+    /// </remarks>
     [Fact]
     public void ClearBuffer_CalledViaInterface_ClearsInternalBuffer()
     {
@@ -262,21 +267,193 @@ public class StreamMessageConsumerIntegrationTests
         consumer.Start();
         Thread.Sleep(50); // Brief pause to allow consumer to read data
 
-        // Verify data was buffered (QueuedMessageCount tracks internal buffer size)
-        // Note: The exact count depends on timing, but buffer should have some data
-        var bufferCountBeforeClear = consumer.QueuedMessageCount;
-
         // Act - Call ClearBuffer via interface (as desktop would do during reconnection)
         IMessageConsumer<DaqifiOutMessage> interfaceRef = consumer;
         interfaceRef.ClearBuffer();
 
-        // Assert - Internal buffer should be cleared
-        Assert.Equal(0, consumer.QueuedMessageCount);
+        // Assert - Internal buffer should be cleared once the consumer thread honors the request.
+        var cleared = WaitFor(() => consumer.QueuedMessageCount == 0, TimeSpan.FromSeconds(1));
+        Assert.True(cleared, "ClearBuffer() should drain the internal buffer within the timeout.");
 
         // Additional verification: consumer should still be functional after clear
         Assert.True(consumer.IsRunning);
 
         consumer.Stop();
+    }
+
+    /// <summary>
+    /// Exercises the reconnection race directly (issue #332): hammer ClearBuffer() from the caller
+    /// thread while the consumer thread is actively reading and parsing a continuous stream. Before
+    /// the fix this concurrently mutated the underlying <see cref="System.Collections.Generic.List{T}"/>
+    /// and issued a second overlapping Stream.Read; now the clear is marshaled onto the consumer
+    /// thread, so no concurrency exception should ever surface and the consumer should keep running.
+    /// </summary>
+    [Fact]
+    public void ClearBuffer_DuringActiveConsumption_IsThreadSafe()
+    {
+        // Arrange - a stream that never ends, so the consumer thread is continuously reading. A
+        // benign parser keeps a running remainder buffered (returns no messages, consumes only part
+        // of the data) so the internal List<byte> is genuinely being appended to and drained while
+        // we hammer it — without protobuf parse errors confounding the concurrency assertion.
+        using var stream = new ContinuousDataStream();
+        var parser = new PartialConsumingParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        var errors = new List<Exception>();
+        consumer.ErrorOccurred += (_, e) =>
+        {
+            lock (errors) { errors.Add(e.Error); }
+        };
+
+        consumer.Start();
+
+        // Act - hammer ClearBuffer AND QueuedMessageCount from this thread (both touch the shared
+        // buffer state) while the consumer thread appends/drains it.
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(500);
+        var clearCalls = 0;
+        while (DateTime.UtcNow < deadline)
+        {
+            consumer.ClearBuffer();
+            _ = consumer.QueuedMessageCount;
+            clearCalls++;
+        }
+
+        // Give the consumer a moment to process any final clears, then stop.
+        Thread.Sleep(50);
+        var stoppedCleanly = consumer.StopSafely(2000);
+
+        // Assert - no concurrency exceptions (List corruption, torn reads) were ever reported.
+        lock (errors)
+        {
+            Assert.True(errors.Count == 0,
+                $"Consumer reported {errors.Count} error(s) during concurrent ClearBuffer; first: {(errors.Count > 0 ? errors[0].ToString() : "none")}");
+        }
+        Assert.True(clearCalls > 0);
+        Assert.True(stoppedCleanly);
+    }
+
+    /// <summary>
+    /// When the stop path's time-bounded Join can't reap a stuck reader (issue #332 follow-up):
+    /// StopSafely reports the timeout, and a subsequent Start() must refuse to spawn a second
+    /// reader over the still-alive one rather than reintroduce overlapping Stream.Read loops.
+    /// </summary>
+    [Fact]
+    public void StopSafely_StuckReader_TimesOut_AndStartRefusesSecondReader()
+    {
+        using var stream = new BlockingReadStream();
+        var parser = new ProtobufMessageParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        consumer.Start();
+        Assert.True(WaitFor(() => stream.IsBlockedInRead, TimeSpan.FromSeconds(1)),
+            "reader should have entered a blocking Read");
+
+        // The reader is stuck in Read, so a bounded stop can't join it.
+        Assert.False(consumer.StopSafely(100));
+
+        // A second Start must not create a concurrent reader against the same stream.
+        var ex = Assert.Throws<InvalidOperationException>(() => consumer.Start());
+        Assert.Contains("not yet exited", ex.Message);
+
+        // Cleanup: release the reader so the background thread can exit.
+        stream.Release();
+    }
+
+    private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return true;
+            Thread.Sleep(5);
+        }
+        return condition();
+    }
+
+    /// <summary>
+    /// A read-only stream that always returns bytes, so the consumer thread stays in a tight
+    /// read/parse loop for the duration of the concurrency test.
+    /// </summary>
+    private sealed class ContinuousDataStream : Stream
+    {
+        private byte _next;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            // Return a modest chunk each call so the buffer both grows and gets parsed/drained.
+            var n = Math.Min(count, 64);
+            for (var i = 0; i < n; i++)
+            {
+                buffer[offset + i] = _next++;
+            }
+            return n;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A read-only stream whose <see cref="Read"/> blocks until <see cref="Release"/> is called,
+    /// used to simulate a consumer thread stuck in a blocking read that a bounded Join can't reap.
+    /// </summary>
+    private sealed class BlockingReadStream : Stream
+    {
+        private readonly ManualResetEventSlim _gate = new(false);
+        private volatile bool _isBlockedInRead;
+
+        // volatile-backed so the polling test thread is guaranteed to observe the consumer
+        // thread's write (a plain auto-property has no happens-before guarantee here).
+        public bool IsBlockedInRead => _isBlockedInRead;
+
+        public void Release() => _gate.Set();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            _isBlockedInRead = true;
+            _gate.Wait();
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            _gate.Set();
+            _gate.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// A parser that never throws: it consumes all but a small trailing remainder each pass and
+    /// yields no messages, so the consumer keeps a non-empty buffer to append/drain under load.
+    /// </summary>
+    private sealed class PartialConsumingParser : IMessageParser<DaqifiOutMessage>
+    {
+        public IEnumerable<IInboundMessage<DaqifiOutMessage>> ParseMessages(byte[] data, out int consumedBytes)
+        {
+            // Leave a few bytes "pending" so the buffer never fully empties between reads.
+            consumedBytes = data.Length > 4 ? data.Length - 4 : 0;
+            return Array.Empty<IInboundMessage<DaqifiOutMessage>>();
+        }
     }
 
     /// <summary>
@@ -296,6 +473,38 @@ public class StreamMessageConsumerIntegrationTests
 
         Assert.Null(exception);
         Assert.Equal(0, consumer.QueuedMessageCount);
+    }
+
+    /// <summary>
+    /// <see cref="StreamMessageConsumer{T}.MessageReceived"/> is raised on the consumer thread, so a
+    /// subscriber can legally call back into <see cref="StreamMessageConsumer{T}.ClearBuffer"/>. That
+    /// must never block the consumer thread (issue #332 round 2: the not-running path must not
+    /// <c>Join</c> the current thread on itself).
+    /// </summary>
+    [Fact]
+    public void ClearBuffer_CalledFromMessageReceivedCallback_DoesNotBlockConsumerThread()
+    {
+        var oneMessage = SerializeWithLengthPrefix(new DaqifiOutMessage { MsgTimeStamp = 42 });
+        using var stream = new MemoryStream(oneMessage);
+        var parser = new ProtobufMessageParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        var handlerReturned = new ManualResetEventSlim(false);
+        Exception? handlerError = null;
+        consumer.MessageReceived += (_, _) =>
+        {
+            try { consumer.ClearBuffer(); }
+            catch (Exception ex) { handlerError = ex; }
+            finally { handlerReturned.Set(); }
+        };
+
+        consumer.Start();
+
+        Assert.True(handlerReturned.Wait(TimeSpan.FromSeconds(2)),
+            "ClearBuffer() invoked from the consumer-thread callback must return promptly, not self-join.");
+        Assert.Null(handlerError);
+
+        consumer.Stop();
     }
 
     /// <summary>

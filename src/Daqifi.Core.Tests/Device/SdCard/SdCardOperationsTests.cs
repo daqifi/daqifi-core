@@ -338,6 +338,42 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task StartSdCardLoggingAsync_WithCustomFileName_ReturnsSessionWithThatName()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            var session = await device.StartSdCardLoggingSessionAsync("custom_data.bin", format: SdCardLogFormat.Protobuf);
+
+            // Assert: the returned name is exactly what was sent to the device.
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal("custom_data.bin", session.FileName);
+            Assert.Equal(SdCardLogFormat.Protobuf, session.Format);
+            Assert.Contains($"SYSTem:STORage:SD:FILE \"{session.FileName}\"", sentCommands);
+        }
+
+        [Fact]
+        public async Task StartSdCardLoggingAsync_WithNullFileName_ReturnsGeneratedNameSentToDevice()
+        {
+            // Arrange
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            // Act
+            var session = await device.StartSdCardLoggingSessionAsync(format: SdCardLogFormat.Json);
+
+            // Assert: the auto-generated name the caller receives is the one that reached the device,
+            // so consumers no longer have to re-derive Core's naming convention.
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.StartsWith("log_", session.FileName);
+            Assert.EndsWith(".json", session.FileName);
+            Assert.Equal(SdCardLogFormat.Json, session.Format);
+            Assert.Contains($"SYSTem:STORage:SD:FILE \"{session.FileName}\"", sentCommands);
+        }
+
+        [Fact]
         public async Task StartSdCardLoggingAsync_SetsIsLoggingToTrue()
         {
             // Arrange

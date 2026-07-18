@@ -299,8 +299,8 @@ Console.WriteLine($"Firmware: {device.Metadata.FirmwareVersion}");
 
 // Check capabilities
 var caps = device.Metadata.Capabilities;
-Console.WriteLine($"Analog Inputs: {caps.AnalogInputCount}");
-Console.WriteLine($"Digital I/O: {caps.DigitalPortCount}");
+Console.WriteLine($"Analog Inputs: {caps.AnalogInputChannels}");
+Console.WriteLine($"Digital I/O: {caps.DigitalChannels}");
 ```
 
 ### Streaming Data

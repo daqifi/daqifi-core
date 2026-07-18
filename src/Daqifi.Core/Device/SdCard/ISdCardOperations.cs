@@ -110,8 +110,37 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <remarks>
+        /// To learn the effective on-card file name (especially when it was auto-generated), call
+        /// <see cref="StartSdCardLoggingSessionAsync"/> instead, which returns an
+        /// <see cref="SdCardLoggingSession"/>.
+        /// </remarks>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
         Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Starts logging data to the SD card and returns the effective session details. Behaves
+        /// exactly like <see cref="StartSdCardLoggingAsync"/> but resolves to an
+        /// <see cref="SdCardLoggingSession"/> carrying the effective on-card file name (supplied or
+        /// auto-generated) and the logging format, so callers can report, download, or later delete
+        /// the log without re-deriving Core's naming convention.
+        /// </summary>
+        /// <param name="fileName">
+        /// The name of the log file. If null or empty, a timestamped name is generated automatically
+        /// using the pattern "log_YYYYMMDD_HHMMSS" with a format-appropriate extension.
+        /// </param>
+        /// <param name="channelMask">
+        /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).
+        /// If null or empty, the current device channel configuration is used.
+        /// </param>
+        /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>
+        /// A task that resolves to an <see cref="SdCardLoggingSession"/> with the effective on-card
+        /// file name and logging format.
+        /// </returns>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Stops logging data to the SD card.
