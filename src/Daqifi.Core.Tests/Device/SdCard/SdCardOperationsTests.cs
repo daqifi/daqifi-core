@@ -344,7 +344,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.Connect();
 
             // Act
-            var session = await device.StartSdCardLoggingAsync("custom_data.bin", format: SdCardLogFormat.Protobuf);
+            var session = await device.StartSdCardLoggingSessionAsync("custom_data.bin", format: SdCardLogFormat.Protobuf);
 
             // Assert: the returned name is exactly what was sent to the device.
             var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -361,7 +361,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             device.Connect();
 
             // Act
-            var session = await device.StartSdCardLoggingAsync(format: SdCardLogFormat.Json);
+            var session = await device.StartSdCardLoggingSessionAsync(format: SdCardLogFormat.Json);
 
             // Assert: the auto-generated name the caller receives is the one that reached the device,
             // so consumers no longer have to re-derive Core's naming convention.

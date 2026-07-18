@@ -103,7 +103,10 @@ namespace Daqifi.Core.Device
             get => _streamingFrequency;
             set
             {
-                var maxSamplingRate = Metadata.Capabilities.MaxSamplingRate;
+                // MaxSamplingRate is a mutable, unvalidated public property; sanitize the ceiling so
+                // an uninitialized/invalid capabilities value (0 or negative) can't produce an
+                // impossible range like "1..0" that rejects every valid frequency.
+                var maxSamplingRate = Math.Max(1, Metadata.Capabilities.MaxSamplingRate);
                 if (value < 1 || value > maxSamplingRate)
                 {
                     throw new ArgumentOutOfRangeException(
@@ -1340,12 +1343,27 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Starts logging data to the SD card.
+        /// Starts logging data to the SD card. Compatibility overload preserving the original
+        /// <see cref="Task"/> return; use <see cref="StartSdCardLoggingSessionAsync"/> to also learn
+        /// the effective on-card file name.
+        /// </summary>
+        /// <param name="fileName">The log file name, or null/empty to auto-generate a timestamped name.</param>
+        /// <param name="channelMask">Optional decimal channel bitmask; null/empty uses the current config.</param>
+        /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+            => StartSdCardLoggingSessionAsync(fileName, channelMask, format, cancellationToken);
+
+        /// <summary>
+        /// Starts logging data to the SD card and returns the effective session details.
         /// </summary>
         /// <param name="fileName">
         /// The name of the log file. If null or empty, a timestamped name is generated automatically
         /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
-        /// (.bin for Protobuf, .json for JSON, .dat for TestData).
+        /// (.bin for Protobuf, .json for JSON, .csv for CSV).
         /// </param>
         /// <param name="channelMask">
         /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).
@@ -1360,7 +1378,7 @@ namespace Daqifi.Core.Device
         /// </returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public async Task<SdCardLoggingSession> StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+        public async Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {

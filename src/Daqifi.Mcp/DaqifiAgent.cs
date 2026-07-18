@@ -394,7 +394,7 @@ public sealed class DaqifiAgent
 
             // Core owns the naming convention and reports the effective on-card filename back to
             // us, so we no longer duplicate the log_{timestamp} generation here.
-            var session = await sd.StartSdCardLoggingAsync(fileName, channelMask: null, format: fmt, cancellationToken)
+            var session = await sd.StartSdCardLoggingSessionAsync(fileName, channelMask: null, format: fmt, cancellationToken)
                 .ConfigureAwait(false);
 
             return new StartLoggingResult(
