@@ -113,6 +113,9 @@ namespace Daqifi.Core.Device
         private IMessageProducer<string>? _messageProducer;
         private IMessageConsumer<DaqifiOutMessage>? _messageConsumer;
         private readonly IStreamTransport? _transport;
+        // Set only by the Stream-based constructor, so Send<T> can write non-string
+        // payloads directly when there's no IStreamTransport to fall back to.
+        private readonly Stream? _directStream;
 
         /// <summary>
         /// Gets the transport used for device communication, if available.
@@ -250,6 +253,7 @@ namespace Daqifi.Core.Device
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
             _messageProducer = new MessageProducer<string>(stream);
+            _directStream = stream;
         }
 
         /// <summary>
@@ -401,7 +405,11 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
         /// <param name="message">The message to send to the device.</param>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when the device is not connected, or when connected but has no transport or
+        /// stream to send on (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress)"/>
+        /// constructor).
+        /// </exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
         {
             if (!IsConnected)
@@ -409,17 +417,26 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
-            // Use message producer if available and message is string-based
+            // Use the queued message producer when available and the message is string-based;
+            // this is the common path (SCPI text commands).
             if (_messageProducer != null && message is IOutboundMessage<string> stringMessage)
             {
                 _messageProducer.Send(stringMessage);
+                return;
             }
-            else
+
+            // Non-string payloads (or a string payload with no producer) bypass the queue and
+            // write directly to the underlying stream, since IOutboundMessage<T> already knows
+            // how to serialize itself regardless of T.
+            var stream = _transport?.Stream ?? _directStream;
+            if (stream == null)
             {
-                // Fallback for backward compatibility - no implementation yet
-                // This will be enhanced in later steps when we add transport abstraction
-                throw new NotImplementedException("Direct message sending without message producer is not yet implemented. Use constructor with Stream parameter.");
+                throw new InvalidOperationException(
+                    "This device has no transport or stream to send on. Use a constructor that accepts a Stream or IStreamTransport.");
             }
+
+            var bytes = message.GetBytes();
+            stream.Write(bytes, 0, bytes.Length);
         }
 
         /// <summary>

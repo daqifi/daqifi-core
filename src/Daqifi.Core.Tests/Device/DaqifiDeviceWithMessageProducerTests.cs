@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using System.Net;
@@ -7,6 +8,18 @@ namespace Daqifi.Core.Tests.Device;
 
 public class DaqifiDeviceWithMessageProducerTests
 {
+    private sealed class BinaryOutboundMessage : IOutboundMessage<byte[]>
+    {
+        public byte[] Data { get; set; }
+
+        public BinaryOutboundMessage(byte[] data)
+        {
+            Data = data;
+        }
+
+        public byte[] GetBytes() => Data;
+    }
+
     [Fact]
     public void DaqifiDevice_WithStream_ShouldInitializeMessageProducer()
     {
@@ -65,6 +78,34 @@ public class DaqifiDeviceWithMessageProducerTests
         
         // Act & Assert
         Assert.Throws<InvalidOperationException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
+    }
+
+    [Fact]
+    public void DaqifiDevice_SendNonStringMessage_WhenConnected_WritesDirectlyToStream()
+    {
+        // Arrange
+        using var stream = new MemoryStream();
+        using var device = new DaqifiDevice("Test Device", stream);
+        device.Connect();
+        var payload = new byte[] { 0x01, 0x02, 0x03 };
+
+        // Act
+        device.Send(new BinaryOutboundMessage(payload));
+
+        // Assert - non-string payloads bypass the queued producer and are written synchronously.
+        Assert.Equal(payload, stream.ToArray());
+    }
+
+    [Fact]
+    public void DaqifiDevice_ProducerlessConstructor_SendAnyMessage_ThrowsInvalidOperationException()
+    {
+        // Arrange - the (name, ipAddress) constructor has no transport or stream to send on.
+        using var device = new DaqifiDevice("Test Device", IPAddress.Loopback);
+        device.Connect();
+
+        // Act & Assert
+        var ex = Assert.Throws<InvalidOperationException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
+        Assert.Contains("no transport or stream", ex.Message);
     }
 
     [Fact]
