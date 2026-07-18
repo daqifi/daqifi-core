@@ -122,6 +122,7 @@ public class DeviceCapabilities
             SupportsStreaming = SupportsStreaming,
             HasSdCard = HasSdCard,
             HasWiFi = HasWiFi,
+            HasWincWifiModule = HasWincWifiModule,
             HasUsb = HasUsb,
             AnalogInputChannels = AnalogInputChannels,
             AnalogOutputChannels = AnalogOutputChannels,

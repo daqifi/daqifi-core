@@ -1,3 +1,4 @@
+using System.Reflection;
 using Daqifi.Core.Device;
 using Xunit;
 
@@ -82,14 +83,16 @@ public class DeviceCapabilitiesTests
     }
 
     [Fact]
-    public void Clone_CopiesAllFieldValues()
+    public void Clone_RoundTripsEveryPublicProperty()
     {
-        // Arrange
+        // Arrange: set every public property to a non-default value so a dropped copy is detectable.
+        // Reflection-driven so a newly added property can't be silently omitted from Clone() (#331).
         var capabilities = new DeviceCapabilities
         {
             SupportsStreaming = false,
             HasSdCard = true,
             HasWiFi = true,
+            HasWincWifiModule = true,
             HasUsb = true,
             AnalogInputChannels = 8,
             AnalogOutputChannels = 2,
@@ -100,15 +103,20 @@ public class DeviceCapabilitiesTests
         // Act
         var clone = capabilities.Clone();
 
-        // Assert
-        Assert.Equal(capabilities.SupportsStreaming, clone.SupportsStreaming);
-        Assert.Equal(capabilities.HasSdCard, clone.HasSdCard);
-        Assert.Equal(capabilities.HasWiFi, clone.HasWiFi);
-        Assert.Equal(capabilities.HasUsb, clone.HasUsb);
-        Assert.Equal(capabilities.AnalogInputChannels, clone.AnalogInputChannels);
-        Assert.Equal(capabilities.AnalogOutputChannels, clone.AnalogOutputChannels);
-        Assert.Equal(capabilities.DigitalChannels, clone.DigitalChannels);
-        Assert.Equal(capabilities.MaxSamplingRate, clone.MaxSamplingRate);
+        // Assert: every readable public instance property must round-trip.
+        var properties = typeof(DeviceCapabilities)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.CanRead);
+
+        foreach (var property in properties)
+        {
+            var original = property.GetValue(capabilities);
+            var copied = property.GetValue(clone);
+
+            // Guard against the test itself leaving a property at its default (which would mask a drop).
+            Assert.NotEqual(property.GetValue(new DeviceCapabilities()), original);
+            Assert.Equal(original, copied);
+        }
     }
 
     [Fact]
