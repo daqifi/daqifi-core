@@ -343,9 +343,12 @@ namespace Daqifi.Core.Device
             var hostTimestamp = timestampResult.Timestamp;
 
             // Flag dropped samples from the device-clock delta (immune to host arrival jitter).
+            // Isolate subscriber exceptions (see RaiseGapDetected) so a throwing GapDetected handler
+            // cannot skip the per-channel decode below — which the caller's broad catch would then
+            // silently drop.
             if (_gapDetector.IsGap(timestampResult.SecondsBetweenMessages))
             {
-                GapDetected?.Invoke(this, new TimestampGapEventArgs(
+                RaiseGapDetected(new TimestampGapEventArgs(
                     hostTimestamp, timestampResult.SecondsBetweenMessages, deviceTimestamp));
             }
 
@@ -361,6 +364,30 @@ namespace Daqifi.Core.Device
             if (hasDigital)
             {
                 DecodeDigital(message, channels, hostTimestamp, deviceTimestamp);
+            }
+        }
+
+        /// <summary>
+        /// Raises <see cref="GapDetected"/>, isolating the decode pipeline from a subscriber
+        /// exception so a throwing handler cannot skip this frame's per-channel decode (which the
+        /// broad catch in <see cref="OnStreamMessageReceived"/> would then silently drop). Mirrors
+        /// <c>DaqifiDevice.RaiseClassifiedEvent</c>.
+        /// </summary>
+        private void RaiseGapDetected(TimestampGapEventArgs args)
+        {
+            var handler = GapDetected;
+            if (handler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handler(this, args);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[{nameof(GapDetected)}] Subscriber threw: {ex}");
             }
         }
 

@@ -88,6 +88,29 @@ public class DaqifiStreamingDeviceDecodeTests
         Assert.Empty(events);
     }
 
+    [Fact]
+    public void GapDetected_ThrowingSubscriber_DoesNotSkipFrameDecode()
+    {
+        var device = CreateStreamingDevice(analogCount: 1);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true;
+        device.StartStreaming();
+
+        device.GapDetected += (_, _) => throw new InvalidOperationException("boom");
+
+        // Steady cadence, then a gap frame that also carries a decodable sample. The gap fires the
+        // throwing subscriber — decode of this frame must still happen.
+        for (uint ts = 1000; ts <= 11000; ts += 1000)
+        {
+            device.InvokeStreamMessage(AnalogFrame(ts, 1.0f));
+        }
+        device.InvokeStreamMessage(AnalogFrame(20000, 7.5f)); // 9x jump -> gap -> throwing handler
+
+        Assert.NotNull(ai0.ActiveSample);
+        Assert.Equal(7.5, ai0.ActiveSample!.Value);
+        Assert.Equal(20000u, ai0.ActiveSample.DeviceTimestamp);
+    }
+
     #endregion
 
     #region Analog decoding
