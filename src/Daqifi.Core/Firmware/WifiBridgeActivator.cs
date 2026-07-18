@@ -187,13 +187,21 @@ public static class WifiBridgeActivator
         var hardTimeoutCts = new CancellationTokenSource(hardTimeoutMs);
         var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardTimeoutCts.Token);
 
-        // Task.Run: the operation's SerialPort.Open() and blocking stream writes
-        // would otherwise run on the CALLING thread up to first await — on a UI
-        // thread that means a stuck open freezes the window. Pass
-        // CancellationToken.None to Task.Run itself: the inner token still
-        // cancels the operation's own delays; we never want "cancelled before
-        // start" to look like an operation fault.
-        var workerTask = Task.Run(() => operation(linkedCts.Token), CancellationToken.None);
+        // LongRunning (a dedicated thread, not a pooled one): the operation's
+        // SerialPort.Open() and blocking stream writes would otherwise run on the
+        // CALLING thread up to first await — on a UI thread that means a stuck open
+        // freezes the window. A plain Task.Run would occupy a thread-pool worker for
+        // the operation's full (potentially unbounded) blocking duration; under
+        // thread-pool pressure that can starve the pool queue the hardTimeoutCts
+        // timer callback also runs on, delaying the very cancellation this method
+        // exists to deliver. Pass CancellationToken.None to StartNew itself: the
+        // inner token still cancels the operation's own delays; we never want
+        // "cancelled before start" to look like an operation fault.
+        var workerTask = Task.Factory.StartNew(
+            () => operation(linkedCts.Token),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
 
         try
         {
