@@ -85,6 +85,15 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         if (_isRunning)
             return; // Already running
 
+        // A prior Stop()/StopSafely() whose Join timed out leaves the old reader thread alive.
+        // Refuse to spawn a second reader against the same stream/buffer — two concurrent
+        // Stream.Read loops would reintroduce the framing corruption this class guards against.
+        if (_consumerThread is { IsAlive: true })
+        {
+            throw new InvalidOperationException(
+                "Cannot start the consumer: a previous consumer thread has not yet exited.");
+        }
+
         _clearRequested = false;
         _isRunning = true;
         _consumerThread = new Thread(ProcessMessages)
@@ -101,11 +110,16 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     public void Stop()
     {
         _isRunning = false;
-        _consumerThread?.Join(1000);
-        _consumerThread = null;
-        lock (_bufferLock)
+        var stopped = _consumerThread?.Join(1000) ?? true;
+        if (stopped)
         {
-            _messageBuffer.Clear();
+            // Only tear down once the reader has actually exited: clearing the buffer (and later
+            // letting Start() reuse the slot) while the thread is still alive would race it.
+            _consumerThread = null;
+            lock (_bufferLock)
+            {
+                _messageBuffer.Clear();
+            }
         }
     }
 
@@ -121,10 +135,16 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
 
         _isRunning = false;
         var stopped = _consumerThread?.Join(timeoutMs) ?? true;
-        _consumerThread = null;
-        lock (_bufferLock)
+        if (stopped)
         {
-            _messageBuffer.Clear();
+            // Only clear once the reader has exited. Doing so unconditionally would (a) let a
+            // later Start() spawn a second reader over a still-alive one, and (b) block past the
+            // advertised timeout here if the reader is holding _bufferLock in a slow parse.
+            _consumerThread = null;
+            lock (_bufferLock)
+            {
+                _messageBuffer.Clear();
+            }
         }
 
         return stopped;
@@ -141,6 +161,12 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// <see cref="Stream.Read(byte[], int, int)"/> that would overlap the reader's own read and
     /// corrupt message framing. In that case the clear takes effect on the next consumer-loop
     /// iteration rather than synchronously on return.
+    /// <para>
+    /// If a consumer thread was just stopped but hasn't fully exited yet (the stop path's Join is
+    /// time-bounded), the inline stream drain is deferred until that thread provably exits; if it
+    /// doesn't exit in time, only the in-memory buffer is cleared and the stream drain is skipped,
+    /// so the caller's <see cref="Stream.Read(byte[], int, int)"/> can never overlap the reader's.
+    /// </para>
     /// </remarks>
     public void ClearBuffer()
     {
@@ -153,7 +179,21 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
             return;
         }
 
-        // No consumer thread is running, so the caller can safely clear directly.
+        // Not running — but a just-stopped reader may still be finishing its final Read during the
+        // stop path's time-bounded Join window. Drain the stream ourselves only once that thread
+        // has provably exited, so our Read can't overlap its Read.
+        var thread = _consumerThread;
+        if (thread is { IsAlive: true } && !thread.Join(1000))
+        {
+            // Reader still alive; don't risk an overlapping Stream.Read. Clear just the in-memory
+            // buffer (always lock-guarded) and skip the stream drain.
+            lock (_bufferLock)
+            {
+                _messageBuffer.Clear();
+            }
+            return;
+        }
+
         PerformClear();
     }
 

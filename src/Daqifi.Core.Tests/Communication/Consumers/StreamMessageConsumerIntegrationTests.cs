@@ -332,6 +332,33 @@ public class StreamMessageConsumerIntegrationTests
         Assert.True(stoppedCleanly);
     }
 
+    /// <summary>
+    /// When the stop path's time-bounded Join can't reap a stuck reader (issue #332 follow-up):
+    /// StopSafely reports the timeout, and a subsequent Start() must refuse to spawn a second
+    /// reader over the still-alive one rather than reintroduce overlapping Stream.Read loops.
+    /// </summary>
+    [Fact]
+    public void StopSafely_StuckReader_TimesOut_AndStartRefusesSecondReader()
+    {
+        using var stream = new BlockingReadStream();
+        var parser = new ProtobufMessageParser();
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+        consumer.Start();
+        Assert.True(WaitFor(() => stream.IsBlockedInRead, TimeSpan.FromSeconds(1)),
+            "reader should have entered a blocking Read");
+
+        // The reader is stuck in Read, so a bounded stop can't join it.
+        Assert.False(consumer.StopSafely(100));
+
+        // A second Start must not create a concurrent reader against the same stream.
+        var ex = Assert.Throws<InvalidOperationException>(() => consumer.Start());
+        Assert.Contains("not yet exited", ex.Message);
+
+        // Cleanup: release the reader so the background thread can exit.
+        stream.Release();
+    }
+
     private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -372,6 +399,44 @@ public class StreamMessageConsumerIntegrationTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A read-only stream whose <see cref="Read"/> blocks until <see cref="Release"/> is called,
+    /// used to simulate a consumer thread stuck in a blocking read that a bounded Join can't reap.
+    /// </summary>
+    private sealed class BlockingReadStream : Stream
+    {
+        private readonly ManualResetEventSlim _gate = new(false);
+
+        public bool IsBlockedInRead { get; private set; }
+
+        public void Release() => _gate.Set();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            IsBlockedInRead = true;
+            _gate.Wait();
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            _gate.Set();
+            _gate.Dispose();
+            base.Dispose(disposing);
+        }
     }
 
     /// <summary>
