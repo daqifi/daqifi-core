@@ -852,6 +852,81 @@ public class SdCardFileParserTests
 
     #endregion
 
+    #region HasDeviceTimestamp
+
+    [Fact]
+    public async Task ParseAsync_WithRealTimestamps_MarksHasDeviceTimestampTrue()
+    {
+        // Arrange
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStatusMessage(timestampFreq: 50_000_000))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 100_000_000,
+                analogFloatValues: new[] { 1.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 150_000_000,
+                analogFloatValues: new[] { 2.0f }));
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "real_ts.bin");
+
+        // Assert
+        var samples = await ToListAsync(session.Samples);
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.True(s.HasDeviceTimestamp));
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithZeroMsgTimeStamp_MarksHasDeviceTimestampFalse()
+    {
+        // Arrange — a message with MsgTimeStamp == 0 has no usable device timestamp,
+        // so the entry falls back to the session base time.
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStatusMessage(timestampFreq: 50_000_000))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 0,
+                analogFloatValues: new[] { 1.0f }));
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "zero_ts.bin");
+
+        // Assert
+        var samples = await ToListAsync(session.Samples);
+        Assert.Single(samples);
+        Assert.False(samples[0].HasDeviceTimestamp);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithNoTimestampFrequency_MarksHasDeviceTimestampFalse()
+    {
+        // Arrange — no TimestampFreq means ticks can't be converted to elapsed time,
+        // so every entry is substituted with the base time.
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 1000,
+                analogFloatValues: new[] { 1.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 2000,
+                analogFloatValues: new[] { 2.0f }));
+
+        using var stream = builder.Build();
+        var options = new SdCardParseOptions { FallbackTimestampFrequency = 0 };
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "no_freq.bin", options);
+
+        // Assert
+        var samples = await ToListAsync(session.Samples);
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.False(s.HasDeviceTimestamp));
+    }
+
+    #endregion
+
     #region Helpers
 
     private static async Task<List<T>> ToListAsync<T>(IAsyncEnumerable<T> source)

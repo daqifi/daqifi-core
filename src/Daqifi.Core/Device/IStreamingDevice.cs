@@ -122,8 +122,10 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Gets the last PWM frequency commanded through <see cref="SetPwmFrequency"/> this
-        /// session, in hertz, or 0 when none has been set. Local bookkeeping only — a device
-        /// keeps its PWM state across host disconnects, so 0 does not prove the device is unset.
+        /// session, in hertz. Local bookkeeping only — a device keeps its PWM state across host
+        /// disconnects, so this defaults to a commandable value (see
+        /// <see cref="DaqifiStreamingDevice.DefaultPwmFrequencyHz"/>) rather than 0, and does not
+        /// prove the device is actually running at that frequency.
         /// </summary>
         int PwmFrequencyHz { get; }
 
@@ -147,5 +149,39 @@ namespace Daqifi.Core.Device
         /// drops its link while restarting. Reconnect once the device is back online.
         /// </remarks>
         void Reboot();
+
+        /// <summary>
+        /// Persists the device's current ADC calibration coefficients to NVM so they survive a reboot.
+        /// </summary>
+        /// <remarks>
+        /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:ADC:SAVEcal</c>). Pair with
+        /// <see cref="LoadAdcCalibration"/> to restore them.
+        /// </remarks>
+        void SaveAdcCalibration();
+
+        /// <summary>
+        /// Restores the device's ADC calibration coefficients from NVM into its runtime.
+        /// </summary>
+        /// <remarks>
+        /// The inverse of <see cref="SaveAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADcal</c>).
+        /// </remarks>
+        void LoadAdcCalibration();
+
+        /// <summary>
+        /// Persists the device's current voltage precision setting to NVM so it survives a reboot.
+        /// </summary>
+        /// <remarks>
+        /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:VOLTage:SAVE</c>). Pair with
+        /// <see cref="LoadVoltagePrecision"/> to restore it.
+        /// </remarks>
+        void SaveVoltagePrecision();
+
+        /// <summary>
+        /// Restores the device's voltage precision setting from NVM into its runtime.
+        /// </summary>
+        /// <remarks>
+        /// The inverse of <see cref="SaveVoltagePrecision"/> (firmware primitive <c>CONFigure:VOLTage:LOAD</c>).
+        /// </remarks>
+        void LoadVoltagePrecision();
     }
 }

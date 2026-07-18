@@ -290,7 +290,8 @@ public sealed class SdCardCsvFileParser
 
             // Reconstruct absolute timestamp using first channel timestamp
             var absoluteTime = baseTime;
-            if (tickPeriod > 0)
+            var hasDeviceTimestamp = tickPeriod > 0;
+            if (hasDeviceTimestamp)
             {
                 if (previousTimestamp == null)
                 {
@@ -306,7 +307,10 @@ public sealed class SdCardCsvFileParser
                 absoluteTime = baseTime.AddSeconds(elapsedSeconds);
             }
 
-            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps);
+            yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps)
+            {
+                HasDeviceTimestamp = hasDeviceTimestamp
+            };
 
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)

@@ -46,6 +46,19 @@ namespace Daqifi.Core.Device
         private const int SD_LIST_MAX_RETRIES = 1;
 
         /// <summary>
+        /// Maximum number of retry attempts for the USB stream-interface command sent during
+        /// <see cref="OnDeviceInitializingAsync"/> when the device returns a transient SCPI error
+        /// (e.g. because the firmware still has the interface set from a prior WiFi session).
+        /// </summary>
+        private const int UsbStreamInterfaceMaxRetries = 1;
+
+        /// <summary>
+        /// Delay in milliseconds before retrying the USB stream-interface command after a
+        /// transient SCPI error.
+        /// </summary>
+        private const int UsbStreamInterfaceRetryDelayMs = 150;
+
+        /// <summary>
         /// libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c> — the code the firmware returns for a
         /// command it doesn't recognize (e.g. a command that postdates the connected firmware).
         /// This is the wire-level signal behind the <see cref="FeatureNotSupportedException"/>
@@ -146,6 +159,12 @@ namespace Daqifi.Core.Device
         /// </remarks>
         /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
         /// <returns>A task representing the asynchronous initialization operation.</returns>
+        /// <exception cref="ScpiInitializationErrorException">
+        /// Thrown when the device returns a SCPI error while setting the stream interface to USB
+        /// that persists after an internal retry. A common trigger is the firmware rejecting the
+        /// command because it still has the interface set from a prior WiFi-streaming session,
+        /// within the tight response window right after connect.
+        /// </exception>
         protected override async Task OnDeviceInitializingAsync(CancellationToken cancellationToken)
         {
             if (!IsUsbConnection)
@@ -156,16 +175,34 @@ namespace Daqifi.Core.Device
             // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
             // command is sent in text mode (protobuf consumer temporarily stopped) and any
             // SCPI error response is captured rather than garbling the protobuf stream.
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
-                responseTimeoutMs: 500,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (ContainsScpiError(lines))
+            //
+            // The firmware persists the last-used stream interface across sessions, so this can
+            // transiently reject with a -200 "Execution error" right after connect. Retry with a
+            // settle delay before treating it as a hard failure (mirrors the SD card retry).
+            IReadOnlyList<string> lines = Array.Empty<string>();
+            for (var attempt = 0; attempt <= UsbStreamInterfaceMaxRetries; attempt++)
             {
-                throw new InvalidOperationException(
-                    "Device returned a SCPI error while setting stream interface to USB.");
+                if (attempt > 0)
+                {
+                    await Task.Delay(UsbStreamInterfaceRetryDelayMs, cancellationToken).ConfigureAwait(false);
+                }
+
+                lines = await ExecuteTextCommandAsync(
+                    () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
+                    responseTimeoutMs: 500,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (!ContainsScpiError(lines))
+                {
+                    return;
+                }
             }
+
+            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
+            throw new ScpiInitializationErrorException(
+                "Device returned a SCPI error while setting stream interface to USB.",
+                lines,
+                lastScpiError);
         }
 
         /// <summary>
@@ -490,10 +527,17 @@ namespace Daqifi.Core.Device
         public const int MaxPwmFrequencyHz = 50_000;
 
         /// <summary>
-        /// Gets the last commanded device-wide PWM frequency in hertz, or 0 when none has been
-        /// set this session. Local bookkeeping mirroring <see cref="SetPwmFrequency"/>.
+        /// Default device-wide PWM frequency, in hertz, used until a frequency has been
+        /// commanded via <see cref="SetPwmFrequency"/>.
         /// </summary>
-        public int PwmFrequencyHz { get; private set; }
+        public const int DefaultPwmFrequencyHz = 1_000;
+
+        /// <summary>
+        /// Gets the last commanded device-wide PWM frequency in hertz. Local bookkeeping
+        /// mirroring <see cref="SetPwmFrequency"/>; defaults to <see cref="DefaultPwmFrequencyHz"/>
+        /// (a commandable value) until a frequency has been set this session.
+        /// </summary>
+        public int PwmFrequencyHz { get; private set; } = DefaultPwmFrequencyHz;
 
         /// <inheritdoc />
         public void SetPwmEnabled(IChannel channel, bool enabled)
@@ -658,6 +702,50 @@ namespace Daqifi.Core.Device
             // The device drops its link while restarting, so tear down the local
             // connection rather than leaving a stale one that reports Connected.
             Disconnect();
+        }
+
+        /// <inheritdoc />
+        public void SaveAdcCalibration()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SaveAdcCalibration);
+        }
+
+        /// <inheritdoc />
+        public void LoadAdcCalibration()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.LoadAdcCalibration);
+        }
+
+        /// <inheritdoc />
+        public void SaveVoltagePrecision()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SaveVoltagePrecision);
+        }
+
+        /// <inheritdoc />
+        public void LoadVoltagePrecision()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.LoadVoltagePrecision);
         }
 
         /// <summary>
@@ -912,6 +1000,52 @@ namespace Daqifi.Core.Device
             {
                 _networkConfiguration.Gateway = configuration.Gateway;
             }
+        }
+
+        /// <summary>
+        /// Loads the persisted LAN configuration from the device's NVM back into its runtime settings.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            // Re-check right before the state-changing send so a cancellation requested after the
+            // entry guard still short-circuits the command (matches the pattern accepted in #324).
+            cancellationToken.ThrowIfCancellationRequested();
+            Send(ScpiMessageProducer.LoadNetworkLan);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Resets the device's LAN configuration to firmware factory defaults.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            // Re-check right before the state-changing send so a cancellation requested after the
+            // entry guard still short-circuits the command (matches the pattern accepted in #324).
+            cancellationToken.ThrowIfCancellationRequested();
+            Send(ScpiMessageProducer.FactoryResetNetworkLan);
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -1489,6 +1623,11 @@ namespace Daqifi.Core.Device
         /// <returns>Metadata about the downloaded file.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardEmptyTransferException">
+        /// Thrown when the device serves a marker-only (0-byte) transfer for the file across all
+        /// retry attempts, indicating its SD subsystem is not ready rather than the file being
+        /// legitimately empty.
+        /// </exception>
         public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             Stream destinationStream,
@@ -1540,14 +1679,32 @@ namespace Daqifi.Core.Device
                     // Send the SCPI command to request the file
                     Send(ScpiMessageProducer.GetSdFile(fileName));
 
-                    // Receive the file data
+                    // Receive the file data. A marker-only (0-byte) transfer means the device's
+                    // SD subsystem wasn't ready when it opened the file - the same kind of
+                    // transient condition GetSdCardFilesAsync's LIST retry already absorbs - so
+                    // retry the GET a bounded number of times before giving up (see #264).
                     var receiver = new SdCardFileReceiver(stream);
-                    var bytesReceived = await receiver.ReceiveAsync(
-                        destinationStream,
-                        fileName,
-                        progress,
-                        timeout: TimeSpan.FromMinutes(30),
-                        cancellationToken: ct).ConfigureAwait(false);
+                    long bytesReceived;
+                    var attempt = 0;
+                    while (true)
+                    {
+                        try
+                        {
+                            bytesReceived = await receiver.ReceiveAsync(
+                                destinationStream,
+                                fileName,
+                                progress,
+                                timeout: TimeSpan.FromMinutes(30),
+                                cancellationToken: ct).ConfigureAwait(false);
+                            break;
+                        }
+                        catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
+                        {
+                            attempt++;
+                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
+                            Send(ScpiMessageProducer.GetSdFile(fileName));
+                        }
+                    }
 
                     fileSize = bytesReceived;
                 }, cancellationToken).ConfigureAwait(false);
@@ -1623,15 +1780,16 @@ namespace Daqifi.Core.Device
             return lines.Any(IsScpiErrorLine);
         }
 
-        // Strict SCPI error format: "**ERROR..." or "ERROR: ...". The colon (or **
-        // prefix) distinguishes a true SCPI error from firmware status text like
-        // "Error !! No SD Card Detected", which should not be surfaced as
-        // SdCardOperationException.LastScpiError.
+        // Strict SCPI error format: "**ERROR" or bare "ERROR" followed by a SCPI delimiter
+        // (":", space, tab, or end-of-line). Distinguishes a true SCPI error from firmware
+        // status text like "Error !! No SD Card Detected", which should not be surfaced as
+        // SdCardOperationException.LastScpiError. Shared with ScpiInitializationErrorException
+        // classification in DaqifiDevice.InitializeAsync so both sites recognize the same set
+        // of delimiter-separated error formats (closes a gap where "ERROR -200,..." or
+        // "ERROR\t-200,..." without a colon went undetected).
         private static bool IsScpiErrorLine(string line)
         {
-            var trimmed = line.TrimStart();
-            return trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase)
-                || trimmed.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase);
+            return ScpiResponseClassifier.IsScpiErrorLine(line);
         }
 
         /// <summary>
@@ -1774,8 +1932,24 @@ namespace Daqifi.Core.Device
                 responseTimeoutMs: 2000,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            LanChipInfoParser.TryParseLines(lines, out var info);
-            return info;
+            if (LanChipInfoParser.TryParseLines(lines, out var info))
+            {
+                return info;
+            }
+
+            // Closes #203: LAN:ENAbled=1 in saved settings but the WINC1500 state
+            // machine hasn't reached INITIALIZED yet (steady-state, not the
+            // post-reboot transient #144 already retries for) makes GETChipInfo?
+            // return this specific SCPI error instead of JSON. Surface it distinctly
+            // so the caller's retry loop can react (kick LAN:APPLY) instead of just
+            // waiting out a blind delay.
+            var errorLine = lines.LastOrDefault(IsScpiErrorLine);
+            if (errorLine != null && TryParseScpiErrorCode(errorLine, out var errorCode) && errorCode == -200)
+            {
+                throw new LanNotInitializedException(errorLine.Trim());
+            }
+
+            return null;
         }
 
         // -----------------------------------------------------------------

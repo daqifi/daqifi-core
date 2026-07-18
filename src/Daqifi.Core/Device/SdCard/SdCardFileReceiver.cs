@@ -54,6 +54,10 @@ public sealed class SdCardFileReceiver
     /// <returns>The total number of file bytes written (excluding the EOF marker).</returns>
     /// <exception cref="TimeoutException">Thrown when the EOF marker is not received within the timeout period.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+    /// <exception cref="SdCardEmptyTransferException">
+    /// Thrown when the EOF marker arrives with zero preceding file bytes, meaning the device
+    /// opened the file but sent no content before closing it.
+    /// </exception>
     public async Task<long> ReceiveAsync(
         Stream destinationStream,
         string fileName,
@@ -144,6 +148,14 @@ public sealed class SdCardFileReceiver
                                 .ConfigureAwait(false);
                             totalBytesReceived += newDataFileBytes;
                         }
+                    }
+
+                    if (totalBytesReceived == 0)
+                    {
+                        // An immediate EOF marker with no preceding file bytes means the device
+                        // opened the file but never sent any content — a transient/wedged SD
+                        // subsystem, not a legitimate empty download. See #264.
+                        throw new SdCardEmptyTransferException(fileName);
                     }
 
                     progress?.Report(new SdCardTransferProgress(totalBytesReceived, fileName));

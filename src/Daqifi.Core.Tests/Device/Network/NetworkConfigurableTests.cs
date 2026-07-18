@@ -506,6 +506,63 @@ namespace Daqifi.Core.Tests.Device.Network
             Assert.Contains("Unsupported WiFi security type", exception.Message);
         }
 
+        [Fact]
+        public async Task LoadNetworkConfigurationAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        {
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.LoadNetworkConfigurationAsync());
+            Assert.Equal("Device is not connected.", exception.Message);
+        }
+
+        [Fact]
+        public async Task LoadNetworkConfigurationAsync_WhenConnected_SendsLoadCommand()
+        {
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+
+            await device.LoadNetworkConfigurationAsync();
+
+            var sentMessage = Assert.Single(device.SentMessages);
+            Assert.Equal("SYSTem:COMMunicate:LAN:LOAD", sentMessage.Data);
+        }
+
+        [Fact]
+        public async Task LoadNetworkConfigurationAsync_WhenCanceled_ThrowsOperationCanceledException()
+        {
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => device.LoadNetworkConfigurationAsync(cts.Token));
+            Assert.Empty(device.SentMessages);
+        }
+
+        [Fact]
+        public async Task FactoryResetNetworkAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        {
+            var device = new DaqifiStreamingDevice("TestDevice");
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => device.FactoryResetNetworkAsync());
+            Assert.Equal("Device is not connected.", exception.Message);
+        }
+
+        [Fact]
+        public async Task FactoryResetNetworkAsync_WhenConnected_SendsFactoryResetCommand()
+        {
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+
+            await device.FactoryResetNetworkAsync();
+
+            var sentMessage = Assert.Single(device.SentMessages);
+            Assert.Equal("SYSTem:COMMunicate:LAN:FACRESET", sentMessage.Data);
+        }
+
         /// <summary>
         /// A testable version of DaqifiStreamingDevice that captures sent messages.
         /// </summary>

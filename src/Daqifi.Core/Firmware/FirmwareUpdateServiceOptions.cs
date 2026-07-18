@@ -265,6 +265,41 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan LanChipInfoTotalTimeout { get; set; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
+    /// When true, <see cref="FirmwareUpdateService.CheckWifiFirmwareStatusAsync"/> sends
+    /// <see cref="Communication.Producers.ScpiMessageProducer.TurnDeviceOn"/> and waits
+    /// <see cref="PowerOnWifiModuleSettleDelay"/> before the first chip-info probe, when the
+    /// device is connected. Right after a PIC32 reflash the WINC module comes back powered
+    /// off, so every <c>GETChipInfo?</c> query fails, the probe reports
+    /// <see cref="WifiFirmwareStatusReason.ChipInfoUnavailable"/>, and callers conservatively
+    /// default to "needs flash" — producing a needless multi-minute WiFi reflash. Powering the
+    /// module on first closes that gap. Defaults to <c>true</c>; set to <c>false</c> to restore
+    /// the legacy behavior of probing without a preceding power-on.
+    /// </summary>
+    public bool PowerOnWifiModuleBeforeProbe { get; set; } = true;
+
+    /// <summary>
+    /// Delay after sending the WINC power-on command, before the first chip-info probe.
+    /// Only consulted when <see cref="PowerOnWifiModuleBeforeProbe"/> is <c>true</c>. Gives the
+    /// module time to power up and start responding to <c>GETChipInfo?</c> queries.
+    /// </summary>
+    public TimeSpan PowerOnWifiModuleSettleDelay { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// When true, the LAN chip-info retry loop sends
+    /// <see cref="Communication.Producers.ScpiMessageProducer.ApplyNetworkLan"/> once, the
+    /// first time a <c>GETChipInfo?</c> probe reports SCPI <c>-200</c> (the WINC1500 state
+    /// machine is not yet initialized even though <c>LAN:ENAbled? = 1</c>), then continues
+    /// retrying within the existing budget. Without this, that steady-state condition (as
+    /// opposed to the post-reboot transient #144 already retries for) exhausts the retry
+    /// budget and reports <see cref="WifiFirmwareStatusReason.LanNotInitialized"/>, sending
+    /// callers into a needless multi-minute reflash of already-current WiFi firmware
+    /// (closes #203). Sent at most once per probe to avoid repeatedly tearing down and
+    /// re-initializing an already-associated WiFi link. Defaults to <c>true</c>; set to
+    /// <c>false</c> to restore the legacy behavior of retrying without ever sending APPLY.
+    /// </summary>
+    public bool KickLanApplyOnNotInitialized { get; set; } = true;
+
+    /// <summary>
     /// Gets the configured timeout for a given firmware update state.
     /// </summary>
     /// <param name="state">The target state.</param>
@@ -376,6 +411,11 @@ public sealed class FirmwareUpdateServiceOptions
 
         ValidatePositive(LanChipInfoRetryDelay, nameof(LanChipInfoRetryDelay));
         ValidatePositive(LanChipInfoTotalTimeout, nameof(LanChipInfoTotalTimeout));
+
+        // Only consulted when PowerOnWifiModuleBeforeProbe is true, but validated
+        // unconditionally so a misconfiguration surfaces even if the flag is
+        // toggled on later without re-touching this value.
+        ValidateNonNegative(PowerOnWifiModuleSettleDelay, nameof(PowerOnWifiModuleSettleDelay));
 
         if (BootloaderVendorId < 0 || BootloaderVendorId > 0xFFFF)
         {

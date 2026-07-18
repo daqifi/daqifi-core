@@ -2,6 +2,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Google.Protobuf;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -295,6 +296,47 @@ public class DaqifiStreamingDeviceDecodeTests
         device.InvokeStreamMessage(frame);
 
         Assert.NotNull(raw);
+    }
+
+    [Fact]
+    public void Decode_RaisesClassifiedStreamMessageReceived()
+    {
+        // Classified event should fire in addition to the undifferentiated MessageReceived.
+        var device = CreateStreamingDevice(analogCount: 1);
+        AnalogChannel(device, 0).IsEnabled = true;
+        device.StartStreaming();
+
+        DaqifiOutMessage? classified = null;
+        device.StreamMessageReceived += m => classified = m;
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        frame.AnalogInDataFloat.Add(1f);
+
+        device.InvokeStreamMessage(frame);
+
+        Assert.Same(frame, classified);
+    }
+
+    [Fact]
+    public void Decode_SubscriberExceptionInStreamMessageReceived_StillDecodesSample()
+    {
+        // A misbehaving StreamMessageReceived subscriber runs inside the base
+        // OnStreamMessageReceived call, before DecodeStreamFrame — it must not prevent
+        // the sample decode below from running.
+        var device = CreateStreamingDevice(analogCount: 1);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true;
+        device.StartStreaming();
+
+        device.StreamMessageReceived += _ => throw new InvalidOperationException("boom");
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        frame.AnalogInDataFloat.Add(1f);
+
+        var ex = Record.Exception(() => device.InvokeStreamMessage(frame));
+
+        Assert.Null(ex);
+        Assert.Equal(1.0, ai0.ActiveSample!.Value);
     }
 
     [Fact]

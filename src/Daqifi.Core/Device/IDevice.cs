@@ -57,4 +57,4 @@ namespace Daqifi.Core.Device
         /// <param name="message">The message to send.</param>
         void Send<T>(IOutboundMessage<T> message);
     }
-} // test change
+}

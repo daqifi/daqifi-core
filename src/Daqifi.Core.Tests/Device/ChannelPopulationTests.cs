@@ -76,9 +76,9 @@ public class ChannelPopulationTests
     [Fact]
     public void PopulateChannelsFromStatus_PreservesEnableDirectionAndOutputAcrossRepopulation()
     {
-        // A later status refresh (e.g. reconnect / metadata re-query) recreates channel
-        // instances; previously-applied configuration must survive, keyed by (type, number),
-        // so the device-level channel API does not silently lose enable/direction/output state.
+        // A later status refresh (e.g. reconnect / metadata re-query) updates channel instances
+        // whose identity (type, number) is unchanged in place, so previously-applied
+        // configuration — and the IChannel reference itself — survives untouched.
         var device = new DaqifiDevice("TestDevice");
         var message = new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535, DigitalPortNum = 2 };
         device.PopulateChannelsFromStatus(message);
@@ -90,13 +90,15 @@ public class ChannelPopulationTests
         digital1.Direction = ChannelDirection.Output;
         digital1.OutputValue = true;
 
-        // Repopulate with the same shape — produces a fresh generation of channel instances.
+        // Repopulate with the same shape — identity is unchanged, so instances are reused.
         device.PopulateChannelsFromStatus(message);
 
         var newAnalog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        Assert.Same(analog0, newAnalog0);
         Assert.True(newAnalog0.IsEnabled);
 
         var newDigital1 = (IDigitalChannel)device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+        Assert.Same(digital1, newDigital1);
         Assert.True(newDigital1.IsEnabled);
         Assert.Equal(ChannelDirection.Output, newDigital1.Direction);
         Assert.True(newDigital1.OutputValue);
@@ -228,6 +230,81 @@ public class ChannelPopulationTests
     }
 
     [Fact]
+    public void PopulateChannelsFromStatus_WithCorruptScalingValues_SubstitutesSafeDefaultsWithoutThrowing()
+    {
+        // A corrupted device response can carry NaN/Infinity or nonsensical coefficients. Population
+        // must not throw (which would abort channel population mid-stream) and must fall back to safe
+        // defaults rather than propagating garbage into every scaled sample (daqifi-core#300).
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 2,
+            AnalogInRes = 65535
+        };
+        message.AnalogInCalM.Add(float.NaN);            // ch0: invalid -> default 1.0
+        message.AnalogInCalM.Add(2.0f);                 // ch1: valid
+        message.AnalogInCalB.Add(float.PositiveInfinity); // ch0: invalid -> default 0.0
+        message.AnalogInCalB.Add(0.2f);                 // ch1: valid
+        message.AnalogInIntScaleM.Add(0.0f);            // ch0: zero scale -> default 1.0
+        message.AnalogInIntScaleM.Add(1.2f);            // ch1: valid
+        message.AnalogInPortRange.Add(-10.0f);          // ch0: negative range -> default 1.0
+        message.AnalogInPortRange.Add(5.0f);            // ch1: valid
+
+        device.PopulateChannelsFromStatus(message);
+
+        var analogChannels = device.Channels
+            .Where(c => c.Type == ChannelType.Analog)
+            .Cast<IAnalogChannel>()
+            .ToList();
+
+        // ch0 fell back to defaults across the board
+        Assert.Equal(1.0, analogChannels[0].CalibrationM, 3);
+        Assert.Equal(0.0, analogChannels[0].CalibrationB, 3);
+        Assert.Equal(1.0, analogChannels[0].InternalScaleM, 3);
+        Assert.Equal(1.0, analogChannels[0].PortRange, 3);
+
+        // ch1's valid values were preserved
+        Assert.Equal(2.0, analogChannels[1].CalibrationM, 3);
+        Assert.Equal(0.2, analogChannels[1].CalibrationB, 3);
+        Assert.Equal(1.2, analogChannels[1].InternalScaleM, 3);
+        Assert.Equal(5.0, analogChannels[1].PortRange, 3);
+    }
+
+    [Theory]
+    [InlineData(0u)]            // missing resolution
+    [InlineData(1u)]            // non-zero but below MinResolution
+    [InlineData(uint.MaxValue)] // above MaxResolution
+    public void PopulateChannelsFromStatus_WithUnusableResolution_FallsBackWithoutThrowing(uint reportedResolution)
+    {
+        // A non-zero but out-of-range AnalogInRes must not reach the AnalogChannel constructor
+        // (which now rejects it) and abort channel population — it should fall back to the assumed
+        // default and flag ResolutionIsAssumed, on both the new-channel and reuse paths.
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 2,
+            AnalogInRes = reportedResolution
+        };
+
+        // First population creates the channels; second re-populates (exercises the reuse path via
+        // UpdateScalingFromStatus) — neither should throw.
+        device.PopulateChannelsFromStatus(message);
+        device.PopulateChannelsFromStatus(message);
+
+        var analogChannels = device.Channels
+            .Where(c => c.Type == ChannelType.Analog)
+            .Cast<IAnalogChannel>()
+            .ToList();
+
+        Assert.Equal(2, analogChannels.Count);
+        foreach (var ch in analogChannels)
+        {
+            Assert.Equal(65535u, ch.Resolution);
+            Assert.True(ch.ResolutionIsAssumed);
+        }
+    }
+
+    [Fact]
     public void PopulateChannelsFromStatus_AnalogChannelsHaveCorrectResolution()
     {
         // Arrange
@@ -271,6 +348,72 @@ public class ChannelPopulationTests
             .Single();
 
         Assert.Equal(65535u, analogChannel.Resolution);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_WithZeroResolution_SetsResolutionIsAssumed()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 1,
+            AnalogInRes = 0
+        };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        var analogChannel = device.Channels
+            .Where(c => c.Type == ChannelType.Analog)
+            .Cast<IAnalogChannel>()
+            .Single();
+
+        Assert.True(analogChannel.ResolutionIsAssumed);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetResolutionIsAssumed()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 1,
+            AnalogInRes = 262143 // 18-bit, device-reported
+        };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        var analogChannel = device.Channels
+            .Where(c => c.Type == ChannelType.Analog)
+            .Cast<IAnalogChannel>()
+            .Single();
+
+        Assert.False(analogChannel.ResolutionIsAssumed);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_RepopulatingWithReportedResolution_ClearsResolutionIsAssumed()
+    {
+        // A channel first populated with an assumed resolution should stop being flagged once
+        // a later status report supplies a real value (e.g. after a firmware update).
+        var device = new DaqifiDevice("TestDevice");
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 0 });
+        var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog);
+        Assert.True(((IAnalogChannel)analog0).ResolutionIsAssumed);
+
+        // Act
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 1, AnalogInRes = 4095 });
+
+        // Assert - same instance, reused, no longer flagged as assumed.
+        var newAnalog0 = device.Channels.First(c => c.Type == ChannelType.Analog);
+        Assert.Same(analog0, newAnalog0);
+        Assert.False(((IAnalogChannel)newAnalog0).ResolutionIsAssumed);
+        Assert.Equal(4095u, ((IAnalogChannel)newAnalog0).Resolution);
     }
 
     #endregion
@@ -500,6 +643,43 @@ public class ChannelPopulationTests
         Assert.Equal(12, device.Channels.Count);
         Assert.Equal(4, device.Channels.Count(c => c.Type == ChannelType.Analog));
         Assert.Equal(8, device.Channels.Count(c => c.Type == ChannelType.Digital));
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_ReusesExistingChannelInstancesWhenIdentityUnchanged()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage { AnalogInPortNum = 4, AnalogInRes = 65535, DigitalPortNum = 4 };
+        device.PopulateChannelsFromStatus(message);
+        var originalChannels = device.Channels.ToList();
+
+        // Act - repopulate with the same channel shape (identity unchanged)
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert - every channel instance is reused, not replaced
+        var refreshedChannels = device.Channels;
+        Assert.Equal(originalChannels.Count, refreshedChannels.Count);
+        for (var i = 0; i < originalChannels.Count; i++)
+        {
+            Assert.Same(originalChannels[i], refreshedChannels[i]);
+        }
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_DropsChannelsNoLongerPresent()
+    {
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 4, AnalogInRes = 65535 });
+        var analog2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
+
+        // Act - a subsequent status report fewer channels
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 });
+
+        // Assert - the dropped channel is no longer part of the collection
+        Assert.Equal(2, device.Channels.Count);
+        Assert.DoesNotContain(device.Channels, c => ReferenceEquals(c, analog2));
     }
 
     [Fact]

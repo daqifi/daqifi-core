@@ -28,9 +28,10 @@ public interface IDigitalChannel : IChannel
     bool IsPwmEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets the last commanded PWM duty cycle for this channel, in whole percent
-    /// (0-100). Local bookkeeping; use <c>IStreamingDevice.SetPwmDutyCycle</c> to change the
-    /// device.
+    /// Gets or sets the last commanded PWM duty cycle for this channel, in whole percent.
+    /// Local bookkeeping; use <c>IStreamingDevice.SetPwmDutyCycle</c> to change the device.
+    /// Defaults to <c>50</c> (a commandable value) until a duty cycle has been set, and clamps
+    /// to <c>1-100</c> on assignment so this always holds a commandable value.
     /// </summary>
     int PwmDutyCyclePercent { get; set; }
 }

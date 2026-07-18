@@ -13,6 +13,24 @@ public class DigitalChannel : IDigitalChannel
     private bool _outputValue;
     private bool _isPwmEnabled;
     private int _pwmDutyCyclePercent;
+    private bool _isPwmCapable;
+
+    /// <summary>
+    /// Lowest commandable PWM duty cycle, in whole percent. Duty 0 is a firmware trap (stored
+    /// but never applied) handled by <c>IStreamingDevice.SetPwmDutyCycle</c>, not a valid
+    /// bookkeeping value.
+    /// </summary>
+    private const int MinPwmDutyCyclePercent = 1;
+
+    /// <summary>
+    /// Highest commandable PWM duty cycle, in whole percent.
+    /// </summary>
+    private const int MaxPwmDutyCyclePercent = 100;
+
+    /// <summary>
+    /// Default PWM duty cycle, in whole percent, used until a value has been commanded.
+    /// </summary>
+    private const int DefaultPwmDutyCyclePercent = 50;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -99,7 +117,16 @@ public class DigitalChannel : IDigitalChannel
     /// <summary>
     /// Gets whether this channel's hardware supports PWM output.
     /// </summary>
-    public bool IsPwmCapable { get; }
+    /// <remarks>
+    /// The setter is internal so that <see cref="Device.DaqifiDevice.PopulateChannelsFromStatus"/>
+    /// can refresh this value in place on a status re-population without recreating the channel
+    /// instance, keeping <see cref="IChannel"/> references stable for consumers.
+    /// </remarks>
+    public bool IsPwmCapable
+    {
+        get { lock (_lock) { return _isPwmCapable; } }
+        internal set { lock (_lock) { _isPwmCapable = value; } }
+    }
 
     /// <summary>
     /// Gets or sets whether PWM output is enabled on this channel (local bookkeeping mirroring
@@ -112,13 +139,21 @@ public class DigitalChannel : IDigitalChannel
     }
 
     /// <summary>
-    /// Gets or sets the last commanded PWM duty cycle in whole percent (0-100). Local
-    /// bookkeeping mirroring the last commanded state.
+    /// Gets or sets the last commanded PWM duty cycle in whole percent. Local bookkeeping
+    /// mirroring the last commanded state; defaults to <c>50</c> (a commandable value) until a
+    /// duty cycle has been set, and clamps to <c>1-100</c> on assignment so this always holds a
+    /// commandable value.
     /// </summary>
     public int PwmDutyCyclePercent
     {
         get { lock (_lock) { return _pwmDutyCyclePercent; } }
-        set { lock (_lock) { _pwmDutyCyclePercent = value; } }
+        set
+        {
+            lock (_lock)
+            {
+                _pwmDutyCyclePercent = Math.Clamp(value, MinPwmDutyCyclePercent, MaxPwmDutyCyclePercent);
+            }
+        }
     }
 
     /// <summary>
@@ -137,13 +172,13 @@ public class DigitalChannel : IDigitalChannel
             throw new ArgumentOutOfRangeException(nameof(channelNumber), "Channel number must be non-negative.");
 
         ChannelNumber = channelNumber;
-        IsPwmCapable = isPwmCapable;
+        _isPwmCapable = isPwmCapable;
         _name = $"Digital Channel {channelNumber}";
         _isEnabled = false;
         _direction = ChannelDirection.Input;
         _outputValue = false;
         _isPwmEnabled = false;
-        _pwmDutyCyclePercent = 0;
+        _pwmDutyCyclePercent = DefaultPwmDutyCyclePercent;
     }
 
     /// <summary>

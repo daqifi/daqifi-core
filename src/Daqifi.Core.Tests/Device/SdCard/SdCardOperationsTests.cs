@@ -1712,6 +1712,45 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
         }
 
+        [Fact]
+        public async Task DownloadSdCardFileAsync_MarkerOnlyTransferOnEveryAttempt_ThrowsSdCardEmptyTransferException()
+        {
+            // Arrange — the device's SD subsystem stays wedged across every GET retry (#264).
+            var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+                () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
+            Assert.Equal("data.bin", ex.FileName);
+            Assert.Empty(destinationStream.ToArray());
+
+            // Two GET attempts: the initial send plus one retry.
+            var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
+            Assert.Equal(2, getCommands);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_MarkerOnlyThenSuccess_RetriesAndSucceeds()
+        {
+            // Arrange — the device's first GET wedges (marker-only), the retry succeeds.
+            var fileData = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+            var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), fileData);
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert
+            Assert.Equal(fileData, destinationStream.ToArray());
+            Assert.Equal(fileData.Length, result.FileSize);
+
+            var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
+            Assert.Equal(2, getCommands);
+        }
+
         #endregion
 
         /// <summary>
@@ -1881,6 +1920,140 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 await rawAction(fakeStream, cancellationToken);
             }
         }
+
+        /// <summary>
+        /// A stream that serves a different canned response (file data + EOF marker) per GET
+        /// attempt, so tests can simulate a device whose SD subsystem recovers (or doesn't)
+        /// across <see cref="DaqifiStreamingDevice.DownloadSdCardFileAsync(string, Stream, IProgress{SdCardTransferProgress}?, CancellationToken)"/>'s
+        /// empty-transfer retry. <see cref="AttemptIndex"/> is bumped externally each time the
+        /// device sends a new GET command; attempts beyond the last canned response repeat it.
+        /// </summary>
+        private sealed class MultiAttemptSdFileStream : Stream
+        {
+            private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
+
+            private readonly byte[][] _fileDataPerAttempt;
+            private int _lastServedAttempt = -1;
+            private byte[] _currentBuffer = Array.Empty<byte>();
+            private int _position;
+
+            public int AttemptIndex;
+
+            public MultiAttemptSdFileStream(params byte[][] fileDataPerAttempt)
+            {
+                _fileDataPerAttempt = fileDataPerAttempt;
+            }
+
+            private void PrimeForCurrentAttempt()
+            {
+                if (_lastServedAttempt == AttemptIndex) return;
+
+                _lastServedAttempt = AttemptIndex;
+                var index = Math.Min(AttemptIndex, _fileDataPerAttempt.Length - 1);
+                var fileData = _fileDataPerAttempt[index];
+
+                _currentBuffer = new byte[fileData.Length + EofMarker.Length];
+                Array.Copy(fileData, 0, _currentBuffer, 0, fileData.Length);
+                Array.Copy(EofMarker, 0, _currentBuffer, fileData.Length, EofMarker.Length);
+                _position = 0;
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                PrimeForCurrentAttempt();
+                var available = _currentBuffer.Length - _position;
+                if (available <= 0) return 0;
+
+                var toRead = Math.Min(count, available);
+                Array.Copy(_currentBuffer, _position, buffer, offset, toRead);
+                _position += toRead;
+                return toRead;
+            }
+
+            public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(Read(buffer, offset, count));
+            }
+
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+
+        /// <summary>
+        /// A testable device whose raw capture stream serves a different response per GET
+        /// attempt (see <see cref="MultiAttemptSdFileStream"/>), for exercising
+        /// <see cref="DaqifiStreamingDevice.DownloadSdCardFileAsync(string, Stream, IProgress{SdCardTransferProgress}?, CancellationToken)"/>'s
+        /// empty-transfer retry.
+        /// </summary>
+        private class TestableRetryDownloadDevice : DaqifiStreamingDevice
+        {
+            private readonly MultiAttemptSdFileStream _stream;
+            private int _getCommandCount;
+
+            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+
+            public TestableRetryDownloadDevice(params byte[][] fileDataPerAttempt)
+                : base("TestDevice")
+            {
+                _stream = new MultiAttemptSdFileStream(fileDataPerAttempt);
+            }
+
+            public override bool IsUsbConnection => true;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    SentMessages.Add(stringMessage);
+                    if (stringMessage.Data.Contains("SD:GET"))
+                    {
+                        _stream.AttemptIndex = _getCommandCount;
+                        _getCommandCount++;
+                    }
+                }
+            }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                setupAction();
+                return Task.FromResult<IReadOnlyList<string>>(new List<string>());
+            }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                await setupActionAsync(cancellationToken).ConfigureAwait(false);
+                return new List<string>();
+            }
+
+            protected override async Task ExecuteRawCaptureAsync(
+                Func<Stream, CancellationToken, Task> rawAction,
+                CancellationToken cancellationToken = default)
+            {
+                await rawAction(_stream, cancellationToken);
+            }
+        }
+
         /// <summary>
         /// A testable device that reports IsUsbConnection = false to verify
         /// that SD card operations reject non-USB connections.

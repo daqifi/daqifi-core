@@ -32,6 +32,24 @@ namespace Daqifi.Core.Device
                    || MatchesErrorPrefix(trimmed, "ERROR");
         }
 
+        /// <summary>
+        /// Returns true if the line is a genuine SCPI-formatted error line: the canonical
+        /// <c>**ERROR</c> marker, or a bare <c>ERROR</c> token, in either case followed by
+        /// <c>:</c>, end-of-line, or a space/tab that in turn precedes an error code (a digit
+        /// or <c>-</c>) — e.g. <c>**ERROR: -200,...</c>, <c>ERROR -200,...</c>, or
+        /// <c>ERROR\t-200,...</c>. Unlike <see cref="IsErrorResponseLine"/>, this deliberately
+        /// excludes the firmware <c>Error !! ...</c> status-text form (space followed by
+        /// non-numeric text), so callers that need to surface only a real SCPI error (e.g. as a
+        /// typed exception's error-code field) don't pick up non-SCPI status text. Trims both
+        /// ends so a bare <c>"ERROR\r"</c> from CRLF line endings still classifies.
+        /// </summary>
+        internal static bool IsScpiErrorLine(string line)
+        {
+            var trimmed = line.Trim();
+            return MatchesStrictScpiErrorPrefix(trimmed, "**ERROR")
+                   || MatchesStrictScpiErrorPrefix(trimmed, "ERROR");
+        }
+
         private static bool MatchesErrorPrefix(string trimmed, string prefix)
         {
             if (trimmed.Length < prefix.Length
@@ -48,6 +66,28 @@ namespace Daqifi.Core.Device
             return next == '!'
                 && trimmed.Length > prefix.Length + 1
                 && trimmed[prefix.Length + 1] == '!';
+        }
+
+        private static bool MatchesStrictScpiErrorPrefix(string trimmed, string prefix)
+        {
+            if (trimmed.Length < prefix.Length
+                || !trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (trimmed.Length == prefix.Length)
+                return true;
+
+            var next = trimmed[prefix.Length];
+            if (next == ':')
+                return true;
+            if (next != ' ' && next != '\t')
+                return false;
+
+            // A space/tab delimiter alone is ambiguous — firmware status text like
+            // "Error !! No SD Card Detected" also uses a space after "Error". Only
+            // treat it as a real SCPI error when what follows looks like an error
+            // code (digit or leading '-').
+            var rest = trimmed[(prefix.Length + 1)..].TrimStart(' ', '\t');
+            return rest.Length > 0 && (char.IsDigit(rest[0]) || rest[0] == '-');
         }
     }
 }

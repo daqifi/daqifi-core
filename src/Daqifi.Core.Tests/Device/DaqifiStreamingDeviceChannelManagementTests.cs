@@ -411,6 +411,27 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public void PwmDutyCyclePercent_DefaultsToCommandableValue()
+        {
+            var channel = new DigitalChannel(0, isPwmCapable: true);
+
+            Assert.Equal(50, channel.PwmDutyCyclePercent);
+        }
+
+        [Theory]
+        [InlineData(-5, 1)]
+        [InlineData(0, 1)]
+        [InlineData(1, 1)]
+        [InlineData(100, 100)]
+        [InlineData(150, 100)]
+        public void PwmDutyCyclePercent_ClampsToCommandableRangeOnAssignment(int assigned, int expected)
+        {
+            var channel = new DigitalChannel(0, isPwmCapable: true) { PwmDutyCyclePercent = assigned };
+
+            Assert.Equal(expected, channel.PwmDutyCyclePercent);
+        }
+
+        [Fact]
         public void SetPwmDutyCycle_OnCapableChannel_SetsBookkeepingAndSendsCommand()
         {
             var device = CreateConnectedDevice(digitalChannels: 8);
@@ -516,6 +537,18 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public void PwmFrequencyHz_DefaultsToCommandableValueBeforeAnySetPwmFrequencyCall()
+        {
+            var device = CreateConnectedDevice(digitalChannels: 8);
+
+            Assert.Equal(DaqifiStreamingDevice.DefaultPwmFrequencyHz, device.PwmFrequencyHz);
+            Assert.InRange(
+                device.PwmFrequencyHz,
+                DaqifiStreamingDevice.MinPwmFrequencyHz,
+                DaqifiStreamingDevice.MaxPwmFrequencyHz);
+        }
+
+        [Fact]
         public void SetPwmFrequency_SendsCommandAddressedToChannelZeroAndTracksValue()
         {
             var device = CreateConnectedDevice(digitalChannels: 8);
@@ -563,7 +596,9 @@ namespace Daqifi.Core.Tests.Device
             });
 
             var refreshed = (IDigitalChannel)DigitalChannelAt(device, 4);
-            Assert.NotSame(channel, refreshed);
+            // Channel identity (type, number) is unchanged across the refresh, so the same
+            // instance is updated in place rather than replaced.
+            Assert.Same(channel, refreshed);
             Assert.True(refreshed.IsPwmEnabled);
             Assert.Equal(42, refreshed.PwmDutyCyclePercent);
         }

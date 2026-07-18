@@ -58,6 +58,11 @@ public class DeviceMetadata
     public string HostName { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets the user-defined friendly name of the device.
+    /// </summary>
+    public string FriendlyName { get; set; } = string.Empty;
+
+    /// <summary>
     /// Gets or sets the TCP port for device communication.
     /// </summary>
     public int DevicePort { get; set; }
@@ -71,6 +76,31 @@ public class DeviceMetadata
     /// Gets or sets the WiFi infrastructure mode.
     /// </summary>
     public uint WifiInfrastructureMode { get; set; }
+
+    /// <summary>
+    /// Copies all field values from another <see cref="DeviceMetadata"/> instance into this one.
+    /// </summary>
+    /// <param name="source">The instance to copy field values from.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="source"/> is <c>null</c>.</exception>
+    public void CopyFrom(DeviceMetadata source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        PartNumber = source.PartNumber;
+        SerialNumber = source.SerialNumber;
+        FirmwareVersion = source.FirmwareVersion;
+        HardwareRevision = source.HardwareRevision;
+        DeviceType = source.DeviceType;
+        Capabilities = source.Capabilities?.Clone() ?? new DeviceCapabilities();
+        IpAddress = source.IpAddress;
+        MacAddress = source.MacAddress;
+        Ssid = source.Ssid;
+        HostName = source.HostName;
+        FriendlyName = source.FriendlyName;
+        DevicePort = source.DevicePort;
+        WifiSecurityMode = source.WifiSecurityMode;
+        WifiInfrastructureMode = source.WifiInfrastructureMode;
+    }
 
     /// <summary>
     /// Updates the device metadata from a protobuf message.
@@ -108,6 +138,11 @@ public class DeviceMetadata
         if (!string.IsNullOrWhiteSpace(message.HostName))
         {
             HostName = message.HostName;
+        }
+
+        if (!string.IsNullOrEmpty(message.FriendlyDeviceName))
+        {
+            FriendlyName = message.FriendlyDeviceName;
         }
 
         if (message.DevicePort != 0)

@@ -113,6 +113,9 @@ namespace Daqifi.Core.Device
         private IMessageProducer<string>? _messageProducer;
         private IMessageConsumer<DaqifiOutMessage>? _messageConsumer;
         private readonly IStreamTransport? _transport;
+        // Set only by the Stream-based constructor, so Send<T> can write non-string
+        // payloads directly when there's no IStreamTransport to fall back to.
+        private readonly Stream? _directStream;
 
         /// <summary>
         /// Gets the transport used for device communication, if available.
@@ -144,6 +147,20 @@ namespace Daqifi.Core.Device
         /// channels populate or the timeout elapses.
         /// </summary>
         private static readonly TimeSpan ChannelPopulationPollInterval = TimeSpan.FromSeconds(1);
+
+        /// <summary>
+        /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
+        /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
+        /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
+        /// state (e.g. stream interface) within the tight response window right after connect.
+        /// </summary>
+        private const int InitScpiErrorMaxRetries = 1;
+
+        /// <summary>
+        /// Delay in milliseconds before retrying the <see cref="InitializeAsync"/> SCPI setup
+        /// sequence after a transient SCPI error.
+        /// </summary>
+        private const int InitScpiErrorRetryDelayMs = 150;
 
         // Serializes ExecuteTextCommandAsync calls device-wide (closes #186).
         // Multiple callers — e.g. concurrent GetSdCardFilesAsync /
@@ -190,6 +207,24 @@ namespace Daqifi.Core.Device
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
 
         /// <summary>
+        /// Occurs when an inbound protobuf message is classified as a status message by the
+        /// internal <see cref="ProtobufProtocolHandler"/>. Raised in addition to the
+        /// undifferentiated <see cref="MessageReceived"/> event, so consumers that only need
+        /// the status/stream classification don't have to re-run <c>CanHandle</c> /
+        /// <c>DetectMessageType</c> over the same frame themselves.
+        /// </summary>
+        public event Action<DaqifiOutMessage>? StatusMessageReceived;
+
+        /// <summary>
+        /// Occurs when an inbound protobuf message is classified as a streaming data message by
+        /// the internal <see cref="ProtobufProtocolHandler"/>. Raised in addition to the
+        /// undifferentiated <see cref="MessageReceived"/> event, so consumers that only need
+        /// the status/stream classification don't have to re-run <c>CanHandle</c> /
+        /// <c>DetectMessageType</c> over the same frame themselves.
+        /// </summary>
+        public event Action<DaqifiOutMessage>? StreamMessageReceived;
+
+        /// <summary>
         /// Occurs when channels have been populated from a device status message.
         /// </summary>
         public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated;
@@ -218,6 +253,7 @@ namespace Daqifi.Core.Device
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
             _messageProducer = new MessageProducer<string>(stream);
+            _directStream = stream;
         }
 
         /// <summary>
@@ -369,7 +405,11 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
         /// <param name="message">The message to send to the device.</param>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when the device is not connected, or when connected but has no transport or
+        /// stream to send on (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress)"/>
+        /// constructor).
+        /// </exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
         {
             if (!IsConnected)
@@ -377,17 +417,26 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
-            // Use message producer if available and message is string-based
+            // Use the queued message producer when available and the message is string-based;
+            // this is the common path (SCPI text commands).
             if (_messageProducer != null && message is IOutboundMessage<string> stringMessage)
             {
                 _messageProducer.Send(stringMessage);
+                return;
             }
-            else
+
+            // Non-string payloads (or a string payload with no producer) bypass the queue and
+            // write directly to the underlying stream, since IOutboundMessage<T> already knows
+            // how to serialize itself regardless of T.
+            var stream = _transport?.Stream ?? _directStream;
+            if (stream == null)
             {
-                // Fallback for backward compatibility - no implementation yet
-                // This will be enhanced in later steps when we add transport abstraction
-                throw new NotImplementedException("Direct message sending without message producer is not yet implemented. Use constructor with Stream parameter.");
+                throw new InvalidOperationException(
+                    "This device has no transport or stream to send on. Use a constructor that accepts a Stream or IStreamTransport.");
             }
+
+            var bytes = message.GetBytes();
+            stream.Write(bytes, 0, bytes.Length);
         }
 
         /// <summary>
@@ -879,7 +928,8 @@ namespace Daqifi.Core.Device
         /// surfaces a <see cref="TimeoutException"/>).
         /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected, or the device returns a SCPI error during initialization.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="ScpiInitializationErrorException">Thrown when the device returns a SCPI error during initialization that persists after an internal retry.</exception>
         /// <exception cref="TimeoutException">Thrown when the device does not report its channel configuration within <paramref name="channelPopulationTimeout"/>.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public virtual async Task InitializeAsync(
@@ -935,28 +985,55 @@ namespace Daqifi.Core.Device
                 // by the protobuf consumer.  The protobuf consumer is stopped for the duration
                 // of this call and restarted afterward, leaving the device in protobuf mode
                 // and ready to receive the SYSInfoPB? response.
-                var initLines = await ExecuteTextCommandAsync(() =>
+                //
+                // A SCPI error here is often transient — e.g. the firmware rejecting a command
+                // tied to a persisted prior-session state within the tight response window right
+                // after connect — so retry the whole sequence with a settle delay before treating
+                // it as a hard failure (mirrors the retry already used for SD card operations).
+                IReadOnlyList<string> initLines = Array.Empty<string>();
+                string? errorLine = null;
+                for (var attempt = 0; attempt <= InitScpiErrorMaxRetries; attempt++)
                 {
-                    Send(ScpiMessageProducer.DisableDeviceEcho);
-                    Thread.Sleep(100);
+                    if (attempt > 0)
+                    {
+                        await Task.Delay(InitScpiErrorRetryDelayMs, cancellationToken).ConfigureAwait(false);
+                    }
 
-                    Send(ScpiMessageProducer.StopStreaming);
-                    Thread.Sleep(100);
+                    initLines = await ExecuteTextCommandAsync(() =>
+                    {
+                        Send(ScpiMessageProducer.DisableDeviceEcho);
+                        Thread.Sleep(100);
 
-                    Send(ScpiMessageProducer.TurnDeviceOn);
-                    Thread.Sleep(100);
+                        Send(ScpiMessageProducer.StopStreaming);
+                        Thread.Sleep(100);
 
-                    Send(ScpiMessageProducer.SetProtobufStreamFormat);
-                }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
+                        Send(ScpiMessageProducer.TurnDeviceOn);
+                        Thread.Sleep(100);
 
-                // Surface any SCPI error that occurred during initialization so callers
-                // know the device is not in the expected state.
-                var errorLine = initLines.FirstOrDefault(
-                    l => l.TrimStart().StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase));
+                        Send(ScpiMessageProducer.SetProtobufStreamFormat);
+                    }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    // Shared with DaqifiStreamingDevice's SCPI error detection so both sites
+                    // recognize the same set of delimiter-separated error formats — a bare
+                    // "**ERROR"-prefix check would miss "ERROR: ..." and space/tab-delimited
+                    // variants like "ERROR -200,..." or "ERROR\t-200,...".
+                    errorLine = initLines.FirstOrDefault(ScpiResponseClassifier.IsScpiErrorLine);
+                    if (errorLine == null)
+                    {
+                        break;
+                    }
+                }
+
+                // Surface any SCPI error that survived the retry so callers know the device
+                // is not in the expected state, via a typed exception so it can be classified
+                // without matching on the message.
                 if (errorLine != null)
                 {
-                    throw new InvalidOperationException(
-                        $"Device returned a SCPI error during initialization: {errorLine.Trim()}");
+                    var trimmedErrorLine = errorLine.Trim();
+                    throw new ScpiInitializationErrorException(
+                        $"Device returned a SCPI error during initialization: {trimmedErrorLine}",
+                        initLines,
+                        trimmedErrorLine);
                 }
 
                 // Query device info and block until the device reports its channel
@@ -1117,9 +1194,45 @@ namespace Daqifi.Core.Device
             // Populate channels from the status message
             PopulateChannelsFromStatus(message);
 
+            // Raise the classified event first so consumers that only care about status
+            // messages can react before the undifferentiated MessageReceived below. A
+            // misbehaving subscriber must not prevent MessageReceived from firing for this
+            // frame — the consumer loop that calls in here does not retry a failed frame,
+            // so an uncaught exception here would silently drop it for every other consumer.
+            RaiseClassifiedEvent(StatusMessageReceived, message, nameof(StatusMessageReceived));
+
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
             OnMessageReceived(inboundMessage);
+        }
+
+        /// <summary>
+        /// Invokes a classified message event, isolating the caller from a subscriber exception.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="OnStatusMessageReceived"/> and <see cref="OnStreamMessageReceived"/> still have
+        /// work to do after raising their classified event (the undifferentiated <see cref="MessageReceived"/>
+        /// event, and for <see cref="DaqifiStreamingDevice"/> the per-channel sample decode) — an exception
+        /// escaping a classified-event subscriber must not skip that remaining work for the frame.
+        /// </remarks>
+        /// <param name="handler">The event delegate to invoke, or <c>null</c> if unsubscribed.</param>
+        /// <param name="message">The message to pass to subscribers.</param>
+        /// <param name="eventName">The event name, for the trace log if a subscriber throws.</param>
+        private static void RaiseClassifiedEvent(Action<DaqifiOutMessage>? handler, DaqifiOutMessage message, string eventName)
+        {
+            if (handler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handler(message);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[{eventName}] Subscriber threw: {ex}");
+            }
         }
 
         /// <summary>
@@ -1159,57 +1272,32 @@ namespace Daqifi.Core.Device
             // half-cleared or torn list.
             lock (_channelsLock)
             {
-                // Capture the prior per-channel configuration before recreating instances.
-                // A status refresh (e.g. a later GetDeviceInfo on reconnect / metadata refresh)
-                // would otherwise reset every channel to IsEnabled=false, silently discarding
-                // the enable/direction/output state the device-level channel-management API
-                // computes its ADC mask and DIO state from. Keyed by (type, number) since the
-                // channel instances themselves are replaced.
-                var priorState = new Dictionary<(ChannelType, int), (bool IsEnabled, ChannelDirection Direction, bool OutputValue, bool IsPwmEnabled, int PwmDutyCyclePercent)>();
+                // Index existing channels by identity (type, number). Channels whose identity
+                // is unchanged are updated in place rather than replaced below, so consumer-held
+                // IChannel references — and the configuration on them (enable/direction/output/
+                // PWM state) — survive a routine status re-population untouched.
+                var existingByKey = new Dictionary<(ChannelType, int), IChannel>();
                 foreach (var existing in _channels)
                 {
-                    var digitalExisting = existing as IDigitalChannel;
-                    priorState[(existing.Type, existing.ChannelNumber)] = (
-                        existing.IsEnabled,
-                        existing.Direction,
-                        digitalExisting?.OutputValue ?? false,
-                        digitalExisting?.IsPwmEnabled ?? false,
-                        digitalExisting?.PwmDutyCyclePercent ?? 0);
+                    existingByKey[(existing.Type, existing.ChannelNumber)] = existing;
                 }
 
-                // Clear existing channels before repopulating
-                _channels.Clear();
+                var updatedChannels = new List<IChannel>();
 
                 // Populate analog input channels
                 if (message.AnalogInPortNum > 0)
                 {
-                    analogCount = PopulateAnalogChannels(message);
+                    analogCount = PopulateAnalogChannels(message, existingByKey, updatedChannels);
                 }
 
                 // Populate digital channels
                 if (message.DigitalPortNum > 0)
                 {
-                    digitalCount = PopulateDigitalChannels(message);
+                    digitalCount = PopulateDigitalChannels(message, existingByKey, updatedChannels);
                 }
 
-                // Reapply the captured state to the freshly created channels so configuration
-                // survives the refresh. Channels with no prior entry keep their defaults.
-                foreach (var channel in _channels)
-                {
-                    if (!priorState.TryGetValue((channel.Type, channel.ChannelNumber), out var state))
-                    {
-                        continue;
-                    }
-
-                    channel.IsEnabled = state.IsEnabled;
-                    channel.Direction = state.Direction;
-                    if (channel is IDigitalChannel digitalChannel)
-                    {
-                        digitalChannel.OutputValue = state.OutputValue;
-                        digitalChannel.IsPwmEnabled = state.IsPwmEnabled;
-                        digitalChannel.PwmDutyCyclePercent = state.PwmDutyCyclePercent;
-                    }
-                }
+                _channels.Clear();
+                _channels.AddRange(updatedChannels);
 
                 channelsSnapshot = _channels.ToArray();
             }
@@ -1224,11 +1312,14 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Populates analog channels from the protobuf message.
+        /// Populates analog channels from the protobuf message, updating existing channel
+        /// instances in place where their identity (type, number) is unchanged.
         /// </summary>
         /// <param name="message">The protobuf message containing analog channel data.</param>
-        /// <returns>The number of analog channels created.</returns>
-        private int PopulateAnalogChannels(DaqifiOutMessage message)
+        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
+        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
+        /// <returns>The number of analog channels populated.</returns>
+        private int PopulateAnalogChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
         {
             var analogInPortRanges = message.AnalogInPortRange;
             var analogInCalibrationBValues = message.AnalogInCalB;
@@ -1238,23 +1329,95 @@ namespace Daqifi.Core.Device
 
             var count = (int)message.AnalogInPortNum;
 
+            // Treat both a missing (0) and a physically-implausible out-of-range resolution as
+            // "assumed": the AnalogChannel constructor/setters now reject anything outside
+            // [MinResolution, MaxResolution], so passing a corrupt non-zero value straight through
+            // would throw and abort channel population mid-stream. Fall back to a safe default and
+            // log instead, so a corrupted status frame can neither crash population nor silently
+            // corrupt every scaled sample on the reuse path (UpdateScalingFromStatus below).
+            var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinResolution or > AnalogChannel.MaxResolution;
+            var resolution = resolutionIsAssumed ? 65535u : analogInResolution;
+
+            if (resolutionIsAssumed && count > 0)
+            {
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported no usable ADC resolution (analog_in_res={analogInResolution}) for {count} analog channel(s); assuming {resolution}. Scaled samples on this device may be systematically wrong.");
+            }
+
             for (var i = 0; i < count; i++)
             {
-                var channel = new AnalogChannel(i, analogInResolution > 0 ? analogInResolution : 65535)
+                var calibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f);
+                var calibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f);
+                var internalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f);
+                var portRange = GetWithDefault(analogInPortRanges, i, 1.0f);
+
+                // A corrupted device response can carry NaN/Infinity or physically nonsensical
+                // scaling coefficients. Feeding those into AnalogChannel would either throw from its
+                // validating setters (killing channel population mid-stream) or silently propagate
+                // garbage into every scaled sample. Fall back to safe defaults and log instead —
+                // mirroring the analog_in_res=0 handling above.
+                calibrationB = (float)SanitizeScalingValue(calibrationB, 0.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationB));
+                calibrationM = (float)SanitizeScalingValue(calibrationM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationM));
+                internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
+                portRange = (float)SanitizePortRange(portRange, i);
+
+                if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
+                {
+                    existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange, resolutionIsAssumed);
+                    destination.Add(existingAnalog);
+                    continue;
+                }
+
+                var channel = new AnalogChannel(i, resolution, resolutionIsAssumed)
                 {
                     Name = $"AI{i}",
                     Direction = ChannelDirection.Input,
                     IsEnabled = false,
-                    CalibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f),
-                    CalibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f),
-                    InternalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f),
-                    PortRange = GetWithDefault(analogInPortRanges, i, 1.0f)
+                    CalibrationB = calibrationB,
+                    CalibrationM = calibrationM,
+                    InternalScaleM = internalScaleM,
+                    PortRange = portRange
                 };
 
-                _channels.Add(channel);
+                destination.Add(channel);
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// Clamps a device-reported calibration/scale coefficient to a value <see cref="AnalogChannel"/>
+        /// will accept, substituting <paramref name="fallback"/> and logging when the reported value is
+        /// non-finite, out of magnitude range, or (when <paramref name="requireNonZero"/>) zero.
+        /// </summary>
+        private double SanitizeScalingValue(double value, double fallback, double maxMagnitude, bool requireNonZero, int channelIndex, string fieldName)
+        {
+            var invalid = !double.IsFinite(value)
+                || Math.Abs(value) > maxMagnitude
+                || (requireNonZero && value == 0.0);
+
+            if (invalid)
+            {
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported invalid {fieldName}={value} for analog channel {channelIndex}; substituting {fallback}. Scaled samples on this channel may be affected.");
+                return fallback;
+            }
+
+            return value;
+        }
+
+        /// <summary>
+        /// Clamps a device-reported port range to a value <see cref="AnalogChannel"/> will accept,
+        /// substituting the 1.0 default and logging when the reported value is non-finite, non-positive,
+        /// or beyond <see cref="AnalogChannel.MaxPortRangeVolts"/>.
+        /// </summary>
+        private double SanitizePortRange(double value, int channelIndex)
+        {
+            if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaxPortRangeVolts)
+            {
+                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported invalid portRange={value} for analog channel {channelIndex}; substituting 1.0. Scaled samples on this channel may be affected.");
+                return 1.0;
+            }
+
+            return value;
         }
 
         /// <summary>
@@ -1265,17 +1428,28 @@ namespace Daqifi.Core.Device
         private const int PwmCapableChannelMask = 0x00F9;
 
         /// <summary>
-        /// Populates digital channels from the protobuf message.
+        /// Populates digital channels from the protobuf message, updating existing channel
+        /// instances in place where their identity (type, number) is unchanged.
         /// </summary>
         /// <param name="message">The protobuf message containing digital channel data.</param>
-        /// <returns>The number of digital channels created.</returns>
-        private int PopulateDigitalChannels(DaqifiOutMessage message)
+        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
+        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
+        /// <returns>The number of digital channels populated.</returns>
+        private int PopulateDigitalChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
         {
             var count = (int)message.DigitalPortNum;
 
             for (var i = 0; i < count; i++)
             {
                 var isPwmCapable = i < 32 && (PwmCapableChannelMask & (1 << i)) != 0;
+
+                if (existingByKey.TryGetValue((ChannelType.Digital, i), out var existing) && existing is DigitalChannel existingDigital)
+                {
+                    existingDigital.IsPwmCapable = isPwmCapable;
+                    destination.Add(existingDigital);
+                    continue;
+                }
+
                 var channel = new DigitalChannel(i, isPwmCapable)
                 {
                     Name = $"DIO{i}",
@@ -1283,7 +1457,7 @@ namespace Daqifi.Core.Device
                     IsEnabled = false
                 };
 
-                _channels.Add(channel);
+                destination.Add(channel);
             }
 
             return count;
@@ -1311,6 +1485,12 @@ namespace Daqifi.Core.Device
         /// <param name="message">The streaming message from the device.</param>
         protected virtual void OnStreamMessageReceived(DaqifiOutMessage message)
         {
+            // Raise the classified event first so consumers that only care about streaming
+            // frames can react before the undifferentiated MessageReceived below. See
+            // RaiseClassifiedEvent for why a subscriber exception must not skip that (or, for
+            // DaqifiStreamingDevice, the per-channel decode that runs after this base call).
+            RaiseClassifiedEvent(StreamMessageReceived, message, nameof(StreamMessageReceived));
+
             // Raise event for external consumers
             var inboundMessage = new ProtobufMessage(message);
             OnMessageReceived(inboundMessage);

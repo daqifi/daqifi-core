@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Daqifi.Core.Communication.Producers;
@@ -399,17 +400,35 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             TransitionToState(FirmwareUpdateState.Connecting, "Connecting to HID bootloader.");
             ReportProgress(progress, FirmwareUpdateState.Connecting, 10, _currentOperation, 0, totalBytes);
 
-            await ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Connecting,
-                "connect HID transport",
-                ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, targetLocationKey, ct),
-                cancellationToken).ConfigureAwait(false);
+            string version;
+            try
+            {
+                await ExecuteWithStateTimeoutAsync(
+                    FirmwareUpdateState.Connecting,
+                    "connect HID transport",
+                    ct => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, targetLocationKey, ct),
+                    cancellationToken).ConfigureAwait(false);
 
-            var version = await ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Connecting,
-                "request bootloader version",
-                RequestBootloaderVersionAsync,
-                cancellationToken).ConfigureAwait(false);
+                version = await ExecuteWithStateTimeoutAsync(
+                    FirmwareUpdateState.Connecting,
+                    "request bootloader version",
+                    RequestBootloaderVersionAsync,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // #298: a dirty HID bootloader handle left behind by another
+                // program (or a previous run) can make the connect or the
+                // version health check fail even though the device is
+                // physically present. Nothing has been erased yet, so it's
+                // safe to attempt one JMP_TO_APP soft reset to force a clean
+                // re-enumeration before giving up.
+                version = await RecoverBootloaderHealthWithSoftResetAsync(
+                    ex,
+                    targetDevicePath,
+                    targetLocationKey,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             _logger.LogInformation("Bootloader version response: {BootloaderVersion}", version);
 
@@ -772,8 +791,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
 
             default:
                 // DeviceDoesNotSupportLanQuery, ChipInfoUnavailable,
-                // LatestReleaseUnavailable, VersionUnparseable — proceed
-                // with the flash conservatively.
+                // LanNotInitialized, LatestReleaseUnavailable,
+                // VersionUnparseable — proceed with the flash conservatively.
                 return false;
         }
     }
@@ -791,6 +810,39 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             };
         }
 
+        // Closes #301: right after a PIC32 reflash the WINC module comes back
+        // powered off, so the first GETChipInfo? probe below would always fail,
+        // report ChipInfoUnavailable, and send the caller into a needless
+        // multi-minute WiFi reflash. Powering it on first (mirroring what
+        // daqifi-desktop's FirmwareUpdateCoordinator does today) closes that gap.
+        // Skipped when the device isn't connected — Send would throw, and a
+        // disconnected device will fail the chip-info probe regardless.
+        if (_options.PowerOnWifiModuleBeforeProbe && device.IsConnected)
+        {
+            // Observe cancellation before this state-changing Send: a
+            // pre-cancelled call must not power on the device before the
+            // cancellation is surfaced to the caller.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                device.Send(ScpiMessageProducer.TurnDeviceOn);
+                if (_options.PowerOnWifiModuleSettleDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(_options.PowerOnWifiModuleSettleDelay, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: the chip-info probe below has its own bounded
+                // retry and gracefully degrades to ChipInfoUnavailable, so a
+                // failure to send the power-on command must not abort the
+                // whole status check. Skip the settle delay too — there is
+                // nothing to settle if the send itself failed.
+                _logger.LogDebug(ex, "Failed to send WINC power-on command before chip-info probe; continuing without it.");
+            }
+        }
+
         // Bounded retry for the LAN chip-info probe (closes #144). Right
         // after a PIC32 firmware update the application is up while WiFi
         // is still finishing startup, so the first chip-info query can
@@ -799,13 +851,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         // multi-minute reflash of already-current WiFi firmware. The
         // retry budget is bounded (LanChipInfoMaxAttempts × RetryDelay)
         // and observes cancellation between attempts.
-        var chipInfo = await TryGetLanChipInfoWithRetryAsync(lanChipInfoProvider, cancellationToken).ConfigureAwait(false);
+        var (chipInfo, wasLanNotInitialized) = await TryGetLanChipInfoWithRetryAsync(
+            device, lanChipInfoProvider, cancellationToken).ConfigureAwait(false);
         if (chipInfo == null)
         {
             return new WifiFirmwareStatus
             {
                 IsUpToDate = false,
-                Reason = WifiFirmwareStatusReason.ChipInfoUnavailable,
+                Reason = wasLanNotInitialized
+                    ? WifiFirmwareStatusReason.LanNotInitialized
+                    : WifiFirmwareStatusReason.ChipInfoUnavailable,
             };
         }
 
@@ -862,13 +917,25 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         };
     }
 
-    private async Task<LanChipInfo?> TryGetLanChipInfoWithRetryAsync(
+    private async Task<(LanChipInfo? ChipInfo, bool WasLanNotInitialized)> TryGetLanChipInfoWithRetryAsync(
+        IStreamingDevice device,
         ILanChipInfoProvider lanChipInfoProvider,
         CancellationToken cancellationToken)
     {
         var maxAttempts = Math.Max(1, _options.LanChipInfoMaxAttempts);
         var retryDelay = _options.LanChipInfoRetryDelay;
         var totalTimeout = _options.LanChipInfoTotalTimeout;
+
+        // Tracks the most recent failure's classification (reset on any
+        // non-LanNotInitialized outcome) so the caller can report the
+        // specific WifiFirmwareStatusReason.LanNotInitialized only when
+        // that was genuinely the terminal condition, not stale from an
+        // earlier attempt. Sent at most once per probe (closes #203) —
+        // repeatedly kicking APPLY would tear down and re-init the WINC
+        // on every failed attempt, risking disruption of an already-
+        // associated WiFi link for no additional benefit.
+        var lastFailureWasLanNotInitialized = false;
+        var hasSentLanApply = false;
 
         // Wall-clock budget guards against the pathological case where
         // attempt-count × per-attempt-timeout + retry-delay sum vastly
@@ -894,7 +961,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     totalTimeout,
                     attempt,
                     maxAttempts);
-                return null;
+                return (null, lastFailureWasLanNotInitialized);
             }
 
             try
@@ -909,8 +976,9 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                             attempt,
                             maxAttempts);
                     }
-                    return chipInfo;
+                    return (chipInfo, false);
                 }
+                lastFailureWasLanNotInitialized = false;
                 _logger.LogDebug(
                     "LAN chip-info query returned null on attempt {Attempt}/{Max}.",
                     attempt,
@@ -923,10 +991,43 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                     totalTimeout,
                     attempt,
                     maxAttempts);
-                return null;
+                return (null, lastFailureWasLanNotInitialized);
+            }
+            catch (LanNotInitializedException ex)
+            {
+                lastFailureWasLanNotInitialized = true;
+                _logger.LogDebug(
+                    ex,
+                    "LAN chip-info query on attempt {Attempt}/{Max} reported the WINC state machine is not initialized.",
+                    attempt,
+                    maxAttempts);
+
+                if (_options.KickLanApplyOnNotInitialized && !hasSentLanApply && device.IsConnected)
+                {
+                    // Observe cancellation before this state-changing Send, mirroring
+                    // the WINC power-on guard above: a cancelled probe must not still
+                    // kick APPLY on the device. Uses the caller's token (not the
+                    // linked timeout token) so a total-timeout expiry alone doesn't
+                    // suppress a kick the caller never actually asked to cancel.
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    hasSentLanApply = true;
+                    try
+                    {
+                        device.Send(ScpiMessageProducer.ApplyNetworkLan);
+                        _logger.LogDebug("Sent LAN:APPLY to initialize the WINC state machine after a not-initialized chip-info response.");
+                    }
+                    catch (Exception sendEx) when (sendEx is not OperationCanceledException)
+                    {
+                        // Best-effort: falling through to the normal retry delay/loop
+                        // below still gives the device a chance to recover on its own.
+                        _logger.LogDebug(sendEx, "Failed to send LAN:APPLY after a not-initialized chip-info response; continuing retry loop without it.");
+                    }
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                lastFailureWasLanNotInitialized = false;
                 _logger.LogDebug(
                     ex,
                     "LAN chip-info query failed on attempt {Attempt}/{Max}.",
@@ -947,15 +1048,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
                         totalTimeout,
                         attempt,
                         maxAttempts);
-                    return null;
+                    return (null, lastFailureWasLanNotInitialized);
                 }
             }
         }
 
         _logger.LogDebug(
-            "LAN chip-info query exhausted {Max} attempts; reporting status as ChipInfoUnavailable.",
-            maxAttempts);
-        return null;
+            "LAN chip-info query exhausted {Max} attempts; reporting status as {Reason}.",
+            maxAttempts,
+            lastFailureWasLanNotInitialized ? WifiFirmwareStatusReason.LanNotInitialized : WifiFirmwareStatusReason.ChipInfoUnavailable);
+        return (null, lastFailureWasLanNotInitialized);
     }
 
     private ExternalProcessRequest BuildWifiProcessRequest(
@@ -1397,6 +1499,87 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
             },
             ex => ex is IOException or TimeoutException or InvalidOperationException,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Recovers from a failed <see cref="FirmwareUpdateState.Connecting"/> health
+    /// check (bad connect or a garbage version response) by issuing one
+    /// <c>JMP_TO_APP</c> soft reset, waiting for the bootloader to re-enumerate,
+    /// and retrying the connect + version check exactly once. See #298: the
+    /// observed failure is a dirty HID bootloader handle left behind by another
+    /// program, which a clean reset clears without touching flash.
+    /// </summary>
+    private async Task<string> RecoverBootloaderHealthWithSoftResetAsync(
+        Exception originalFailure,
+        string? targetDevicePath,
+        string? targetLocationKey,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            originalFailure,
+            "Bootloader connect/health-check failed in {State}; attempting a JMP_TO_APP soft-reset recovery before giving up.",
+            FirmwareUpdateState.Connecting);
+
+        try
+        {
+            // Best-effort: the handle may already be unusable (that's often why
+            // the health check failed in the first place), so a write failure
+            // here just falls through to the original failure below rather than
+            // surfacing a new unhandled exception.
+            if (_hidTransport.IsConnected)
+            {
+                await _hidTransport
+                    .WriteAsync(_bootloaderProtocol.CreateJumpToApplicationMessage(), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "JMP_TO_APP soft-reset write failed; the bootloader handle is likely already unusable.");
+            // Rethrow via ExceptionDispatchInfo (not `throw originalFailure;`) so the
+            // original exception's stack trace still points at the actual
+            // connect/health-check failure site, not this recovery method.
+            ExceptionDispatchInfo.Capture(originalFailure).Throw();
+            throw; // unreachable; satisfies flow analysis
+        }
+        finally
+        {
+            await SafeDisconnectHidAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            var recoveredDevice = await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.WaitingForBootloader,
+                "wait for HID bootloader re-enumeration after soft reset",
+                ct => WaitForBootloaderDeviceAsync(targetDevicePath, targetLocationKey, ct),
+                cancellationToken).ConfigureAwait(false);
+
+            await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.Connecting,
+                "reconnect HID transport after soft reset",
+                ct => ConnectToBootloaderWithRetryAsync(recoveredDevice, targetDevicePath, targetLocationKey, ct),
+                cancellationToken).ConfigureAwait(false);
+
+            var version = await ExecuteWithStateTimeoutAsync(
+                FirmwareUpdateState.Connecting,
+                "request bootloader version after soft reset",
+                RequestBootloaderVersionAsync,
+                cancellationToken).ConfigureAwait(false);
+
+            _logger.LogInformation("Bootloader health restored after JMP_TO_APP soft reset.");
+            return version;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Bootloader is still unhealthy after the JMP_TO_APP soft-reset recovery attempt.");
+            ExceptionDispatchInfo.Capture(originalFailure).Throw();
+            throw; // unreachable; satisfies flow analysis
+        }
     }
 
     private async Task<string> RequestBootloaderVersionAsync(CancellationToken cancellationToken)

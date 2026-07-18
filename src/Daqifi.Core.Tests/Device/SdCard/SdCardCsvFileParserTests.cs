@@ -715,6 +715,56 @@ public sealed class SdCardCsvFileParserTests
     }
 
     // -------------------------------------------------------------------------
+    // HasDeviceTimestamp
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ParseAsync_WithTimestampTickRate_MarksHasDeviceTimestampTrue()
+    {
+        // Arrange
+        await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
+            "Nyquist 1", "SN123", 100u,
+            (1000u, new[] { 1.5, 2.5 }),
+            (1100u, new[] { 3.5, 4.5 })
+        );
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+
+        // Act
+        var session = await parser.ParseAsync(stream, "test.csv");
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.True(s.HasDeviceTimestamp));
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithoutTimestampTickRate_MarksHasDeviceTimestampFalse()
+    {
+        // Arrange — no "Timestamp Tick Rate" comment and no fallback frequency, so ticks
+        // can't be converted to elapsed time and entries fall back to the session base time.
+        const string content =
+            "# Device: Nyquist 1\n" +
+            "# Serial Number: SN123\n" +
+            "ain0_ts,ain0_val\n" +
+            "1000,1.5\n" +
+            "1100,3.5\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 0 };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "test.csv", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.False(s.HasDeviceTimestamp));
+    }
+
+    // -------------------------------------------------------------------------
     // Helper
     // -------------------------------------------------------------------------
 

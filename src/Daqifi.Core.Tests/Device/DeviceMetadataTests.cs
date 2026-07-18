@@ -26,6 +26,7 @@ public class DeviceMetadataTests
         Assert.Equal(string.Empty, metadata.MacAddress);
         Assert.Equal(string.Empty, metadata.Ssid);
         Assert.Equal(string.Empty, metadata.HostName);
+        Assert.Equal(string.Empty, metadata.FriendlyName);
         Assert.Equal(0, metadata.DevicePort);
     }
 
@@ -190,5 +191,154 @@ public class DeviceMetadataTests
         Assert.Equal(string.Empty, metadata.Ssid);
         Assert.Equal(string.Empty, metadata.HostName);
         Assert.Equal(0, metadata.DevicePort);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_UpdatesFriendlyName()
+    {
+        // Arrange
+        var metadata = new DeviceMetadata();
+        var message = new DaqifiOutMessage
+        {
+            FriendlyDeviceName = "My Device"
+        };
+
+        // Act
+        metadata.UpdateFromProtobuf(message);
+
+        // Assert
+        Assert.Equal("My Device", metadata.FriendlyName);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_WithEmptyFriendlyName_LeavesFriendlyNameUnchanged()
+    {
+        // Arrange
+        var metadata = new DeviceMetadata { FriendlyName = "Previous Name" };
+        var message = new DaqifiOutMessage
+        {
+            FriendlyDeviceName = ""
+        };
+
+        // Act
+        metadata.UpdateFromProtobuf(message);
+
+        // Assert
+        Assert.Equal("Previous Name", metadata.FriendlyName);
+    }
+
+    [Fact]
+    public void CopyFrom_CopiesAllFieldValues()
+    {
+        // Arrange
+        var source = new DeviceMetadata
+        {
+            PartNumber = "Nq3",
+            SerialNumber = "12345",
+            FirmwareVersion = "1.2.3",
+            HardwareRevision = "2.0",
+            DeviceType = DeviceType.Nyquist3,
+            Capabilities = new DeviceCapabilities
+            {
+                SupportsStreaming = true,
+                HasSdCard = true,
+                HasWiFi = true,
+                HasUsb = true,
+                AnalogInputChannels = 8,
+                AnalogOutputChannels = 2,
+                DigitalChannels = 16,
+                MaxSamplingRate = 5000
+            },
+            IpAddress = "192.168.1.100",
+            MacAddress = "AA-BB-CC-DD-EE-FF",
+            Ssid = "TestNetwork",
+            HostName = "daqifi-001",
+            FriendlyName = "My Device",
+            DevicePort = 9760,
+            WifiSecurityMode = 3,
+            WifiInfrastructureMode = 1
+        };
+        var target = new DeviceMetadata();
+
+        // Act
+        target.CopyFrom(source);
+
+        // Assert
+        Assert.Equal(source.PartNumber, target.PartNumber);
+        Assert.Equal(source.SerialNumber, target.SerialNumber);
+        Assert.Equal(source.FirmwareVersion, target.FirmwareVersion);
+        Assert.Equal(source.HardwareRevision, target.HardwareRevision);
+        Assert.Equal(source.DeviceType, target.DeviceType);
+        Assert.Equal(source.IpAddress, target.IpAddress);
+        Assert.Equal(source.MacAddress, target.MacAddress);
+        Assert.Equal(source.Ssid, target.Ssid);
+        Assert.Equal(source.HostName, target.HostName);
+        Assert.Equal(source.FriendlyName, target.FriendlyName);
+        Assert.Equal(source.DevicePort, target.DevicePort);
+        Assert.Equal(source.WifiSecurityMode, target.WifiSecurityMode);
+        Assert.Equal(source.WifiInfrastructureMode, target.WifiInfrastructureMode);
+        Assert.Equal(source.Capabilities.AnalogInputChannels, target.Capabilities.AnalogInputChannels);
+        Assert.Equal(source.Capabilities.AnalogOutputChannels, target.Capabilities.AnalogOutputChannels);
+        Assert.Equal(source.Capabilities.DigitalChannels, target.Capabilities.DigitalChannels);
+        Assert.Equal(source.Capabilities.MaxSamplingRate, target.Capabilities.MaxSamplingRate);
+        Assert.Equal(source.Capabilities.HasSdCard, target.Capabilities.HasSdCard);
+        Assert.Equal(source.Capabilities.HasWiFi, target.Capabilities.HasWiFi);
+        Assert.Equal(source.Capabilities.HasUsb, target.Capabilities.HasUsb);
+        Assert.Equal(source.Capabilities.SupportsStreaming, target.Capabilities.SupportsStreaming);
+    }
+
+    [Fact]
+    public void CopyFrom_CapabilitiesAreDeepCopiedNotShared()
+    {
+        // Arrange
+        var source = new DeviceMetadata();
+        var target = new DeviceMetadata();
+
+        // Act
+        target.CopyFrom(source);
+
+        // Assert
+        Assert.NotSame(source.Capabilities, target.Capabilities);
+    }
+
+    [Fact]
+    public void CopyFrom_MutatingSourceAfterCopyDoesNotAffectTarget()
+    {
+        // Arrange
+        var source = new DeviceMetadata { PartNumber = "Nq3" };
+        var target = new DeviceMetadata();
+        target.CopyFrom(source);
+
+        // Act
+        source.PartNumber = "Nq1";
+        source.Capabilities.AnalogInputChannels = 8;
+
+        // Assert
+        Assert.Equal("Nq3", target.PartNumber);
+        Assert.Equal(0, target.Capabilities.AnalogInputChannels);
+    }
+
+    [Fact]
+    public void CopyFrom_NullSource_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var target = new DeviceMetadata();
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() => target.CopyFrom(null!));
+    }
+
+    [Fact]
+    public void CopyFrom_SourceWithNullCapabilities_DefaultsToNewCapabilities()
+    {
+        // Arrange
+        var source = new DeviceMetadata { Capabilities = null! };
+        var target = new DeviceMetadata();
+
+        // Act
+        target.CopyFrom(source);
+
+        // Assert
+        Assert.NotNull(target.Capabilities);
     }
 }
