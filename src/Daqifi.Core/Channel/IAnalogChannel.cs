@@ -16,9 +16,18 @@ public interface IAnalogChannel : IChannel
     double MaxValue { get; set; }
 
     /// <summary>
-    /// Gets the resolution of the ADC (e.g., 65535 for 16-bit).
+    /// Gets the resolution of the ADC, expressed as the maximum raw count (e.g., 65535 for 16-bit,
+    /// 262143 for 18-bit) — i.e. 2^bits - 1, not 2^bits. This value is a direct divisor in
+    /// <see cref="GetScaledValue"/>.
     /// </summary>
     uint Resolution { get; }
+
+    /// <summary>
+    /// Gets whether <see cref="Resolution"/> is a fallback guess rather than a value the device
+    /// actually reported. When <c>true</c>, samples scaled with this channel may be systematically
+    /// wrong (e.g. a device that omits its ADC resolution entirely).
+    /// </summary>
+    bool ResolutionIsAssumed { get; }
 
     /// <summary>
     /// Gets or sets the calibration slope (M in the scaling formula).

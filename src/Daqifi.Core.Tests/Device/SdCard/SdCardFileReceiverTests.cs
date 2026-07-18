@@ -130,19 +130,34 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
-    public async Task ReceiveAsync_EmptyFile_JustEofMarker_OutputIsEmpty()
+    public async Task ReceiveAsync_MarkerOnlyTransfer_ThrowsSdCardEmptyTransferException()
     {
-        // Arrange — only the EOF marker, no file data
+        // Arrange — only the EOF marker, no file data. A device whose SD subsystem is wedged
+        // or not yet ready opens the file successfully but sends zero content bytes before the
+        // marker — this must be surfaced as a failure, not a silent 0-byte "success" (#264).
         using var sourceStream = new MemoryStream(EofMarker);
         using var destinationStream = new MemoryStream();
         var receiver = new SdCardFileReceiver(sourceStream);
 
-        // Act
-        var bytesReceived = await receiver.ReceiveAsync(destinationStream, "empty.bin");
-
-        // Assert
-        Assert.Equal(0, bytesReceived);
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "empty.bin"));
+        Assert.Equal("empty.bin", ex.FileName);
         Assert.Empty(destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerOnlyTransferSplitAcrossChunks_ThrowsSdCardEmptyTransferException()
+    {
+        // Arrange — same as above, but the marker itself is split across reads, exercising the
+        // trailing-window path with zero file bytes ever written.
+        using var sourceStream = new ChunkedMemoryStream(EofMarker, chunkSize: 5);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, bufferSize: 5);
+
+        // Act & Assert
+        await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "empty.bin"));
     }
 
     [Fact]
