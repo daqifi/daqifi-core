@@ -1225,8 +1225,8 @@ namespace Daqifi.Core.Device
         /// Thrown when the device's firmware does not recognize the storage query (SCPI -113
         /// "Undefined header"), typically because it predates <see cref="DaqifiDevice.MinSupportedFirmware"/>;
         /// or, over a WiFi/TCP transport, when the firmware predates SD-over-WiFi support
-        /// (<see cref="DeviceFeature.SdFileTransferOverWifi"/>, firmware v3.7.0) — the storage query
-        /// drives the SD card through the same transport gate as the file operations.
+        /// (<see cref="DeviceFeature.SdFileTransferOverWifi"/>) — the storage query drives the SD
+        /// card through the same transport gate as the file operations.
         /// </exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
         public async Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
