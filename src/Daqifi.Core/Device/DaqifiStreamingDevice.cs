@@ -1012,6 +1012,9 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
+            // Re-check right before the state-changing send so a cancellation requested after the
+            // entry guard still short-circuits the command (matches the pattern accepted in #324).
+            cancellationToken.ThrowIfCancellationRequested();
             Send(ScpiMessageProducer.LoadNetworkLan);
             return Task.CompletedTask;
         }
@@ -1032,6 +1035,9 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
+            // Re-check right before the state-changing send so a cancellation requested after the
+            // entry guard still short-circuits the command (matches the pattern accepted in #324).
+            cancellationToken.ThrowIfCancellationRequested();
             Send(ScpiMessageProducer.FactoryResetNetworkLan);
             return Task.CompletedTask;
         }
