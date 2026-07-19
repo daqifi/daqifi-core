@@ -15,12 +15,22 @@ public class LineBasedMessageParser : IMessageParser<string>
     /// <summary>
     /// Initializes a new instance of the LineBasedMessageParser class.
     /// </summary>
-    /// <param name="lineEnding">The line ending to split messages on. Defaults to CRLF.</param>
+    /// <param name="lineEnding">The line ending to split messages on. Defaults to CRLF. Must encode to at least one byte.</param>
     /// <param name="encoding">The text encoding to use. Defaults to UTF-8.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="lineEnding"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="lineEnding"/> encodes to zero bytes (an empty line ending would prevent the parser from making progress).</exception>
     public LineBasedMessageParser(string lineEnding = "\r\n", Encoding? encoding = null)
     {
+        if (lineEnding == null)
+            throw new ArgumentNullException(nameof(lineEnding));
+
         _encoding = encoding ?? Encoding.UTF8;
         _lineEnding = _encoding.GetBytes(lineEnding);
+
+        if (_lineEnding.Length == 0)
+            throw new ArgumentException(
+                "Line ending must encode to at least one byte; an empty line ending would prevent the parser from making progress.",
+                nameof(lineEnding));
     }
 
     /// <summary>
