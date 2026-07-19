@@ -54,6 +54,17 @@ namespace Daqifi.Core.Tests.Device
             Assert.Null(new DeviceConnectionOptions().Logger);
         }
 
+        [Fact]
+        public void PopulateChannels_ThrowingLogger_IsSwallowed_DoesNotPropagate()
+        {
+            // A misbehaving consumer logger must never take down device operation (SafeLog isolation).
+            var device = new DaqifiStreamingDevice("Lab Nq1", ipAddress: null, logger: new ThrowingLogger());
+            device.Connect();
+
+            var ex = Record.Exception(() => device.PopulateChannelsFromStatus(StatusWithResolution(2, resolution: 0)));
+            Assert.Null(ex);
+        }
+
         private static DaqifiOutMessage StatusWithResolution(int analogCount, uint resolution)
         {
             var status = new DaqifiOutMessage
@@ -76,6 +87,15 @@ namespace Daqifi.Core.Tests.Device
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
                 Func<TState, Exception?, string> formatter)
                 => Entries.Add((logLevel, formatter(state, exception)));
+        }
+
+        private sealed class ThrowingLogger : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+                => throw new InvalidOperationException("boom");
         }
     }
 }
