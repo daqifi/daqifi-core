@@ -152,7 +152,9 @@ public class DeviceFinderBaseTests
 
         // First pass acquires the discovery semaphore and parks (uncancelable token).
         var first = finder.DiscoverAsync(CancellationToken.None);
-        await finder.Acquired.Task; // the semaphore is now held
+        // Bounded wait: if the first pass faults before signaling acquisition, fail fast
+        // instead of hanging until the runner-level timeout.
+        await finder.Acquired.Task.WaitAsync(TimeSpan.FromSeconds(5)); // the semaphore is now held
 
         // A second, timed pass must wait on the held semaphore; its timeout elapses
         // first. The timeout is a normal terminal condition, so it must complete with
@@ -163,7 +165,7 @@ public class DeviceFinderBaseTests
 
         // The first pass is untouched by the second's timeout.
         finder.ReleaseGate();
-        Assert.Empty(await first);
+        Assert.Empty(await first.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
