@@ -372,6 +372,45 @@ public sealed class SdCardCsvFileParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_BareChBeforeRealHeader_UsesRealHeaderLayout()
+    {
+        // Regression (#366 follow-up): after the #365 crash fix, a bare "ch" line was
+        // treated inconsistently — ParseHeader stopped on it (empty layout) while
+        // FindDataStartIndex skipped it as a data row. A bare "ch" *before* the real
+        // header therefore silently mis-parsed: the real header was skipped as a bad
+        // row, channel counts came out 0, and the dio column was misclassified as an
+        // extra analog value. Both scans must now skip the stray "ch" and land on the
+        // real header, so the layout (2 analog + 1 digital) is honoured and the dio
+        // column is not dropped.
+        var content =
+            "# Device: TestDevice\n" +
+            "# Serial Number: SN001\n" +
+            "# Timestamp Tick Rate: 100 Hz\n" +
+            "ch\n" +           // stray "ch" ahead of the real header — must be skipped
+            "ain0_ts,ain0_val,ain1_ts,ain1_val,dio_ts,dio_val\n" +
+            "1000,5.0,1000,22.0,1000,7\n" +
+            "2000,6.0,2000,23.0,2000,3\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var session = await parser.ParseAsync(stream, "test.csv");
+        var samples = await ToListAsync(session.Samples);
+
+        // Real header layout is honoured, not the empty one from stopping on "ch".
+        Assert.Equal(2, session.DeviceConfig!.AnalogPortCount);
+        Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
+
+        Assert.Equal(2, samples.Count);
+        // Two analog channels parsed (dio not misclassified as a third analog value).
+        Assert.Equal(2, samples[0].AnalogValues.Count);
+        Assert.Equal(5.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(22.0, samples[0].AnalogValues[1], precision: 5);
+        // Digital column preserved, not dropped.
+        Assert.Equal(7u, samples[0].DigitalData);
+        Assert.Equal(3u, samples[1].DigitalData);
+    }
+
+    [Fact]
     public async Task ParseAsync_OddColumnCount_SkipsMalformedRow()
     {
         // Arrange — a row with an odd number of columns (not ts+val pairs) should be skipped

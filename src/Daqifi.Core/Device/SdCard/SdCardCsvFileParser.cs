@@ -174,10 +174,11 @@ public sealed class SdCardCsvFileParser
                         timestampFreq = rate;
                     }
                 }
+
+                continue;
             }
-            else if (line.Contains("_ts,", StringComparison.OrdinalIgnoreCase) ||
-                     line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) ||
-                     line.StartsWith("ain", StringComparison.OrdinalIgnoreCase))
+
+            if (IsColumnHeaderLine(line))
             {
                 // Column header: ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val
                 // Count channel pairs and identify digital columns
@@ -201,11 +202,17 @@ public sealed class SdCardCsvFileParser
 
                 break;
             }
-            else
+
+            if (IsHeaderNoiseLine(line))
             {
-                // First data row reached without finding column header
-                break;
+                // Malformed header-region noise (e.g. a stray "ch") before the real
+                // column header. Skip it and keep scanning so the real header — and its
+                // channel layout — isn't lost. Must stay consistent with FindDataStartIndex.
+                continue;
             }
+
+            // First data row reached without finding a column header.
+            break;
         }
 
         var config = new SdCardDeviceConfiguration(
@@ -235,17 +242,16 @@ public sealed class SdCardCsvFileParser
                 continue;  // Comment line
             }
 
-            // Check if it's the column header (contains "_ts," or starts with "ch"/"ain").
-            // The line.Length > 2 guard protects the line[2] access: StartsWith("ch")
-            // only guarantees length >= 2, so a bare "ch" line would otherwise throw
-            // IndexOutOfRangeException and abort the whole parse. A too-short "ch" line
-            // falls through and is treated as a data row, which TryParseCsvDataRow then
-            // skips as malformed — consistent with the parser's skip-bad-lines contract.
-            if (line.Contains("_ts,", StringComparison.OrdinalIgnoreCase) ||
-                (line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && line.Length > 2 && !char.IsDigit(line[2])) ||
-                line.StartsWith("ain", StringComparison.OrdinalIgnoreCase))
+            if (IsColumnHeaderLine(line))
             {
                 continue;  // Column header line
+            }
+
+            if (IsHeaderNoiseLine(line))
+            {
+                // Malformed header-region noise (e.g. a stray "ch") — skip it rather than
+                // treating it as the first data row, so the scan lands on the real data.
+                continue;
             }
 
             return i;  // First data row
@@ -253,6 +259,29 @@ public sealed class SdCardCsvFileParser
 
         return lines.Count;  // No data found
     }
+
+    /// <summary>
+    /// Determines whether a line is a CSV column header
+    /// (e.g. <c>ain0_ts,ain0_val,...,dio_ts,dio_val</c> or a <c>ch...</c>/<c>ain...</c> variant).
+    /// Shared by <see cref="ParseHeader"/> and <see cref="FindDataStartIndex"/> so both agree on
+    /// what a header looks like. The <c>line.Length &gt; 2</c> guard protects the <c>line[2]</c>
+    /// access: <c>StartsWith("ch")</c> only guarantees length &gt;= 2, so a bare "ch" line would
+    /// otherwise throw <see cref="IndexOutOfRangeException"/> (closes #365).
+    /// </summary>
+    private static bool IsColumnHeaderLine(string line) =>
+        line.Contains("_ts,", StringComparison.OrdinalIgnoreCase) ||
+        (line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && line.Length > 2 && !char.IsDigit(line[2])) ||
+        line.StartsWith("ain", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Determines whether a non-comment line is malformed header-region noise: it starts with
+    /// "ch" (case-insensitive) but is not a valid column header (e.g. a bare "ch"). A genuine
+    /// data row starts with a numeric timestamp, never "ch", so such a line is never data.
+    /// Both the header parser and the data-start scan skip it, so a stray "ch" before the real
+    /// column header can neither hide the header nor shift the data-start onto a bad row.
+    /// </summary>
+    private static bool IsHeaderNoiseLine(string line) =>
+        line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && !IsColumnHeaderLine(line);
 
 #pragma warning disable CS1998 // Async iterator: yield return requires async; method has no real awaits.
     private static async IAsyncEnumerable<SdCardLogEntry> ParseCsvLines(
