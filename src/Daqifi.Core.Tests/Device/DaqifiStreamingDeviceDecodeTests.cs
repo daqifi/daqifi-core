@@ -455,8 +455,10 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_FewerValuesThanChannels_MapsAvailableWithoutThrowing()
+    public void Decode_MidStreamFewerValuesThanChannels_MapsAvailableWithoutThrowing()
     {
+        // The warmup guard (issue #351) only suppresses *leading* short frames. Once a full frame
+        // has been seen, a later short frame is still best-effort mapped rather than dropped.
         var device = CreateStreamingDevice(analogCount: 2);
         var ai0 = AnalogChannel(device, 0);
         var ai1 = AnalogChannel(device, 1);
@@ -464,14 +466,21 @@ public class DaqifiStreamingDeviceDecodeTests
         ai1.IsEnabled = true;
         device.StartStreaming();
 
-        var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
-        frame.AnalogInDataFloat.Add(1f); // only one value for two enabled channels
+        // First a full frame to clear the warmup guard.
+        var full = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        full.AnalogInDataFloat.Add(9f);
+        full.AnalogInDataFloat.Add(9f);
+        device.InvokeStreamMessage(full);
+
+        // Then a mid-stream short frame: one value for two enabled channels.
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 2 };
+        frame.AnalogInDataFloat.Add(1f);
 
         var ex = Record.Exception(() => device.InvokeStreamMessage(frame));
 
         Assert.Null(ex);
         Assert.Equal(1.0, ai0.ActiveSample!.Value);
-        Assert.Null(ai1.ActiveSample);
+        Assert.Equal(9.0, ai1.ActiveSample!.Value); // retains its last (full-frame) value
     }
 
     [Fact]
@@ -495,6 +504,189 @@ public class DaqifiStreamingDeviceDecodeTests
 
         // Host timestamp advances monotonically as device ticks increase.
         Assert.True(ai0.ActiveSample!.Timestamp >= firstHost);
+    }
+
+    #endregion
+
+    #region Warmup-frame suppression (issue #351)
+
+    [Fact]
+    public void Decode_SuppressesMalformedFirstFrame_ThenEmitsFullFrame()
+    {
+        // Reproduces the bench evidence: 2 enabled analog channels, first frame carries a single
+        // analog value (a firmware warmup frame). That partial first sample must not reach the
+        // channels; the next full frame must decode normally.
+        var device = CreateStreamingDevice(analogCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        var ai1 = AnalogChannel(device, 1);
+        ai0.IsEnabled = true;
+        ai1.IsEnabled = true;
+        device.StartStreaming();
+
+        var samples = new List<double>();
+        ai0.SampleReceived += (_, e) => samples.Add(e.Sample.Value);
+
+        // Malformed first frame: one value for two enabled channels.
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        warmup.AnalogInDataFloat.Add(0.1f);
+        device.InvokeStreamMessage(warmup);
+
+        Assert.Null(ai0.ActiveSample); // warmup frame suppressed
+        Assert.Null(ai1.ActiveSample);
+        Assert.Empty(samples);
+
+        // Next full frame decodes for both channels.
+        var full = new DaqifiOutMessage { MsgTimeStamp = 1840 };
+        full.AnalogInDataFloat.Add(4f);
+        full.AnalogInDataFloat.Add(8f);
+        device.InvokeStreamMessage(full);
+
+        Assert.Equal(4.0, ai0.ActiveSample!.Value);
+        Assert.Equal(8.0, ai1.ActiveSample!.Value);
+        Assert.Equal(new[] { 4.0 }, samples); // AI0 saw exactly one (correct) sample
+    }
+
+    [Fact]
+    public void Decode_SuppressedWarmupFrame_DoesNotAnchorSessionClock()
+    {
+        // A suppressed warmup frame must be a complete non-event: the *next* frame anchors the
+        // timestamp baseline, so no spurious gap is reported from the warmup-to-first delta.
+        var device = CreateStreamingDevice(analogCount: 2);
+        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 1).IsEnabled = true;
+        device.StartStreaming();
+
+        var gaps = new List<TimestampGapEventArgs>();
+        device.GapDetected += (_, e) => gaps.Add(e);
+
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        warmup.AnalogInDataFloat.Add(0.1f);
+        device.InvokeStreamMessage(warmup);
+
+        // Steady full-frame cadence after the warmup frame.
+        for (uint ts = 100000; ts <= 105000; ts += 1000)
+        {
+            var frame = new DaqifiOutMessage { MsgTimeStamp = ts };
+            frame.AnalogInDataFloat.Add(1f);
+            frame.AnalogInDataFloat.Add(2f);
+            device.InvokeStreamMessage(frame);
+        }
+
+        // Had the warmup frame (ts=1000) anchored the clock, the jump to ts=100000 would trip a gap.
+        Assert.Empty(gaps);
+    }
+
+    [Fact]
+    public void Decode_WarmupFrame_StillReRaisesRawMessage()
+    {
+        // Suppression skips only the per-channel decode; raw-frame consumers still see the frame.
+        var device = CreateStreamingDevice(analogCount: 2);
+        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 1).IsEnabled = true;
+        device.StartStreaming();
+
+        var rawFrames = 0;
+        device.MessageReceived += (_, _) => rawFrames++;
+
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        warmup.AnalogInDataFloat.Add(0.1f);
+        device.InvokeStreamMessage(warmup);
+
+        Assert.Equal(1, rawFrames);
+    }
+
+    [Fact]
+    public void Decode_FullFirstFrame_NotSuppressed()
+    {
+        // A first frame that already carries the full complement decodes immediately.
+        var device = CreateStreamingDevice(analogCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        var ai1 = AnalogChannel(device, 1);
+        ai0.IsEnabled = true;
+        ai1.IsEnabled = true;
+        device.StartStreaming();
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        frame.AnalogInDataFloat.Add(1f);
+        frame.AnalogInDataFloat.Add(2f);
+        device.InvokeStreamMessage(frame);
+
+        Assert.Equal(1.0, ai0.ActiveSample!.Value);
+        Assert.Equal(2.0, ai1.ActiveSample!.Value);
+    }
+
+    [Fact]
+    public void Decode_DigitalOnlyStream_FirstFrameNotSuppressed()
+    {
+        // With no analog channels enabled the warmup guard never engages: a digital-only first
+        // frame is decoded normally.
+        var device = CreateStreamingDevice(analogCount: 0, digitalCount: 4);
+        var dio = Enumerable.Range(0, 4).Select(n => DigitalChannel(device, n)).ToList();
+        foreach (var d in dio) d.IsEnabled = true;
+        device.StartStreaming();
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        frame.DigitalData = ByteString.CopyFrom(new byte[] { 0b1010 });
+        device.InvokeStreamMessage(frame);
+
+        Assert.Equal(0.0, dio[0].ActiveSample!.Value);
+        Assert.Equal(1.0, dio[1].ActiveSample!.Value);
+    }
+
+    [Fact]
+    public void Decode_WarmupGuardReArmsForEachSession()
+    {
+        // The guard is re-armed at every StartStreaming, so a warmup frame is suppressed at the
+        // start of a *subsequent* session too.
+        var device = CreateStreamingDevice(analogCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        var ai1 = AnalogChannel(device, 1);
+        ai0.IsEnabled = true;
+        ai1.IsEnabled = true;
+
+        // Session 1: warmup + a full frame.
+        device.StartStreaming();
+        var w1 = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        w1.AnalogInDataFloat.Add(0.1f);
+        device.InvokeStreamMessage(w1);
+        var f1 = new DaqifiOutMessage { MsgTimeStamp = 2 };
+        f1.AnalogInDataFloat.Add(1f);
+        f1.AnalogInDataFloat.Add(2f);
+        device.InvokeStreamMessage(f1);
+        device.StopStreaming();
+
+        // Session 2: a fresh warmup frame must again be suppressed.
+        device.StartStreaming();
+        var w2 = new DaqifiOutMessage { MsgTimeStamp = 3 };
+        w2.AnalogInDataFloat.Add(5f); // single value -> partial again
+        device.InvokeStreamMessage(w2);
+
+        // AI1 still holds session-1's value; the session-2 warmup frame did not overwrite AI0.
+        Assert.Equal(1.0, ai0.ActiveSample!.Value);
+        Assert.Equal(2.0, ai1.ActiveSample!.Value);
+    }
+
+    [Fact]
+    public void Decode_PersistentShortFrames_ReleasedAfterCap()
+    {
+        // Safety bound: a stream that only ever sends short frames must not be withheld forever.
+        // After MaxSuppressedWarmupFrames (5) suppressed frames, the guard releases.
+        var device = CreateStreamingDevice(analogCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        AnalogChannel(device, 1).IsEnabled = true;
+        ai0.IsEnabled = true;
+        device.StartStreaming();
+
+        // 5 suppressed, the 6th is released (best-effort mapped).
+        for (var i = 0; i < 6; i++)
+        {
+            var frame = new DaqifiOutMessage { MsgTimeStamp = (uint)(1000 + i) };
+            frame.AnalogInDataFloat.Add(i);
+            device.InvokeStreamMessage(frame);
+        }
+
+        Assert.NotNull(ai0.ActiveSample);
+        Assert.Equal(5.0, ai0.ActiveSample!.Value); // the 6th frame's value
     }
 
     #endregion

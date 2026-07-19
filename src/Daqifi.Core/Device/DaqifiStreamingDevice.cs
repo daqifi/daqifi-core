@@ -91,6 +91,31 @@ namespace Daqifi.Core.Device
         private readonly TimestampGapDetector _gapDetector = new();
 
         /// <summary>
+        /// The maximum number of leading short-analog frames suppressed at stream start
+        /// (see <see cref="_awaitingFirstFullAnalogFrame"/>). Bounds the warmup-frame guard so a
+        /// genuinely short stream can never be withheld indefinitely.
+        /// </summary>
+        private const int MaxSuppressedWarmupFrames = 5;
+
+        /// <summary>
+        /// True from the start of a streaming session until the first analog-bearing frame carrying
+        /// the full enabled-channel complement has been decoded. Guards the malformed warmup frame
+        /// the firmware emits at stream start (issue #351): its fast streaming encoder can emit a
+        /// leading frame with fewer analog values than the enabled channel mask, which would
+        /// otherwise reach every consumer as a partial <see cref="DataSample"/> (silently corrupting
+        /// first-value baselining, gap detection, and export). Such leading short frames are
+        /// suppressed — the per-channel decode is skipped, though the raw frame is still re-raised —
+        /// until the first full frame arrives, bounded by <see cref="MaxSuppressedWarmupFrames"/>.
+        /// </summary>
+        private bool _awaitingFirstFullAnalogFrame;
+
+        /// <summary>
+        /// Count of leading short-analog frames suppressed in the current session; capped by
+        /// <see cref="MaxSuppressedWarmupFrames"/>.
+        /// </summary>
+        private int _suppressedWarmupFrameCount;
+
+        /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
         /// </summary>
         public bool IsStreaming { get; private set; }
@@ -293,6 +318,11 @@ namespace Daqifi.Core.Device
             _timestampProcessor.SetTimestampFrequency(StreamTimestampKey, TimestampFrequency);
             _gapDetector.Reset();
 
+            // Arm the warmup-frame guard: the firmware's leading stream frame can carry a partial
+            // analog complement (issue #351) and must not reach consumers as a real sample.
+            _awaitingFirstFullAnalogFrame = true;
+            _suppressedWarmupFrameCount = 0;
+
             IsStreaming = true;
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
         }
@@ -442,6 +472,31 @@ namespace Daqifi.Core.Device
                 return;
             }
 
+            // Snapshot channels once: the consumer thread that repopulates channels is the same
+            // thread that runs this decode, so the structure is stable for the duration of the call.
+            var channels = SnapshotChannels();
+
+            // Suppress the firmware's malformed warmup frame at stream start (issue #351): its fast
+            // streaming encoder can emit a leading analog-bearing frame with fewer values than the
+            // enabled channel mask. Dropping the whole frame here — before timestamp/gap processing,
+            // so it is a complete non-event and the next frame anchors the session clock — keeps a
+            // partial sample from reaching per-channel consumers and the live-sample stream. Only
+            // leading short frames are suppressed (mid-stream short frames stay best-effort mapped),
+            // bounded so a genuinely short stream is never withheld indefinitely.
+            if (_awaitingFirstFullAnalogFrame && (hasFloat || hasRawAnalog))
+            {
+                var analogValueCount = hasFloat ? message.AnalogInDataFloat.Count : message.AnalogInData.Count;
+                var enabledAnalogCount = CountEnabledAnalogChannels(channels);
+                if (enabledAnalogCount > 0 && analogValueCount < enabledAnalogCount
+                    && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
+                {
+                    _suppressedWarmupFrameCount++;
+                    return;
+                }
+
+                _awaitingFirstFullAnalogFrame = false;
+            }
+
             // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
             // the raw device tick value through to each decoded sample.
             var deviceTimestamp = message.MsgTimeStamp;
@@ -457,10 +512,6 @@ namespace Daqifi.Core.Device
                 RaiseGapDetected(new TimestampGapEventArgs(
                     hostTimestamp, timestampResult.SecondsBetweenMessages, deviceTimestamp));
             }
-
-            // Snapshot channels once: the consumer thread that repopulates channels is the same
-            // thread that runs this decode, so the structure is stable for the duration of the call.
-            var channels = SnapshotChannels();
 
             if (hasFloat || hasRawAnalog)
             {
@@ -502,6 +553,19 @@ namespace Daqifi.Core.Device
         /// USB firmware streams pre-scaled floats (used directly); WiFi firmware streams raw ADC
         /// counts (scaled per channel via <see cref="IAnalogChannel.GetScaledValue"/>).
         /// </summary>
+        private static int CountEnabledAnalogChannels(IReadOnlyList<IChannel> channels)
+        {
+            var count = 0;
+            foreach (var channel in channels)
+            {
+                if (channel.IsEnabled && channel is IAnalogChannel)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
         private static void DecodeAnalog(
             DaqifiOutMessage message,
             IReadOnlyList<IChannel> channels,
