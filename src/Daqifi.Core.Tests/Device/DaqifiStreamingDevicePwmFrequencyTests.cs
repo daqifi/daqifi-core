@@ -95,8 +95,10 @@ namespace Daqifi.Core.Tests.Device
         {
             // An unexpected transport drop sets ConnectionStatus.Lost (not Disconnected); the cache
             // must still clear so a reconnect re-sends (the device's PWM state isn't trustworthy).
-            var transport = new DropTransport();
-            var device = new CapturingStreamingDevice(transport);
+            // using var guarantees disposal even if an assertion throws — device before transport
+            // (reverse declaration order), so the consumer/producer stop before the stream closes.
+            using var transport = new DropTransport();
+            using var device = new CapturingStreamingDevice(transport);
 
             device.Connect();
             device.SetPwmFrequency(2000);
@@ -107,7 +109,6 @@ namespace Daqifi.Core.Tests.Device
             device.SetPwmFrequency(2000); // unchanged value, but must re-send after a Lost
 
             Assert.Equal(2, device.PwmFrequencySends.Count);
-            device.Dispose();
         }
 
         private sealed class DropTransport : IStreamTransport
