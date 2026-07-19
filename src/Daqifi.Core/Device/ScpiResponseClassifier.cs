@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 #nullable enable
 
@@ -49,6 +50,49 @@ namespace Daqifi.Core.Device
             return MatchesStrictScpiErrorPrefix(trimmed, "**ERROR")
                    || MatchesStrictScpiErrorPrefix(trimmed, "ERROR");
         }
+
+        /// <summary>
+        /// Extracts the numeric error code from a SCPI error line — e.g. <c>-200</c> from
+        /// <c>**ERROR: -200,"Execution error"</c>, <c>ERROR -113,"Undefined header"</c>, or
+        /// <c>**ERROR\t-113,...</c>. The delimiter between the <c>ERROR</c>/<c>**ERROR</c> token and
+        /// the code may be <c>:</c>, space, or tab — the same set the line matchers above accept, kept
+        /// here so the accepted delimiters can't drift between detection and extraction. The code is
+        /// the text up to the following comma (if any).
+        /// </summary>
+        /// <param name="line">The candidate error line.</param>
+        /// <param name="code">The parsed error code when the method returns <c>true</c>; otherwise 0.</param>
+        /// <returns><c>true</c> if a numeric error code was extracted; otherwise <c>false</c>.</returns>
+        internal static bool TryExtractErrorCode(string line, out int code)
+        {
+            code = 0;
+            var trimmed = line.TrimStart();
+
+            string afterToken;
+            if (trimmed.StartsWith("**ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                afterToken = trimmed[7..];
+            }
+            else if (trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                afterToken = trimmed[5..];
+            }
+            else
+            {
+                return false;
+            }
+
+            afterToken = afterToken.TrimStart(TokenDelimiters);
+
+            var commaIndex = afterToken.IndexOf(',');
+            var codeSpan = (commaIndex >= 0 ? afterToken[..commaIndex] : afterToken).Trim();
+            return int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
+        }
+
+        /// <summary>
+        /// The delimiters accepted between the <c>ERROR</c>/<c>**ERROR</c> token and the error code.
+        /// Single-sourced here so <see cref="TryExtractErrorCode"/> and the line matchers stay in lockstep.
+        /// </summary>
+        private static readonly char[] TokenDelimiters = { ':', ' ', '\t' };
 
         private static bool MatchesErrorPrefix(string trimmed, string prefix)
         {
