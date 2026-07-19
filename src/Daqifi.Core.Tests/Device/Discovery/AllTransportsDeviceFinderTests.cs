@@ -183,6 +183,43 @@ namespace Daqifi.Core.Tests.Device.Discovery
             Assert.NotNull(finder);
         }
 
+        [Fact]
+        public async Task DiscoverAsync_ThrowingDeviceDiscoveredSubscriber_StillReturnsAllAndCompletes()
+        {
+            var a = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+            var b = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
+            var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { a, b });
+
+            finder.DeviceDiscovered += (_, _) => throw new InvalidOperationException("boom");
+            var completed = 0;
+            finder.DiscoveryCompleted += (_, _) => completed++;
+
+            // A throwing subscriber must not abort the dedup loop or skip DiscoveryCompleted.
+            var result = (await finder.DiscoverAsync()).ToList();
+
+            Assert.Equal(2, result.Count);
+            Assert.Equal(1, completed);
+        }
+
+        [Fact]
+        public async Task DiscoverAsync_Timeout_FinderThrowsCancellation_ReturnsOthersAndCompletes()
+        {
+            // A finder that throws OperationCanceledException on its timeout overload must be treated
+            // as a normal (empty) end-of-pass, not propagate out and skip DiscoveryCompleted.
+            var throwsOce = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) }, throwOnDiscover: new OperationCanceledException());
+            var ok = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
+            var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { throwsOce, ok });
+
+            var completed = 0;
+            finder.DiscoveryCompleted += (_, _) => completed++;
+
+            var result = (await finder.DiscoverAsync(TimeSpan.FromMilliseconds(50))).ToList();
+
+            Assert.Single(result);
+            Assert.Equal("B", result[0].SerialNumber);
+            Assert.Equal(1, completed);
+        }
+
         // ---- DaqifiDeviceFactory.DiscoverAndConnectAsync selection paths ----
 
         [Fact]

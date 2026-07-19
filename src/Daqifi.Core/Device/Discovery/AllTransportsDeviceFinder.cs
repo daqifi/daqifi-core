@@ -97,10 +97,36 @@ namespace Daqifi.Core.Device.Discovery
             ThrowIfDisposed();
 
             // Fan out concurrently; results[i] corresponds to _finders[i], giving a stable,
-            // finder-ordered "first wins" for deduplication.
+            // finder-ordered "first wins" for deduplication. A caller-supplied token that fires
+            // surfaces as OperationCanceledException (SafeDiscoverAsync rethrows it).
             var results = await Task.WhenAll(_finders.Select(f => SafeDiscoverAsync(f, cancellationToken)))
                 .ConfigureAwait(false);
 
+            return MergeAndPublish(results);
+        }
+
+        /// <inheritdoc />
+        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+        {
+            ThrowIfDisposed();
+
+            // Delegate to each finder's own timeout overload so a timeout is a normal end-of-pass
+            // (return what was found), matching WiFiDeviceFinder/SerialDeviceFinder — rather than
+            // routing through the cancellation path, where a finder observing the timeout token
+            // would throw OperationCanceledException and skip DiscoveryCompleted.
+            var results = await Task.WhenAll(_finders.Select(f => SafeDiscoverAsync(f, timeout)))
+                .ConfigureAwait(false);
+
+            return MergeAndPublish(results);
+        }
+
+        /// <summary>
+        /// Deduplicates the per-finder results (finder-ordered, first-wins) and publishes the
+        /// <see cref="DeviceDiscovered"/> / <see cref="DiscoveryCompleted"/> events, isolating
+        /// subscriber exceptions so a throwing consumer callback cannot abort discovery.
+        /// </summary>
+        private IEnumerable<IDeviceInfo> MergeAndPublish(IEnumerable<IEnumerable<IDeviceInfo>> results)
+        {
             var seen = new HashSet<string>(StringComparer.Ordinal);
             var unique = new List<IDeviceInfo>();
             foreach (var device in results.SelectMany(r => r))
@@ -108,19 +134,25 @@ namespace Daqifi.Core.Device.Discovery
                 if (device != null && seen.Add(Identity(device)))
                 {
                     unique.Add(device);
-                    DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(device));
+                    RaiseIsolated(() => DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(device)), nameof(DeviceDiscovered));
                 }
             }
 
-            DiscoveryCompleted?.Invoke(this, EventArgs.Empty);
+            RaiseIsolated(() => DiscoveryCompleted?.Invoke(this, EventArgs.Empty), nameof(DiscoveryCompleted));
             return unique;
         }
 
-        /// <inheritdoc />
-        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+        private static void RaiseIsolated(Action raise, string eventName)
         {
-            using var cts = new CancellationTokenSource(timeout);
-            return await DiscoverAsync(cts.Token).ConfigureAwait(false);
+            try
+            {
+                raise();
+            }
+            catch (Exception ex)
+            {
+                // Discovery outcome must not depend on consumer callback correctness.
+                Trace.WriteLine($"[{nameof(AllTransportsDeviceFinder)}] {eventName} subscriber threw: {ex}");
+            }
         }
 
         private async Task<IEnumerable<IDeviceInfo>> SafeDiscoverAsync(IDeviceFinder finder, CancellationToken cancellationToken)
@@ -139,6 +171,22 @@ namespace Daqifi.Core.Device.Discovery
             {
                 // One transport failing (e.g. WiFi with no network) must not sink the whole discovery.
                 Trace.WriteLine($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed: {ex}");
+                return Enumerable.Empty<IDeviceInfo>();
+            }
+        }
+
+        private async Task<IEnumerable<IDeviceInfo>> SafeDiscoverAsync(IDeviceFinder finder, TimeSpan timeout)
+        {
+            try
+            {
+                return await finder.DiscoverAsync(timeout).ConfigureAwait(false)
+                    ?? Enumerable.Empty<IDeviceInfo>();
+            }
+            catch (Exception ex)
+            {
+                // Timeout is a normal end-of-pass here (no caller token to honor); a finder that
+                // fails or throws on its own timeout must not sink the other transports' results.
+                Trace.WriteLine($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} timed-out discovery failed: {ex}");
                 return Enumerable.Empty<IDeviceInfo>();
             }
         }
