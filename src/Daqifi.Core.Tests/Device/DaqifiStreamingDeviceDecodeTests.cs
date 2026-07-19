@@ -667,6 +667,38 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
+    public void Decode_DigitalOnlyStart_ThenAnalogEnabledMidStream_ShortFrameNotSuppressed()
+    {
+        // The warmup guard is armed only when analog channels are enabled at StartStreaming. A
+        // session that starts digital-only leaves it disarmed, so a short analog frame arriving
+        // after analog is enabled mid-stream is best-effort mapped, not treated as a leading
+        // warmup frame far from session start.
+        var device = CreateStreamingDevice(analogCount: 2, digitalCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        var ai1 = AnalogChannel(device, 1);
+        var dio0 = DigitalChannel(device, 0);
+        dio0.IsEnabled = true; // digital-only at start
+        device.StartStreaming();
+
+        // A digital frame streams normally.
+        var digital = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        digital.DigitalData = ByteString.CopyFrom(new byte[] { 0b1 });
+        device.InvokeStreamMessage(digital);
+        Assert.Equal(1.0, dio0.ActiveSample!.Value);
+
+        // Enable analog mid-stream, then a short analog frame arrives (guard was never armed).
+        device.EnableChannels(new[] { ai0, ai1 });
+        var shortAnalog = new DaqifiOutMessage { MsgTimeStamp = 2 };
+        shortAnalog.AnalogInDataFloat.Add(7f); // one value for two enabled channels
+
+        var ex = Record.Exception(() => device.InvokeStreamMessage(shortAnalog));
+
+        Assert.Null(ex);
+        Assert.Equal(7.0, ai0.ActiveSample!.Value); // not suppressed — best-effort mapped
+        Assert.Null(ai1.ActiveSample);
+    }
+
+    [Fact]
     public void Decode_PersistentShortFrames_ReleasedAfterCap()
     {
         // Safety bound: a stream that only ever sends short frames must not be withheld forever.

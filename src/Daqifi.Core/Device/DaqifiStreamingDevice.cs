@@ -98,8 +98,9 @@ namespace Daqifi.Core.Device
         private const int MaxSuppressedWarmupFrames = 5;
 
         /// <summary>
-        /// True from the start of a streaming session until the first analog-bearing frame carrying
-        /// the full enabled-channel complement has been decoded. Guards the malformed warmup frame
+        /// True from the start of a streaming session that begins with analog channels enabled,
+        /// until the first analog-bearing frame carrying the full enabled-channel complement has
+        /// been decoded (disarmed for a digital-only start). Guards the malformed warmup frame
         /// the firmware emits at stream start (issue #351): its fast streaming encoder can emit a
         /// leading frame with fewer analog values than the enabled channel mask, which would
         /// otherwise reach every consumer as a partial <see cref="DataSample"/> (silently corrupting
@@ -318,9 +319,13 @@ namespace Daqifi.Core.Device
             _timestampProcessor.SetTimestampFrequency(StreamTimestampKey, TimestampFrequency);
             _gapDetector.Reset();
 
-            // Arm the warmup-frame guard: the firmware's leading stream frame can carry a partial
-            // analog complement (issue #351) and must not reach consumers as a real sample.
-            _awaitingFirstFullAnalogFrame = true;
+            // Arm the warmup-frame guard only when analog channels are enabled at stream start —
+            // the reproduced failure mode (issue #351) is the firmware's leading partial-analog
+            // frame at the start of an *analog* stream. A digital-only start needs no guard; leaving
+            // it disarmed there also avoids suppressing short analog frames that could arrive far
+            // from session start if analog channels are enabled mid-stream (a scenario with no
+            // observed warmup frame).
+            _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
             _suppressedWarmupFrameCount = 0;
 
             IsStreaming = true;
