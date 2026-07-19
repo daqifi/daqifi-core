@@ -50,6 +50,38 @@ public class DeviceFinderBaseTests
         public bool IsDisposedForTest => IsDisposed;
     }
 
+    /// <summary>
+    /// A finder that acquires the discovery semaphore (as WiFi/Serial/Hid do) and then
+    /// parks until released, so a second, timed discovery contends for the semaphore and
+    /// its timeout can elapse while awaiting the token-bound <c>WaitAsync</c>.
+    /// </summary>
+    private sealed class BlockingFinder : DeviceFinderBase
+    {
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Signaled once a pass has acquired the semaphore.</summary>
+        public TaskCompletionSource Acquired { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void ReleaseGate() => _gate.TrySetResult();
+
+        public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                Acquired.TrySetResult();
+                await _gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                OnDiscoveryCompleted();
+                return Array.Empty<IDeviceInfo>();
+            }
+            finally
+            {
+                DiscoverySemaphore.Release();
+            }
+        }
+    }
+
     [Fact]
     public async Task DiscoverAsync_RaisesDeviceDiscoveredAndDiscoveryCompleted()
     {
@@ -111,6 +143,27 @@ public class DeviceFinderBaseTests
         // cancelable token wired to the timeout (not CancellationToken.None).
         Assert.Equal(1, finder.DiscoverCallCount);
         Assert.True(finder.LastToken.CanBeCanceled);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_Timeout_WhileAwaitingConcurrentPass_ReturnsEmptyNotCanceled()
+    {
+        using var finder = new BlockingFinder();
+
+        // First pass acquires the discovery semaphore and parks (uncancelable token).
+        var first = finder.DiscoverAsync(CancellationToken.None);
+        await finder.Acquired.Task; // the semaphore is now held
+
+        // A second, timed pass must wait on the held semaphore; its timeout elapses
+        // first. The timeout is a normal terminal condition, so it must complete with
+        // an empty result rather than throwing OperationCanceledException (which would
+        // bubble through DaqifiTools.GuardAsync as a canceled tool call).
+        var result = await finder.DiscoverAsync(TimeSpan.FromMilliseconds(50));
+        Assert.Empty(result);
+
+        // The first pass is untouched by the second's timeout.
+        finder.ReleaseGate();
+        Assert.Empty(await first);
     }
 
     [Fact]

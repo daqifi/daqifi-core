@@ -37,7 +37,22 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
     public virtual async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
     {
         using var cts = new CancellationTokenSource(timeout);
-        return await DiscoverAsync(cts.Token).ConfigureAwait(false);
+        try
+        {
+            return await DiscoverAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // The timeout elapsed — that is a normal terminal condition for a timed
+            // discovery, not a caller cancellation. Derived finders acquire the
+            // discovery semaphore with this token (see WiFi/Serial/Hid), so a timeout
+            // that fires while awaiting a concurrent pass would otherwise surface as
+            // OperationCanceledException; return an empty result instead so callers
+            // (e.g. DaqifiTools.GuardAsync, which rethrows OCE) see "found nothing"
+            // rather than a canceled call. This overload takes no caller token, so
+            // every cancellation here is timeout-originated.
+            return Array.Empty<IDeviceInfo>();
+        }
     }
 
     /// <summary>
