@@ -180,6 +180,31 @@ resolve to `null`, same as `IUsbPortDescriptorProvider`'s cross-platform fallbac
 > parsing/fallback logic has automated coverage). Confirm both on a Windows bench with real
 > hardware before relying on this for anything safety-critical.
 
+### Discover Across All Transports (Recommended)
+
+To "find any DAQiFi on WiFi or USB" in one call, use `AllTransportsDeviceFinder` — it runs the
+per-transport finders concurrently and returns a single deduplicated set. Because it is itself an
+`IDeviceFinder`, wrapping it in a `ContinuousDeviceFinder` (below) gives deduplicated *continuous*
+discovery across every transport for free.
+
+```csharp
+using Daqifi.Core.Device.Discovery;
+
+// One-shot across WiFi + serial:
+using var finder = AllTransportsDeviceFinder.CreateDefault();
+var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(3));
+
+// Or the common "find one and connect" case in a single call:
+var device = await DaqifiDeviceFactory.DiscoverAndConnectAsync(
+    filter: d => d.ConnectionType == ConnectionType.Serial,   // optional; first match otherwise
+    timeout: TimeSpan.FromSeconds(5));
+```
+
+A transport finder that fails (e.g. WiFi discovery with no network) is logged and skipped, so the
+other transports still return. Deduplication reuses `ContinuousDeviceFinder`'s per-transport
+identity, so the same physical unit reachable over both WiFi and USB appears as two connection
+options; pass a custom `identitySelector` (e.g. by serial number) to collapse them.
+
 ### Continuous Discovery (Live Device Set)
 
 `IDeviceFinder.DiscoverAsync` is a single pass. For a UI that shows a live, self-updating
@@ -211,11 +236,12 @@ continuous.Dispose(); // also disposes the wrapped finder unless LeaveInnerFinde
 ```
 
 One instance wraps one finder, so it represents a single transport's cadence and live set.
-To track WiFi, Serial, and HID together, create one `ContinuousDeviceFinder` per transport —
-each with its own interval — and merge their events into a single collection. Devices are
-deduplicated per transport: the same physical unit seen over both WiFi and Serial appears as
-two distinct connection options. `continuous.Devices` returns a thread-safe snapshot of the
-current set at any time.
+To track WiFi, Serial, and HID together, prefer wrapping an `AllTransportsDeviceFinder` (above)
+in a single `ContinuousDeviceFinder` — one cadence, one deduplicated live set across every
+transport. (Only reach for the advanced path of one `ContinuousDeviceFinder` *per* transport when
+you need a different interval per transport.) Devices are deduplicated per transport: the same
+physical unit seen over both WiFi and Serial appears as two distinct connection options.
+`continuous.Devices` returns a thread-safe snapshot of the current set at any time.
 
 ### Manual Device Connection (Advanced)
 
