@@ -5,7 +5,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <summary>
 /// Discovers DAQiFi devices in USB HID bootloader mode.
 /// </summary>
-public class HidDeviceFinder : IDeviceFinder, IDisposable
+public class HidDeviceFinder : DeviceFinderBase
 {
     /// <summary>
     /// Default DAQiFi bootloader vendor ID.
@@ -19,8 +19,6 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
 
     private readonly IHidDeviceEnumerator _hidDeviceEnumerator;
     private readonly IUsbLocationProvider _usbLocationProvider;
-    private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
-    private bool _disposed;
 
     /// <summary>
     /// Initializes a new finder that filters to DAQiFi bootloader VID/PID by default.
@@ -68,13 +66,7 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
     public int? ProductIdFilter { get; set; }
 
     /// <inheritdoc />
-    public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
-
-    /// <inheritdoc />
-    public event EventHandler? DiscoveryCompleted;
-
-    /// <inheritdoc />
-    public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    public override Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
     {
         return DiscoverAsync(VendorIdFilter, ProductIdFilter, cancellationToken);
     }
@@ -93,7 +85,7 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
     {
         ThrowIfDisposed();
 
-        await _discoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var hidDevices = await _hidDeviceEnumerator
@@ -139,51 +131,7 @@ public class HidDeviceFinder : IDeviceFinder, IDisposable
         }
         finally
         {
-            _discoverySemaphore.Release();
+            DiscoverySemaphore.Release();
         }
-    }
-
-    /// <inheritdoc />
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-    {
-        using var cts = new CancellationTokenSource(timeout);
-        return await DiscoverAsync(cts.Token).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Raises the <see cref="DeviceDiscovered"/> event.
-    /// </summary>
-    /// <param name="deviceInfo">The discovered device metadata.</param>
-    protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
-    {
-        DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
-    }
-
-    /// <summary>
-    /// Raises the <see cref="DiscoveryCompleted"/> event.
-    /// </summary>
-    protected virtual void OnDiscoveryCompleted()
-    {
-        DiscoveryCompleted?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-        {
-            throw new ObjectDisposedException(nameof(HidDeviceFinder));
-        }
-    }
-
-    /// <inheritdoc />
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _discoverySemaphore.Dispose();
-        _disposed = true;
     }
 }

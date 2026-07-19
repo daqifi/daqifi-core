@@ -18,7 +18,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// Discovers DAQiFi devices connected via USB/Serial ports.
 /// Probes each port by sending SCPI commands and validating protobuf responses.
 /// </summary>
-public class SerialDeviceFinder : IDeviceFinder, IDisposable
+public class SerialDeviceFinder : DeviceFinderBase
 {
     #region Constants
 
@@ -57,7 +57,6 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     #region Private Fields
 
     private readonly int _baudRate;
-    private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
     private readonly IUsbPortDescriptorProvider _usbPortDescriptorProvider;
     private readonly IUsbLocationProvider _usbLocationProvider;
     private readonly Func<string[]>? _portNameProvider;
@@ -82,7 +81,6 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     // STATIC on purpose: a wedged COM port is machine-global state, not finder
     // state.
     private static readonly ConcurrentDictionary<string, PortProbeClaim> PortClaims = new();
-    private bool _disposed;
 
     private sealed class PortProbeClaim
     {
@@ -124,20 +122,6 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
 
     // Internal so tests can shrink the hard timeout instead of waiting 8s per case.
     internal int PortProbeHardTimeoutMs { get; set; } = DefaultPortProbeHardTimeoutMs;
-
-    #endregion
-
-    #region Events
-
-    /// <summary>
-    /// Occurs when a device is discovered.
-    /// </summary>
-    public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
-
-    /// <summary>
-    /// Occurs when device discovery completes.
-    /// </summary>
-    public event EventHandler? DiscoveryCompleted;
 
     #endregion
 
@@ -213,12 +197,12 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
     /// </summary>
     /// <param name="cancellationToken">Cancellation token to abort the operation.</param>
     /// <returns>A task containing the collection of discovered DAQiFi devices.</returns>
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
         // Prevent concurrent discovery operations
-        await _discoverySemaphore.WaitAsync(cancellationToken);
+        await DiscoverySemaphore.WaitAsync(cancellationToken);
         try
         {
             var discoveredDevices = new List<IDeviceInfo>();
@@ -305,19 +289,8 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
         }
         finally
         {
-            _discoverySemaphore.Release();
+            DiscoverySemaphore.Release();
         }
-    }
-
-    /// <summary>
-    /// Discovers devices asynchronously with a timeout.
-    /// </summary>
-    /// <param name="timeout">The timeout for discovery.</param>
-    /// <returns>A task containing the collection of discovered devices.</returns>
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-    {
-        using var cts = new CancellationTokenSource(timeout);
-        return await DiscoverAsync(cts.Token);
     }
 
     #endregion
@@ -767,47 +740,6 @@ public class SerialDeviceFinder : IDeviceFinder, IDisposable
             IsPowerOn = true,
             LocationKey = locationKey
         };
-    }
-
-    /// <summary>
-    /// Raises the DeviceDiscovered event.
-    /// </summary>
-    protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
-    {
-        DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
-    }
-
-    /// <summary>
-    /// Raises the DiscoveryCompleted event.
-    /// </summary>
-    protected virtual void OnDiscoveryCompleted()
-    {
-        DiscoveryCompleted?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>
-    /// Throws ObjectDisposedException if this instance has been disposed.
-    /// </summary>
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(SerialDeviceFinder));
-    }
-
-    #endregion
-
-    #region IDisposable
-
-    /// <summary>
-    /// Disposes the device finder.
-    /// </summary>
-    public void Dispose()
-    {
-        if (!_disposed)
-        {
-            _discoverySemaphore.Dispose();
-            _disposed = true;
-        }
     }
 
     #endregion
