@@ -16,7 +16,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// <summary>
 /// Discovers DAQiFi devices on the network using UDP broadcast on port 30303.
 /// </summary>
-public class WiFiDeviceFinder : IDeviceFinder, IDisposable
+public class WiFiDeviceFinder : DeviceFinderBase
 {
     #region Constants
 
@@ -52,22 +52,6 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
 
     private readonly int _discoveryPort;
     private readonly byte[] _queryCommandBytes;
-    private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
-    private bool _disposed;
-
-    #endregion
-
-    #region Events
-
-    /// <summary>
-    /// Occurs when a device is discovered.
-    /// </summary>
-    public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
-
-    /// <summary>
-    /// Occurs when device discovery completes.
-    /// </summary>
-    public event EventHandler? DiscoveryCompleted;
 
     #endregion
 
@@ -99,19 +83,9 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
     /// </summary>
     /// <param name="cancellationToken">Cancellation token to abort the operation.</param>
     /// <returns>A task containing the collection of discovered devices.</returns>
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+    public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
     {
         return await DiscoverAsync(Timeout.InfiniteTimeSpan, cancellationToken);
-    }
-
-    /// <summary>
-    /// Discovers devices asynchronously with a timeout.
-    /// </summary>
-    /// <param name="timeout">The timeout for discovery.</param>
-    /// <returns>A task containing the collection of discovered devices.</returns>
-    public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
-    {
-        return await DiscoverAsync(timeout, CancellationToken.None);
     }
 
     /// <summary>
@@ -243,7 +217,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         ThrowIfDisposed();
 
         // Prevent concurrent discovery operations
-        await _discoverySemaphore.WaitAsync(cancellationToken);
+        await DiscoverySemaphore.WaitAsync(cancellationToken);
         try
         {
             var discoveredDevices = new List<IDeviceInfo>();
@@ -337,7 +311,7 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
         }
         finally
         {
-            _discoverySemaphore.Release();
+            DiscoverySemaphore.Release();
         }
     }
 
@@ -614,47 +588,6 @@ public class WiFiDeviceFinder : IDeviceFinder, IDisposable
                Contains(n, "TAP-Windows") || Contains(d, "TAP-Windows") ||
                Contains(n, "TAP-") || Contains(d, "TAP-") ||
                Contains(n, "TAP ") || Contains(d, "TAP ");
-    }
-
-    /// <summary>
-    /// Raises the DeviceDiscovered event.
-    /// </summary>
-    protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
-    {
-        DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
-    }
-
-    /// <summary>
-    /// Raises the DiscoveryCompleted event.
-    /// </summary>
-    protected virtual void OnDiscoveryCompleted()
-    {
-        DiscoveryCompleted?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>
-    /// Throws ObjectDisposedException if this instance has been disposed.
-    /// </summary>
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(WiFiDeviceFinder));
-    }
-
-    #endregion
-
-    #region IDisposable
-
-    /// <summary>
-    /// Disposes the device finder.
-    /// </summary>
-    public void Dispose()
-    {
-        if (!_disposed)
-        {
-            _discoverySemaphore.Dispose();
-            _disposed = true;
-        }
     }
 
     #endregion
