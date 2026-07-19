@@ -5,6 +5,8 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Protocol;
 using Daqifi.Core.Firmware;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -110,6 +112,15 @@ namespace Daqifi.Core.Device
         public DeviceState State { get; private set; } = DeviceState.Disconnected;
 
         private ConnectionStatus _status;
+
+        /// <summary>
+        /// Sink for this device's diagnostics. Defaults to <see cref="NullLogger.Instance"/> when the
+        /// caller opts out — the safety-relevant warnings (bad calibration/resolution → wrong scaled
+        /// samples) are then simply discarded, as they were effectively invisible via the previous
+        /// <c>Trace.WriteLine</c> path to consumers on Microsoft.Extensions.Logging. Never null.
+        /// </summary>
+        private readonly ILogger _logger;
+
         private IMessageProducer<string>? _messageProducer;
         private IMessageConsumer<DaqifiOutMessage>? _messageConsumer;
         private readonly IStreamTransport? _transport;
@@ -234,11 +245,13 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="name">The name of the device.</param>
         /// <param name="ipAddress">The IP address of the device, if known.</param>
-        public DaqifiDevice(string name, IPAddress? ipAddress = null)
+        /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
+        public DaqifiDevice(string name, IPAddress? ipAddress = null, ILogger? logger = null)
         {
             Name = name;
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
+            _logger = logger ?? NullLogger.Instance;
         }
 
         /// <summary>
@@ -247,11 +260,13 @@ namespace Daqifi.Core.Device
         /// <param name="name">The name of the device.</param>
         /// <param name="stream">The stream for device communication.</param>
         /// <param name="ipAddress">The IP address of the device, if known.</param>
-        public DaqifiDevice(string name, Stream stream, IPAddress? ipAddress = null)
+        /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
+        public DaqifiDevice(string name, Stream stream, IPAddress? ipAddress = null, ILogger? logger = null)
         {
             Name = name;
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
+            _logger = logger ?? NullLogger.Instance;
             _messageProducer = new MessageProducer<string>(stream);
             _directStream = stream;
         }
@@ -261,12 +276,14 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="name">The name of the device.</param>
         /// <param name="transport">The transport for device communication.</param>
-        public DaqifiDevice(string name, IStreamTransport transport)
+        /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
+        public DaqifiDevice(string name, IStreamTransport transport, ILogger? logger = null)
         {
             Name = name;
             _status = ConnectionStatus.Disconnected;
+            _logger = logger ?? NullLogger.Instance;
             _transport = transport;
-            
+
             // Subscribe to transport status changes
             _transport.StatusChanged += OnTransportStatusChanged;
         }
@@ -407,7 +424,7 @@ namespace Daqifi.Core.Device
         /// <param name="message">The message to send to the device.</param>
         /// <exception cref="InvalidOperationException">
         /// Thrown when the device is not connected, or when connected but has no transport or
-        /// stream to send on (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress)"/>
+        /// stream to send on (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/>
         /// constructor).
         /// </exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
@@ -656,7 +673,7 @@ namespace Daqifi.Core.Device
                         }
                     }
 
-                    Trace.WriteLine($"[ExecuteTextCommandAsync] Protobuf consumer stopped at {sw.ElapsedMilliseconds}ms");
+                    _logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", sw.ElapsedMilliseconds);
 
                     // Create a temporary text consumer on the same stream
                     using var textConsumer = new StreamMessageConsumer<string>(
@@ -673,13 +690,13 @@ namespace Daqifi.Core.Device
                     // sync context (e.g. UI thread) would deadlock if that thread calls Disconnect().
                     await Task.Delay(50, cancellationToken).ConfigureAwait(false);
 
-                    Trace.WriteLine($"[ExecuteTextCommandAsync] Text consumer started at {sw.ElapsedMilliseconds}ms");
+                    _logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", sw.ElapsedMilliseconds);
 
                     // Execute the setup action (sends SCPI commands). ConfigureAwait(false)
                     // matches the surrounding lock-protected awaits.
                     await setupActionAsync(cancellationToken).ConfigureAwait(false);
 
-                    Trace.WriteLine($"[ExecuteTextCommandAsync] Setup action completed at {sw.ElapsedMilliseconds}ms");
+                    _logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds);
 
                     // Wait for responses using a two-phase inactivity-based timeout:
                     // Phase 1: Wait up to responseTimeoutMs for the first response.
@@ -699,7 +716,7 @@ namespace Daqifi.Core.Device
                             if (!hasReceivedAny)
                             {
                                 hasReceivedAny = true;
-                                Trace.WriteLine($"[ExecuteTextCommandAsync] First response at {sw.ElapsedMilliseconds}ms");
+                                _logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", sw.ElapsedMilliseconds);
                             }
                         }
 
@@ -723,7 +740,7 @@ namespace Daqifi.Core.Device
                         }
                     }
 
-                    Trace.WriteLine($"[ExecuteTextCommandAsync] Collection complete at {sw.ElapsedMilliseconds}ms, {collectedLines.Count} lines");
+                    _logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", sw.ElapsedMilliseconds, collectedLines.Count);
 
                     // Stop the text consumer
                     textConsumer.StopSafely();
@@ -749,7 +766,7 @@ namespace Daqifi.Core.Device
                         _messageConsumer.MessageReceived += OnInboundMessageReceived;
                     }
 
-                    Trace.WriteLine($"[ExecuteTextCommandAsync] Total elapsed: {sw.ElapsedMilliseconds}ms");
+                    _logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds);
                 }
 
                 return collectedLines;
@@ -832,7 +849,7 @@ namespace Daqifi.Core.Device
                 {
                     // Empty reply means timeout or unresponsive device, not a
                     // queued error — terminate rather than spin to maxIterations.
-                    Trace.WriteLine($"[DrainErrorQueueAsync] Empty reply on iteration {i}; terminating after {popped.Count} popped entries.");
+                    _logger.LogDebug("[DrainErrorQueueAsync] Empty reply on iteration {Iteration}; terminating after {PoppedCount} popped entries.", i, popped.Count);
                     return popped;
                 }
 
@@ -851,7 +868,7 @@ namespace Daqifi.Core.Device
                 popped.Add(reply);
             }
 
-            Trace.WriteLine($"[DrainErrorQueueAsync] Did not converge after {maxIterations} iterations; queue may still contain entries.");
+            _logger.LogWarning("[DrainErrorQueueAsync] Did not converge after {MaxIterations} iterations; queue may still contain entries.", maxIterations);
             return popped;
         }
 
@@ -1218,7 +1235,7 @@ namespace Daqifi.Core.Device
         /// <param name="handler">The event delegate to invoke, or <c>null</c> if unsubscribed.</param>
         /// <param name="message">The message to pass to subscribers.</param>
         /// <param name="eventName">The event name, for the trace log if a subscriber throws.</param>
-        private static void RaiseClassifiedEvent(Action<DaqifiOutMessage>? handler, DaqifiOutMessage message, string eventName)
+        private void RaiseClassifiedEvent(Action<DaqifiOutMessage>? handler, DaqifiOutMessage message, string eventName)
         {
             if (handler == null)
             {
@@ -1231,7 +1248,7 @@ namespace Daqifi.Core.Device
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[{eventName}] Subscriber threw: {ex}");
+                _logger.LogWarning(ex, "[{EventName}] classified-event subscriber threw", eventName);
             }
         }
 
@@ -1340,7 +1357,7 @@ namespace Daqifi.Core.Device
 
             if (resolutionIsAssumed && count > 0)
             {
-                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported no usable ADC resolution (analog_in_res={analogInResolution}) for {count} analog channel(s); assuming {resolution}. Scaled samples on this device may be systematically wrong.");
+                _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported no usable ADC resolution (analog_in_res={Resolution}) for {ChannelCount} analog channel(s); assuming {AssumedResolution}. Scaled samples on this device may be systematically wrong.", Name, analogInResolution, count, resolution);
             }
 
             for (var i = 0; i < count; i++)
@@ -1397,7 +1414,7 @@ namespace Daqifi.Core.Device
 
             if (invalid)
             {
-                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported invalid {fieldName}={value} for analog channel {channelIndex}; substituting {fallback}. Scaled samples on this channel may be affected.");
+                _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid {FieldName}={Value} for analog channel {ChannelIndex}; substituting {Fallback}. Scaled samples on this channel may be affected.", Name, fieldName, value, channelIndex, fallback);
                 return fallback;
             }
 
@@ -1413,7 +1430,7 @@ namespace Daqifi.Core.Device
         {
             if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaxPortRangeVolts)
             {
-                Trace.WriteLine($"[PopulateAnalogChannels] Device '{Name}' reported invalid portRange={value} for analog channel {channelIndex}; substituting 1.0. Scaled samples on this channel may be affected.");
+                _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid portRange={Value} for analog channel {ChannelIndex}; substituting 1.0. Scaled samples on this channel may be affected.", Name, value, channelIndex);
                 return 1.0;
             }
 
