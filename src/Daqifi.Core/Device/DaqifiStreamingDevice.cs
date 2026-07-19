@@ -91,6 +91,33 @@ namespace Daqifi.Core.Device
         private readonly TimestampGapDetector _gapDetector = new();
 
         /// <summary>
+        /// The maximum number of leading short-analog frames suppressed at stream start
+        /// (see <see cref="_awaitingFirstFullAnalogFrame"/>). Bounds the warmup-frame guard so a
+        /// genuinely short stream can never be withheld indefinitely.
+        /// </summary>
+        private const int MaxSuppressedWarmupFrames = 5;
+
+        /// <summary>
+        /// True from the start of a streaming session that begins with analog channels enabled,
+        /// until the first analog-bearing frame carrying the full enabled-channel complement has
+        /// been decoded (disarmed for a digital-only start). Guards the malformed warmup frame
+        /// the firmware emits at stream start (issue #351): its fast streaming encoder can emit a
+        /// leading frame with fewer analog values than the enabled channel mask, which would
+        /// otherwise reach every consumer as a partial <see cref="DataSample"/> (silently corrupting
+        /// first-value baselining, gap detection, and export). For such leading short frames only
+        /// the malformed analog decode is skipped — a combined frame's digital payload is still
+        /// decoded and the raw frame is still re-raised — until the first full frame arrives,
+        /// bounded by <see cref="MaxSuppressedWarmupFrames"/>.
+        /// </summary>
+        private bool _awaitingFirstFullAnalogFrame;
+
+        /// <summary>
+        /// Count of leading short-analog frames suppressed in the current session; capped by
+        /// <see cref="MaxSuppressedWarmupFrames"/>.
+        /// </summary>
+        private int _suppressedWarmupFrameCount;
+
+        /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
         /// </summary>
         public bool IsStreaming { get; private set; }
@@ -293,6 +320,15 @@ namespace Daqifi.Core.Device
             _timestampProcessor.SetTimestampFrequency(StreamTimestampKey, TimestampFrequency);
             _gapDetector.Reset();
 
+            // Arm the warmup-frame guard only when analog channels are enabled at stream start —
+            // the reproduced failure mode (issue #351) is the firmware's leading partial-analog
+            // frame at the start of an *analog* stream. A digital-only start needs no guard; leaving
+            // it disarmed there also avoids suppressing short analog frames that could arrive far
+            // from session start if analog channels are enabled mid-stream (a scenario with no
+            // observed warmup frame).
+            _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
+            _suppressedWarmupFrameCount = 0;
+
             IsStreaming = true;
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
         }
@@ -442,6 +478,34 @@ namespace Daqifi.Core.Device
                 return;
             }
 
+            // Snapshot channels once: the consumer thread that repopulates channels is the same
+            // thread that runs this decode, so the structure is stable for the duration of the call.
+            var channels = SnapshotChannels();
+
+            // Suppress the firmware's malformed warmup frame at stream start (issue #351): its fast
+            // streaming encoder can emit a leading analog-bearing frame with fewer values than the
+            // enabled channel mask. Only the malformed *analog* values are withheld — a combined
+            // frame's digital payload is still decoded, and the frame's (normal one-period)
+            // timestamp still anchors the session clock, so digital state/edges are not lost. Only
+            // leading short frames are suppressed (mid-stream short frames stay best-effort mapped),
+            // bounded so a genuinely short stream is never withheld indefinitely.
+            var suppressWarmupAnalog = false;
+            if (_awaitingFirstFullAnalogFrame && (hasFloat || hasRawAnalog))
+            {
+                var analogValueCount = hasFloat ? message.AnalogInDataFloat.Count : message.AnalogInData.Count;
+                var enabledAnalogCount = CountEnabledAnalogChannels(channels);
+                if (enabledAnalogCount > 0 && analogValueCount < enabledAnalogCount
+                    && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
+                {
+                    _suppressedWarmupFrameCount++;
+                    suppressWarmupAnalog = true;
+                }
+                else
+                {
+                    _awaitingFirstFullAnalogFrame = false;
+                }
+            }
+
             // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
             // the raw device tick value through to each decoded sample.
             var deviceTimestamp = message.MsgTimeStamp;
@@ -458,11 +522,7 @@ namespace Daqifi.Core.Device
                     hostTimestamp, timestampResult.SecondsBetweenMessages, deviceTimestamp));
             }
 
-            // Snapshot channels once: the consumer thread that repopulates channels is the same
-            // thread that runs this decode, so the structure is stable for the duration of the call.
-            var channels = SnapshotChannels();
-
-            if (hasFloat || hasRawAnalog)
+            if ((hasFloat || hasRawAnalog) && !suppressWarmupAnalog)
             {
                 DecodeAnalog(message, channels, hostTimestamp, deviceTimestamp, hasFloat);
             }
@@ -502,6 +562,19 @@ namespace Daqifi.Core.Device
         /// USB firmware streams pre-scaled floats (used directly); WiFi firmware streams raw ADC
         /// counts (scaled per channel via <see cref="IAnalogChannel.GetScaledValue"/>).
         /// </summary>
+        private static int CountEnabledAnalogChannels(IReadOnlyList<IChannel> channels)
+        {
+            var count = 0;
+            foreach (var channel in channels)
+            {
+                if (channel.IsEnabled && channel is IAnalogChannel)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
         private static void DecodeAnalog(
             DaqifiOutMessage message,
             IReadOnlyList<IChannel> channels,
