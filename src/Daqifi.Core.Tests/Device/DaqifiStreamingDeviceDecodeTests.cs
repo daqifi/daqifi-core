@@ -547,10 +547,10 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_SuppressedWarmupFrame_DoesNotAnchorSessionClock()
+    public void Decode_WarmupFrameThenSteadyCadence_NoFalseGap()
     {
-        // A suppressed warmup frame must be a complete non-event: the *next* frame anchors the
-        // timestamp baseline, so no spurious gap is reported from the warmup-to-first delta.
+        // The warmup frame's timestamp is normal (one sample period before the next frame), so it
+        // anchors the session clock correctly — a steady cadence after it reports no false gap.
         var device = CreateStreamingDevice(analogCount: 2);
         AnalogChannel(device, 0).IsEnabled = true;
         AnalogChannel(device, 1).IsEnabled = true;
@@ -559,12 +559,12 @@ public class DaqifiStreamingDeviceDecodeTests
         var gaps = new List<TimestampGapEventArgs>();
         device.GapDetected += (_, e) => gaps.Add(e);
 
+        // Warmup frame (partial analog), then a steady one-period cadence.
         var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
         warmup.AnalogInDataFloat.Add(0.1f);
         device.InvokeStreamMessage(warmup);
 
-        // Steady full-frame cadence after the warmup frame.
-        for (uint ts = 100000; ts <= 105000; ts += 1000)
+        for (uint ts = 2000; ts <= 12000; ts += 1000)
         {
             var frame = new DaqifiOutMessage { MsgTimeStamp = ts };
             frame.AnalogInDataFloat.Add(1f);
@@ -572,8 +572,38 @@ public class DaqifiStreamingDeviceDecodeTests
             device.InvokeStreamMessage(frame);
         }
 
-        // Had the warmup frame (ts=1000) anchored the clock, the jump to ts=100000 would trip a gap.
         Assert.Empty(gaps);
+    }
+
+    [Fact]
+    public void Decode_CombinedWarmupFrame_SuppressesAnalogButKeepsDigital()
+    {
+        // The firmware's fast encoder packs analog+digital into one frame, so the warmup frame
+        // carries a valid digital payload alongside its partial analog values (issue #351 evidence:
+        // "analog=[1] digital=00-04"). Only the malformed analog is dropped; digital is preserved.
+        var device = CreateStreamingDevice(analogCount: 2, digitalCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        var ai1 = AnalogChannel(device, 1);
+        var dio0 = DigitalChannel(device, 0);
+        var dio1 = DigitalChannel(device, 1);
+        ai0.IsEnabled = true;
+        ai1.IsEnabled = true;
+        dio0.IsEnabled = true;
+        dio1.IsEnabled = true;
+        device.StartStreaming();
+
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        warmup.AnalogInDataFloat.Add(0.1f); // partial analog: 1 value for 2 enabled channels
+        warmup.DigitalData = ByteString.CopyFrom(new byte[] { 0b10 }); // DIO0 low, DIO1 high
+
+        device.InvokeStreamMessage(warmup);
+
+        // Analog values suppressed...
+        Assert.Null(ai0.ActiveSample);
+        Assert.Null(ai1.ActiveSample);
+        // ...but the digital payload in the same frame is still decoded.
+        Assert.Equal(0.0, dio0.ActiveSample!.Value);
+        Assert.Equal(1.0, dio1.ActiveSample!.Value);
     }
 
     [Fact]

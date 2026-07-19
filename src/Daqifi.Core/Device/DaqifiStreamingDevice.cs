@@ -104,9 +104,10 @@ namespace Daqifi.Core.Device
         /// the firmware emits at stream start (issue #351): its fast streaming encoder can emit a
         /// leading frame with fewer analog values than the enabled channel mask, which would
         /// otherwise reach every consumer as a partial <see cref="DataSample"/> (silently corrupting
-        /// first-value baselining, gap detection, and export). Such leading short frames are
-        /// suppressed — the per-channel decode is skipped, though the raw frame is still re-raised —
-        /// until the first full frame arrives, bounded by <see cref="MaxSuppressedWarmupFrames"/>.
+        /// first-value baselining, gap detection, and export). For such leading short frames only
+        /// the malformed analog decode is skipped — a combined frame's digital payload is still
+        /// decoded and the raw frame is still re-raised — until the first full frame arrives,
+        /// bounded by <see cref="MaxSuppressedWarmupFrames"/>.
         /// </summary>
         private bool _awaitingFirstFullAnalogFrame;
 
@@ -483,11 +484,12 @@ namespace Daqifi.Core.Device
 
             // Suppress the firmware's malformed warmup frame at stream start (issue #351): its fast
             // streaming encoder can emit a leading analog-bearing frame with fewer values than the
-            // enabled channel mask. Dropping the whole frame here — before timestamp/gap processing,
-            // so it is a complete non-event and the next frame anchors the session clock — keeps a
-            // partial sample from reaching per-channel consumers and the live-sample stream. Only
+            // enabled channel mask. Only the malformed *analog* values are withheld — a combined
+            // frame's digital payload is still decoded, and the frame's (normal one-period)
+            // timestamp still anchors the session clock, so digital state/edges are not lost. Only
             // leading short frames are suppressed (mid-stream short frames stay best-effort mapped),
             // bounded so a genuinely short stream is never withheld indefinitely.
+            var suppressWarmupAnalog = false;
             if (_awaitingFirstFullAnalogFrame && (hasFloat || hasRawAnalog))
             {
                 var analogValueCount = hasFloat ? message.AnalogInDataFloat.Count : message.AnalogInData.Count;
@@ -496,10 +498,12 @@ namespace Daqifi.Core.Device
                     && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
                 {
                     _suppressedWarmupFrameCount++;
-                    return;
+                    suppressWarmupAnalog = true;
                 }
-
-                _awaitingFirstFullAnalogFrame = false;
+                else
+                {
+                    _awaitingFirstFullAnalogFrame = false;
+                }
             }
 
             // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
@@ -518,7 +522,7 @@ namespace Daqifi.Core.Device
                     hostTimestamp, timestampResult.SecondsBetweenMessages, deviceTimestamp));
             }
 
-            if (hasFloat || hasRawAnalog)
+            if ((hasFloat || hasRawAnalog) && !suppressWarmupAnalog)
             {
                 DecodeAnalog(message, channels, hostTimestamp, deviceTimestamp, hasFloat);
             }
