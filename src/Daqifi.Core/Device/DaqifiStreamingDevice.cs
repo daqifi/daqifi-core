@@ -82,6 +82,12 @@ namespace Daqifi.Core.Device
         private const string StreamTimestampKey = "stream";
 
         /// <summary>
+        /// Detects dropped samples from the device-clock delta between frames. Reset at the start of
+        /// every streaming session alongside <see cref="_timestampProcessor"/>. Drives <see cref="GapDetected"/>.
+        /// </summary>
+        private readonly TimestampGapDetector _gapDetector = new();
+
+        /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
         /// </summary>
         public bool IsStreaming { get; private set; }
@@ -137,6 +143,14 @@ namespace Daqifi.Core.Device
 
         /// <inheritdoc />
         public event EventHandler<LowSdSpaceWarningEventArgs>? LowSdSpaceWarning;
+
+        /// <summary>
+        /// Raised while streaming when the device-clock delta between two consecutive frames
+        /// indicates dropped samples (a real gap in the device's stream, distinct from host-side
+        /// arrival jitter). Fires once per detected gap, on the decode thread, carrying the outage
+        /// duration and the timestamp of the first frame after the gap. See <see cref="TimestampGapDetector"/>.
+        /// </summary>
+        public event EventHandler<TimestampGapEventArgs>? GapDetected;
 
         private readonly NetworkConfiguration _networkConfiguration = new NetworkConfiguration();
 
@@ -252,6 +266,7 @@ namespace Daqifi.Core.Device
             // when unreported, e.g. older firmware).
             _timestampProcessor.Reset(StreamTimestampKey);
             _timestampProcessor.SetTimestampFrequency(StreamTimestampKey, TimestampFrequency);
+            _gapDetector.Reset();
 
             IsStreaming = true;
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
@@ -324,9 +339,18 @@ namespace Daqifi.Core.Device
             // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
             // the raw device tick value through to each decoded sample.
             var deviceTimestamp = message.MsgTimeStamp;
-            var hostTimestamp = _timestampProcessor
-                .ProcessTimestamp(StreamTimestampKey, deviceTimestamp)
-                .Timestamp;
+            var timestampResult = _timestampProcessor.ProcessTimestamp(StreamTimestampKey, deviceTimestamp);
+            var hostTimestamp = timestampResult.Timestamp;
+
+            // Flag dropped samples from the device-clock delta (immune to host arrival jitter).
+            // Isolate subscriber exceptions (see RaiseGapDetected) so a throwing GapDetected handler
+            // cannot skip the per-channel decode below — which the caller's broad catch would then
+            // silently drop.
+            if (_gapDetector.IsGap(timestampResult.SecondsBetweenMessages))
+            {
+                RaiseGapDetected(new TimestampGapEventArgs(
+                    hostTimestamp, timestampResult.SecondsBetweenMessages, deviceTimestamp));
+            }
 
             // Snapshot channels once: the consumer thread that repopulates channels is the same
             // thread that runs this decode, so the structure is stable for the duration of the call.
@@ -340,6 +364,30 @@ namespace Daqifi.Core.Device
             if (hasDigital)
             {
                 DecodeDigital(message, channels, hostTimestamp, deviceTimestamp);
+            }
+        }
+
+        /// <summary>
+        /// Raises <see cref="GapDetected"/>, isolating the decode pipeline from a subscriber
+        /// exception so a throwing handler cannot skip this frame's per-channel decode (which the
+        /// broad catch in <see cref="OnStreamMessageReceived"/> would then silently drop). Mirrors
+        /// <c>DaqifiDevice.RaiseClassifiedEvent</c>.
+        /// </summary>
+        private void RaiseGapDetected(TimestampGapEventArgs args)
+        {
+            var handler = GapDetected;
+            if (handler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handler(this, args);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[{nameof(GapDetected)}] Subscriber threw: {ex}");
             }
         }
 

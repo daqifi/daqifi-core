@@ -16,6 +16,103 @@ namespace Daqifi.Core.Tests.Device;
 /// </summary>
 public class DaqifiStreamingDeviceDecodeTests
 {
+    #region Gap detection
+
+    [Fact]
+    public void GapDetected_FiresOnceOnDeviceClockGap_AfterSteadyCadence()
+    {
+        var device = CreateStreamingDevice(analogCount: 1);
+        AnalogChannel(device, 0).IsEnabled = true;
+        device.StartStreaming();
+
+        var events = new List<TimestampGapEventArgs>();
+        device.GapDetected += (_, e) => events.Add(e);
+
+        // First frame (no prior reference) + steady 1000-tick cadence to seed the EMA.
+        for (uint ts = 1000; ts <= 11000; ts += 1000)
+        {
+            device.InvokeStreamMessage(AnalogFrame(ts, 1.0f));
+        }
+        Assert.Empty(events); // steady cadence -> no gap
+
+        // A 5x jump in the device clock = dropped samples.
+        device.InvokeStreamMessage(AnalogFrame(16000, 1.0f));
+
+        Assert.Single(events);
+        Assert.Equal(16000u, events[0].DeviceTimestamp);
+        Assert.True(events[0].SecondsSincePreviousMessage > 0);
+    }
+
+    [Fact]
+    public void GapDetected_DoesNotFireOnSteadyCadence()
+    {
+        var device = CreateStreamingDevice(analogCount: 1);
+        AnalogChannel(device, 0).IsEnabled = true;
+        device.StartStreaming();
+
+        var fired = false;
+        device.GapDetected += (_, _) => fired = true;
+
+        for (uint ts = 1000; ts <= 50000; ts += 1000)
+        {
+            device.InvokeStreamMessage(AnalogFrame(ts, 1.0f));
+        }
+
+        Assert.False(fired);
+    }
+
+    [Fact]
+    public void GapDetected_ResetsBetweenSessions_NoFalseGapOnDifferentCadence()
+    {
+        var device = CreateStreamingDevice(analogCount: 1);
+        AnalogChannel(device, 0).IsEnabled = true;
+
+        // Session 1: fast cadence (1000-tick deltas) trains the EMA.
+        device.StartStreaming();
+        for (uint ts = 1000; ts <= 11000; ts += 1000)
+        {
+            device.InvokeStreamMessage(AnalogFrame(ts, 1.0f));
+        }
+        device.StopStreaming();
+
+        var events = new List<TimestampGapEventArgs>();
+        device.GapDetected += (_, e) => events.Add(e);
+
+        // Session 2: slower cadence (3000-tick deltas). Were the EMA not reset at StartStreaming,
+        // the first real delta (3000) would exceed 2x the stale 1000 average and false-trip.
+        device.StartStreaming();
+        device.InvokeStreamMessage(AnalogFrame(100000, 1.0f)); // first frame — no reference
+        device.InvokeStreamMessage(AnalogFrame(103000, 1.0f)); // +3000 re-seeds the EMA
+        device.InvokeStreamMessage(AnalogFrame(106000, 1.0f)); // +3000 steady
+
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public void GapDetected_ThrowingSubscriber_DoesNotSkipFrameDecode()
+    {
+        var device = CreateStreamingDevice(analogCount: 1);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true;
+        device.StartStreaming();
+
+        device.GapDetected += (_, _) => throw new InvalidOperationException("boom");
+
+        // Steady cadence, then a gap frame that also carries a decodable sample. The gap fires the
+        // throwing subscriber — decode of this frame must still happen.
+        for (uint ts = 1000; ts <= 11000; ts += 1000)
+        {
+            device.InvokeStreamMessage(AnalogFrame(ts, 1.0f));
+        }
+        device.InvokeStreamMessage(AnalogFrame(20000, 7.5f)); // 9x jump -> gap -> throwing handler
+
+        Assert.NotNull(ai0.ActiveSample);
+        Assert.Equal(7.5, ai0.ActiveSample!.Value);
+        Assert.Equal(20000u, ai0.ActiveSample.DeviceTimestamp);
+    }
+
+    #endregion
+
     #region Analog decoding
 
     [Fact]
@@ -434,6 +531,13 @@ public class DaqifiStreamingDeviceDecodeTests
 
     private static IChannel DigitalChannel(DaqifiStreamingDevice device, int number) =>
         device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == number);
+
+    private static DaqifiOutMessage AnalogFrame(uint timestamp, float value)
+    {
+        var frame = new DaqifiOutMessage { MsgTimeStamp = timestamp };
+        frame.AnalogInDataFloat.Add(value);
+        return frame;
+    }
 
     /// <summary>
     /// A <see cref="DaqifiStreamingDevice"/> that captures sent SCPI commands (so streaming
