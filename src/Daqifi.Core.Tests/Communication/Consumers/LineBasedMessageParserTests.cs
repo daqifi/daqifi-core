@@ -88,6 +88,22 @@ public class LineBasedMessageParserTests
     }
 
     [Fact]
+    public void LineBasedMessageParser_Constructor_WithEmptyLineEnding_ShouldThrowArgumentException()
+    {
+        // An empty line ending encodes to zero bytes, which would make ParseMessages
+        // spin forever (searchStart never advances). Fail fast at construction instead.
+        var ex = Assert.Throws<ArgumentException>(() => new LineBasedMessageParser(""));
+        Assert.Equal("lineEnding", ex.ParamName);
+    }
+
+    [Fact]
+    public void LineBasedMessageParser_Constructor_WithNullLineEnding_ShouldThrowArgumentNullException()
+    {
+        var ex = Assert.Throws<ArgumentNullException>(() => new LineBasedMessageParser(null!));
+        Assert.Equal("lineEnding", ex.ParamName);
+    }
+
+    [Fact]
     public void LineBasedMessageParser_ParseMessages_WithNoData_ShouldReturnEmpty()
     {
         // Arrange
