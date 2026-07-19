@@ -16,7 +16,12 @@ namespace Daqifi.Core.Device.Discovery;
 public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
 {
     private readonly SemaphoreSlim _discoverySemaphore = new(1, 1);
-    private bool _disposed;
+
+    // 0 = live, 1 = disposed. Written via Interlocked.Exchange so concurrent
+    // Dispose() calls resolve to exactly one winner, and published before the
+    // semaphore is disposed so ThrowIfDisposed() starts throwing the moment
+    // disposal begins (see Dispose(bool)).
+    private int _disposed;
 
     /// <summary>
     /// Serializes concurrent discovery passes on this instance. Derived finders
@@ -51,6 +56,13 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
             // (e.g. DaqifiTools.GuardAsync, which rethrows OCE) see "found nothing"
             // rather than a canceled call. This overload takes no caller token, so
             // every cancellation here is timeout-originated.
+            //
+            // A timeout can interrupt a derived finder before it reaches its own
+            // OnDiscoveryCompleted() (e.g. HidDeviceFinder does not catch
+            // OperationCanceledException), so raise the end-of-pass signal here to
+            // keep it consistent with a normal timed pass. The raiser is already
+            // subscriber-isolated, so this cannot fault the timeout path.
+            OnDiscoveryCompleted();
             return Array.Empty<IDeviceInfo>();
         }
     }
@@ -104,14 +116,14 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
     /// <summary>
     /// Gets a value indicating whether this instance has been disposed.
     /// </summary>
-    protected bool IsDisposed => _disposed;
+    protected bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <summary>
     /// Throws <see cref="ObjectDisposedException"/> if this instance has been disposed.
     /// </summary>
     protected void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
         {
             throw new ObjectDisposedException(GetType().Name);
         }
@@ -134,7 +146,12 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
     /// </param>
     protected virtual void Dispose(bool disposing)
     {
-        if (_disposed)
+        // Publish the disposed state atomically and *before* releasing managed
+        // resources: the first caller to flip the flag wins (so concurrent
+        // Dispose() calls can't both dispose the semaphore), and a concurrent
+        // DiscoverAsync now reliably fails ThrowIfDisposed() with the finder-named
+        // ObjectDisposedException instead of racing onto a disposed semaphore.
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
@@ -143,7 +160,5 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
         {
             _discoverySemaphore.Dispose();
         }
-
-        _disposed = true;
     }
 }

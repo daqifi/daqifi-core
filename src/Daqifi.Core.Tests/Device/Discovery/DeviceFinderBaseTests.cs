@@ -169,6 +169,46 @@ public class DeviceFinderBaseTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_Timeout_WhileAwaitingConcurrentPass_RaisesDiscoveryCompleted()
+    {
+        using var finder = new BlockingFinder();
+
+        var completedCount = 0;
+        finder.DiscoveryCompleted += (_, _) => Interlocked.Increment(ref completedCount);
+
+        // First pass acquires the semaphore and parks; it has NOT completed yet.
+        var first = finder.DiscoverAsync(CancellationToken.None);
+        await finder.Acquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // A timed pass whose timeout elapses while awaiting the held semaphore must
+        // still raise the end-of-pass signal, matching a normal timed pass — otherwise
+        // a consumer awaiting DiscoveryCompleted could wait indefinitely.
+        var result = await finder.DiscoverAsync(TimeSpan.FromMilliseconds(50));
+        Assert.Empty(result);
+
+        // The parked first pass hasn't completed, so this completion is the timed
+        // pass's own end-of-pass signal.
+        Assert.Equal(1, Volatile.Read(ref completedCount));
+
+        finder.ReleaseGate();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public void Dispose_ConcurrentCalls_DisposeSemaphoreExactlyOnce()
+    {
+        var finder = new TestFinder();
+
+        // Concurrent Dispose() calls must resolve to a single winner (Interlocked flag)
+        // so the shared semaphore is disposed exactly once and no call faults.
+        var tasks = Enumerable.Range(0, 16).Select(_ => Task.Run(() => finder.Dispose())).ToArray();
+        var ex = Record.Exception(() => Task.WaitAll(tasks));
+
+        Assert.Null(ex);
+        Assert.True(finder.IsDisposedForTest);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_AfterDispose_ThrowsObjectDisposedException()
     {
         var finder = new TestFinder();
