@@ -145,24 +145,10 @@ public class TcpStreamTransport : IStreamTransport
         if (IsConnected)
             return;
 
-        var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
-        var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
-        Exception? lastException = null;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
+        await ConnectRetryExecutor.ExecuteAsync(
+            retryOptions,
+            connectAttempt: async options =>
             {
-                // Calculate delay for this attempt
-                if (attempt > 1)
-                {
-                    var delay = options.CalculateDelay(attempt);
-                    if (delay > TimeSpan.Zero)
-                    {
-                        await Task.Delay(delay);
-                    }
-                }
-
                 _tcpClient = _localInterface != null
                     ? new TcpClient(new IPEndPoint(_localInterface, 0))
                     : new TcpClient();
@@ -195,32 +181,14 @@ public class TcpStreamTransport : IStreamTransport
                 }
 
                 _networkStream = _tcpClient.GetStream();
-                OnStatusChanged(true, null);
-                return; // Success!
-            }
-            catch (Exception ex)
+            },
+            onAttemptFailed: () =>
             {
-                lastException = ex;
                 _tcpClient?.Dispose();
                 _tcpClient = null;
                 _networkStream = null;
-
-                // If this is not the last attempt and retry is enabled, continue
-                if (attempt < maxAttempts && options.Enabled)
-                {
-                    OnStatusChanged(false, new Exception($"Connection attempt {attempt}/{maxAttempts} failed, retrying...", ex));
-                    continue;
-                }
-
-                // Last attempt failed or retry disabled
-                OnStatusChanged(false, ex);
-                throw;
-            }
-        }
-
-        // Should not reach here, but just in case
-        OnStatusChanged(false, lastException);
-        throw lastException ?? new InvalidOperationException("Connection failed after all retry attempts.");
+            },
+            onStatusChanged: OnStatusChanged);
     }
 
     /// <summary>
