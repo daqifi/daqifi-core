@@ -7,6 +7,7 @@ using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Daqifi.Core.Firmware;
 
@@ -143,16 +144,18 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Initializes a new firmware update service. <paramref name="usbLocationProvider"/> resolves
-    /// an enumerated bootloader's USB physical-location key when targeting by
-    /// <c>targetLocationKey</c>; when null, a platform-default provider is used (Windows → WMI,
-    /// others → no-op fallback, which makes location-key targeting a no-op).
+    /// Initializes a new firmware update service. The optional <paramref name="logger"/> defaults to
+    /// a no-op logger (<see cref="NullLogger{T}.Instance"/>) when omitted, so the service is usable
+    /// without wiring up logging. <paramref name="usbLocationProvider"/> resolves an enumerated
+    /// bootloader's USB physical-location key when targeting by <c>targetLocationKey</c>; when null,
+    /// a platform-default provider is used (Windows → WMI, others → no-op fallback, which makes
+    /// location-key targeting a no-op).
     /// </summary>
     public FirmwareUpdateService(
         IHidTransport hidTransport,
         IFirmwareDownloadService firmwareDownloadService,
         IExternalProcessRunner externalProcessRunner,
-        ILogger<FirmwareUpdateService> logger,
+        ILogger<FirmwareUpdateService>? logger = null,
         IBootloaderProtocol? bootloaderProtocol = null,
         IHidDeviceEnumerator? hidDeviceEnumerator = null,
         FirmwareUpdateServiceOptions? options = null,
@@ -161,7 +164,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         _hidTransport = hidTransport ?? throw new ArgumentNullException(nameof(hidTransport));
         FirmwareDownloadService = firmwareDownloadService ?? throw new ArgumentNullException(nameof(firmwareDownloadService));
         _externalProcessRunner = externalProcessRunner ?? throw new ArgumentNullException(nameof(externalProcessRunner));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _logger = logger ?? NullLogger<FirmwareUpdateService>.Instance;
         _bootloaderProtocol = bootloaderProtocol ?? new Pic32BootloaderProtocol();
         _hidDeviceEnumerator = hidDeviceEnumerator ?? new HidLibraryDeviceEnumerator();
         _options = options ?? new FirmwareUpdateServiceOptions();
