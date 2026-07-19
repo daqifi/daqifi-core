@@ -677,6 +677,55 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Sets and persists the device's user-defined friendly name to NVM, then optimistically
+        /// updates <see cref="DaqifiDevice.Metadata"/>'s <see cref="DeviceMetadata.FriendlyName"/>.
+        /// </summary>
+        /// <remarks>
+        /// Composes the firmware sequence <c>SYSTem:DEVice:NAME "name"</c> then
+        /// <c>SYSTem:DEVice:NAME:SAVE</c> (producer commands added in #302). The device does not echo
+        /// the new name back synchronously — and may not stream another status frame for a while — so
+        /// the local metadata is updated optimistically once both commands are sent. This is the
+        /// device-level composition desktop hand-rolled (its "no producer helper exists" note is stale).
+        /// </remarks>
+        /// <param name="name">
+        /// 1-<see cref="ScpiMessageProducer.MaxFriendlyNameLength"/> printable ASCII characters
+        /// (0x20-0x7E), excluding <c>"</c> and <c>\</c> — see <see cref="ScpiMessageProducer.IsFriendlyNameValid"/>.
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token observed before the commands are sent.</param>
+        /// <returns>A task that completes once both commands have been sent.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> fails validation.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        public Task SetFriendlyNameAsync(string name, CancellationToken cancellationToken = default)
+        {
+            if (name is null)
+            {
+                throw new ArgumentNullException(nameof(name));
+            }
+
+            if (!ScpiMessageProducer.IsFriendlyNameValid(name))
+            {
+                throw new ArgumentException(
+                    $"Device name must be 1-{ScpiMessageProducer.MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
+                    nameof(name));
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Send(ScpiMessageProducer.SetDeviceName(name));
+            Send(ScpiMessageProducer.SaveDeviceName);
+            Metadata.FriendlyName = name;
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Comma-separated PWM-capable channel numbers for error messages, derived from this
         /// device's channel collection.
         /// </summary>
