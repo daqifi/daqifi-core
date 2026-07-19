@@ -156,24 +156,10 @@ public class SerialStreamTransport : IStreamTransport
         if (IsConnected)
             return;
 
-        var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
-        var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
-        Exception? lastException = null;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
+        await ConnectRetryExecutor.ExecuteAsync(
+            retryOptions,
+            connectAttempt: options =>
             {
-                // Calculate delay for this attempt
-                if (attempt > 1)
-                {
-                    var delay = options.CalculateDelay(attempt);
-                    if (delay > TimeSpan.Zero)
-                    {
-                        await Task.Delay(delay);
-                    }
-                }
-
                 var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
                 _serialPort = new SerialPort(_portName, _baudRate, _parity, _dataBits, _stopBits)
                 {
@@ -191,31 +177,14 @@ public class SerialStreamTransport : IStreamTransport
                 // ensures consumer threads can be stopped promptly (StopSafely).
                 _serialPort.ReadTimeout = 500;
 
-                OnStatusChanged(true, null);
-                return; // Success!
-            }
-            catch (Exception ex)
+                return Task.CompletedTask;
+            },
+            onAttemptFailed: () =>
             {
-                lastException = ex;
                 _serialPort?.Dispose();
                 _serialPort = null;
-
-                // If this is not the last attempt and retry is enabled, continue
-                if (attempt < maxAttempts && options.Enabled)
-                {
-                    OnStatusChanged(false, new Exception($"Connection attempt {attempt}/{maxAttempts} failed, retrying...", ex));
-                    continue;
-                }
-
-                // Last attempt failed or retry disabled
-                OnStatusChanged(false, ex);
-                throw;
-            }
-        }
-
-        // Should not reach here, but just in case
-        OnStatusChanged(false, lastException);
-        throw lastException ?? new InvalidOperationException("Connection failed after all retry attempts.");
+            },
+            onStatusChanged: OnStatusChanged);
     }
 
     /// <summary>
