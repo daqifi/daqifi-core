@@ -14,7 +14,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 #nullable enable
@@ -287,6 +289,87 @@ namespace Daqifi.Core.Device
 
             IsStreaming = false;
             Send(ScpiMessageProducer.StopStreaming);
+        }
+
+        /// <summary>
+        /// The default bounded-buffer capacity (in samples) used by <see cref="StreamSamplesAsync"/>.
+        /// </summary>
+        public const int DefaultLiveSampleBufferCapacity = 4096;
+
+        private long _droppedLiveSampleCount;
+
+        /// <summary>
+        /// Gets the cumulative number of live samples dropped across all <see cref="StreamSamplesAsync"/>
+        /// enumerations because a consumer could not keep up with the incoming rate (drop-oldest policy).
+        /// A non-zero and growing value means a live consumer is too slow for the current stream rate.
+        /// </summary>
+        public long DroppedLiveSampleCount => Interlocked.Read(ref _droppedLiveSampleCount);
+
+        /// <summary>
+        /// Exposes decoded live samples as an <see cref="IAsyncEnumerable{T}"/> for pull-based
+        /// <c>await foreach</c> consumption with cancellation and backpressure — bringing the live path
+        /// up to the same async-stream idiom the SD-card and export paths already use. Additive: the
+        /// per-channel <see cref="IChannel.SampleReceived"/> and raw-frame events are unaffected.
+        /// </summary>
+        /// <remarks>
+        /// Samples are buffered in a bounded channel with a <b>drop-oldest</b> overflow policy: if the
+        /// consumer falls behind, the oldest buffered samples are discarded (memory never grows
+        /// unbounded) and <see cref="DroppedLiveSampleCount"/> is incremented — the decode thread that
+        /// produces samples is never blocked. Enumeration observes the channels present when it starts;
+        /// cancelling <paramref name="cancellationToken"/> ends it promptly (surfaced as
+        /// <see cref="OperationCanceledException"/>) and unsubscribes, but does <b>not</b> stop the
+        /// device's stream — call <see cref="StopStreaming"/> for that.
+        /// </remarks>
+        /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
+        /// <param name="bufferCapacity">
+        /// Bounded buffer capacity; defaults to <see cref="DefaultLiveSampleBufferCapacity"/> when null.
+        /// </param>
+        /// <returns>An async stream of <see cref="LiveSample"/> (channel + decoded sample).</returns>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 1.</exception>
+        public async IAsyncEnumerable<LiveSample> StreamSamplesAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken = default,
+            int? bufferCapacity = null)
+        {
+            var capacity = bufferCapacity ?? DefaultLiveSampleBufferCapacity;
+            if (capacity < 1)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(bufferCapacity), capacity, "Buffer capacity must be at least 1.");
+            }
+
+            var buffer = System.Threading.Channels.Channel.CreateBounded<LiveSample>(
+                new BoundedChannelOptions(capacity)
+                {
+                    FullMode = BoundedChannelFullMode.DropOldest,
+                    SingleReader = true,
+                    SingleWriter = false,
+                },
+                _ => Interlocked.Increment(ref _droppedLiveSampleCount));
+
+            void OnSample(object? sender, SampleReceivedEventArgs e) =>
+                buffer.Writer.TryWrite(new LiveSample(e.Channel, e.Sample));
+
+            var channels = SnapshotChannels();
+            foreach (var channel in channels)
+            {
+                channel.SampleReceived += OnSample;
+            }
+
+            try
+            {
+                await foreach (var sample in buffer.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    yield return sample;
+                }
+            }
+            finally
+            {
+                foreach (var channel in channels)
+                {
+                    channel.SampleReceived -= OnSample;
+                }
+                buffer.Writer.TryComplete();
+            }
         }
 
         /// <summary>

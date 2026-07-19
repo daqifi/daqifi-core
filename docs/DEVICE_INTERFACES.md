@@ -331,9 +331,10 @@ Console.WriteLine($"Digital I/O: {caps.DigitalChannels}");
 
 ### Streaming Data
 
-Two ways to consume streamed data: decoded per-channel samples via `IChannel.SampleReceived`
-(recommended for most consumers), or the raw protobuf frame via `MessageReceived` (for hand-decoding
-or bridging into another pipeline).
+Three ways to consume streamed data: decoded per-channel samples via `IChannel.SampleReceived`
+(event, recommended for most consumers), a pull-based async stream via `StreamSamplesAsync`
+(`await foreach` with cancellation and backpressure), or the raw protobuf frame via `MessageReceived`
+(for hand-decoding or bridging into another pipeline).
 
 #### Per-channel samples (recommended)
 
@@ -373,6 +374,34 @@ carries the raw device tick count alongside the rollover-adjusted host `Timestam
 arrives outside a streaming session is still re-raised via `MessageReceived` but is not decoded into
 samples. `GetChannelsSnapshot()` is used above (rather than the live `Channels` property) because the
 channel list can be repopulated concurrently when a new device status message arrives.
+
+#### Live async stream (`await foreach`)
+
+`StreamSamplesAsync` exposes the same decoded samples as an `IAsyncEnumerable<LiveSample>`, so a
+consumer can pull them with `await foreach` — the idiom the SD-card/export paths already use — with
+cancellation and backpressure instead of hand-building an event/queue bridge. Each `LiveSample` pairs
+the decoded `IDataSample` with the `IChannel` that produced it.
+
+```csharp
+using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+
+device.EnableChannels(device.GetChannelsSnapshot().Where(c => c.Type == ChannelType.Analog));
+device.StreamingFrequency = 100; // Hz
+device.StartStreaming();
+
+using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+await foreach (var s in device.StreamSamplesAsync(cts.Token))
+{
+    Console.WriteLine($"{s.Channel.Name}: {s.Sample.Value} (tick {s.Sample.DeviceTimestamp})");
+}
+```
+
+Samples are buffered in a bounded channel (`DefaultLiveSampleBufferCapacity`, override via the
+`bufferCapacity` argument) with a **drop-oldest** overflow policy — if the consumer falls behind, the
+oldest buffered samples are discarded (memory never grows unbounded) and `DroppedLiveSampleCount`
+increments; the decode thread is never blocked. Cancelling the token ends the enumeration promptly
+(surfaced as `OperationCanceledException`) and unsubscribes, but does **not** stop the device stream —
+call `StopStreaming()` for that. This is additive: `SampleReceived` and `MessageReceived` are unaffected.
 
 #### Raw protobuf frames
 
