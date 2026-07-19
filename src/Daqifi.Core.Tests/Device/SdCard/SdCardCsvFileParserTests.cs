@@ -327,6 +327,51 @@ public sealed class SdCardCsvFileParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_BareChLine_DoesNotThrowAndParsesRemainingRows()
+    {
+        // Regression (#365): a bare "ch" line (exactly 2 chars) reaches
+        // FindDataStartIndex, where StartsWith("ch") was followed by an
+        // unguarded line[2] access — throwing IndexOutOfRangeException and
+        // aborting the whole parse. It must instead be treated as a (malformed)
+        // data row and skipped, matching the parser's skip-bad-lines contract.
+        var content =
+            "# Device: TestDevice\n" +
+            "# Serial Number: SN001\n" +
+            "# Timestamp Tick Rate: 100 Hz\n" +
+            "ch0_ts,ch0_val\n" +
+            "ch\n" +           // bare "ch" — must not crash
+            "1000,5.0\n" +
+            "2000,6.0\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var session = await parser.ParseAsync(stream, "test.csv");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(5.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(6.0, samples[1].AnalogValues[0], precision: 5);
+    }
+
+    [Fact]
+    public async Task ParseAsync_OnlyBareChLine_ReturnsNoSamplesWithoutThrowing()
+    {
+        // #365: when the bare "ch" line is the first non-comment line it becomes
+        // the data-start index; it must parse to zero samples, not crash.
+        var content =
+            "# Device: TestDevice\n" +
+            "# Timestamp Tick Rate: 100 Hz\n" +
+            "ch\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var session = await parser.ParseAsync(stream, "test.csv");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Empty(samples);
+    }
+
+    [Fact]
     public async Task ParseAsync_OddColumnCount_SkipsMalformedRow()
     {
         // Arrange — a row with an odd number of columns (not ts+val pairs) should be skipped

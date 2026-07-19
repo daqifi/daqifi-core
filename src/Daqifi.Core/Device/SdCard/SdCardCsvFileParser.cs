@@ -235,9 +235,14 @@ public sealed class SdCardCsvFileParser
                 continue;  // Comment line
             }
 
-            // Check if it's the column header (contains "_ts," or starts with "ch"/"ain")
+            // Check if it's the column header (contains "_ts," or starts with "ch"/"ain").
+            // The line.Length > 2 guard protects the line[2] access: StartsWith("ch")
+            // only guarantees length >= 2, so a bare "ch" line would otherwise throw
+            // IndexOutOfRangeException and abort the whole parse. A too-short "ch" line
+            // falls through and is treated as a data row, which TryParseCsvDataRow then
+            // skips as malformed — consistent with the parser's skip-bad-lines contract.
             if (line.Contains("_ts,", StringComparison.OrdinalIgnoreCase) ||
-                (line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && !char.IsDigit(line[2])) ||
+                (line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && line.Length > 2 && !char.IsDigit(line[2])) ||
                 line.StartsWith("ain", StringComparison.OrdinalIgnoreCase))
             {
                 continue;  // Column header line
