@@ -55,6 +55,40 @@ public class IntelHexParserTests
         Assert.Throws<InvalidDataException>(() => _parser.ParseHexRecords(lines));
     }
 
+    [Fact]
+    public void ParseHexRecords_ByteCountDisagreesWithDataLength_ThrowsInvalidDataException()
+    {
+        // A data record whose byte-count field says 1 but which carries 2 data bytes (AA BB).
+        // Checksum is valid (01+00+00+00+AA+BB+9A = 0x200 -> 0), so only the byte-count/length
+        // check can reject it.
+        var lines = new[] { ":01000000AABB9A" };
+
+        var ex = Assert.Throws<InvalidDataException>(() => _parser.ParseHexRecords(lines));
+        Assert.Contains("declares", ex.Message);
+    }
+
+    [Fact]
+    public void ParseHexRecords_Type04RecordWithTooFewDataBytes_ThrowsInvalidDataExceptionNotArgumentException()
+    {
+        // Type-04 (extended linear address) record declaring 0 data bytes, with a valid checksum
+        // (00+00+00+04+FC = 0x100 -> 0). Its byte-count field (0) matches its data length (0), so
+        // ValidateRecordLength passes it — but a type-04 record must carry exactly 2 address bytes.
+        // Before the fix this reached UpdateBaseAddress and handed BitConverter.ToUInt16 a zero-length
+        // array, crashing with a raw ArgumentException instead of the documented InvalidDataException.
+        var lines = new[] { ":00000004FC" };
+
+        var ex = Assert.Throws<InvalidDataException>(() => _parser.ParseHexRecords(lines));
+        Assert.Contains("type-04", ex.Message);
+    }
+
+    [Fact]
+    public void ParseRecords_Type04RecordWithTooFewDataBytes_ThrowsInvalidDataExceptionNotArgumentException()
+    {
+        var lines = new[] { ":00000004FC" };
+
+        Assert.Throws<InvalidDataException>(() => _parser.ParseRecords(lines));
+    }
+
     #endregion
 
     #region ParseHexRecords - Checksum Validation

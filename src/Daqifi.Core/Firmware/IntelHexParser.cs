@@ -65,9 +65,10 @@ public class IntelHexParser
             ValidateLine(line);
 
             var hexLine = ConvertLineToBytes(line);
+            ValidateRecordLength(hexLine, line);
             ValidateChecksum(hexLine, line);
 
-            baseAddress = UpdateBaseAddress(hexLine, baseAddress);
+            baseAddress = UpdateBaseAddress(hexLine, baseAddress, line);
 
             if (IsProtectedHexRecord(hexLine, baseAddress))
             {
@@ -105,10 +106,11 @@ public class IntelHexParser
             ValidateLine(line);
 
             var hexLine = ConvertLineToBytes(line);
+            ValidateRecordLength(hexLine, line);
             ValidateChecksum(hexLine, line);
             var recordType = hexLine[3];
 
-            baseAddress = UpdateBaseAddress(hexLine, baseAddress);
+            baseAddress = UpdateBaseAddress(hexLine, baseAddress, line);
 
             if (IsProtectedHexRecord(hexLine, baseAddress))
             {
@@ -144,6 +146,25 @@ public class IntelHexParser
         {
             throw new InvalidDataException(
                 $"The hex record \"{line}\" is too short to be a valid record");
+        }
+    }
+
+    private static void ValidateRecordLength(byte[] record, string line)
+    {
+        // Intel HEX structure: 1 (byte count) + 2 (address) + 1 (record type) + N (data) + 1 (checksum),
+        // where N is the value of the byte-count field (record[0]). ValidateLine already guarantees at
+        // least 5 decoded bytes, so record[0] is safely accessible. A declared count that disagrees with
+        // the actual data length means the record is truncated, padded, or corrupt. Rejecting it here as
+        // the documented InvalidDataException prevents the downstream BitConverter.ToUInt16 calls (in
+        // UpdateBaseAddress / IsProtectedHexRecord / ParseRecords) from reading a wrong-sized slice and
+        // throwing a raw ArgumentException — e.g. a type-04 record with a zero byte count would otherwise
+        // hand ToUInt16 a zero-length array and crash the whole parse.
+        int declaredDataLength = record[0];
+        int actualDataLength = record.Length - 5;
+        if (actualDataLength != declaredDataLength)
+        {
+            throw new InvalidDataException(
+                $"The hex record \"{line}\" declares {declaredDataLength} data byte(s) but contains {actualDataLength}");
         }
     }
 
@@ -183,12 +204,24 @@ public class IntelHexParser
         return hexLine;
     }
 
-    private static ushort UpdateBaseAddress(byte[] hexRecord, ushort currentBaseAddress)
+    private static ushort UpdateBaseAddress(byte[] hexRecord, ushort currentBaseAddress, string line)
     {
         var recordType = hexRecord[3];
         if (recordType == 0x04)
         {
-            var dataArray = hexRecord.Skip(4).Take(hexRecord.Length - 5).ToArray();
+            // A type-04 (extended linear address) record must carry exactly 2 data bytes — the
+            // upper 16 bits of the 32-bit address. Its byte-count field can equal its data length
+            // yet still be wrong (e.g. a zero-count type-04 record whose count "matches" its zero
+            // data bytes), so ValidateRecordLength alone doesn't cover this. Guard the slice
+            // explicitly so a short/corrupt type-04 record throws the documented InvalidDataException
+            // rather than a raw ArgumentException from BitConverter.ToUInt16 on an undersized array.
+            if (hexRecord.Length - 5 != 2)
+            {
+                throw new InvalidDataException(
+                    $"The hex record \"{line}\" is a type-04 extended-address record but does not carry exactly 2 data bytes");
+            }
+
+            var dataArray = hexRecord.Skip(4).Take(2).ToArray();
             if (BitConverter.IsLittleEndian) Array.Reverse(dataArray);
             return BitConverter.ToUInt16(dataArray, 0);
         }
