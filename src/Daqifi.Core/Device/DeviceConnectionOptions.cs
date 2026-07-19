@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Transport;
+using Microsoft.Extensions.Logging;
 
 #nullable enable
 
@@ -35,6 +36,12 @@ public class DeviceConnectionOptions
     /// <see cref="ArgumentOutOfRangeException"/>. Default is 8 seconds.
     /// </summary>
     public TimeSpan ChannelPopulationTimeout { get; set; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>
+    /// Optional logger the constructed device routes its diagnostics through (bad calibration/
+    /// resolution warnings, SCPI text-exchange timing). When null, the device uses a no-op logger.
+    /// </summary>
+    public ILogger? Logger { get; set; }
 
     /// <summary>
     /// Creates a default configuration with default retry behavior and device initialization enabled.

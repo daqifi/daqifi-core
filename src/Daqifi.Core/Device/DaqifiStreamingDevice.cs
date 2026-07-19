@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Daqifi.Core.Device.Network;
 using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Firmware;
@@ -170,7 +171,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="name">The name of the device.</param>
         /// <param name="ipAddress">The IP address of the device, if known.</param>
-        public DaqifiStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
+        public DaqifiStreamingDevice(string name, IPAddress? ipAddress = null, ILogger? logger = null)
+            : base(name, ipAddress, logger)
         {
             StreamingFrequency = 100;
         }
@@ -180,7 +183,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="name">The name of the device.</param>
         /// <param name="transport">The transport for device communication.</param>
-        public DaqifiStreamingDevice(string name, IStreamTransport transport) : base(name, transport)
+        /// <param name="logger">Optional logger for device diagnostics; a no-op logger is used when null.</param>
+        public DaqifiStreamingDevice(string name, IStreamTransport transport, ILogger? logger = null)
+            : base(name, transport, logger)
         {
             StreamingFrequency = 100;
         }

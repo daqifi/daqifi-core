@@ -383,7 +383,8 @@ public static class DaqifiDeviceFactory
             DeviceName = deviceName,
             ConnectionRetry = effectiveOptions.ConnectionRetry,
             InitializeDevice = effectiveOptions.InitializeDevice,
-            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout
+            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout,
+            Logger = effectiveOptions.Logger
         };
 
         // Honor LocalInterfaceAddress so multi-homed hosts egress on the NIC that
@@ -425,7 +426,8 @@ public static class DaqifiDeviceFactory
             DeviceName = deviceName,
             ConnectionRetry = effectiveOptions.ConnectionRetry,
             InitializeDevice = effectiveOptions.InitializeDevice,
-            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout
+            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout,
+            Logger = effectiveOptions.Logger
         };
 
         return await ConnectSerialAsync(
@@ -468,7 +470,7 @@ public static class DaqifiDeviceFactory
 
             // Step 2: Create the device with the transport
             // Note: Once created, the device owns the transport and will dispose it
-            device = new DaqifiStreamingDevice(options.DeviceName, transport);
+            device = new DaqifiStreamingDevice(options.DeviceName, transport, options.Logger);
 
             // Step 3: Connect the device (starts message producers/consumers)
             device.Connect();
