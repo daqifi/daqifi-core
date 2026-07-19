@@ -90,9 +90,13 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// The delimiters accepted between the <c>ERROR</c>/<c>**ERROR</c> token and the error code.
-        /// Single-sourced here so <see cref="TryExtractErrorCode"/> and the line matchers stay in lockstep.
+        /// Single-sourced here and consulted via <see cref="IsTokenDelimiter"/> by both
+        /// <see cref="TryExtractErrorCode"/> and the line matchers, so detection and extraction can't drift.
         /// </summary>
         private static readonly char[] TokenDelimiters = { ':', ' ', '\t' };
+
+        /// <summary>Returns true if <paramref name="c"/> is one of the accepted <see cref="TokenDelimiters"/>.</summary>
+        private static bool IsTokenDelimiter(char c) => Array.IndexOf(TokenDelimiters, c) >= 0;
 
         private static bool MatchesErrorPrefix(string trimmed, string prefix)
         {
@@ -102,7 +106,7 @@ namespace Daqifi.Core.Device
             if (trimmed.Length == prefix.Length)
                 return true;
             var next = trimmed[prefix.Length];
-            if (next == ':' || next == ' ' || next == '\t')
+            if (IsTokenDelimiter(next))
                 return true;
             // Single '!' is ambiguous (could be a filename like "error!log.bin").
             // Require '!!' so we still catch firmware "Error!!" status text but
@@ -123,7 +127,8 @@ namespace Daqifi.Core.Device
             var next = trimmed[prefix.Length];
             if (next == ':')
                 return true;
-            if (next != ' ' && next != '\t')
+            // ':' already returned above, so this rejects anything that isn't a space/tab delimiter.
+            if (!IsTokenDelimiter(next))
                 return false;
 
             // A space/tab delimiter alone is ambiguous — firmware status text like
