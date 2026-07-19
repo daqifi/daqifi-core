@@ -175,7 +175,7 @@ namespace Daqifi.Core.Device
         public DaqifiStreamingDevice(string name, IPAddress? ipAddress = null, ILogger? logger = null)
             : base(name, ipAddress, logger)
         {
-            StreamingFrequency = 100;
+            InitializeStreamingDevice();
         }
 
         /// <summary>
@@ -187,7 +187,25 @@ namespace Daqifi.Core.Device
         public DaqifiStreamingDevice(string name, IStreamTransport transport, ILogger? logger = null)
             : base(name, transport, logger)
         {
+            InitializeStreamingDevice();
+        }
+
+        private void InitializeStreamingDevice()
+        {
             StreamingFrequency = 100;
+
+            // Clear the "already-sent" PWM frequency cache on any transition away from Connected —
+            // an intentional Disconnected as well as an unexpected drop (which sets Lost, not
+            // Disconnected) and the Retrying/Failed states. After any of these the device's runtime
+            // PWM state is no longer trustworthy, so a reconnect on the same instance must re-send.
+            // See #345.
+            StatusChanged += (_, e) =>
+            {
+                if (e.Status != ConnectionStatus.Connected)
+                {
+                    _lastSentPwmFrequencyHz = null;
+                }
+            };
         }
 
         /// <summary>
@@ -703,6 +721,14 @@ namespace Daqifi.Core.Device
         /// </summary>
         public int PwmFrequencyHz { get; private set; } = DefaultPwmFrequencyHz;
 
+        /// <summary>
+        /// The PWM frequency actually sent to the device this connection, or <c>null</c> if none has
+        /// been sent yet (also reset to <c>null</c> on disconnect). Distinct from
+        /// <see cref="PwmFrequencyHz"/>, which carries a session default before anything is sent —
+        /// this drives the skip-if-unchanged guard so a fresh connection always sends. See #345.
+        /// </summary>
+        private int? _lastSentPwmFrequencyHz;
+
         /// <inheritdoc />
         public void SetPwmEnabled(IChannel channel, bool enabled)
         {
@@ -805,10 +831,19 @@ namespace Daqifi.Core.Device
                 throw new InvalidOperationException("Device is not connected.");
             }
 
+            // Skip the redundant round-trip when the device already has this frequency (from a
+            // send earlier this connection). The cache is cleared on disconnect so a fresh
+            // connection always sends. PwmFrequencyHz still reflects the commanded value. See #345.
+            if (frequencyHz == _lastSentPwmFrequencyHz)
+            {
+                return;
+            }
+
             // The SCPI command is addressed to a channel, but the firmware drives all PWM from
             // one shared timer and applies the frequency to every channel. Channel 0 is used as
             // the address because it is PWM-capable on all supported hardware.
             Send(ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
+            _lastSentPwmFrequencyHz = frequencyHz;
             PwmFrequencyHz = frequencyHz;
         }
 

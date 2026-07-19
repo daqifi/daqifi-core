@@ -25,14 +25,6 @@ public sealed class DaqifiAgent
     private readonly ConcurrentDictionary<string, DaqifiDevice> _connected = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    /// <summary>
-    /// The PWM frequency, in hertz, actually commanded to each connected device this session, so
-    /// <see cref="SetPwmOutputAsync"/> can skip resending an unchanged frequency. Cleared whenever
-    /// a device id is (re)connected, since a fresh connection's real on-device frequency is
-    /// unknown again.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, int> _lastSentPwmFrequencyHz = new(StringComparer.Ordinal);
-
     public DaqifiAgent(ServerOptions options) => _options = options;
 
     // ---------------------------------------------------------------- discovery
@@ -97,7 +89,6 @@ public sealed class DaqifiAgent
                 .ConfigureAwait(false);
 
             _connected[deviceId] = device;
-            _lastSentPwmFrequencyHz.TryRemove(deviceId, out _);
             return ConnectedDeviceInfo.From(deviceId, device);
         }
         finally
@@ -115,7 +106,6 @@ public sealed class DaqifiAgent
             {
                 try { device.Disconnect(); } catch { /* best effort */ }
                 device.Dispose();
-                _lastSentPwmFrequencyHz.TryRemove(deviceId, out _);
                 return $"Disconnected '{deviceId}'.";
             }
             return $"Device '{deviceId}' was not connected.";
@@ -300,15 +290,10 @@ public sealed class DaqifiAgent
 
             streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
 
-            // Only reprogram the shared device-wide timer when the frequency actually changes (or
-            // hasn't been sent to this device yet this session) — a duty-only update or re-enable
-            // shouldn't cost an extra SCPI round-trip.
-            if (!_lastSentPwmFrequencyHz.TryGetValue(deviceId, out var lastSentFrequencyHz) ||
-                lastSentFrequencyHz != desiredFrequencyHz)
-            {
-                streaming.SetPwmFrequency(desiredFrequencyHz);
-                _lastSentPwmFrequencyHz[deviceId] = desiredFrequencyHz;
-            }
+            // Reprogram the shared device-wide timer. Core skips the SCPI round-trip when the
+            // frequency is unchanged from what it last sent this connection (#345), so a duty-only
+            // update or re-enable no longer costs an extra round-trip and needs no agent-side cache.
+            streaming.SetPwmFrequency(desiredFrequencyHz);
 
             streaming.SetPwmEnabled(ch, true);
 
@@ -449,7 +434,6 @@ public sealed class DaqifiAgent
                 device.Dispose();
             }
             _connected.Clear();
-            _lastSentPwmFrequencyHz.Clear();
         }
         finally
         {
