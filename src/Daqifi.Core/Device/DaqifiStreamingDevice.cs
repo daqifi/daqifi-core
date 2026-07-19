@@ -173,12 +173,14 @@ namespace Daqifi.Core.Device
         {
             StreamingFrequency = 100;
 
-            // Clear the "already-sent" PWM frequency cache whenever the device disconnects, so a
-            // fresh connection always re-sends the frequency (the value lives in the device's
-            // runtime settings and is not guaranteed across a reconnect). See #345.
+            // Clear the "already-sent" PWM frequency cache on any transition away from Connected —
+            // an intentional Disconnected as well as an unexpected drop (which sets Lost, not
+            // Disconnected) and the Retrying/Failed states. After any of these the device's runtime
+            // PWM state is no longer trustworthy, so a reconnect on the same instance must re-send.
+            // See #345.
             StatusChanged += (_, e) =>
             {
-                if (e.Status == ConnectionStatus.Disconnected)
+                if (e.Status != ConnectionStatus.Connected)
                 {
                     _lastSentPwmFrequencyHz = null;
                 }

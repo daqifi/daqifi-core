@@ -1,6 +1,10 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Xunit;
 
@@ -86,9 +90,64 @@ namespace Daqifi.Core.Tests.Device
             Assert.Empty(device.PwmFrequencySends);
         }
 
+        [Fact]
+        public void SetPwmFrequency_AfterConnectionLost_ReconnectReSendsEvenIfUnchanged()
+        {
+            // An unexpected transport drop sets ConnectionStatus.Lost (not Disconnected); the cache
+            // must still clear so a reconnect re-sends (the device's PWM state isn't trustworthy).
+            var transport = new DropTransport();
+            var device = new CapturingStreamingDevice(transport);
+
+            device.Connect();
+            device.SetPwmFrequency(2000);
+
+            transport.SimulateLoss(); // device -> Lost, cache cleared
+
+            device.Connect();
+            device.SetPwmFrequency(2000); // unchanged value, but must re-send after a Lost
+
+            Assert.Equal(2, device.PwmFrequencySends.Count);
+            device.Dispose();
+        }
+
+        private sealed class DropTransport : IStreamTransport
+        {
+            private readonly MemoryStream _stream = new();
+            public Stream Stream => _stream;
+            public bool IsConnected { get; private set; }
+            public string ConnectionInfo => IsConnected ? "Mock: Connected" : "Mock: Disconnected";
+            public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+            public Task ConnectAsync() => ConnectAsync(null);
+            public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+            {
+                IsConnected = true;
+                StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+                return Task.CompletedTask;
+            }
+            public Task DisconnectAsync()
+            {
+                IsConnected = false;
+                StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+                return Task.CompletedTask;
+            }
+            public void Connect() => ConnectAsync().Wait();
+            public void Disconnect() => DisconnectAsync().Wait();
+
+            /// <summary>Raises an unexpected drop (StatusChanged(false) without an intentional Disconnect).</summary>
+            public void SimulateLoss()
+            {
+                IsConnected = false;
+                StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, "Connection lost"));
+            }
+
+            public void Dispose() => _stream.Dispose();
+        }
+
         private sealed class CapturingStreamingDevice : DaqifiStreamingDevice
         {
             public CapturingStreamingDevice() : base("TestDevice") { }
+            public CapturingStreamingDevice(IStreamTransport transport) : base("TestDevice", transport) { }
 
             private readonly List<string> _sent = new();
 
