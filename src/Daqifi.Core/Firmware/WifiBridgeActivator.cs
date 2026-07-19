@@ -216,6 +216,16 @@ public static class WifiBridgeActivator
             // same race SerialDeviceFinder guards against per #295).
             if (winner != workerTask && !workerTask.IsCompleted)
             {
+                // Cancel the hard-timeout source explicitly, up front, rather than relying on its
+                // independent timer having already fired. The Task.Delay(hardTimeoutMs) above and
+                // hardTimeoutCts's timer are two separate timers of the same duration, so the delay
+                // can win the race a hair before hardTimeoutCts fires — which would let a worker that
+                // returns late observe an as-yet-uncancelled linkedCts.Token and run one further
+                // state-changing step after the caller already got a TimeoutException (#326 finding
+                // #2). Cancelling here guarantees the worker's token is cancelled before we throw.
+                // Idempotent if the timer already fired.
+                hardTimeoutCts.Cancel();
+
                 // Open() is uncancellable, so on timeout/cancellation the worker task
                 // is ABANDONED rather than awaited — it may still be blocked in native
                 // I/O. Observe its eventual fault so it can't surface as an
