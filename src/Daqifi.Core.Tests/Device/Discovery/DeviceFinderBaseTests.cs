@@ -70,6 +70,37 @@ public class DeviceFinderBaseTests
     }
 
     [Fact]
+    public async Task OnDeviceDiscovered_ThrowingSubscriber_IsIsolatedAndDiscoveryCompletes()
+    {
+        var device = new DeviceInfo { Name = "Nq1", SerialNumber = "SN1" };
+        using var finder = new TestFinder(device);
+
+        // A throwing DeviceDiscovered subscriber must not abort the pass nor suppress
+        // the subsequent DiscoveryCompleted event.
+        finder.DeviceDiscovered += (_, _) => throw new InvalidOperationException("boom");
+        var completedCount = 0;
+        finder.DiscoveryCompleted += (_, _) => completedCount++;
+
+        var result = (await finder.DiscoverAsync()).ToList();
+
+        Assert.Single(result);
+        Assert.Equal(1, completedCount);
+    }
+
+    [Fact]
+    public async Task OnDiscoveryCompleted_ThrowingSubscriber_IsIsolated()
+    {
+        using var finder = new TestFinder();
+
+        finder.DiscoveryCompleted += (_, _) => throw new InvalidOperationException("boom");
+
+        // Must not surface out of the discovery body.
+        var result = await finder.DiscoverAsync();
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_Timeout_RoutesThroughCancellationTokenOverload()
     {
         using var finder = new TestFinder();

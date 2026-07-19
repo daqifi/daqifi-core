@@ -41,20 +41,49 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
     }
 
     /// <summary>
-    /// Raises the <see cref="DeviceDiscovered"/> event.
+    /// Raises the <see cref="DeviceDiscovered"/> event. Subscriber exceptions are
+    /// isolated so a throwing consumer callback cannot abort the discovery pass or
+    /// suppress the subsequent <see cref="DiscoveryCompleted"/> event.
     /// </summary>
     /// <param name="deviceInfo">The discovered device metadata.</param>
     protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
     {
-        DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
+        RaiseIsolated(() => DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo)), nameof(DeviceDiscovered));
     }
 
     /// <summary>
-    /// Raises the <see cref="DiscoveryCompleted"/> event.
+    /// Raises the <see cref="DiscoveryCompleted"/> event. Subscriber exceptions are
+    /// isolated so a throwing consumer callback cannot fault the discovery body.
     /// </summary>
     protected virtual void OnDiscoveryCompleted()
     {
-        DiscoveryCompleted?.Invoke(this, EventArgs.Empty);
+        RaiseIsolated(() => DiscoveryCompleted?.Invoke(this, EventArgs.Empty), nameof(DiscoveryCompleted));
+    }
+
+    /// <summary>
+    /// Invokes an event raiser, swallowing any subscriber exception so the discovery
+    /// outcome never depends on consumer callback correctness. Mirrors the isolation
+    /// guarantee <see cref="AllTransportsDeviceFinder"/> applies to the same events.
+    /// </summary>
+    private void RaiseIsolated(Action raise, string eventName)
+    {
+        try
+        {
+            raise();
+        }
+        catch (Exception ex)
+        {
+            // Best-effort trace only; the logging path must not fault discovery either
+            // (a throwing TraceListener is swallowed).
+            try
+            {
+                System.Diagnostics.Trace.WriteLine($"[{GetType().Name}] {eventName} subscriber threw: {ex}");
+            }
+            catch
+            {
+                // ignore
+            }
+        }
     }
 
     /// <summary>
