@@ -686,6 +686,12 @@ namespace Daqifi.Core.Device
         /// the new name back synchronously — and may not stream another status frame for a while — so
         /// the local metadata is updated optimistically once both commands are sent. This is the
         /// device-level composition desktop hand-rolled (its "no producer helper exists" note is stale).
+        ///
+        /// <para>Completion semantics: the returned task completes once the commands are enqueued to
+        /// the outbound producer — it does <b>not</b> await on-device application or NVM persistence,
+        /// which the firmware does not acknowledge. This matches the other fire-and-forget device
+        /// commands (e.g. <see cref="LoadNetworkConfigurationAsync"/>, <see cref="FactoryResetNetworkAsync"/>);
+        /// the async signature exists for cancellation and device-surface consistency.</para>
         /// </remarks>
         /// <param name="name">
         /// 1-<see cref="ScpiMessageProducer.MaxFriendlyNameLength"/> printable ASCII characters
