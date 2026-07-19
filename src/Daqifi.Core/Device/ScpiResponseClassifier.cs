@@ -90,8 +90,9 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// The delimiters accepted between the <c>ERROR</c>/<c>**ERROR</c> token and the error code.
-        /// Single-sourced here and consulted via <see cref="IsTokenDelimiter"/> by both
-        /// <see cref="TryExtractErrorCode"/> and the line matchers, so detection and extraction can't drift.
+        /// Single-sourced here: the line matchers test membership via <see cref="IsTokenDelimiter"/>, and
+        /// <see cref="TryExtractErrorCode"/> trims with this array directly — both draw from this one set,
+        /// so detection and extraction can't drift.
         /// </summary>
         private static readonly char[] TokenDelimiters = { ':', ' ', '\t' };
 
