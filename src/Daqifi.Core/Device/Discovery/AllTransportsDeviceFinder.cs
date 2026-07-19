@@ -150,8 +150,9 @@ namespace Daqifi.Core.Device.Discovery
             }
             catch (Exception ex)
             {
-                // Discovery outcome must not depend on consumer callback correctness.
-                Trace.WriteLine($"[{nameof(AllTransportsDeviceFinder)}] {eventName} subscriber threw: {ex}");
+                // Discovery outcome must not depend on consumer callback correctness (nor on the
+                // logging path — SafeTrace swallows a throwing TraceListener).
+                SafeTrace($"[{nameof(AllTransportsDeviceFinder)}] {eventName} subscriber threw: {ex}");
             }
         }
 
@@ -170,7 +171,7 @@ namespace Daqifi.Core.Device.Discovery
             catch (Exception ex)
             {
                 // One transport failing (e.g. WiFi with no network) must not sink the whole discovery.
-                Trace.WriteLine($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed: {ex}");
+                SafeTrace($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed: {ex}");
                 return Enumerable.Empty<IDeviceInfo>();
             }
         }
@@ -184,10 +185,23 @@ namespace Daqifi.Core.Device.Discovery
             }
             catch (Exception ex)
             {
-                // Timeout is a normal end-of-pass here (no caller token to honor); a finder that
-                // fails or throws on its own timeout must not sink the other transports' results.
-                Trace.WriteLine($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} timed-out discovery failed: {ex}");
+                // Timeout is a normal end-of-pass here (no caller token to honor); any failure —
+                // timeout, socket error, disposed resource — must not sink the other transports'
+                // results. Message stays generic since the cause is not necessarily the timeout.
+                SafeTrace($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed during a timed pass: {ex}");
                 return Enumerable.Empty<IDeviceInfo>();
+            }
+        }
+
+        private static void SafeTrace(string message)
+        {
+            try
+            {
+                Trace.WriteLine(message);
+            }
+            catch
+            {
+                // Best-effort logging: a misbehaving TraceListener must never affect discovery.
             }
         }
 
