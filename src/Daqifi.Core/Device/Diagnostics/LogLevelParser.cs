@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Daqifi.Core.Device.Diagnostics;
@@ -34,13 +35,22 @@ public static partial class LogLevelParser
             return false;
         }
 
-        // The numeric groups are bounded by \d+ in the pattern; int.Parse is safe
-        // for the realistic single-digit levels the firmware emits.
+        // The numeric groups are bounded by \d+ (any run of digits, no magnitude
+        // bound), so a match can still carry a value that overflows Int32. Use
+        // TryParse and treat an out-of-range group as an unparseable line —
+        // honoring this Try* method's "return false, never throw" contract
+        // rather than letting an OverflowException escape.
+        if (!int.TryParse(match.Groups["level"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var level)
+            || !int.TryParse(match.Groups["ceiling"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var ceiling))
+        {
+            return false;
+        }
+
         result = new LogLevelSetting
         {
             Module = match.Groups["module"].Value,
-            Level = int.Parse(match.Groups["level"].Value),
-            Ceiling = int.Parse(match.Groups["ceiling"].Value),
+            Level = level,
+            Ceiling = ceiling,
         };
         return true;
     }
