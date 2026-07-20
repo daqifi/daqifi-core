@@ -35,9 +35,9 @@
          frameworks); HidPlatformFactory selects the backend at runtime. The
          IOKit DllImports compile on every target and only execute on macOS. -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300" PrivateAssets="All" />
-    <PackageReference Include="System.IO.Ports" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.301" PrivateAssets="All" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.10" />
     <InternalsVisibleTo Include="Daqifi.Core.Tests" />
   </ItemGroup>
 
@@ -48,7 +48,7 @@
        WindowsUsbPortDescriptorProvider.cs (compiled on every target)
        can resolve System.Management even during a Linux/macOS build. -->
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="10.0.9" />
+    <PackageReference Include="System.Management" Version="10.0.10" />
   </ItemGroup>
 
 
