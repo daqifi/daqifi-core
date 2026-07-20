@@ -3312,6 +3312,34 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task ResetBootloaderAsync_WhenJumpToAppWriteHangs_TimesOutInJumpingToAppState()
+    {
+        // The standalone JMP_TO_APP write must be bounded by JumpingToApplicationTimeout,
+        // just like the full update flow's jump step — a write that blocks (or ignores
+        // cancellation) must not let the reset run unbounded.
+        var hidTransport = new FakeHidTransport
+        {
+            WriteHook = (_, ct) => Task.Delay(Timeout.Infinite, ct)
+        };
+
+        var options = CreateFastOptions();
+        options.JumpingToApplicationTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator(), options);
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.ResetBootloaderAsync());
+
+        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.IsType<TimeoutException>(ex.InnerException);
+        // The hung write never completed, so nothing was recorded, and the HID
+        // transport is still disconnected on the way out.
+        Assert.Empty(hidTransport.Writes);
+        Assert.False(hidTransport.IsConnected);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
     public async Task BootloaderDiagnostic_AfterHealthCheck_ServiceStaysUsableForAnotherDiagnostic()
     {
         // A successful diagnostic must leave CurrentState Idle so a subsequent
@@ -3662,7 +3690,14 @@ public class FirmwareUpdateServiceTests
             ConnectByPathAsync(devicePath).GetAwaiter().GetResult();
         }
 
-        public Task WriteAsync(byte[] data, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Optional hook invoked by <see cref="WriteAsync"/> before the write is recorded.
+        /// Lets a test make a write hang (honoring the linked cancellation token) to verify
+        /// per-state timeout enforcement.
+        /// </summary>
+        public Func<byte[], CancellationToken, Task>? WriteHook { get; set; }
+
+        public async Task WriteAsync(byte[] data, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsConnected)
@@ -3670,8 +3705,12 @@ public class FirmwareUpdateServiceTests
                 throw new InvalidOperationException("Not connected.");
             }
 
+            if (WriteHook is not null)
+            {
+                await WriteHook(data, cancellationToken).ConfigureAwait(false);
+            }
+
             Writes.Add(data.ToArray());
-            return Task.CompletedTask;
         }
 
         public void Write(byte[] data)

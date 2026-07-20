@@ -401,9 +401,12 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
 
                     failedState = FirmwareUpdateState.JumpingToApp;
                     failedOperation = "issue JMP_TO_APP soft reset";
-                    await _hidTransport
-                        .WriteAsync(_bootloaderProtocol.CreateJumpToApplicationMessage(), ct)
-                        .ConfigureAwait(false);
+                    await ExecuteWithStateTimeoutAsync(
+                        FirmwareUpdateState.JumpingToApp,
+                        failedOperation,
+                        innerCt => _hidTransport
+                            .WriteAsync(_bootloaderProtocol.CreateJumpToApplicationMessage(), innerCt),
+                        ct).ConfigureAwait(false);
 
                     _logger.LogInformation(
                         "Standalone JMP_TO_APP soft reset issued to bootloader without touching flash.");
