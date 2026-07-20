@@ -14,7 +14,7 @@ namespace Daqifi.Core.Firmware;
 /// <summary>
 /// Default firmware update orchestration service for PIC32 and WiFi update flows.
 /// </summary>
-public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
+public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32BootloaderDiagnostics, IDisposable
 {
     // WINC flash tool prompt markers (stdin handshake).
     private const string WincBootPromptMarker = "Power cycle WINC and set to bootloader mode";
@@ -317,6 +317,165 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IDisposable
         }
         finally
         {
+            _isInsideOperation.Value = false;
+            _operationLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<string> CheckBootloaderHealthAsync(
+        string? targetDevicePath = null,
+        CancellationToken cancellationToken = default)
+        => RunBootloaderDiagnosticAsync(
+            targetDevicePath,
+            async ct =>
+            {
+                // Track the phase so a failure is reported against the state it
+                // occurred in, with the matching recovery guidance — mirroring
+                // RunPic32UpdateAsync's failedState/failedOperation capture.
+                var failedState = FirmwareUpdateState.WaitingForBootloader;
+                var failedOperation = "wait for HID bootloader enumeration";
+                try
+                {
+                    var hidDevice = await ExecuteWithStateTimeoutAsync(
+                        FirmwareUpdateState.WaitingForBootloader,
+                        failedOperation,
+                        innerCt => WaitForBootloaderDeviceAsync(targetDevicePath, null, innerCt),
+                        ct).ConfigureAwait(false);
+
+                    failedState = FirmwareUpdateState.Connecting;
+                    failedOperation = "connect HID transport";
+                    await ExecuteWithStateTimeoutAsync(
+                        FirmwareUpdateState.Connecting,
+                        failedOperation,
+                        innerCt => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, null, innerCt),
+                        ct).ConfigureAwait(false);
+
+                    failedOperation = "request bootloader version";
+                    var version = await ExecuteWithStateTimeoutAsync(
+                        FirmwareUpdateState.Connecting,
+                        failedOperation,
+                        RequestBootloaderVersionAsync,
+                        ct).ConfigureAwait(false);
+
+                    _logger.LogInformation(
+                        "Standalone bootloader health check succeeded; version {BootloaderVersion}.", version);
+                    return version;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw CreateFirmwareUpdateException(failedState, failedOperation, ex);
+                }
+            },
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task ResetBootloaderAsync(
+        string? targetDevicePath = null,
+        CancellationToken cancellationToken = default)
+        => await RunBootloaderDiagnosticAsync(
+            targetDevicePath,
+            async ct =>
+            {
+                var failedState = FirmwareUpdateState.WaitingForBootloader;
+                var failedOperation = "wait for HID bootloader enumeration";
+                try
+                {
+                    var hidDevice = await ExecuteWithStateTimeoutAsync(
+                        FirmwareUpdateState.WaitingForBootloader,
+                        failedOperation,
+                        innerCt => WaitForBootloaderDeviceAsync(targetDevicePath, null, innerCt),
+                        ct).ConfigureAwait(false);
+
+                    failedState = FirmwareUpdateState.Connecting;
+                    failedOperation = "connect HID transport";
+                    await ExecuteWithStateTimeoutAsync(
+                        FirmwareUpdateState.Connecting,
+                        failedOperation,
+                        innerCt => ConnectToBootloaderWithRetryAsync(hidDevice, targetDevicePath, null, innerCt),
+                        ct).ConfigureAwait(false);
+
+                    failedState = FirmwareUpdateState.JumpingToApp;
+                    failedOperation = "issue JMP_TO_APP soft reset";
+                    await _hidTransport
+                        .WriteAsync(_bootloaderProtocol.CreateJumpToApplicationMessage(), ct)
+                        .ConfigureAwait(false);
+
+                    _logger.LogInformation(
+                        "Standalone JMP_TO_APP soft reset issued to bootloader without touching flash.");
+                    return true;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw CreateFirmwareUpdateException(failedState, failedOperation, ex);
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Serializes a lightweight bootloader diagnostic on the same operation lock and HID
+    /// transport the full update flow uses, then guarantees the HID transport is disconnected
+    /// afterward. Unlike <see cref="RunExclusiveAsync"/> it does not drive the update state
+    /// machine (<see cref="CurrentState"/> stays <see cref="FirmwareUpdateState.Idle"/>) — a
+    /// health check / soft reset is not a firmware update — but it keeps the same Idle-only
+    /// gate so it cannot interleave with an in-flight update. Reentrancy from an update's
+    /// synchronous progress / state-change callback is rejected (rather than allowed through
+    /// like the read-only <see cref="CheckWifiFirmwareStatusAsync"/> probe) because a
+    /// diagnostic owns the HID connect/version/reset exchange.
+    /// </summary>
+    private async Task<T> RunBootloaderDiagnosticAsync<T>(
+        string? targetDevicePath,
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+
+        // Fast-fail an obviously-invalid target (whitespace) rather than polling until the
+        // WaitingForBootloader state timeout. Null means "no targeting" (first enumerated bootloader).
+        if (targetDevicePath != null && string.IsNullOrWhiteSpace(targetDevicePath))
+        {
+            throw new ArgumentException("Target device path cannot be whitespace.", nameof(targetDevicePath));
+        }
+
+        if (_isInsideOperation.Value)
+        {
+            throw new InvalidOperationException(
+                "Cannot run a bootloader diagnostic from within an in-flight firmware operation.");
+        }
+
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _isInsideOperation.Value = true;
+        try
+        {
+            ResetIfTerminalState();
+
+            if (CurrentState != FirmwareUpdateState.Idle)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot run a bootloader diagnostic while service is in state {CurrentState}.");
+            }
+
+            _bootloaderPollAttempts = 0;
+            _lastBootloaderEnumerationError = null;
+            _targetBootloaderDevicePath = targetDevicePath;
+            _targetBootloaderLocationKey = null;
+
+            return await operation(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A health check leaves a live HID handle; a soft reset re-enumerates the
+            // device out from under it. Either way, release the handle before returning
+            // so a subsequent update (or diagnostic) starts from a clean transport.
+            await SafeDisconnectHidAsync().ConfigureAwait(false);
             _isInsideOperation.Value = false;
             _operationLock.Release();
         }
