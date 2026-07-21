@@ -21,7 +21,15 @@ namespace Daqifi.Core.Device.Network
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <remarks>
         /// <para>
-        /// This method performs the following steps:
+        /// Requires a USB control connection. Applying the LAN settings restarts the WiFi module,
+        /// which would drop a WiFi/TCP control connection before the save step is delivered (leaving
+        /// the new config applied-but-not-persisted), so this method throws
+        /// <see cref="NetworkReconfigurationRequiresUsbException"/> when invoked over WiFi/TCP. The
+        /// transport is checked first: over a non-USB transport the method throws before stopping
+        /// streaming and before dispatching any command, so nothing is left half-applied.
+        /// </para>
+        /// <para>
+        /// Once the USB precondition is met, this method performs the following steps:
         /// </para>
         /// <list type="number">
         /// <item><description>Stops any active streaming</description></item>
@@ -38,12 +46,6 @@ namespace Daqifi.Core.Device.Network
         /// <para>
         /// Note: The SD card and LAN interfaces share the same SPI bus on the device hardware
         /// and cannot be used simultaneously. This method handles the interface switching automatically.
-        /// </para>
-        /// <para>
-        /// Requires a USB control connection. Applying the LAN settings restarts the WiFi module,
-        /// which would drop a WiFi/TCP control connection before the save step is delivered (leaving
-        /// the new config applied-but-not-persisted), so this method throws
-        /// <see cref="NetworkReconfigurationRequiresUsbException"/> when invoked over WiFi/TCP.
         /// </para>
         /// </remarks>
         /// <exception cref="NetworkReconfigurationRequiresUsbException">Thrown when the active control transport is not USB.</exception>
