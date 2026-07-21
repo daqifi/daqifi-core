@@ -39,7 +39,14 @@ namespace Daqifi.Core.Device.Network
         /// Note: The SD card and LAN interfaces share the same SPI bus on the device hardware
         /// and cannot be used simultaneously. This method handles the interface switching automatically.
         /// </para>
+        /// <para>
+        /// Requires a USB control connection. Applying the LAN settings restarts the WiFi module,
+        /// which would drop a WiFi/TCP control connection before the save step is delivered (leaving
+        /// the new config applied-but-not-persisted), so this method throws
+        /// <see cref="NetworkReconfigurationRequiresUsbException"/> when invoked over WiFi/TCP.
+        /// </para>
         /// </remarks>
+        /// <exception cref="NetworkReconfigurationRequiresUsbException">Thrown when the active control transport is not USB.</exception>
         Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default);
 
         /// <summary>
