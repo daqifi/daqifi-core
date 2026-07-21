@@ -10,9 +10,15 @@ namespace Daqifi.Core.Firmware;
 /// <remarks>
 /// Implementations share the same HID transport and operation serialization as the full
 /// update flow, so these operations cannot run concurrently with — nor be re-entered from a
-/// callback of — an in-flight update. Both throw <see cref="FirmwareUpdateException"/>
-/// (carrying <see cref="FirmwareUpdateException.RecoveryGuidance"/>) on failure, consistent
-/// with the full update flow.
+/// callback of — an in-flight update. <em>Bootloader operation</em> failures (enumeration,
+/// connect, version, or reset) are wrapped in <see cref="FirmwareUpdateException"/> (carrying
+/// <see cref="FirmwareUpdateException.RecoveryGuidance"/>), consistent with the full update
+/// flow. Precondition, lifecycle, and concurrency failures are thrown directly instead:
+/// <see cref="System.ArgumentException"/> for a whitespace target path,
+/// <see cref="System.ObjectDisposedException"/> when the service is disposed,
+/// <see cref="System.InvalidOperationException"/> when invoked while another firmware operation
+/// is in flight (including reentrancy from its callbacks) or the service is not idle, and
+/// <see cref="System.OperationCanceledException"/> when the supplied token is canceled.
 /// </remarks>
 public interface IPic32BootloaderDiagnostics
 {
@@ -34,6 +40,17 @@ public interface IPic32BootloaderDiagnostics
     /// and <see cref="FirmwareUpdateException.RecoveryGuidance"/> describe where the health
     /// check failed.
     /// </exception>
+    /// <exception cref="System.ArgumentException">
+    /// Thrown when <paramref name="targetDevicePath"/> is non-null but whitespace.
+    /// </exception>
+    /// <exception cref="System.ObjectDisposedException">Thrown when the service has been disposed.</exception>
+    /// <exception cref="System.InvalidOperationException">
+    /// Thrown when another firmware operation is in flight (including reentrancy from its
+    /// callbacks) or the service is not in an idle state.
+    /// </exception>
+    /// <exception cref="System.OperationCanceledException">
+    /// Thrown when <paramref name="cancellationToken"/> is canceled.
+    /// </exception>
     Task<string> CheckBootloaderHealthAsync(
         string? targetDevicePath = null,
         CancellationToken cancellationToken = default);
@@ -53,6 +70,17 @@ public interface IPic32BootloaderDiagnostics
     /// Thrown when the bootloader could not be enumerated, connected to, or the soft-reset
     /// message could not be written. The exception's <see cref="FirmwareUpdateException.FailedState"/>
     /// and <see cref="FirmwareUpdateException.RecoveryGuidance"/> describe where the reset failed.
+    /// </exception>
+    /// <exception cref="System.ArgumentException">
+    /// Thrown when <paramref name="targetDevicePath"/> is non-null but whitespace.
+    /// </exception>
+    /// <exception cref="System.ObjectDisposedException">Thrown when the service has been disposed.</exception>
+    /// <exception cref="System.InvalidOperationException">
+    /// Thrown when another firmware operation is in flight (including reentrancy from its
+    /// callbacks) or the service is not in an idle state.
+    /// </exception>
+    /// <exception cref="System.OperationCanceledException">
+    /// Thrown when <paramref name="cancellationToken"/> is canceled.
     /// </exception>
     Task ResetBootloaderAsync(
         string? targetDevicePath = null,
