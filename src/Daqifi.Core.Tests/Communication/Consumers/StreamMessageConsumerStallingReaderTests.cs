@@ -98,6 +98,56 @@ public class StreamMessageConsumerStallingReaderTests
     }
 
     [Fact]
+    public void Start_RacedByTwoCallersDuringGrace_SpawnsOnlyOneReader()
+    {
+        // The grace period widened an existing window: two callers restarting concurrently could
+        // both observe a cleared running flag, both wait out the grace, and then each spawn a
+        // reader — two Stream.Read loops on one stream. Start() serializes the whole transition,
+        // so exactly one replacement reader may exist.
+        //
+        // Driven through the grace window deliberately: both callers are parked in the stale-thread
+        // join when that thread is released, which is the widest the race ever gets.
+        using var stream = new ThreadCountingStallingStream();
+        using var consumer = new StreamMessageConsumer<string>(stream, new LineBasedMessageParser());
+
+        consumer.Start();
+        Assert.True(stream.WaitForReadEntered(TimeSpan.FromSeconds(2)));
+        Assert.False(consumer.StopSafely(timeoutMs: 100));
+
+        using var bothInStart = new CountdownEvent(2);
+        var failures = new List<Exception>();
+        var starters = Enumerable.Range(0, 2).Select(_ => new Thread(() =>
+        {
+            bothInStart.Signal();
+            try
+            {
+                consumer.Start();
+            }
+            catch (Exception ex)
+            {
+                lock (failures) { failures.Add(ex); }
+            }
+        })).ToArray();
+
+        foreach (var t in starters) t.Start();
+        Assert.True(bothInStart.Wait(TimeSpan.FromSeconds(5)));
+
+        // Release the stale reader so both racers' grace joins complete at essentially the same
+        // moment — the worst case for the race.
+        Thread.Sleep(50);
+        stream.Release();
+
+        foreach (var t in starters) Assert.True(t.Join(TimeSpan.FromSeconds(10)));
+        Assert.True(consumer.StopSafely(timeoutMs: 2000));
+
+        // One original reader plus at most one replacement. Three distinct reader threads means
+        // two were spawned concurrently against the same stream.
+        Assert.True(
+            stream.DistinctReaderCount <= 2,
+            $"{stream.DistinctReaderCount} distinct reader threads touched the stream; at most 2 (original + one replacement) is correct. Failures: {failures.Count}");
+    }
+
+    [Fact]
     public void Start_CalledFromMessageReceivedCallbackAfterStop_RefusesWithoutSelfJoin()
     {
         // MessageReceived callbacks run on the consumer thread, so a handler can call Start() after
@@ -285,13 +335,75 @@ public class StreamMessageConsumerStallingReaderTests
     }
 
     /// <summary>
+    /// Blocks the first reader until released, and records how many distinct threads have entered
+    /// <see cref="Read(byte[], int, int)"/> — the observable signature of a double-start.
+    /// </summary>
+    private sealed class ThreadCountingStallingStream : Stream
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        private readonly ManualResetEventSlim _readEntered = new(false);
+        private readonly HashSet<int> _readerThreadIds = [];
+
+        public int DistinctReaderCount
+        {
+            get { lock (_readerThreadIds) { return _readerThreadIds.Count; } }
+        }
+
+        public bool WaitForReadEntered(TimeSpan timeout) => _readEntered.Wait(timeout);
+
+        public void Release() => _release.Set();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            lock (_readerThreadIds)
+            {
+                _readerThreadIds.Add(Environment.CurrentManagedThreadId);
+            }
+
+            _readEntered.Set();
+            if (!_release.IsSet)
+            {
+                _release.Wait(TimeSpan.FromSeconds(10));
+            }
+            else
+            {
+                Thread.Sleep(10);
+            }
+
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _release.Set();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
     /// Emits one payload on the first read so exactly one MessageReceived callback fires, then
     /// idles. Used to drive a handler that runs on the consumer thread.
     /// </summary>
     private sealed class SingleLineThenIdleStream : Stream
     {
         private readonly byte[] _payload;
-        private bool _sent;
+        private int _offset;
 
         public SingleLineThenIdleStream(string text) => _payload = Encoding.UTF8.GetBytes(text);
 
@@ -305,15 +417,19 @@ public class StreamMessageConsumerStallingReaderTests
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (_sent)
+            var remaining = _payload.Length - _offset;
+            if (remaining <= 0)
             {
                 Thread.Sleep(10);
                 return 0;
             }
 
-            _sent = true;
-            Array.Copy(_payload, 0, buffer, offset, _payload.Length);
-            return _payload.Length;
+            // Honor count: Stream.Read may never return more than the caller asked for, so serve
+            // the payload across as many partial reads as it takes.
+            var toCopy = Math.Min(count, remaining);
+            Array.Copy(_payload, _offset, buffer, offset, toCopy);
+            _offset += toCopy;
+            return toCopy;
         }
 
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

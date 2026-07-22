@@ -29,6 +29,24 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// </summary>
     private volatile bool _clearRequested;
 
+    /// <summary>
+    /// Serializes <see cref="Start"/> so the check / grace-wait / publish sequence is atomic and
+    /// only one reader thread can ever be spawned.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately <b>not</b> taken by <see cref="Stop"/> / <see cref="StopSafely"/>: those would
+    /// then block for the whole of a concurrent start's grace wait, which is the opposite of what a
+    /// stop should do. This closes the double-start hazard specifically; a caller that races
+    /// <see cref="Start"/> against a stop is asking for an ill-defined result either way.
+    /// <para>
+    /// A <see cref="MessageReceived"/> callback that calls <see cref="Start"/> while another thread
+    /// holds this lock waits, but only until that thread's grace elapses — the holder is joining the
+    /// callback's own thread, so it gives up after <see cref="StaleReaderGraceMs"/> and both callers
+    /// then refuse. Bounded, and only in an already re-entrant scenario.
+    /// </para>
+    /// </remarks>
+    private readonly object _startLock = new();
+
     private volatile bool _isRunning;
     private Thread? _consumerThread;
     private bool _disposed;
@@ -108,35 +126,42 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     {
         ThrowIfDisposed();
 
-        if (_isRunning)
-            return; // Already running
-
-        // A prior Stop()/StopSafely() whose Join timed out leaves the old reader thread alive.
-        // Refuse to spawn a second reader against the same stream/buffer — two concurrent
-        // Stream.Read loops would reintroduce the framing corruption this class guards against.
-        // The stop already cleared _isRunning, so give that reader a bounded chance to finish
-        // its in-flight read and exit before giving up on the caller.
-        //
-        // Exception: if we ARE the consumer thread (Start called from a MessageReceived callback
-        // after another thread requested stop), joining would just wait on ourselves until the
-        // grace elapses and then refuse anyway. Refuse immediately instead — same guarantee, no
-        // pointless stall on the reader thread. Mirrors the self-join guard in ClearBuffer.
-        var staleThread = _consumerThread;
-        if (staleThread is { IsAlive: true }
-            && (ReferenceEquals(staleThread, Thread.CurrentThread)
-                || !staleThread.Join(StaleReaderGraceMs)))
+        // Serialize the whole transition — check, grace wait, and publish. Without this, two
+        // callers racing a restart can both observe a cleared running flag, both wait out the
+        // grace, and then each spawn a reader: two concurrent Stream.Read loops on one stream,
+        // which is precisely what this class must never allow.
+        lock (_startLock)
         {
-            throw new ConsumerThreadNotExitedException();
+            if (_isRunning)
+                return; // Already running
+
+            // A prior Stop()/StopSafely() whose Join timed out leaves the old reader thread alive.
+            // Refuse to spawn a second reader against the same stream/buffer — two concurrent
+            // Stream.Read loops would reintroduce the framing corruption this class guards against.
+            // The stop already cleared _isRunning, so give that reader a bounded chance to finish
+            // its in-flight read and exit before giving up on the caller.
+            //
+            // Exception: if we ARE the consumer thread (Start called from a MessageReceived callback
+            // after another thread requested stop), joining would just wait on ourselves until the
+            // grace elapses and then refuse anyway. Refuse immediately instead — same guarantee, no
+            // pointless stall on the reader thread. Mirrors the self-join guard in ClearBuffer.
+            var staleThread = _consumerThread;
+            if (staleThread is { IsAlive: true }
+                && (ReferenceEquals(staleThread, Thread.CurrentThread)
+                    || !staleThread.Join(StaleReaderGraceMs)))
+            {
+                throw new ConsumerThreadNotExitedException();
+            }
+
+            _clearRequested = false;
+            _isRunning = true;
+            _consumerThread = new Thread(ProcessMessages)
+            {
+                IsBackground = true,
+                Name = $"MessageConsumer-{typeof(T).Name}"
+            };
+            _consumerThread.Start();
         }
-
-        _clearRequested = false;
-        _isRunning = true;
-        _consumerThread = new Thread(ProcessMessages)
-        {
-            IsBackground = true,
-            Name = $"MessageConsumer-{typeof(T).Name}"
-        };
-        _consumerThread.Start();
     }
 
     /// <summary>
