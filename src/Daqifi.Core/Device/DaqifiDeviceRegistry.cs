@@ -193,28 +193,25 @@ public sealed class DaqifiDeviceRegistry : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         var discoveryIdentity = DeviceIdentity.FromDiscovery(deviceInfo);
-        var replacedExisting = false;
 
-        // Pre-connect check. Rejecting here is free: nothing has been opened yet.
-        while (true)
+        // Pre-connect check. Rejecting here is free: nothing has been opened yet. The check that
+        // actually guards the live set runs after connecting, atomically with the add.
+        DeviceRegistration? existing;
+        List<DeviceRegistration>? stale;
+
+        lock (_lock)
         {
-            DeviceRegistration? existing;
-            List<DeviceRegistration>? stale;
+            ThrowIfDisposed();
+            stale = PruneLocked();
+            existing = FindDuplicateLocked(key, discoveryIdentity);
+        }
 
-            lock (_lock)
-            {
-                ThrowIfDisposed();
-                stale = PruneLocked();
-                existing = FindDuplicateLocked(key, discoveryIdentity);
-            }
+        CompleteRemoval(stale, DeviceRemovalReason.Disconnected);
 
-            CompleteRemoval(stale, DeviceRemovalReason.Disconnected);
+        DeviceRegistration? approvedReplacement = null;
 
-            if (existing == null)
-            {
-                break;
-            }
-
+        if (existing != null)
+        {
             var action = InvokePolicy(new DuplicateDeviceCheck(
                 existing,
                 discoveryIdentity,
@@ -223,26 +220,27 @@ public sealed class DaqifiDeviceRegistry : IDisposable
                 deviceInfo.ConnectionType,
                 DuplicateCheckPhase.BeforeConnect));
 
-            switch (action)
+            if (action == DuplicateDeviceAction.Cancel)
             {
-                case DuplicateDeviceAction.SwitchToNew:
-                    // Drop the existing connection first: it may be holding the very resource
-                    // (serial port, device-side socket) the new connection needs.
-                    RemoveRegistration(existing, DeviceRemovalReason.Replaced);
-                    replacedExisting = true;
-                    continue;
-
-                case DuplicateDeviceAction.Cancel:
-                    return new DeviceRegistrationResult(DeviceRegistrationOutcome.Canceled, null);
-
-                default:
-                    return new DeviceRegistrationResult(DeviceRegistrationOutcome.DuplicateRejected, existing);
+                return new DeviceRegistrationResult(DeviceRegistrationOutcome.Canceled, null);
             }
+
+            if (action != DuplicateDeviceAction.SwitchToNew)
+            {
+                return new DeviceRegistrationResult(DeviceRegistrationOutcome.DuplicateRejected, existing);
+            }
+
+            // Record the decision but keep the existing connection until the new one is actually
+            // open. Dropping it first would leave the caller with nothing when the new transport
+            // fails to connect — switching a healthy USB session to a WiFi address that turns out
+            // not to answer must not cost them the session they had. Registration drops it once
+            // the replacement is live, without asking the policy a second time.
+            approvedReplacement = existing;
         }
 
         var device = await _connector(deviceInfo, options, cancellationToken).ConfigureAwait(false);
 
-        return RegisterCore(device, deviceInfo, key, replacedExisting);
+        return RegisterCore(device, deviceInfo, key, approvedReplacement);
     }
 
     /// <summary>
@@ -284,7 +282,7 @@ public sealed class DaqifiDeviceRegistry : IDisposable
                 "Only a connected device can be registered. Connect the device first.", nameof(device));
         }
 
-        return RegisterCore(device, deviceInfo, key, replacedExisting: false);
+        return RegisterCore(device, deviceInfo, key, approvedReplacement: null);
     }
 
     /// <summary>
@@ -481,16 +479,19 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// <param name="device">The connected device being registered.</param>
     /// <param name="deviceInfo">The discovery metadata, if available.</param>
     /// <param name="key">The requested key, or <c>null</c> to derive one.</param>
-    /// <param name="replacedExisting">
-    /// Whether an earlier (pre-connect) duplicate check already dropped a registration for this
-    /// unit, so the outcome should be reported as <see cref="DeviceRegistrationOutcome.ReplacedExisting"/>.
+    /// <param name="approvedReplacement">
+    /// A registration the pre-connect check already got approval to replace. Finding it again here
+    /// is not a fresh duplicate: it is dropped without re-consulting the policy, so a consumer that
+    /// prompts its user is asked once per connection attempt rather than twice.
     /// </param>
     private DeviceRegistrationResult RegisterCore(
         DaqifiDevice device,
         IDeviceInfo? deviceInfo,
         string? key,
-        bool replacedExisting)
+        DeviceRegistration? approvedReplacement)
     {
+        var replacedExisting = false;
+
         try
         {
             // Metadata is authoritative once connected, but it never carries the USB location key
@@ -549,13 +550,17 @@ public sealed class DaqifiDeviceRegistry : IDisposable
                         added);
                 }
 
-                var action = InvokePolicy(new DuplicateDeviceCheck(
-                    existing!,
-                    identity,
-                    deviceInfo,
-                    device,
-                    connectionType,
-                    DuplicateCheckPhase.AfterConnect));
+                // A registration the caller already approved replacing before we connected is not
+                // a fresh duplicate — dropping it now is finishing that decision, not making one.
+                var action = ReferenceEquals(existing, approvedReplacement)
+                    ? DuplicateDeviceAction.SwitchToNew
+                    : InvokePolicy(new DuplicateDeviceCheck(
+                        existing!,
+                        identity,
+                        deviceInfo,
+                        device,
+                        connectionType,
+                        DuplicateCheckPhase.AfterConnect));
 
                 switch (action)
                 {

@@ -284,6 +284,71 @@ public class DaqifiDeviceRegistryTests
     }
 
     [Fact]
+    public async Task ConnectAsync_SwitchToNew_WhenTheNewConnectionFails_KeepsTheExistingOne()
+    {
+        const string serialNumber = "DAQ-12345";
+        var overUsb = ConnectedDevice("usb", serialNumber);
+        var attempt = 0;
+        using var registry = new DaqifiDeviceRegistry((_, _, _) =>
+        {
+            attempt++;
+            return attempt == 1
+                ? Task.FromResult(overUsb)
+                : Task.FromException<DaqifiDevice>(
+                    new TimeoutException("TCP connect to 192.0.2.1:9760 timed out after 5s."));
+        });
+        var removals = new List<DeviceRemovedEventArgs>();
+        registry.DeviceRemoved += (_, e) => removals.Add(e);
+
+        await registry.ConnectAsync(UsbInfo(serialNumber));
+        registry.DuplicatePolicy = _ => DuplicateDeviceAction.SwitchToNew;
+
+        // The replacement transport refuses the connection — the real case that caught this: a
+        // device that answers UDP discovery but is not listening on its TCP data port. Switching
+        // to it must not cost the caller the healthy USB session they already had.
+        await Assert.ThrowsAsync<TimeoutException>(() => registry.ConnectAsync(WifiInfo(serialNumber)));
+
+        Assert.Equal(1, registry.Count);
+        Assert.True(overUsb.IsConnected);
+        Assert.Same(overUsb, Assert.Single(registry.Devices).Device);
+        Assert.Empty(removals);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_SwitchToNew_DropsTheOldConnectionOnlyAfterTheNewOneIsOpen()
+    {
+        const string serialNumber = "DAQ-12345";
+        var overUsb = ConnectedDevice("usb", serialNumber);
+        var overWifi = ConnectedDevice("wifi", serialNumber);
+        var policyCalls = new List<DuplicateCheckPhase>();
+        var connectedWhileOldStillRegistered = false;
+        var connects = new List<int>();
+        using var registry = RegistryReturning(connects, overUsb, overWifi);
+
+        await registry.ConnectAsync(UsbInfo(serialNumber));
+
+        registry.DuplicatePolicy = check =>
+        {
+            policyCalls.Add(check.Phase);
+            return DuplicateDeviceAction.SwitchToNew;
+        };
+        registry.DeviceRemoved += (_, _) =>
+        {
+            // At the moment the old registration is dropped, the replacement must already be live.
+            connectedWhileOldStillRegistered = overWifi.IsConnected;
+        };
+
+        var result = await registry.ConnectAsync(WifiInfo(serialNumber));
+
+        Assert.Equal(DeviceRegistrationOutcome.ReplacedExisting, result.Outcome);
+        Assert.True(connectedWhileOldStillRegistered);
+        Assert.False(overUsb.IsConnected);
+        Assert.Equal(1, registry.Count);
+        // Asked once, pre-connect — a consumer prompting its user must not see two dialogs.
+        Assert.Equal(DuplicateCheckPhase.BeforeConnect, Assert.Single(policyCalls));
+    }
+
+    [Fact]
     public async Task ConnectAsync_Cancel_LeavesTheExistingConnectionAndRegistersNothing()
     {
         const string serialNumber = "DAQ-12345";

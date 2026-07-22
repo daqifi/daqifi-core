@@ -16,7 +16,9 @@ public enum DuplicateDeviceAction
 
     /// <summary>
     /// Drop the already-registered connection (disconnecting and disposing it) and continue with
-    /// the new one.
+    /// the new one. The existing connection is not dropped until the new one is actually open, so
+    /// a replacement that fails to connect leaves the original in place rather than costing the
+    /// caller both.
     /// </summary>
     SwitchToNew,
 
