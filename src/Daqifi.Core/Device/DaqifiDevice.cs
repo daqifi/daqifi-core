@@ -519,18 +519,24 @@ namespace Daqifi.Core.Device
         /// the transport's current stream. The abandoned reader has already been told to stop, so it
         /// exits as soon as its in-flight read returns and never issues another one; its events are
         /// no longer subscribed, so anything it consumed on that last read is simply dropped.
+        /// <para>
+        /// The consumer is snapshotted once up front: the text-exchange path holds
+        /// <c>_textExchangeLock</c> (which <see cref="Disconnect"/> also waits on), but the raw-capture
+        /// path does not, so a concurrent teardown could otherwise null the field between reads.
+        /// </para>
         /// </remarks>
         private void RestartMessageConsumerAfterSwap()
         {
-            if (_messageConsumer == null)
+            var consumer = _messageConsumer;
+            if (consumer == null)
             {
                 return;
             }
 
             try
             {
-                _messageConsumer.Start();
-                _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                consumer.Start();
+                consumer.MessageReceived += OnInboundMessageReceived;
                 return;
             }
             catch (ConsumerThreadNotExitedException ex)
@@ -558,13 +564,12 @@ namespace Daqifi.Core.Device
             {
             }
 
-            var stale = _messageConsumer;
             _messageConsumer = null;
             // Dispose does not block: the instance is already stopped, so its StopSafely
             // short-circuits without joining the abandoned thread.
             try
             {
-                stale.Dispose();
+                consumer.Dispose();
             }
             catch (Exception ex)
             {
