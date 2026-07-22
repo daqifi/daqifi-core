@@ -243,6 +243,81 @@ you need a different interval per transport.) Devices are deduplicated per trans
 physical unit seen over both WiFi and Serial appears as two distinct connection options.
 `continuous.Devices` returns a thread-safe snapshot of the current set at any time.
 
+### Managing Multiple Devices (`DaqifiDeviceRegistry`)
+
+Multi-device is the normal DAQ case, and `DaqifiDeviceFactory` hands back one device at a time
+without tracking the live set. `DaqifiDeviceRegistry` is that missing layer: a thread-safe set of
+connected devices that owns their lifetime, raises add/remove events, and — the part every
+consumer otherwise reimplements — recognizes **the same physical unit reached over two transports
+at once**, the classic "already connected via USB, now discovered over WiFi" support trap.
+
+```csharp
+using Daqifi.Core.Device;
+
+using var registry = new DaqifiDeviceRegistry();
+
+registry.DeviceAdded += (_, e) => devices.Add(e.Registration);       // bind to your UI list
+registry.DeviceRemoved += (_, e) => devices.Remove(e.Registration);  // e.Reason says why
+
+foreach (var info in await finder.DiscoverAsync(TimeSpan.FromSeconds(3)))
+{
+    var result = await registry.ConnectAsync(info);
+
+    // Not an error: the unit was already connected over another transport, and the registry
+    // handed back that live connection instead of opening a redundant second one.
+    if (result.Outcome == DeviceRegistrationOutcome.DuplicateRejected)
+    {
+        logger.LogInformation("{Name} is already connected as {Key}", info.Name, result.Key);
+    }
+}
+
+// Later: the registry disconnects and disposes whatever it removes.
+registry.Remove(key);
+```
+
+**Keys vs. identity.** Two separate concepts run through the API:
+
+| | What it is | Used for |
+|---|---|---|
+| **Key** (`DeviceRegistration.Key`) | The handle you look a device up by. Defaults to `DeviceIdentity.Key`; pass your own to `ConnectAsync`/`Register` if you already mint device ids. | `TryGet`, `Remove` |
+| **Identity** (`DeviceIdentity`) | The fingerprint of the physical unit: serial number → MAC address → USB `LocationKey`. | Duplicate detection |
+
+Identity matching walks those three discriminators and is decided by the first one **both** sides
+report: serial numbers compare case-insensitively and decisively (different serials are different
+units, full stop), MAC comparison ignores separators, and the USB location key is the last resort
+for identical units that report no serial. A device that reports none of the three never matches
+another — two unidentifiable devices are treated as two devices, not one.
+
+**Duplicate policy.** The check runs twice: once from `IDeviceInfo` before connecting (free to
+reject — nothing is open yet) and again from `DaqifiDevice.Metadata` afterwards, because a
+serial-port device's serial number is often only known once it has answered its first status
+message. With no callback set the existing connection wins and the new one is rejected. To decide
+yourself — for example by prompting the user:
+
+```csharp
+registry.DuplicatePolicy = check =>
+{
+    var message = $"{check.Existing.Device.Name} is already connected via " +
+                  $"{check.ExistingConnectionType}. Switch to {check.NewConnectionType}?";
+
+    return PromptUser(message)
+        ? DuplicateDeviceAction.SwitchToNew   // drop the existing connection, keep the new one
+        : DuplicateDeviceAction.KeepExisting; // or Cancel to abandon the attempt entirely
+};
+```
+
+**Ownership and liveness.** The registry disconnects and disposes every device it removes,
+including duplicates it rejects — once a device is passed to `ConnectAsync` or `Register`, don't
+dispose it yourself. Registrations whose device stops reporting `IsConnected` are pruned before
+every registration attempt (and by `PruneDisconnected()` on demand), so a unit that was unplugged
+never blocks a later reconnect. The registry does not reconnect on its own.
+
+All members are safe to call from any thread; reads return snapshots, and the duplicate policy is
+always invoked without the internal lock held, so a policy that blocks on a user prompt never
+blocks other threads. Two concurrent `ConnectAsync` calls for the *same* physical device may both
+open a connection — the loser is detected after connecting and disposed — so serialize your own
+calls if a single connect attempt matters.
+
 ### Manual Device Connection (Advanced)
 
 For cases where you need more control over the connection process:
@@ -576,6 +651,8 @@ However, for connection state changes (Connect/Disconnect), coordinate access fr
 ## Features
 
 - **Simple Factory API**: Single-call connection with `DaqifiDeviceFactory`
+- **Multi-Device Registry**: `DaqifiDeviceRegistry` tracks the live device set and detects the same
+  unit connected over two transports
 - **Clean Abstraction**: Hardware details hidden behind well-defined interfaces
 - **Event-Driven**: Status changes and messages handled via events
 - **Type Safety**: Generic message types provide compile-time safety

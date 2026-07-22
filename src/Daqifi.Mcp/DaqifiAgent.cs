@@ -9,7 +9,7 @@ namespace Daqifi.Mcp;
 /// <summary>
 /// Agent-facing facade over <c>Daqifi.Core</c>. Owns device discovery results and the set of
 /// connected devices, and translates the high-level tool surface into the real SDK calls
-/// (static <see cref="DaqifiDeviceFactory"/>, <see cref="IStreamingDevice"/> channel APIs,
+/// (<see cref="DaqifiDeviceRegistry"/>, <see cref="IStreamingDevice"/> channel APIs,
 /// <see cref="ISdCardOperations"/>). One instance is shared by all tool calls.
 /// </summary>
 /// <remarks>
@@ -17,12 +17,15 @@ namespace Daqifi.Mcp;
 /// disconnects, or mutates device state is serialized behind <see cref="_gate"/>. Read-only
 /// introspection snapshots the channel collection instead, so it never blocks and never folds the
 /// live <c>Channels</c> view while the device's consumer thread repopulates it.
+/// The live set of connections is owned by a <see cref="DaqifiDeviceRegistry"/> keyed by our own
+/// <c>device_id</c>, which also supplies stale-handle pruning, disposal, and cross-transport
+/// duplicate detection (the same unit reached over both USB and WiFi).
 /// </remarks>
 public sealed class DaqifiAgent
 {
     private readonly ServerOptions _options;
     private readonly ConcurrentDictionary<string, IDeviceInfo> _discovered = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, DaqifiDevice> _connected = new(StringComparer.Ordinal);
+    private readonly DaqifiDeviceRegistry _registry = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public DaqifiAgent(ServerOptions options) => _options = options;
@@ -61,35 +64,37 @@ public sealed class DaqifiAgent
 
     // ------------------------------------------------------------- connection
 
+    /// <summary>
+    /// Connects to a discovered device and files it in the registry under its <c>device_id</c>.
+    /// Reconnecting an id that is already live (or connecting a second transport to a device that
+    /// is already connected) is not an error: the registry's default duplicate policy hands back
+    /// the existing connection, whose id is the one returned — so always use the returned
+    /// <c>device_id</c> for follow-up calls rather than assuming it is the one passed in.
+    /// </summary>
     public async Task<ConnectedDeviceInfo> ConnectAsync(string deviceId, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_connected.TryGetValue(deviceId, out var already))
-            {
-                if (already.IsConnected)
-                {
-                    return ConnectedDeviceInfo.From(deviceId, already);
-                }
-
-                // Stale handle (device dropped); discard it and reconnect.
-                _connected.TryRemove(new KeyValuePair<string, DaqifiDevice>(deviceId, already));
-                already.Dispose();
-            }
-
             if (!_discovered.TryGetValue(deviceId, out var info))
             {
                 throw new InvalidOperationException(
                     $"Unknown device_id '{deviceId}'. Call discover_devices first and use a device_id from its result.");
             }
 
-            var device = await DaqifiDeviceFactory
-                .ConnectFromDeviceInfoAsync(info, null, cancellationToken)
+            // The registry prunes stale handles (device dropped since it was registered) before
+            // the duplicate check, so a dropped device reconnects instead of returning a dead one.
+            var result = await _registry
+                .ConnectAsync(info, deviceId, options: null, cancellationToken)
                 .ConfigureAwait(false);
 
-            _connected[deviceId] = device;
-            return ConnectedDeviceInfo.From(deviceId, device);
+            if (result.Registration is null)
+            {
+                throw new InvalidOperationException(
+                    $"Connection to '{deviceId}' was canceled by the duplicate-device policy.");
+            }
+
+            return ConnectedDeviceInfo.From(result.Registration.Key, result.Registration.Device);
         }
         finally
         {
@@ -102,13 +107,10 @@ public sealed class DaqifiAgent
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_connected.TryRemove(deviceId, out var device))
-            {
-                try { device.Disconnect(); } catch { /* best effort */ }
-                device.Dispose();
-                return $"Disconnected '{deviceId}'.";
-            }
-            return $"Device '{deviceId}' was not connected.";
+            // Remove owns the teardown: disconnect then dispose.
+            return _registry.Remove(deviceId)
+                ? $"Disconnected '{deviceId}'."
+                : $"Device '{deviceId}' was not connected.";
         }
         finally
         {
@@ -117,7 +119,7 @@ public sealed class DaqifiAgent
     }
 
     public IReadOnlyList<ConnectedDeviceInfo> ListConnected() =>
-        _connected.Select(kvp => ConnectedDeviceInfo.From(kvp.Key, kvp.Value)).ToList();
+        _registry.Devices.Select(r => ConnectedDeviceInfo.From(r.Key, r.Device)).ToList();
 
     // ----------------------------------------------------------- introspection
 
@@ -419,21 +421,20 @@ public sealed class DaqifiAgent
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            foreach (var device in _connected.Values)
+            foreach (var registration in _registry.Devices)
             {
                 try
                 {
-                    if (device is ISdCardOperations { IsLoggingToSdCard: true } sd)
+                    if (registration.Device is ISdCardOperations { IsLoggingToSdCard: true } sd)
                     {
                         await sd.StopSdCardLoggingAsync().ConfigureAwait(false);
                     }
                 }
                 catch { /* best effort */ }
-
-                try { device.Disconnect(); } catch { /* best effort */ }
-                device.Dispose();
             }
-            _connected.Clear();
+
+            // Clear disconnects and disposes every registered device.
+            _registry.Clear();
         }
         finally
         {
@@ -445,19 +446,19 @@ public sealed class DaqifiAgent
 
     private DaqifiDevice Require(string deviceId)
     {
-        if (!_connected.TryGetValue(deviceId, out var device))
+        if (!_registry.TryGet(deviceId, out var registration))
         {
             throw new InvalidOperationException(
                 $"Device '{deviceId}' is not connected. Call connect_device first.");
         }
-        if (!device.IsConnected)
+        if (!registration!.Device.IsConnected)
         {
-            // Only evict the exact stale instance we inspected (a concurrent reconnect may have
-            // already replaced it with a live one under the same id).
-            _connected.TryRemove(new KeyValuePair<string, DaqifiDevice>(deviceId, device));
+            // Evict by reference so only the exact stale instance we inspected is removed: a
+            // concurrent reconnect may already have replaced it with a live one under the same id.
+            _registry.Remove(registration.Device);
             throw new InvalidOperationException($"Device '{deviceId}' is no longer connected.");
         }
-        return device;
+        return registration.Device;
     }
 
     private (DaqifiDevice device, IStreamingDevice streaming) RequireStreaming(string deviceId)
