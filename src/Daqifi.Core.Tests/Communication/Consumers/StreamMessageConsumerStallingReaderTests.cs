@@ -148,6 +148,41 @@ public class StreamMessageConsumerStallingReaderTests
     }
 
     [Fact]
+    public void Dispose_AfterATimedOutStop_StillJoinsTheSurvivingReader()
+    {
+        // StopSafely short-circuits when the consumer is already stopped, which is precisely the
+        // state a timed-out stop leaves: running flag cleared, reader still alive in its read. So
+        // Dispose() must wait on that thread itself, or it returns while a reader still holds the
+        // stream — the owner believes teardown is complete when it isn't.
+        var stream = new ThreadCountingStallingStream();
+        var consumer = new StreamMessageConsumer<string>(stream, new LineBasedMessageParser());
+        try
+        {
+            consumer.Start();
+            Assert.True(stream.WaitForReadEntered(TimeSpan.FromSeconds(2)));
+
+            // Timed-out stop: _isRunning is now false but the reader is still parked in Read().
+            Assert.False(consumer.StopSafely(timeoutMs: 100));
+            Assert.True(IsConsumerThreadAlive(consumer), "precondition: the reader should still be alive");
+
+            // Let the read return, then dispose immediately — no sleep, so Dispose only sees an
+            // exited thread if it actually waited for one.
+            stream.Release();
+            consumer.Dispose();
+
+            Assert.False(
+                IsConsumerThreadAlive(consumer),
+                "Dispose() returned while the previously-stopped reader was still alive.");
+        }
+        finally
+        {
+            stream.Release();
+            consumer.Dispose();
+            stream.Dispose();
+        }
+    }
+
+    [Fact]
     public void Dispose_RacingAStartInItsGraceWindow_LeavesNoReaderRunning()
     {
         // Start() checks disposal, then can sit in the grace join for up to a second before
@@ -172,16 +207,26 @@ public class StreamMessageConsumerStallingReaderTests
             });
             starter.Start();
 
-            Thread.Sleep(100);           // let the starter reach the grace join
+            // Wait for the starter to actually block rather than sleeping a guessed interval: its
+            // only work is Start(), so WaitSleepJoin means it has reached the lock or the grace
+            // join. Deterministic, and fails fast if it never gets there.
+            Assert.True(
+                WaitUntil(() => starter.ThreadState.HasFlag(System.Threading.ThreadState.WaitSleepJoin), TimeSpan.FromSeconds(5)),
+                "starter thread never reached the grace join");
+
             stream.Release();            // its join can now complete
             consumer.Dispose();          // races the starter's publish
 
             Assert.True(starter.Join(TimeSpan.FromSeconds(10)));
 
             // The invariant, regardless of who won: nothing is still reading once Dispose returned.
+            // Assert the thread itself is gone, not merely that the running flag was cleared — a
+            // flag says nothing about whether the reader actually let go of the stream.
+            var outcome = starterFailure?.GetType().Name ?? "started";
+            Assert.False(consumer.IsRunning, $"IsRunning was still set after Dispose() (starter outcome: {outcome}).");
             Assert.False(
-                consumer.IsRunning,
-                $"A reader was running after Dispose() returned (starter outcome: {starterFailure?.GetType().Name ?? "started"}).");
+                IsConsumerThreadAlive(consumer),
+                $"A reader thread was still alive after Dispose() returned (starter outcome: {outcome}).");
         }
         finally
         {

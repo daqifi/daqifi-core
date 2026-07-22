@@ -480,6 +480,36 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
             _disposed = true;
         }
 
+        // StopSafely short-circuits — returning true without joining — when the consumer is already
+        // stopped. That is exactly the state a timed-out stop leaves behind: _isRunning false, the
+        // reader still alive in an in-flight read. Left as-is, Dispose would return without ever
+        // waiting on that thread. Note whether it was running so the extra wait applies only to the
+        // short-circuit case, rather than stacking a second grace on top of StopSafely's own join.
+        var wasRunning = _isRunning;
         StopSafely();
+
+        if (!wasRunning)
+        {
+            JoinStaleReader();
+        }
+    }
+
+    /// <summary>
+    /// Waits a bounded time for a stopped-but-not-yet-exited reader to finish its in-flight read
+    /// and exit.
+    /// </summary>
+    /// <remarks>
+    /// Skips the wait when called from the reader itself (for example a <see cref="Dispose"/> from
+    /// inside a <see cref="MessageReceived"/> handler), where joining would only stall that thread
+    /// until the timeout — the same self-join guard <see cref="Start"/> and <see cref="ClearBuffer"/>
+    /// carry.
+    /// </remarks>
+    private void JoinStaleReader()
+    {
+        var thread = _consumerThread;
+        if (thread is { IsAlive: true } && !ReferenceEquals(thread, Thread.CurrentThread))
+        {
+            thread.Join(StaleReaderGraceMs);
+        }
     }
 }
