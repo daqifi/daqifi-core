@@ -502,12 +502,93 @@ namespace Daqifi.Core.Device
             }
             finally
             {
-                // Restart the protobuf consumer
-                if (_messageConsumer != null)
+                RestartMessageConsumerAfterSwap();
+            }
+        }
+
+        /// <summary>
+        /// Restarts the protobuf consumer after a swap (raw capture or text exchange) has stopped it.
+        /// </summary>
+        /// <remarks>
+        /// The stop paths join the reader thread with a bounded timeout, so a reader parked in a
+        /// slow blocking <see cref="Stream.Read(byte[], int, int)"/> can still be alive when we come
+        /// to restart. <see cref="StreamMessageConsumer{T}.Start"/> rightly refuses that — two
+        /// concurrent readers on one stream would corrupt message framing — but failing the whole
+        /// operation with an internal error the caller cannot act on is worse than recovering
+        /// (issue #383). Escalate instead: discard the stale instance and bind a fresh consumer to
+        /// the transport's current stream. The abandoned reader has already been told to stop, so it
+        /// exits as soon as its in-flight read returns and never issues another one; its events are
+        /// no longer subscribed, so anything it consumed on that last read is simply dropped.
+        /// </remarks>
+        private void RestartMessageConsumerAfterSwap()
+        {
+            if (_messageConsumer == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _messageConsumer.Start();
+                _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                return;
+            }
+            catch (ConsumerThreadNotExitedException ex)
+            {
+                SafeLog(() => _logger.LogWarning(
+                    ex,
+                    "Previous message consumer thread had not exited; replacing the consumer with a fresh instance."));
+            }
+
+            // The transport can have gone away while the swap was in flight (a concurrent
+            // Disconnect/Dispose). Nothing to rebind to in that case — leave the consumer null so
+            // the next Connect() builds one, rather than throwing from a finally block.
+            Stream? stream = null;
+            try
+            {
+                if (_transport is { IsConnected: true })
                 {
-                    _messageConsumer.Start();
-                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                    stream = _transport.Stream;
                 }
+            }
+            catch (TransportNotConnectedException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            var stale = _messageConsumer;
+            _messageConsumer = null;
+            // Dispose does not block: the instance is already stopped, so its StopSafely
+            // short-circuits without joining the abandoned thread.
+            try
+            {
+                stale.Dispose();
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _logger.LogDebug(ex, "Disposing the abandoned message consumer failed."));
+            }
+
+            if (stream == null)
+            {
+                return;
+            }
+
+            // This helper runs from finally blocks, so a failure here must not mask the exception
+            // that is already unwinding. Leaving _messageConsumer null is a recoverable state —
+            // every use site null-checks it and the next Connect() rebuilds it.
+            try
+            {
+                var replacement = new StreamMessageConsumer<DaqifiOutMessage>(stream, new ProtobufMessageParser());
+                replacement.Start();
+                replacement.MessageReceived += OnInboundMessageReceived;
+                _messageConsumer = replacement;
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _logger.LogError(ex, "Failed to start a replacement message consumer."));
             }
         }
 
@@ -760,11 +841,7 @@ namespace Daqifi.Core.Device
                     }
 
                     // Restart the protobuf consumer
-                    if (_messageConsumer != null)
-                    {
-                        _messageConsumer.Start();
-                        _messageConsumer.MessageReceived += OnInboundMessageReceived;
-                    }
+                    RestartMessageConsumerAfterSwap();
 
                     SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
                 }

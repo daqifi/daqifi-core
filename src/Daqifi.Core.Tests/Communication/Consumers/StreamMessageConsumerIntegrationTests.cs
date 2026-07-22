@@ -351,8 +351,11 @@ public class StreamMessageConsumerIntegrationTests
         // The reader is stuck in Read, so a bounded stop can't join it.
         Assert.False(consumer.StopSafely(100));
 
-        // A second Start must not create a concurrent reader against the same stream.
-        var ex = Assert.Throws<InvalidOperationException>(() => consumer.Start());
+        // A second Start must not create a concurrent reader against the same stream. The refusal
+        // is typed (issue #383) so a caller that owns the consumer can recover by discarding this
+        // instance, while still deriving from InvalidOperationException for existing catch sites.
+        var ex = Assert.Throws<ConsumerThreadNotExitedException>(() => consumer.Start());
+        Assert.IsAssignableFrom<InvalidOperationException>(ex);
         Assert.Contains("not yet exited", ex.Message);
 
         // Cleanup: release the reader so the background thread can exit.

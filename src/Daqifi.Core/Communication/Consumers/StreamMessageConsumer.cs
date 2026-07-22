@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Messages;
+using System.Net.Sockets;
 using System.Text;
 
 namespace Daqifi.Core.Communication.Consumers;
@@ -78,6 +79,12 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// <summary>
     /// Starts the message consumer, beginning background message reading.
     /// </summary>
+    /// <exception cref="ObjectDisposedException">Thrown when this instance has been disposed.</exception>
+    /// <exception cref="ConsumerThreadNotExitedException">
+    /// Thrown when a previous consumer thread is still alive, so starting would put two concurrent
+    /// readers on the same stream. Callers that own the consumer can recover by discarding this
+    /// instance and constructing a fresh one against the current stream.
+    /// </exception>
     public void Start()
     {
         ThrowIfDisposed();
@@ -90,8 +97,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         // Stream.Read loops would reintroduce the framing corruption this class guards against.
         if (_consumerThread is { IsAlive: true })
         {
-            throw new InvalidOperationException(
-                "Cannot start the consumer: a previous consumer thread has not yet exited.");
+            throw new ConsumerThreadNotExitedException();
         }
 
         _clearRequested = false;
@@ -268,6 +274,14 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     // Expected when no data is available within ReadTimeout; just loop
                     continue;
                 }
+                catch (IOException ex) when (IsReadTimeout(ex))
+                {
+                    // A socket read that hits SO_RCVTIMEO surfaces as IOException wrapping a
+                    // SocketException rather than TimeoutException, so it needs the same benign
+                    // "no data yet" treatment — otherwise every idle interval on a TCP transport
+                    // would raise ErrorOccurred (issue #383).
+                    continue;
+                }
                 catch (Exception ex)
                 {
                     OnErrorOccurred(ex);
@@ -300,6 +314,21 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 OnErrorOccurred(ex);
             }
         }
+    }
+
+    /// <summary>
+    /// Determines whether an <see cref="IOException"/> raised by a read is just the stream's
+    /// configured read timeout expiring with no data, rather than a real I/O fault.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately narrow: only the exact shape <see cref="NetworkStream"/> produces when a
+    /// synchronous read exceeds the socket's receive timeout. Searching deeper into the cause
+    /// chain would risk classifying a genuine fault that merely happens to wrap a timeout as
+    /// "no data yet", which would silently spin instead of reporting the failure.
+    /// </remarks>
+    private static bool IsReadTimeout(IOException exception)
+    {
+        return exception.InnerException is SocketException { SocketErrorCode: SocketError.TimedOut };
     }
 
     /// <summary>
