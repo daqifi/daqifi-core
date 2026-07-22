@@ -784,6 +784,37 @@ public class DaqifiDeviceRegistryTests
     }
 
     [Fact]
+    public async Task ConnectAsync_CancelledWhileThePolicyDecides_NeverReachesTheConnector()
+    {
+        const string serialNumber = "DAQ-12345";
+        var connectorRuns = 0;
+        using var registry = new DaqifiDeviceRegistry((_, _, _) =>
+        {
+            connectorRuns++;
+            return Task.FromResult(ConnectedDevice($"device-{connectorRuns}", serialNumber));
+        });
+        using var cancellation = new CancellationTokenSource();
+
+        await registry.ConnectAsync(UsbInfo(serialNumber), cancellationToken: cancellation.Token);
+        Assert.Equal(1, connectorRuns);
+
+        // Cancellation requested while the policy blocks must be observed before connecting, not
+        // left to the connector — this stub ignores the token, as a custom connector may.
+        registry.DuplicatePolicy = _ =>
+        {
+            cancellation.Cancel();
+            return DuplicateDeviceAction.SwitchToNew;
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => registry.ConnectAsync(WifiInfo(serialNumber), cancellationToken: cancellation.Token));
+
+        Assert.Equal(1, connectorRuns);
+        // The existing registration is untouched: a cancelled switch costs nothing.
+        Assert.Equal(1, registry.Count);
+    }
+
+    [Fact]
     public async Task DisposedRegistry_RejectsFurtherRegistrations()
     {
         var registry = new DaqifiDeviceRegistry();
