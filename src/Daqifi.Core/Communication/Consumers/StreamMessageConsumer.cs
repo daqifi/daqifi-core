@@ -116,8 +116,15 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         // Stream.Read loops would reintroduce the framing corruption this class guards against.
         // The stop already cleared _isRunning, so give that reader a bounded chance to finish
         // its in-flight read and exit before giving up on the caller.
+        //
+        // Exception: if we ARE the consumer thread (Start called from a MessageReceived callback
+        // after another thread requested stop), joining would just wait on ourselves until the
+        // grace elapses and then refuse anyway. Refuse immediately instead — same guarantee, no
+        // pointless stall on the reader thread. Mirrors the self-join guard in ClearBuffer.
         var staleThread = _consumerThread;
-        if (staleThread is { IsAlive: true } && !staleThread.Join(StaleReaderGraceMs))
+        if (staleThread is { IsAlive: true }
+            && (ReferenceEquals(staleThread, Thread.CurrentThread)
+                || !staleThread.Join(StaleReaderGraceMs)))
         {
             throw new ConsumerThreadNotExitedException();
         }

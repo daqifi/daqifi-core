@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Transport;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 
 namespace Daqifi.Core.Tests.Communication.Consumers;
 
@@ -94,6 +95,61 @@ public class StreamMessageConsumerStallingReaderTests
         Assert.True(consumer.StopSafely(timeoutMs: 2000));
 
         Assert.IsType<IOException>(captured);
+    }
+
+    [Fact]
+    public void Start_CalledFromMessageReceivedCallbackAfterStop_RefusesWithoutSelfJoin()
+    {
+        // MessageReceived callbacks run on the consumer thread, so a handler can call Start() after
+        // another thread has already cleared the running flag. The stale thread is then *us*:
+        // joining it would block for the whole grace period and refuse anyway. Refuse immediately
+        // instead, matching the self-join guard ClearBuffer already has.
+        // CRLF: LineBasedMessageParser's default line ending.
+        using var stream = new SingleLineThenIdleStream("hello\r\n");
+        using var consumer = new StreamMessageConsumer<string>(stream, new LineBasedMessageParser());
+
+        using var handlerEntered = new ManualResetEventSlim(false);
+        using var proceed = new ManualResetEventSlim(false);
+        using var finished = new ManualResetEventSlim(false);
+        Exception? captured = null;
+        var elapsedMs = -1L;
+
+        consumer.MessageReceived += (_, _) =>
+        {
+            if (!handlerEntered.IsSet)
+            {
+                handlerEntered.Set();
+                proceed.Wait(TimeSpan.FromSeconds(5));
+
+                var stopwatch = Stopwatch.StartNew();
+                try
+                {
+                    consumer.Start();
+                }
+                catch (Exception ex)
+                {
+                    captured = ex;
+                }
+
+                stopwatch.Stop();
+                elapsedMs = stopwatch.ElapsedMilliseconds;
+                finished.Set();
+            }
+        };
+
+        consumer.Start();
+        Assert.True(handlerEntered.Wait(TimeSpan.FromSeconds(5)));
+
+        // Another thread stops the consumer while the callback is parked, so the callback's
+        // Start() sees a cleared running flag and a still-alive consumer thread — itself.
+        Assert.False(consumer.StopSafely(timeoutMs: 100));
+        proceed.Set();
+
+        Assert.True(finished.Wait(TimeSpan.FromSeconds(5)));
+        Assert.IsType<ConsumerThreadNotExitedException>(captured);
+        Assert.True(
+            elapsedMs < 500,
+            $"Start() self-joined for {elapsedMs}ms; it must refuse immediately rather than wait out the grace period.");
     }
 
     [Fact]
@@ -226,6 +282,43 @@ public class StreamMessageConsumerStallingReaderTests
 
             base.Dispose(disposing);
         }
+    }
+
+    /// <summary>
+    /// Emits one payload on the first read so exactly one MessageReceived callback fires, then
+    /// idles. Used to drive a handler that runs on the consumer thread.
+    /// </summary>
+    private sealed class SingleLineThenIdleStream : Stream
+    {
+        private readonly byte[] _payload;
+        private bool _sent;
+
+        public SingleLineThenIdleStream(string text) => _payload = Encoding.UTF8.GetBytes(text);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_sent)
+            {
+                Thread.Sleep(10);
+                return 0;
+            }
+
+            _sent = true;
+            Array.Copy(_payload, 0, buffer, offset, _payload.Length);
+            return _payload.Length;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>
