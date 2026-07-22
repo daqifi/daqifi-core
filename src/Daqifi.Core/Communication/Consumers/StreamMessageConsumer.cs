@@ -77,13 +77,32 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     public event EventHandler<MessageConsumerErrorEventArgs>? ErrorOccurred;
 
     /// <summary>
+    /// Grace period, in milliseconds, that <see cref="Start"/> waits for a stopped-but-not-yet-exited
+    /// reader thread before refusing to start.
+    /// </summary>
+    /// <remarks>
+    /// A prior stop already cleared <see cref="_isRunning"/>, so a still-alive reader is guaranteed
+    /// to be on its way out — it exits as soon as its in-flight read returns and never issues
+    /// another one. Waiting for that is therefore always correct, and it is what lets a restart
+    /// succeed on the same instance instead of failing the caller (issue #383). Only a reader whose
+    /// read never returns at all outlasts this, and that means the stream itself is stuck.
+    /// </remarks>
+    private const int StaleReaderGraceMs = 1000;
+
+    /// <summary>
     /// Starts the message consumer, beginning background message reading.
     /// </summary>
+    /// <remarks>
+    /// If a previous reader thread has been stopped but has not yet exited, this waits up to
+    /// <see cref="StaleReaderGraceMs"/> for it rather than failing immediately.
+    /// </remarks>
     /// <exception cref="ObjectDisposedException">Thrown when this instance has been disposed.</exception>
     /// <exception cref="ConsumerThreadNotExitedException">
-    /// Thrown when a previous consumer thread is still alive, so starting would put two concurrent
-    /// readers on the same stream. Callers that own the consumer can recover by discarding this
-    /// instance and constructing a fresh one against the current stream.
+    /// Thrown when a previous consumer thread is still alive after the grace period, so starting
+    /// would put two concurrent readers on the same stream. A reader that outlasts the grace is one
+    /// whose <see cref="Stream.Read(byte[], int, int)"/> is not returning at all, which means the
+    /// stream is stuck — constructing a fresh consumer against that same stream would not help, so
+    /// callers should surface the failure rather than start a second reader on it.
     /// </exception>
     public void Start()
     {
@@ -95,7 +114,10 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         // A prior Stop()/StopSafely() whose Join timed out leaves the old reader thread alive.
         // Refuse to spawn a second reader against the same stream/buffer — two concurrent
         // Stream.Read loops would reintroduce the framing corruption this class guards against.
-        if (_consumerThread is { IsAlive: true })
+        // The stop already cleared _isRunning, so give that reader a bounded chance to finish
+        // its in-flight read and exit before giving up on the caller.
+        var staleThread = _consumerThread;
+        if (staleThread is { IsAlive: true } && !staleThread.Join(StaleReaderGraceMs))
         {
             throw new ConsumerThreadNotExitedException();
         }

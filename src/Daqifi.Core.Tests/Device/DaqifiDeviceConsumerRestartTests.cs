@@ -15,29 +15,33 @@ namespace Daqifi.Core.Tests.Device;
 /// </summary>
 public class DaqifiDeviceConsumerRestartTests
 {
+    // Start()'s grace period is covered precisely in StreamMessageConsumerStallingReaderTests.
+    // It is deliberately not asserted from here: the text exchange's own internal delays add well
+    // over a second of slack before the restart, so any device-level attempt to isolate the grace
+    // would come down to timing tuning and would be flaky in CI.
+
     [Fact]
-    public async Task ExecuteTextCommand_WhenReaderDoesNotExitPromptly_RecoversWithFreshConsumer()
+    public async Task ExecuteTextCommand_WhenReaderNeverExits_LeavesConsumerStoppedWithoutThrowing()
     {
-        using var transport = new StallingReadMockTransport();
-        using var device = new ConsumerRestartTestableDevice("Stalling Device", transport);
+        // A stream whose read never returns at all. The guard must hold — no replacement consumer
+        // may be bound to that stuck stream, since it would be a second concurrent reader on it —
+        // but the failure must not surface as an unactionable internal error from a finally block.
+        using var transport = new StallingReadMockTransport(readBlock: Timeout.InfiniteTimeSpan);
+        using var device = new ConsumerRestartTestableDevice("Stuck Device", transport);
 
         device.Connect();
         var original = GetMessageConsumer(device);
         Assert.NotNull(original);
-
-        // Reader is now parked inside Read() for longer than the swap's stop budget.
         Assert.True(transport.WaitForReadEntered(TimeSpan.FromSeconds(5)));
 
-        // Pre-fix this threw InvalidOperationException from the restart in the finally block.
+        // Completes rather than propagating ConsumerThreadNotExitedException out of the finally.
         var lines = await device.CallExecuteTextCommandAsync(() => { });
         Assert.Empty(lines);
 
-        // The device recovered by binding a fresh consumer to the transport's current stream,
-        // and the stale instance was discarded rather than restarted.
-        var replacement = GetMessageConsumer(device);
-        Assert.NotNull(replacement);
-        Assert.NotSame(original, replacement);
-        Assert.True(replacement!.IsRunning);
+        // Same instance, left stopped — emphatically NOT a fresh consumer racing the stuck reader.
+        var after = GetMessageConsumer(device);
+        Assert.Same(original, after);
+        Assert.False(after!.IsRunning);
 
         transport.ReleaseReaders();
         device.Disconnect();
@@ -47,8 +51,8 @@ public class DaqifiDeviceConsumerRestartTests
     public async Task ExecuteTextCommand_WhenReaderExitsPromptly_KeepsSameConsumer()
     {
         // The normal path is unchanged: a reader that exits within the stop budget is simply
-        // restarted, with no consumer churn.
-        using var transport = new StallingReadMockTransport(stallReads: false);
+        // restarted, with no grace period needed.
+        using var transport = new StallingReadMockTransport(readBlock: TimeSpan.Zero);
         using var device = new ConsumerRestartTestableDevice("Prompt Device", transport);
 
         device.Connect();
@@ -89,19 +93,24 @@ public class DaqifiDeviceConsumerRestartTests
     }
 
     /// <summary>
-    /// Transport whose stream models a reader parked in a blocking socket read: the first read
-    /// blocks well past the consumer-swap stop budget, mirroring a WiFi connection whose receive
-    /// timeout outlasts the swap. Writes are accepted and discarded.
+    /// Transport whose stream models a reader parked in a blocking socket read, mirroring a WiFi
+    /// connection whose receive timeout outlasts the consumer-swap stop budget. Writes are accepted
+    /// and discarded.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="readBlock"/> selects the scenario: <see cref="TimeSpan.Zero"/> for a prompt
+    /// reader, a finite span for one that outlives the stop budget but does return, and
+    /// <see cref="Timeout.InfiniteTimeSpan"/> for a stream that is stuck outright.
+    /// </remarks>
     private sealed class StallingReadMockTransport : IStreamTransport
     {
         private readonly StallingStream _stream;
         private bool _isConnected;
         private bool _disposed;
 
-        public StallingReadMockTransport(bool stallReads = true)
+        public StallingReadMockTransport(TimeSpan readBlock)
         {
-            _stream = new StallingStream(stallReads ? TimeSpan.FromSeconds(10) : TimeSpan.Zero);
+            _stream = new StallingStream(readBlock);
         }
 
         public Stream Stream => _disposed
@@ -150,11 +159,11 @@ public class DaqifiDeviceConsumerRestartTests
 
         private sealed class StallingStream : Stream
         {
-            private readonly TimeSpan _stall;
+            private readonly TimeSpan _readBlock;
             private readonly ManualResetEventSlim _release = new(false);
             private readonly ManualResetEventSlim _readEntered = new(false);
 
-            public StallingStream(TimeSpan stall) => _stall = stall;
+            public StallingStream(TimeSpan readBlock) => _readBlock = readBlock;
 
             public bool WaitForReadEntered(TimeSpan timeout) => _readEntered.Wait(timeout);
 
@@ -171,13 +180,14 @@ public class DaqifiDeviceConsumerRestartTests
             public override int Read(byte[] buffer, int offset, int count)
             {
                 _readEntered.Set();
-                if (_stall > TimeSpan.Zero)
+                if (_readBlock == TimeSpan.Zero)
                 {
-                    _release.Wait(_stall);
+                    Thread.Sleep(10);
                 }
                 else
                 {
-                    Thread.Sleep(10);
+                    // Infinite means "stuck stream": only an explicit Release() ever frees it.
+                    _release.Wait(_readBlock);
                 }
 
                 return 0;

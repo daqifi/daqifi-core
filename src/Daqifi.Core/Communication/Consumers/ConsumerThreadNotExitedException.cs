@@ -7,9 +7,15 @@ namespace Daqifi.Core.Communication.Consumers;
 /// </summary>
 /// <remarks>
 /// Derives from <see cref="InvalidOperationException"/> so existing callers that catch the broader
-/// type keep working; the distinct type lets callers that own the consumer recover by abandoning
-/// the stale instance and constructing a fresh one against the current stream, rather than
-/// surfacing an unactionable internal error (issue #383).
+/// type keep working; the distinct type lets callers recognize this specific condition rather than
+/// pattern-matching on a message (issue #383).
+/// <para>
+/// <see cref="StreamMessageConsumer{T}.Start"/> only raises this after waiting a grace period for
+/// the stopped reader to exit, so it means the reader's read is not returning at all — the stream
+/// itself is stuck. Constructing a fresh consumer against that same stream is <b>not</b> a valid
+/// recovery: it would be a second concurrent reader on it, which is the framing corruption the
+/// guard prevents, and it would block on the stuck stream just the same.
+/// </para>
 /// </remarks>
 public class ConsumerThreadNotExitedException : InvalidOperationException
 {

@@ -15,28 +15,46 @@ namespace Daqifi.Core.Tests.Communication.Consumers;
 public class StreamMessageConsumerStallingReaderTests
 {
     [Fact]
-    public void Start_AfterStalledReaderExits_Succeeds()
+    public void Start_WhenStoppedReaderExitsWithinGrace_WaitsAndRestartsSameInstance()
     {
-        // The double-reader refusal is transient, not terminal: once the in-flight read returns,
-        // the reader observes the cleared running flag and exits, so a restart on the same
-        // instance is allowed again. This is what makes the short operational read timeout on the
-        // TCP transport sufficient to keep the connect-time swap out of the guard (issue #383).
-        using var stream = new StallingStream(TimeSpan.FromSeconds(5));
+        // The #383 recovery: a reader that outlives the stop budget but does return is absorbed by
+        // Start()'s grace period, so the restart succeeds on the SAME instance. That is what makes
+        // a bounded read timeout sufficient, and it means no second reader is ever put on the
+        // stream. Release() lands while Start() is already waiting.
+        using var stream = new StallingStream(Timeout.InfiniteTimeSpan);
         using var consumer = new StreamMessageConsumer<string>(stream, new LineBasedMessageParser());
 
         consumer.Start();
         Assert.True(stream.WaitForReadEntered(TimeSpan.FromSeconds(2)));
         Assert.False(consumer.StopSafely(timeoutMs: 200));
+
+        using (var releaser = new Timer(_ => stream.Release(), null, 200, Timeout.Infinite))
+        {
+            consumer.Start();
+        }
+
+        Assert.True(consumer.IsRunning);
+        Assert.True(consumer.StopSafely(timeoutMs: 2000));
+    }
+
+    [Fact]
+    public void Start_WhenStoppedReaderNeverExits_StillRefusesASecondReader()
+    {
+        // A read that never returns means the stream is stuck. The guard must outlast the grace
+        // period — a second reader on that stream is exactly the framing corruption it prevents.
+        using var stream = new StallingStream(Timeout.InfiniteTimeSpan);
+        using var consumer = new StreamMessageConsumer<string>(stream, new LineBasedMessageParser());
+
+        consumer.Start();
+        Assert.True(stream.WaitForReadEntered(TimeSpan.FromSeconds(2)));
+        Assert.False(consumer.StopSafely(timeoutMs: 200));
+
         Assert.Throws<ConsumerThreadNotExitedException>(() => consumer.Start());
+        Assert.False(consumer.IsRunning);
         Assert.Equal(1, stream.ReadCount);
 
         stream.Release();
-        // The stop path already cleared IsRunning, so the reader exits after this read returns.
         Assert.True(WaitUntil(() => !IsConsumerThreadAlive(consumer), TimeSpan.FromSeconds(2)));
-
-        consumer.Start();
-        Assert.True(consumer.IsRunning);
-        Assert.True(consumer.StopSafely(timeoutMs: 2000));
     }
 
     [Fact]
@@ -98,7 +116,8 @@ public class StreamMessageConsumerStallingReaderTests
                 MaxAttempts = 1,
                 ConnectionTimeout = TimeSpan.FromSeconds(10)
             });
-            using var accepted = await listener.AcceptTcpClientAsync();
+            // Bounded so a fixture failure fails fast instead of hanging the suite.
+            using var accepted = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
             using var consumer = new StreamMessageConsumer<string>(transport.Stream, new LineBasedMessageParser());
             var errors = new List<Exception>();
