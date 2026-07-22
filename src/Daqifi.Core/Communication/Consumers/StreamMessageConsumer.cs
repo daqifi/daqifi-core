@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Messages;
+using System.Net.Sockets;
 using System.Text;
 
 namespace Daqifi.Core.Communication.Consumers;
@@ -28,9 +29,33 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// </summary>
     private volatile bool _clearRequested;
 
+    /// <summary>
+    /// Serializes <see cref="Start"/> so the check / grace-wait / publish sequence is atomic and
+    /// only one reader thread can ever be spawned.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately <b>not</b> taken by <see cref="Stop"/> / <see cref="StopSafely"/>: those would
+    /// then block for the whole of a concurrent start's grace wait, which is the opposite of what a
+    /// stop should do. This closes the double-start hazard specifically; a caller that races
+    /// <see cref="Start"/> against a stop is asking for an ill-defined result either way.
+    /// <para>
+    /// A <see cref="MessageReceived"/> callback that calls <see cref="Start"/> while another thread
+    /// holds this lock waits, but only until that thread's grace elapses — the holder is joining the
+    /// callback's own thread, so it gives up after <see cref="StaleReaderGraceMs"/> and both callers
+    /// then refuse. Bounded, and only in an already re-entrant scenario.
+    /// </para>
+    /// </remarks>
+    private readonly object _startLock = new();
+
     private volatile bool _isRunning;
     private Thread? _consumerThread;
-    private bool _disposed;
+
+    /// <summary>
+    /// Set under <see cref="_startLock"/> by <see cref="Dispose"/>, but read from other threads
+    /// without it (<see cref="ClearBuffer"/>), so it must be volatile for those reads to be
+    /// well-defined.
+    /// </summary>
+    private volatile bool _disposed;
 
     /// <summary>
     /// Initializes a new instance of the StreamMessageConsumer class.
@@ -76,32 +101,77 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     public event EventHandler<MessageConsumerErrorEventArgs>? ErrorOccurred;
 
     /// <summary>
+    /// Grace period, in milliseconds, that <see cref="Start"/> waits for a stopped-but-not-yet-exited
+    /// reader thread before refusing to start.
+    /// </summary>
+    /// <remarks>
+    /// A prior stop already cleared <see cref="_isRunning"/>, so a still-alive reader is guaranteed
+    /// to be on its way out — it exits as soon as its in-flight read returns and never issues
+    /// another one. Waiting for that is therefore always correct, and it is what lets a restart
+    /// succeed on the same instance instead of failing the caller (issue #383). Only a reader whose
+    /// read never returns at all outlasts this, and that means the stream itself is stuck.
+    /// </remarks>
+    private const int StaleReaderGraceMs = 1000;
+
+    /// <summary>
     /// Starts the message consumer, beginning background message reading.
     /// </summary>
+    /// <remarks>
+    /// If a previous reader thread has been stopped but has not yet exited, this waits up to
+    /// <see cref="StaleReaderGraceMs"/> for it rather than failing immediately.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">Thrown when this instance has been disposed.</exception>
+    /// <exception cref="ConsumerThreadNotExitedException">
+    /// Thrown when a previous consumer thread is still alive after the grace period, so starting
+    /// would put two concurrent readers on the same stream. A reader that outlasts the grace is one
+    /// whose <see cref="Stream.Read(byte[], int, int)"/> is not returning at all, which means the
+    /// stream is stuck — constructing a fresh consumer against that same stream would not help, so
+    /// callers should surface the failure rather than start a second reader on it.
+    /// </exception>
     public void Start()
     {
-        ThrowIfDisposed();
-
-        if (_isRunning)
-            return; // Already running
-
-        // A prior Stop()/StopSafely() whose Join timed out leaves the old reader thread alive.
-        // Refuse to spawn a second reader against the same stream/buffer — two concurrent
-        // Stream.Read loops would reintroduce the framing corruption this class guards against.
-        if (_consumerThread is { IsAlive: true })
+        // Serialize the whole transition — disposal check, running check, grace wait, and publish.
+        // Without this, two callers racing a restart can both observe a cleared running flag, both
+        // wait out the grace, and then each spawn a reader: two concurrent Stream.Read loops on one
+        // stream, which is precisely what this class must never allow.
+        //
+        // The disposal check belongs inside the lock too. Dispose() sets _disposed under this same
+        // lock, so holding it means _disposed cannot change underneath us — checking once here is
+        // sufficient, and no reader can be spawned after disposal has begun.
+        lock (_startLock)
         {
-            throw new InvalidOperationException(
-                "Cannot start the consumer: a previous consumer thread has not yet exited.");
+            ThrowIfDisposed();
+
+            if (_isRunning)
+                return; // Already running
+
+            // A prior Stop()/StopSafely() whose Join timed out leaves the old reader thread alive.
+            // Refuse to spawn a second reader against the same stream/buffer — two concurrent
+            // Stream.Read loops would reintroduce the framing corruption this class guards against.
+            // The stop already cleared _isRunning, so give that reader a bounded chance to finish
+            // its in-flight read and exit before giving up on the caller.
+            //
+            // Exception: if we ARE the consumer thread (Start called from a MessageReceived callback
+            // after another thread requested stop), joining would just wait on ourselves until the
+            // grace elapses and then refuse anyway. Refuse immediately instead — same guarantee, no
+            // pointless stall on the reader thread. Mirrors the self-join guard in ClearBuffer.
+            var staleThread = _consumerThread;
+            if (staleThread is { IsAlive: true }
+                && (ReferenceEquals(staleThread, Thread.CurrentThread)
+                    || !staleThread.Join(StaleReaderGraceMs)))
+            {
+                throw new ConsumerThreadNotExitedException();
+            }
+
+            _clearRequested = false;
+            _isRunning = true;
+            _consumerThread = new Thread(ProcessMessages)
+            {
+                IsBackground = true,
+                Name = $"MessageConsumer-{typeof(T).Name}"
+            };
+            _consumerThread.Start();
         }
-
-        _clearRequested = false;
-        _isRunning = true;
-        _consumerThread = new Thread(ProcessMessages)
-        {
-            IsBackground = true,
-            Name = $"MessageConsumer-{typeof(T).Name}"
-        };
-        _consumerThread.Start();
     }
 
     /// <summary>
@@ -268,6 +338,14 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     // Expected when no data is available within ReadTimeout; just loop
                     continue;
                 }
+                catch (IOException ex) when (IsReadTimeout(ex))
+                {
+                    // A socket read that hits SO_RCVTIMEO surfaces as IOException wrapping a
+                    // SocketException rather than TimeoutException, so it needs the same benign
+                    // "no data yet" treatment — otherwise every idle interval on a TCP transport
+                    // would raise ErrorOccurred (issue #383).
+                    continue;
+                }
                 catch (Exception ex)
                 {
                     OnErrorOccurred(ex);
@@ -300,6 +378,21 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 OnErrorOccurred(ex);
             }
         }
+    }
+
+    /// <summary>
+    /// Determines whether an <see cref="IOException"/> raised by a read is just the stream's
+    /// configured read timeout expiring with no data, rather than a real I/O fault.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately narrow: only the exact shape <see cref="NetworkStream"/> produces when a
+    /// synchronous read exceeds the socket's receive timeout. Searching deeper into the cause
+    /// chain would risk classifying a genuine fault that merely happens to wrap a timeout as
+    /// "no data yet", which would silently spin instead of reporting the failure.
+    /// </remarks>
+    private static bool IsReadTimeout(IOException exception)
+    {
+        return exception.InnerException is SocketException { SocketErrorCode: SocketError.TimedOut };
     }
 
     /// <summary>
@@ -370,12 +463,53 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// <summary>
     /// Disposes the message consumer and releases resources.
     /// </summary>
+    /// <remarks>
+    /// Marks disposal under <see cref="_startLock"/> and <em>before</em> stopping, so a concurrent
+    /// <see cref="Start"/> cannot spawn a reader that outlives this call: either it already holds
+    /// the lock (and we wait out its grace, then stop the reader it started), or it acquires the
+    /// lock afterwards and fails its disposal check. Only the flag is set under the lock — the
+    /// stop itself runs outside it, so teardown never holds the lock while joining a reader.
+    /// </remarks>
     public void Dispose()
     {
-        if (!_disposed)
+        lock (_startLock)
         {
-            StopSafely();
+            if (_disposed)
+                return;
+
             _disposed = true;
+        }
+
+        // StopSafely short-circuits — returning true without joining — when the consumer is already
+        // stopped. That is exactly the state a timed-out stop leaves behind: _isRunning false, the
+        // reader still alive in an in-flight read. Left as-is, Dispose would return without ever
+        // waiting on that thread. Note whether it was running so the extra wait applies only to the
+        // short-circuit case, rather than stacking a second grace on top of StopSafely's own join.
+        var wasRunning = _isRunning;
+        StopSafely();
+
+        if (!wasRunning)
+        {
+            JoinStaleReader();
+        }
+    }
+
+    /// <summary>
+    /// Waits a bounded time for a stopped-but-not-yet-exited reader to finish its in-flight read
+    /// and exit.
+    /// </summary>
+    /// <remarks>
+    /// Skips the wait when called from the reader itself (for example a <see cref="Dispose"/> from
+    /// inside a <see cref="MessageReceived"/> handler), where joining would only stall that thread
+    /// until the timeout — the same self-join guard <see cref="Start"/> and <see cref="ClearBuffer"/>
+    /// carry.
+    /// </remarks>
+    private void JoinStaleReader()
+    {
+        var thread = _consumerThread;
+        if (thread is { IsAlive: true } && !ReferenceEquals(thread, Thread.CurrentThread))
+        {
+            thread.Join(StaleReaderGraceMs);
         }
     }
 }
