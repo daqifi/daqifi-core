@@ -25,7 +25,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.DiscoverAsync(timeoutMs, wifi, serial, cancellationToken));
 
     [McpServerTool(Name = "connect_device")]
-    [Description("Connect to a previously-discovered device. Pass a device_id from discover_devices. Channels are populated on connect.")]
+    [Description("Connect to a previously-discovered device. Pass a device_id from discover_devices. Channels are populated on connect. If that physical device is already connected (including over a different transport), the existing connection is returned — use the device_id from the result for follow-up calls.")]
     public static Task<ConnectedDeviceInfo> ConnectDevice(
         DaqifiAgent agent,
         [Description("The device_id from discover_devices.")] string deviceId,
