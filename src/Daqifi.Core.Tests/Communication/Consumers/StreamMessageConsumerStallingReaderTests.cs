@@ -148,6 +148,50 @@ public class StreamMessageConsumerStallingReaderTests
     }
 
     [Fact]
+    public void Dispose_RacingAStartInItsGraceWindow_LeavesNoReaderRunning()
+    {
+        // Start() checks disposal, then can sit in the grace join for up to a second before
+        // spawning. If Dispose() slips through in between, a reader outlives the Dispose() call —
+        // callbacks firing after teardown, against a stream the owner considers released.
+        // Dispose() marks disposal under the same lock Start() holds, so that cannot happen
+        // whichever side wins the race.
+        var stream = new ThreadCountingStallingStream();
+        var consumer = new StreamMessageConsumer<string>(stream, new LineBasedMessageParser());
+        try
+        {
+            consumer.Start();
+            Assert.True(stream.WaitForReadEntered(TimeSpan.FromSeconds(2)));
+            Assert.False(consumer.StopSafely(timeoutMs: 100));
+
+            // Parks inside Start()'s grace join, holding the lock.
+            Exception? starterFailure = null;
+            var starter = new Thread(() =>
+            {
+                try { consumer.Start(); }
+                catch (Exception ex) { starterFailure = ex; }
+            });
+            starter.Start();
+
+            Thread.Sleep(100);           // let the starter reach the grace join
+            stream.Release();            // its join can now complete
+            consumer.Dispose();          // races the starter's publish
+
+            Assert.True(starter.Join(TimeSpan.FromSeconds(10)));
+
+            // The invariant, regardless of who won: nothing is still reading once Dispose returned.
+            Assert.False(
+                consumer.IsRunning,
+                $"A reader was running after Dispose() returned (starter outcome: {starterFailure?.GetType().Name ?? "started"}).");
+        }
+        finally
+        {
+            stream.Release();
+            consumer.Dispose();
+            stream.Dispose();
+        }
+    }
+
+    [Fact]
     public void Start_CalledFromMessageReceivedCallbackAfterStop_RefusesWithoutSelfJoin()
     {
         // MessageReceived callbacks run on the consumer thread, so a handler can call Start() after

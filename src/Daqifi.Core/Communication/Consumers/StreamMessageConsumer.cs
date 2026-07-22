@@ -49,7 +49,13 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
 
     private volatile bool _isRunning;
     private Thread? _consumerThread;
-    private bool _disposed;
+
+    /// <summary>
+    /// Set under <see cref="_startLock"/> by <see cref="Dispose"/>, but read from other threads
+    /// without it (<see cref="ClearBuffer"/>), so it must be volatile for those reads to be
+    /// well-defined.
+    /// </summary>
+    private volatile bool _disposed;
 
     /// <summary>
     /// Initializes a new instance of the StreamMessageConsumer class.
@@ -124,14 +130,18 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// </exception>
     public void Start()
     {
-        ThrowIfDisposed();
-
-        // Serialize the whole transition — check, grace wait, and publish. Without this, two
-        // callers racing a restart can both observe a cleared running flag, both wait out the
-        // grace, and then each spawn a reader: two concurrent Stream.Read loops on one stream,
-        // which is precisely what this class must never allow.
+        // Serialize the whole transition — disposal check, running check, grace wait, and publish.
+        // Without this, two callers racing a restart can both observe a cleared running flag, both
+        // wait out the grace, and then each spawn a reader: two concurrent Stream.Read loops on one
+        // stream, which is precisely what this class must never allow.
+        //
+        // The disposal check belongs inside the lock too. Dispose() sets _disposed under this same
+        // lock, so holding it means _disposed cannot change underneath us — checking once here is
+        // sufficient, and no reader can be spawned after disposal has begun.
         lock (_startLock)
         {
+            ThrowIfDisposed();
+
             if (_isRunning)
                 return; // Already running
 
@@ -453,12 +463,23 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// <summary>
     /// Disposes the message consumer and releases resources.
     /// </summary>
+    /// <remarks>
+    /// Marks disposal under <see cref="_startLock"/> and <em>before</em> stopping, so a concurrent
+    /// <see cref="Start"/> cannot spawn a reader that outlives this call: either it already holds
+    /// the lock (and we wait out its grace, then stop the reader it started), or it acquires the
+    /// lock afterwards and fails its disposal check. Only the flag is set under the lock — the
+    /// stop itself runs outside it, so teardown never holds the lock while joining a reader.
+    /// </remarks>
     public void Dispose()
     {
-        if (!_disposed)
+        lock (_startLock)
         {
-            StopSafely();
+            if (_disposed)
+                return;
+
             _disposed = true;
         }
+
+        StopSafely();
     }
 }
