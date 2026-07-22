@@ -258,6 +258,18 @@ public sealed class DaqifiDeviceRegistry : IDisposable
             }
         }
 
+        // Re-check immediately before opening anything. The policy above runs without the lock and
+        // may block indefinitely on a user prompt, so a registry disposed during that window would
+        // otherwise still reach the connector and start fresh transport activity on the way down.
+        // This narrows that window to a few instructions rather than closing it: a Dispose landing
+        // between here and the connector, or during the connect itself, still lets the connection
+        // open, and RegisterCore then throws and disposes it. Guaranteeing no transport activity
+        // outlives the registry needs in-flight tracking on Dispose, which is out of scope here.
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+        }
+
         var device = await _connector(deviceInfo, options, cancellationToken).ConfigureAwait(false);
 
         return RegisterCore(device, deviceInfo, key, approvedReplacement);
@@ -466,6 +478,12 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// <see cref="DeviceRemoved"/> is not raised: the registry itself is going away, so there is no
     /// live set left to keep in sync.
     /// </summary>
+    /// <remarks>
+    /// Does not wait for work already in flight. A <see cref="ConnectAsync"/> that has already
+    /// reached its connector finishes opening the connection, and is then rejected and disposed by
+    /// the registration step — so nothing leaks, but the transport activity does complete. Callers
+    /// that need connect attempts to stop promptly should cancel the token they passed in.
+    /// </remarks>
     public void Dispose()
     {
         List<DeviceRegistration> removed;

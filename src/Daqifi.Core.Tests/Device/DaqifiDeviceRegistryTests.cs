@@ -756,6 +756,34 @@ public class DaqifiDeviceRegistryTests
     }
 
     [Fact]
+    public async Task ConnectAsync_RegistryDisposedWhileThePolicyDecides_NeverReachesTheConnector()
+    {
+        const string serialNumber = "DAQ-12345";
+        var connectorRuns = 0;
+        using var registry = new DaqifiDeviceRegistry((_, _, _) =>
+        {
+            connectorRuns++;
+            return Task.FromResult(ConnectedDevice($"device-{connectorRuns}", serialNumber));
+        });
+
+        await registry.ConnectAsync(UsbInfo(serialNumber));
+        Assert.Equal(1, connectorRuns);
+
+        // The policy may block indefinitely on a user prompt, and the app can shut the registry
+        // down while that prompt is up. No new transport activity may start on the way down.
+        registry.DuplicatePolicy = _ =>
+        {
+            registry.Dispose();
+            return DuplicateDeviceAction.SwitchToNew;
+        };
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => registry.ConnectAsync(WifiInfo(serialNumber)));
+
+        Assert.Equal(1, connectorRuns);
+    }
+
+    [Fact]
     public async Task DisposedRegistry_RejectsFurtherRegistrations()
     {
         var registry = new DaqifiDeviceRegistry();
