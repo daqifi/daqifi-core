@@ -368,7 +368,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
                 }
                 catch (Exception ex)
                 {
-                    throw CreateFirmwareUpdateException(failedState, failedOperation, ex);
+                    throw CreateFirmwareUpdateException(
+                        failedState, failedOperation, ex, failureSubject: "Bootloader health check");
                 }
             },
             cancellationToken);
@@ -418,7 +419,8 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
                 }
                 catch (Exception ex)
                 {
-                    throw CreateFirmwareUpdateException(failedState, failedOperation, ex);
+                    throw CreateFirmwareUpdateException(
+                        failedState, failedOperation, ex, failureSubject: "Bootloader soft reset");
                 }
             },
             cancellationToken).ConfigureAwait(false);
@@ -2461,11 +2463,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
         }
     }
 
+    // failureSubject names the operation that failed, so the message is honest about what
+    // the caller actually ran. Diagnostics pass their own subject: a health check or soft
+    // reset must not report "Firmware update failed" to a consumer (e.g. a recovery dialog)
+    // that deliberately probed the bootloader *instead of* starting an update.
     private FirmwareUpdateException CreateFirmwareUpdateException(
         FirmwareUpdateState failedState,
         string failedOperation,
         Exception exception,
-        Pic32CleanupOutcome cleanupOutcome = Pic32CleanupOutcome.NotEligible)
+        Pic32CleanupOutcome cleanupOutcome = Pic32CleanupOutcome.NotEligible,
+        string failureSubject = "Firmware update")
     {
         if (exception is FirmwareUpdateException firmwareUpdateException)
         {
@@ -2476,7 +2483,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
         }
 
         var recoveryGuidance = BuildRecoveryGuidance(failedState, cleanupOutcome);
-        var message = $"Firmware update failed in state '{failedState}' while {failedOperation}.";
+        var message = $"{failureSubject} failed in state '{failedState}' while {failedOperation}.";
 
         return new FirmwareUpdateException(
             failedState,
