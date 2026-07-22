@@ -306,6 +306,12 @@ registry.DuplicatePolicy = check =>
 };
 ```
 
+`SwitchToNew` opens the replacement *before* dropping the existing connection, so switching to a
+transport that turns out not to answer leaves the original in place rather than costing you both.
+The trade-off is that switching to a connection needing the same resource the old one holds (the
+same serial port) fails instead of freeing it first — for that, `Remove(key)` then `ConnectAsync`.
+The policy is asked once per connection attempt, not again after connecting.
+
 **Ownership and liveness.** The registry disconnects and disposes every device it removes,
 including duplicates it rejects — once a device is passed to `ConnectAsync` or `Register`, don't
 dispose it yourself. Registrations whose device stops reporting `IsConnected` are pruned before
