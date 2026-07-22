@@ -41,9 +41,12 @@ namespace Daqifi.Core.Device;
 /// <para>
 /// <b>Concurrency.</b> All members are safe to call from any thread. Reads snapshot the live set,
 /// and the duplicate policy is always invoked without the internal lock held, so a policy that
-/// blocks on a user prompt never blocks other threads. Two concurrent
-/// <see cref="ConnectAsync"/> calls for the <em>same</em> physical device may both open a
-/// connection — the loser is detected after connecting and disposed — so a consumer that wants a
+/// blocks on a user prompt never blocks other threads. Because the set can change while the policy
+/// is deciding, a registration handed back as a duplicate is revalidated afterwards: it is in the
+/// live set at the moment it is returned, and if it went away the check is re-resolved against the
+/// current set instead. Like any handle, it can still be removed by another thread later. Two
+/// concurrent <see cref="ConnectAsync"/> calls for the <em>same</em> physical device may both open
+/// a connection — the loser is detected after connecting and disposed — so a consumer that wants a
 /// single connect attempt should serialize its own calls (see issue #342).
 /// </para>
 /// </remarks>
@@ -196,22 +199,27 @@ public sealed class DaqifiDeviceRegistry : IDisposable
 
         // Pre-connect check. Rejecting here is free: nothing has been opened yet. The check that
         // actually guards the live set runs after connecting, atomically with the add.
-        DeviceRegistration? existing;
-        List<DeviceRegistration>? stale;
-
-        lock (_lock)
-        {
-            ThrowIfDisposed();
-            stale = PruneLocked();
-            existing = FindDuplicateLocked(key, discoveryIdentity);
-        }
-
-        CompleteRemoval(stale, DeviceRemovalReason.Disconnected);
-
         DeviceRegistration? approvedReplacement = null;
 
-        if (existing != null)
+        while (true)
         {
+            DeviceRegistration? existing;
+            List<DeviceRegistration>? stale;
+
+            lock (_lock)
+            {
+                ThrowIfDisposed();
+                stale = PruneLocked();
+                existing = FindDuplicateLocked(key, discoveryIdentity);
+            }
+
+            CompleteRemoval(stale, DeviceRemovalReason.Disconnected);
+
+            if (existing == null)
+            {
+                break;
+            }
+
             var action = InvokePolicy(new DuplicateDeviceCheck(
                 existing,
                 discoveryIdentity,
@@ -225,17 +233,29 @@ public sealed class DaqifiDeviceRegistry : IDisposable
                 return new DeviceRegistrationResult(DeviceRegistrationOutcome.Canceled, null);
             }
 
-            if (action != DuplicateDeviceAction.SwitchToNew)
+            if (action == DuplicateDeviceAction.SwitchToNew)
+            {
+                // Record the decision but keep the existing connection until the new one is
+                // actually open. Dropping it first would leave the caller with nothing when the
+                // new transport fails to connect — switching a healthy USB session to a WiFi
+                // address that turns out not to answer must not cost them the session they had.
+                // Registration drops it once the replacement is live, without asking the policy a
+                // second time. If it vanishes in the meantime the reference simply matches nothing
+                // there, and the new device is registered on its own merits.
+                approvedReplacement = existing;
+                break;
+            }
+
+            // KeepExisting. Only hand that registration back if it is still the live one: the
+            // policy ran without the lock and is documented as free to block on a user prompt, so
+            // another thread (or the policy itself) may have removed or replaced it meanwhile, and
+            // returning it then would deliver a disposed handle as "the live connection". When it
+            // has gone, re-resolve against the current set instead — which either finds a
+            // different duplicate to ask about or clears the way to connect.
+            if (IsStillRegistered(existing))
             {
                 return new DeviceRegistrationResult(DeviceRegistrationOutcome.DuplicateRejected, existing);
             }
-
-            // Record the decision but keep the existing connection until the new one is actually
-            // open. Dropping it first would leave the caller with nothing when the new transport
-            // fails to connect — switching a healthy USB session to a WiFi address that turns out
-            // not to answer must not cost them the session they had. Registration drops it once
-            // the replacement is live, without asking the policy a second time.
-            approvedReplacement = existing;
         }
 
         var device = await _connector(deviceInfo, options, cancellationToken).ConfigureAwait(false);
@@ -574,6 +594,16 @@ public sealed class DaqifiDeviceRegistry : IDisposable
                         return new DeviceRegistrationResult(DeviceRegistrationOutcome.Canceled, null);
 
                     default:
+                        // KeepExisting. Same revalidation as the pre-connect path: the policy ran
+                        // without the lock, so only hand back a registration that is still the
+                        // live one. If it has gone, loop rather than disposing the device we just
+                        // connected — re-resolving may now find no duplicate at all, in which case
+                        // this device is what the caller should end up with.
+                        if (!IsStillRegistered(existing!))
+                        {
+                            continue;
+                        }
+
                         DisposeDevice(device);
                         return new DeviceRegistrationResult(
                             DeviceRegistrationOutcome.DuplicateRejected, existing);
@@ -734,6 +764,22 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     #endregion
 
     #region Helpers
+
+    /// <summary>
+    /// Reports whether a registration captured earlier is still the entry filed under its key.
+    /// Used to revalidate a registration across the duplicate-policy call, which runs without the
+    /// lock held and may block indefinitely, so the live set can change underneath it.
+    /// </summary>
+    /// <param name="registration">The registration captured before the policy ran.</param>
+    /// <returns><c>true</c> when that exact instance is still in the live set.</returns>
+    private bool IsStillRegistered(DeviceRegistration registration)
+    {
+        lock (_lock)
+        {
+            return _devices.TryGetValue(registration.Key, out var current)
+                && ReferenceEquals(current, registration);
+        }
+    }
 
     /// <summary>
     /// Asks the duplicate policy what to do, defaulting to keeping the existing connection when no

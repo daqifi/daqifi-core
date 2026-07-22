@@ -319,11 +319,28 @@ public class DaqifiDeviceRegistryTests
     {
         const string serialNumber = "DAQ-12345";
         var overUsb = ConnectedDevice("usb", serialNumber);
-        var overWifi = ConnectedDevice("wifi", serialNumber);
+
+        // Deliberately left disconnected: the replacement opens inside the connector below and
+        // nowhere earlier, which is what makes the ordering assertion meaningful. Connecting it
+        // during setup (as the ConnectedDevice helper does) would make the assertion tautological —
+        // true whether or not the registry actually waits.
+        var overWifi = new DaqifiDevice("wifi");
+        overWifi.Metadata.SerialNumber = serialNumber;
+
         var policyCalls = new List<DuplicateCheckPhase>();
-        var connectedWhileOldStillRegistered = false;
-        var connects = new List<int>();
-        using var registry = RegistryReturning(connects, overUsb, overWifi);
+        var replacementWasOpenWhenOldWasDropped = false;
+        var connectorRuns = 0;
+
+        using var registry = new DaqifiDeviceRegistry((_, _, _) =>
+        {
+            if (connectorRuns++ == 0)
+            {
+                return Task.FromResult(overUsb);
+            }
+
+            overWifi.Connect();
+            return Task.FromResult(overWifi);
+        });
 
         await registry.ConnectAsync(UsbInfo(serialNumber));
 
@@ -335,15 +352,18 @@ public class DaqifiDeviceRegistryTests
         registry.DeviceRemoved += (_, _) =>
         {
             // At the moment the old registration is dropped, the replacement must already be live.
-            connectedWhileOldStillRegistered = overWifi.IsConnected;
+            // Drop-the-old-first ordering would observe it still disconnected here.
+            replacementWasOpenWhenOldWasDropped = overWifi.IsConnected;
         };
 
         var result = await registry.ConnectAsync(WifiInfo(serialNumber));
 
         Assert.Equal(DeviceRegistrationOutcome.ReplacedExisting, result.Outcome);
-        Assert.True(connectedWhileOldStillRegistered);
+        Assert.True(replacementWasOpenWhenOldWasDropped);
+        Assert.Equal(2, connectorRuns);
         Assert.False(overUsb.IsConnected);
         Assert.Equal(1, registry.Count);
+        Assert.Same(overWifi, Assert.Single(registry.Devices).Device);
         // Asked once, pre-connect — a consumer prompting its user must not see two dialogs.
         Assert.Equal(DuplicateCheckPhase.BeforeConnect, Assert.Single(policyCalls));
     }
@@ -366,6 +386,60 @@ public class DaqifiDeviceRegistryTests
         Assert.Null(result.Key);
         Assert.Equal(1, registry.Count);
         Assert.True(overUsb.IsConnected);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_PolicyRemovesTheExistingRegistrationWhileDeciding_NeverReturnsTheDeadHandle()
+    {
+        const string serialNumber = "DAQ-12345";
+        var connects = new List<int>();
+        var overUsb = ConnectedDevice("usb", serialNumber);
+        var overWifi = ConnectedDevice("wifi", serialNumber);
+        using var registry = RegistryReturning(connects, overUsb, overWifi);
+
+        await registry.ConnectAsync(UsbInfo(serialNumber));
+
+        // The policy runs without the registry lock and may block on a user prompt, so the live
+        // set can change underneath it — here the existing connection is torn down while the
+        // prompt is up. KeepExisting must not then hand back the registration that just died.
+        registry.DuplicatePolicy = check =>
+        {
+            registry.Remove(check.Existing.Key);
+            return DuplicateDeviceAction.KeepExisting;
+        };
+
+        var result = await registry.ConnectAsync(WifiInfo(serialNumber));
+
+        Assert.Equal(DeviceRegistrationOutcome.Registered, result.Outcome);
+        Assert.Same(overWifi, result.Device);
+        Assert.True(result.Device!.IsConnected);
+        Assert.Equal(1, registry.Count);
+        Assert.False(overUsb.IsConnected);
+    }
+
+    [Fact]
+    public void Register_PolicyRemovesTheExistingRegistrationWhileDeciding_RegistersTheNewDevice()
+    {
+        const string serialNumber = "DAQ-12345";
+        using var registry = new DaqifiDeviceRegistry();
+        var existing = ConnectedDevice("usb", serialNumber);
+        var replacement = ConnectedDevice("wifi", serialNumber);
+        registry.Register(existing);
+
+        // Same race on the post-connect path, where the device has already been connected: it must
+        // be registered rather than disposed in favor of a registration that no longer exists.
+        registry.DuplicatePolicy = check =>
+        {
+            registry.Remove(check.Existing.Key);
+            return DuplicateDeviceAction.KeepExisting;
+        };
+
+        var result = registry.Register(replacement);
+
+        Assert.Equal(DeviceRegistrationOutcome.Registered, result.Outcome);
+        Assert.Same(replacement, result.Device);
+        Assert.True(replacement.IsConnected);
+        Assert.Equal(1, registry.Count);
     }
 
     [Fact]
