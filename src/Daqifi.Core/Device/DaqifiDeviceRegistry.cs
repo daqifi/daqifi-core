@@ -30,9 +30,13 @@ namespace Daqifi.Core.Device;
 /// </para>
 /// <para>
 /// <b>Liveness.</b> Registrations whose device stops reporting <see cref="DaqifiDevice.IsConnected"/>
-/// are pruned before every registration attempt (and by <see cref="PruneDisconnected"/> on demand),
-/// so a device that was unplugged never blocks a reconnect. The registry does not subscribe to
-/// device status events or reconnect on its own; automatic reconnect is issue #379.
+/// are pruned before every registration attempt (and by <see cref="PruneDisconnected"/> on demand).
+/// Pruning is only as good as the transport's drop detection, which is a real limit today: the
+/// serial transport reports the OS handle's state, and that stays open after a USB device is
+/// physically unplugged, so such a device keeps reporting <c>IsConnected</c> and is not pruned.
+/// Devices you disconnect yourself, and drops a transport does report, are pruned as described.
+/// The registry does not subscribe to device status events or reconnect on its own; automatic
+/// reconnect is issue #379.
 /// </para>
 /// <para>
 /// <b>Concurrency.</b> All members are safe to call from any thread. Reads snapshot the live set,

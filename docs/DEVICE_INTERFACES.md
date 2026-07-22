@@ -309,8 +309,14 @@ registry.DuplicatePolicy = check =>
 **Ownership and liveness.** The registry disconnects and disposes every device it removes,
 including duplicates it rejects — once a device is passed to `ConnectAsync` or `Register`, don't
 dispose it yourself. Registrations whose device stops reporting `IsConnected` are pruned before
-every registration attempt (and by `PruneDisconnected()` on demand), so a unit that was unplugged
-never blocks a later reconnect. The registry does not reconnect on its own.
+every registration attempt (and by `PruneDisconnected()` on demand). The registry does not
+reconnect on its own.
+
+> **Know this limit:** pruning is only as good as the transport's drop detection.
+> `SerialStreamTransport.IsConnected` reports the OS handle's state, which stays open after a USB
+> device is physically unplugged, so that device keeps reporting `IsConnected` and is *not* pruned —
+> a later `ConnectAsync` under the same key hands back the dead handle rather than reconnecting.
+> Devices you `Disconnect()` yourself, and drops a transport does report, prune as described.
 
 All members are safe to call from any thread; reads return snapshots, and the duplicate policy is
 always invoked without the internal lock held, so a policy that blocks on a user prompt never
