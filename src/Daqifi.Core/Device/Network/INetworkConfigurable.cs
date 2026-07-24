@@ -42,6 +42,12 @@ namespace Daqifi.Core.Device.Network
         /// follows the restart, so none can be lost to it (#352).
         /// </para>
         /// <para>
+        /// Cancellation applies only up to that save: past it the device has committed, so
+        /// cancelling during the restart wait ends the wait early rather than failing the call.
+        /// Reporting a cancellation there would tell the caller nothing happened while the device
+        /// was in fact already sitting on the new configuration.
+        /// </para>
+        /// <para>
         /// <b>Over a WiFi/TCP control connection this is expected to drop the connection.</b>
         /// Restarting the WiFi module takes the device off the network carrying the control link
         /// whenever the new configuration points somewhere else — unavoidable when switching

@@ -1238,7 +1238,12 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when an unsupported WiFi mode or security type is specified.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        /// <exception cref="OperationCanceledException">
+        /// Thrown when the operation is canceled <b>before</b> the configuration is committed to the
+        /// device. Once the save and apply have been dispatched the operation always completes
+        /// successfully: cancelling during the restart wait ends the wait early instead of failing,
+        /// because the device has already persisted and applied the new settings.
+        /// </exception>
         public async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
         {
             if (configuration == null)
@@ -1315,6 +1320,11 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.DisableStorageSd);
             Send(ScpiMessageProducer.EnableNetworkLan);
 
+            // Last point at which abandoning the operation is harmless: everything staged above
+            // lives only in the device's runtime settings — nothing persisted, nothing applied.
+            // Past the save below the device has committed, so cancellation stops being a way out.
+            cancellationToken.ThrowIfCancellationRequested();
+
             // Persist BEFORE applying (#352). LAN:SAVE copies the staged runtime settings straight
             // to NVM; it does NOT require them to have been applied first. Sending it here — while
             // the control link is still guaranteed alive — is what makes the reconfiguration
@@ -1331,7 +1341,18 @@ namespace Daqifi.Core.Device
 
             // Hold for the module restart window before returning, so the apply is flushed to the
             // transport rather than left buffered in a connection that is about to go away.
-            await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
+            // Cancelling here ends the wait but does NOT fail the operation: the device has already
+            // persisted and applied the new configuration, so reporting "canceled" — and skipping
+            // the local-state update below — would leave the caller believing nothing happened
+            // while the device is sitting on a different network.
+            try
+            {
+                await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Already committed on the device; stop waiting early and complete normally.
+            }
 
             // Update local configuration. Static IP fields use null = "leave
             // unchanged" semantics, so only overwrite when the caller provided
