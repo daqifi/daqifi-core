@@ -75,45 +75,33 @@ namespace Daqifi.Core.Tests.Device
 
         // ---- Firmware-version axis ------------------------------------------------------------
 
+        /// <summary>
+        /// Version-gated features with a real released firmware version on each side of the
+        /// boundary. Spelled out rather than computed from the minimum: deriving "one below" by
+        /// decrementing a component can yield an unparseable string (e.g. a 3.0.0 minimum), which
+        /// would still report unsupported — passing the test for the wrong reason.
+        /// </summary>
         public static IEnumerable<object[]> VersionGatedFeatures() =>
             new List<object[]>
             {
-                new object[] { DeviceFeature.SdFileTransferOverWifi, "3.7.0" },
-                new object[] { DeviceFeature.CapabilityDocument, "3.5.0" },
-                new object[] { DeviceFeature.SdStorageQuery, "3.5.0" }
+                //                feature                                below,    at min,   above
+                new object[] { DeviceFeature.SdFileTransferOverWifi, "3.6.3", "3.7.0", "3.7.2" },
+                new object[] { DeviceFeature.CapabilityDocument,     "3.4.4", "3.5.0", "3.6.0" },
+                new object[] { DeviceFeature.SdStorageQuery,         "3.4.3", "3.5.0", "3.6.0" }
             };
 
         [Theory]
         [MemberData(nameof(VersionGatedFeatures))]
-        public void Supports_AtMinimumFirmware_ReturnsTrue(DeviceFeature feature, string minVersion)
+        public void Supports_AcrossTheFirmwareVersionBoundary(
+            DeviceFeature feature, string below, string atMin, string above)
         {
-            var device = DeviceOn(DeviceType.Nyquist1, minVersion);
+            // Guards the data itself: a "below" that stopped parsing would report unsupported via
+            // the fail-closed path instead of the comparison under test.
+            Assert.True(FirmwareVersion.TryParse(below, out _));
 
-            Assert.True(device.Supports(feature));
-        }
-
-        [Theory]
-        [MemberData(nameof(VersionGatedFeatures))]
-        public void Supports_AboveMinimumFirmware_ReturnsTrue(DeviceFeature feature, string minVersion)
-        {
-            var above = FirmwareVersion.TryParse(minVersion, out var parsed)
-                ? new FirmwareVersion(parsed.Major, parsed.Minor, parsed.Patch + 1, null, 0).ToString()
-                : minVersion;
-            var device = DeviceOn(DeviceType.Nyquist1, above);
-
-            Assert.True(device.Supports(feature));
-        }
-
-        [Theory]
-        [MemberData(nameof(VersionGatedFeatures))]
-        public void Supports_BelowMinimumFirmware_ReturnsFalse(DeviceFeature feature, string minVersion)
-        {
-            var below = FirmwareVersion.TryParse(minVersion, out var parsed)
-                ? new FirmwareVersion(parsed.Major, parsed.Minor - 1, 9, null, 0).ToString()
-                : minVersion;
-            var device = DeviceOn(DeviceType.Nyquist1, below);
-
-            Assert.False(device.Supports(feature));
+            Assert.False(DeviceOn(DeviceType.Nyquist1, below).Supports(feature));
+            Assert.True(DeviceOn(DeviceType.Nyquist1, atMin).Supports(feature));
+            Assert.True(DeviceOn(DeviceType.Nyquist1, above).Supports(feature));
         }
 
         [Theory]
