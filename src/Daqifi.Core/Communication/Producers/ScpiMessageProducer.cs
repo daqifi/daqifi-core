@@ -624,23 +624,180 @@ public class ScpiMessageProducer
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Creates a command message to persist the current ADC calibration coefficients to NVM.
+    /// Creates a command message to persist the current runtime ADC calibration coefficients to the <b>user</b> NVM bank.
     /// </summary>
     /// <remarks>
+    /// Writes every channel's live CalM/CalB (set via <see cref="SetAdcCalibrationSlope"/> /
+    /// <see cref="SetAdcCalibrationOffset"/>, which are RAM-only until saved) into the user bank. Use
+    /// <see cref="SaveFactoryAdcCalibration"/> to write the factory bank instead, and
+    /// <see cref="UseAdcCalibration"/> to choose which bank the device applies at boot.
     /// Command: CONFigure:ADC:SAVEcal
     /// Example: messageProducer.Send(ScpiMessageProducer.SaveAdcCalibration);
     /// </remarks>
     public static IOutboundMessage<string> SaveAdcCalibration => new ScpiMessage("CONFigure:ADC:SAVEcal");
 
     /// <summary>
-    /// Creates a command message to restore the ADC calibration coefficients from NVM into the runtime.
+    /// Creates a command message to restore the ADC calibration coefficients from the <b>user</b> NVM bank into the runtime.
     /// </summary>
     /// <remarks>
-    /// The inverse of <see cref="SaveAdcCalibration"/>.
+    /// The inverse of <see cref="SaveAdcCalibration"/>. Use <see cref="LoadFactoryAdcCalibration"/> to restore the
+    /// factory bank instead.
     /// Command: CONFigure:ADC:LOADcal
     /// Example: messageProducer.Send(ScpiMessageProducer.LoadAdcCalibration);
     /// </remarks>
     public static IOutboundMessage<string> LoadAdcCalibration => new ScpiMessage("CONFigure:ADC:LOADcal");
+
+    /// <summary>
+    /// Creates a command message to set a single channel's ADC calibration slope (CalM) in device RAM.
+    /// </summary>
+    /// <param name="channel">The analog input channel number.</param>
+    /// <param name="calM">The calibration slope (gain) coefficient.</param>
+    /// <remarks>
+    /// <b>RAM only.</b> This changes the live coefficient the firmware applies to incoming samples but does
+    /// <i>not</i> persist it — the value is lost on reboot unless written to an NVM bank with
+    /// <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/> (factory bank).
+    /// The slope is formatted with an invariant decimal point so the command is locale-independent.
+    /// Command: CONFigure:ADC:chanCALM channel,calM
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetAdcCalibrationSlope(0, 1.0025));
+    /// </remarks>
+    public static IOutboundMessage<string> SetAdcCalibrationSlope(int channel, double calM)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        if (!double.IsFinite(calM))
+        {
+            // NaN/Infinity would render as "NaN"/"Infinity" — tokens the firmware cannot parse.
+            throw new ArgumentOutOfRangeException(nameof(calM), calM, "Calibration slope must be a finite number.");
+        }
+
+        return new ScpiMessage($"CONFigure:ADC:chanCALM {channel},{calM.ToString(CultureInfo.InvariantCulture)}");
+    }
+
+    /// <summary>
+    /// Creates a command message to set a single channel's ADC calibration offset (CalB) in device RAM.
+    /// </summary>
+    /// <param name="channel">The analog input channel number.</param>
+    /// <param name="calB">The calibration offset coefficient.</param>
+    /// <remarks>
+    /// <b>RAM only.</b> This changes the live coefficient the firmware applies to incoming samples but does
+    /// <i>not</i> persist it — the value is lost on reboot unless written to an NVM bank with
+    /// <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/> (factory bank).
+    /// The offset is formatted with an invariant decimal point so the command is locale-independent.
+    /// Command: CONFigure:ADC:chanCALB channel,calB
+    /// Example: messageProducer.Send(ScpiMessageProducer.SetAdcCalibrationOffset(0, -0.0031));
+    /// </remarks>
+    public static IOutboundMessage<string> SetAdcCalibrationOffset(int channel, double calB)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        if (!double.IsFinite(calB))
+        {
+            // NaN/Infinity would render as "NaN"/"Infinity" — tokens the firmware cannot parse.
+            throw new ArgumentOutOfRangeException(nameof(calB), calB, "Calibration offset must be a finite number.");
+        }
+
+        return new ScpiMessage($"CONFigure:ADC:chanCALB {channel},{calB.ToString(CultureInfo.InvariantCulture)}");
+    }
+
+    /// <summary>
+    /// Creates a query message to read a channel's ADC calibration slope (CalM) currently in device RAM.
+    /// </summary>
+    /// <param name="channel">The analog input channel number.</param>
+    /// <remarks>
+    /// Returns the live runtime coefficient, which may differ from either NVM bank if it was changed with
+    /// <see cref="SetAdcCalibrationSlope"/> since the last save/load.
+    /// Command: CONFigure:ADC:chanCALM? channel
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetAdcCalibrationSlope(0));
+    /// </remarks>
+    public static IOutboundMessage<string> GetAdcCalibrationSlope(int channel)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        return new ScpiMessage($"CONFigure:ADC:chanCALM? {channel}");
+    }
+
+    /// <summary>
+    /// Creates a query message to read a channel's ADC calibration offset (CalB) currently in device RAM.
+    /// </summary>
+    /// <param name="channel">The analog input channel number.</param>
+    /// <remarks>
+    /// Returns the live runtime coefficient, which may differ from either NVM bank if it was changed with
+    /// <see cref="SetAdcCalibrationOffset"/> since the last save/load.
+    /// Command: CONFigure:ADC:chanCALB? channel
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetAdcCalibrationOffset(0));
+    /// </remarks>
+    public static IOutboundMessage<string> GetAdcCalibrationOffset(int channel)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        return new ScpiMessage($"CONFigure:ADC:chanCALB? {channel}");
+    }
+
+    /// <summary>
+    /// Creates a command message to persist the current runtime ADC calibration coefficients to the <b>factory</b> NVM bank.
+    /// </summary>
+    /// <remarks>
+    /// Writes every channel's live CalM/CalB into the factory bank. Contrast with <see cref="SaveAdcCalibration"/>,
+    /// which writes the <i>user</i> bank. Which bank the device applies is chosen by <see cref="UseAdcCalibration"/>.
+    /// Command: CONFigure:ADC:SAVEFcal
+    /// Example: messageProducer.Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
+    /// </remarks>
+    public static IOutboundMessage<string> SaveFactoryAdcCalibration => new ScpiMessage("CONFigure:ADC:SAVEFcal");
+
+    /// <summary>
+    /// Creates a command message to restore the ADC calibration coefficients from the <b>factory</b> NVM bank into the runtime.
+    /// </summary>
+    /// <remarks>
+    /// The inverse of <see cref="SaveFactoryAdcCalibration"/>. Contrast with <see cref="LoadAdcCalibration"/>,
+    /// which restores the <i>user</i> bank.
+    /// Command: CONFigure:ADC:LOADFcal
+    /// Example: messageProducer.Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
+    /// </remarks>
+    public static IOutboundMessage<string> LoadFactoryAdcCalibration => new ScpiMessage("CONFigure:ADC:LOADFcal");
+
+    /// <summary>
+    /// Creates a command message to select which ADC calibration bank the device applies.
+    /// </summary>
+    /// <param name="bank">The calibration bank: <c>0</c> = factory, <c>1</c> = user.</param>
+    /// <remarks>
+    /// <b>Persisted.</b> The choice is written to NVM and the runtime coefficients are immediately reloaded from the
+    /// selected bank; the same bank is then loaded automatically on every subsequent boot. Firmware rejects any value
+    /// other than 0 or 1, so this method validates the argument before producing a command.
+    /// Command: CONFigure:ADC:USECal bank
+    /// Example: messageProducer.Send(ScpiMessageProducer.UseAdcCalibration(1)); // apply the user bank
+    /// </remarks>
+    public static IOutboundMessage<string> UseAdcCalibration(int bank)
+    {
+        if (bank is < 0 or > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
+        }
+
+        return new ScpiMessage($"CONFigure:ADC:USECal {bank}");
+    }
+
+    /// <summary>
+    /// Creates a query message to read which ADC calibration bank is currently active.
+    /// </summary>
+    /// <remarks>
+    /// The device replies with <c>0</c> (factory) or <c>1</c> (user), matching the argument accepted by
+    /// <see cref="UseAdcCalibration"/>.
+    /// Command: CONFigure:ADC:USECal?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetAdcCalibrationBank);
+    /// </remarks>
+    public static IOutboundMessage<string> GetAdcCalibrationBank => new ScpiMessage("CONFigure:ADC:USECal?");
 
     /// <summary>
     /// Creates a command message to persist the current voltage precision setting to NVM.

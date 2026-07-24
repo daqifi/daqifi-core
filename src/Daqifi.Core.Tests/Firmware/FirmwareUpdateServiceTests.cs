@@ -2870,6 +2870,11 @@ public class FirmwareUpdateServiceTests
         public void LoadAdcCalibration() { }
         public void SaveVoltagePrecision() { }
         public void LoadVoltagePrecision() { }
+        public void SetAdcCalibrationSlope(int channelNumber, double calM) { }
+        public void SetAdcCalibrationOffset(int channelNumber, double calB) { }
+        public void SaveFactoryAdcCalibration() { }
+        public void LoadFactoryAdcCalibration() { }
+        public void UseAdcCalibration(int bank) { }
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
@@ -2961,6 +2966,11 @@ public class FirmwareUpdateServiceTests
         public void LoadAdcCalibration() { }
         public void SaveVoltagePrecision() { }
         public void LoadVoltagePrecision() { }
+        public void SetAdcCalibrationSlope(int channelNumber, double calM) { }
+        public void SetAdcCalibrationOffset(int channelNumber, double calB) { }
+        public void SaveFactoryAdcCalibration() { }
+        public void LoadFactoryAdcCalibration() { }
+        public void UseAdcCalibration(int bank) { }
         public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
             await Task.Delay(_attemptLatency, cancellationToken).ConfigureAwait(false);
@@ -3727,6 +3737,11 @@ public class FirmwareUpdateServiceTests
         public void LoadAdcCalibration() { }
         public void SaveVoltagePrecision() { }
         public void LoadVoltagePrecision() { }
+        public void SetAdcCalibrationSlope(int channelNumber, double calM) { }
+        public void SetAdcCalibrationOffset(int channelNumber, double calB) { }
+        public void SaveFactoryAdcCalibration() { }
+        public void LoadFactoryAdcCalibration() { }
+        public void UseAdcCalibration(int bank) { }
     }
 
     private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
@@ -3831,6 +3846,11 @@ public class FirmwareUpdateServiceTests
         public void LoadAdcCalibration() { }
         public void SaveVoltagePrecision() { }
         public void LoadVoltagePrecision() { }
+        public void SetAdcCalibrationSlope(int channelNumber, double calM) { }
+        public void SetAdcCalibrationOffset(int channelNumber, double calB) { }
+        public void SaveFactoryAdcCalibration() { }
+        public void LoadFactoryAdcCalibration() { }
+        public void UseAdcCalibration(int bank) { }
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {

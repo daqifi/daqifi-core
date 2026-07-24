@@ -10,6 +10,21 @@ namespace Daqifi.Core.Communication.Transport;
 /// </summary>
 public class TcpStreamTransport : IStreamTransport
 {
+    /// <summary>
+    /// Socket receive timeout applied once the connection is established, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// The connection timeout is only needed for the connect handshake and retry/backoff logic,
+    /// not for blocking reads during normal operation. Leaving the (multi-second) connect timeout
+    /// in place meant a <see cref="Consumers.StreamMessageConsumer{T}"/> reader thread parked in a
+    /// blocking <see cref="NetworkStream.Read(byte[], int, int)"/> could not be joined inside the
+    /// consumer-swap window used by the text-exchange path, which surfaced as a spurious
+    /// "a previous consumer thread has not yet exited" failure on connect (issue #383).
+    /// A short operational timeout bounds that wait, matching the serial transport's post-open
+    /// <c>ReadTimeout = 500</c>.
+    /// </remarks>
+    internal const int OperationalReceiveTimeoutMs = 500;
+
     private readonly IPEndPoint _endPoint;
     private readonly IPAddress? _localInterface;
     private TcpClient? _tcpClient;
@@ -181,6 +196,13 @@ public class TcpStreamTransport : IStreamTransport
                 }
 
                 _networkStream = _tcpClient.GetStream();
+
+                // After a successful connect, lower the receive timeout to a short operational
+                // value so consumer threads blocked in a synchronous read can always be stopped
+                // promptly (StopSafely). Only synchronous reads observe this; the async SD-card
+                // download path uses ReadAsync, which ignores SO_RCVTIMEO and keeps its own
+                // long timeout. See OperationalReceiveTimeoutMs.
+                _tcpClient.ReceiveTimeout = OperationalReceiveTimeoutMs;
             },
             onAttemptFailed: () =>
             {

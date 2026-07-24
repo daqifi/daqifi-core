@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Transport;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 
@@ -200,6 +201,49 @@ public class TcpStreamTransportTests
             // Assert
             Assert.True(transport.IsConnected);
             Assert.Contains("127.0.0.1", transport.ConnectionInfo);
+            await transport.DisconnectAsync();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task TcpStreamTransport_ConnectAsync_LowersReceiveTimeoutToOperationalValue()
+    {
+        // Regression for issue #383: leaving the socket at the (multi-second) connection timeout
+        // meant a consumer thread parked in a blocking read could not be joined inside the
+        // consumer-swap window, so the restart hit the double-reader guard and a connect failed
+        // with "a previous consumer thread has not yet exited". The serial transport already
+        // lowers its ReadTimeout after opening; TCP must do the same.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new TcpStreamTransport(IPAddress.Loopback, port);
+            var options = new ConnectionRetryOptions
+            {
+                Enabled = false,
+                MaxAttempts = 1,
+                ConnectionTimeout = TimeSpan.FromSeconds(10)
+            };
+
+            await transport.ConnectAsync(options);
+
+            Assert.True(transport.IsConnected);
+            Assert.Equal(TcpStreamTransport.OperationalReceiveTimeoutMs, transport.Stream.ReadTimeout);
+
+            // The short timeout must actually bound a blocking read of an idle connection, which
+            // is what lets StopSafely's Join succeed.
+            var stopwatch = Stopwatch.StartNew();
+            Assert.Throws<IOException>(() => transport.Stream.Read(new byte[16], 0, 16));
+            stopwatch.Stop();
+            Assert.True(
+                stopwatch.ElapsedMilliseconds < 5000,
+                $"Read should have expired near the operational timeout, took {stopwatch.ElapsedMilliseconds}ms.");
+
             await transport.DisconnectAsync();
         }
         finally

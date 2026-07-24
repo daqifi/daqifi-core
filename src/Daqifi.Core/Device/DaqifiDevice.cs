@@ -502,12 +502,60 @@ namespace Daqifi.Core.Device
             }
             finally
             {
-                // Restart the protobuf consumer
-                if (_messageConsumer != null)
-                {
-                    _messageConsumer.Start();
-                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
-                }
+                RestartMessageConsumerAfterSwap();
+            }
+        }
+
+        /// <summary>
+        /// Restarts the protobuf consumer after a swap (raw capture or text exchange) has stopped it.
+        /// </summary>
+        /// <remarks>
+        /// The stop paths join the reader thread with a bounded timeout, so a reader parked in a slow
+        /// blocking <see cref="Stream.Read(byte[], int, int)"/> can still be alive here.
+        /// <see cref="StreamMessageConsumer{T}.Start"/> absorbs that case by waiting a grace period
+        /// for the stopped reader to exit, which is what keeps a normal connect from failing with
+        /// "a previous consumer thread has not yet exited" (issue #383).
+        /// <para>
+        /// If it still refuses, the reader's read is not returning at all — the stream is stuck.
+        /// Deliberately do <b>not</b> recover by binding a fresh consumer to that same stream: a new
+        /// instance would be a second concurrent reader on it, which is exactly the framing
+        /// corruption the guard exists to prevent, and it would block on the stuck stream anyway.
+        /// The consumer is left stopped; the operation's own failure (or the next
+        /// <see cref="Connect"/>) surfaces the problem honestly.
+        /// </para>
+        /// <para>
+        /// Never throws: it runs from <c>finally</c> blocks, where an exception would mask the real
+        /// failure already unwinding. The consumer is also snapshotted once up front — the
+        /// text-exchange path holds <c>_textExchangeLock</c> (which <see cref="Disconnect"/> waits
+        /// on), but the raw-capture path does not, so a concurrent teardown could otherwise null the
+        /// field between reads.
+        /// </para>
+        /// </remarks>
+        private void RestartMessageConsumerAfterSwap()
+        {
+            var consumer = _messageConsumer;
+            if (consumer == null)
+            {
+                return;
+            }
+
+            try
+            {
+                consumer.Start();
+                consumer.MessageReceived += OnInboundMessageReceived;
+            }
+            catch (ConsumerThreadNotExitedException ex)
+            {
+                SafeLog(() => _logger.LogError(
+                    ex,
+                    "The previous message consumer thread did not exit, so the consumer was left stopped. "
+                    + "The device stream appears stuck; a reconnect is required to resume inbound messages."));
+            }
+            catch (Exception ex)
+            {
+                // e.g. ObjectDisposedException from a concurrent Dispose(). Swallow rather than let
+                // it escape a finally block and replace the operation's real exception.
+                SafeLog(() => _logger.LogError(ex, "Failed to restart the message consumer after a stream swap."));
             }
         }
 
@@ -760,11 +808,7 @@ namespace Daqifi.Core.Device
                     }
 
                     // Restart the protobuf consumer
-                    if (_messageConsumer != null)
-                    {
-                        _messageConsumer.Start();
-                        _messageConsumer.MessageReceived += OnInboundMessageReceived;
-                    }
+                    RestartMessageConsumerAfterSwap();
 
                     SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
                 }
