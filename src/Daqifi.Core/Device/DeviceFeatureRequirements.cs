@@ -1,6 +1,7 @@
 using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 
 #nullable enable
 
@@ -35,12 +36,14 @@ namespace Daqifi.Core.Device
     /// absent or unparseable version fails the check (see <see cref="DaqifiDevice.Supports"/>).
     /// </param>
     /// <param name="Boards">
-    /// Board variants that have the feature, or <c>null</c> when every board does.
+    /// Board variants that have the feature, or <c>null</c> when every board does. Immutable: the
+    /// table hands the same instance to every caller, so a mutable array here would let any
+    /// friend-assembly code silently re-gate the feature process-wide.
     /// </param>
     /// <param name="Hardware">Physical hardware the feature drives.</param>
     internal readonly record struct FeatureRequirement(
         FirmwareVersion? MinVersion,
-        DeviceType[]? Boards,
+        ImmutableArray<DeviceType>? Boards,
         HardwareRequirement Hardware);
 
     /// <summary>
@@ -67,7 +70,8 @@ namespace Daqifi.Core.Device
         /// </summary>
         internal static readonly FirmwareVersion CapabilityDocumentMinFirmware = new(3, 5, 0, null, 0);
 
-        private static readonly DeviceType[] Nyquist3Only = { DeviceType.Nyquist3 };
+        private static readonly ImmutableArray<DeviceType> Nyquist3Only =
+            ImmutableArray.Create(DeviceType.Nyquist3);
 
         private static readonly IReadOnlyDictionary<DeviceFeature, FeatureRequirement> Table =
             new Dictionary<DeviceFeature, FeatureRequirement>

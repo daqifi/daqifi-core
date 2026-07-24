@@ -284,5 +284,50 @@ namespace Daqifi.Core.Tests.Device
             Assert.Null(ex.RequiredVersion);
             Assert.Equal(DeviceType.Nyquist1, ex.Board);
         }
+
+        [Fact]
+        public void EnsureSupported_WhenHardwareIsTheFailingAxis_DoesNotClaimAFirmwareRequirement()
+        {
+            // Regression: the exception used to take its required version straight from the table
+            // regardless of which axis failed, so a device whose firmware already met the minimum
+            // but lacked the SD card was told "Requires firmware >= 3.7.0; the device reports
+            // '3.7.0'" — self-contradictory, and pointing at an upgrade that cannot fix it.
+            var noSd = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+            noSd.HasSdCard = false;
+            var device = DeviceOn(DeviceType.Nyquist1, "3.7.0", noSd);
+
+            var ex = Assert.Throws<FeatureNotSupportedException>(
+                () => device.EnsureSupported(DeviceFeature.SdFileTransferOverWifi));
+
+            Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
+            Assert.Null(ex.RequiredVersion);
+            Assert.DoesNotContain("Requires firmware", ex.Message);
+            Assert.Equal(DeviceType.Nyquist1, ex.Board);
+        }
+
+        [Fact]
+        public void EnsureSupported_WhenVersionIsTheFailingAxis_StillReportsTheRequirement()
+        {
+            // The other half of the same rule: when the version *is* what failed, the required
+            // version must still be reported — that is the caller's actionable next step.
+            var device = DeviceOn(DeviceType.Nyquist1, "3.6.3");
+
+            var ex = Assert.Throws<FeatureNotSupportedException>(
+                () => device.EnsureSupported(DeviceFeature.SdFileTransferOverWifi));
+
+            Assert.Equal(new FirmwareVersion(3, 7, 0, null, 0), ex.RequiredVersion);
+            Assert.Contains("Requires firmware >= 3.7.0", ex.Message);
+        }
+
+        [Fact]
+        public void RequirementTable_BoardAllowListIsImmutable()
+        {
+            // The table hands the same instance to every caller, so a mutable allow-list would let
+            // any friend-assembly code silently re-gate the feature process-wide.
+            var boards = DeviceFeatureRequirements.For(DeviceFeature.AnalogOutput).Boards;
+
+            Assert.True(boards.HasValue);
+            Assert.Equal(new[] { DeviceType.Nyquist3 }, boards!.Value);
+        }
     }
 }
