@@ -454,6 +454,167 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    // ---------------------------------------------------------------------
+    // Per-channel ADC calibration-constant write path (daqifi-core#386)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public void SetAdcCalibrationSlope_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetAdcCalibrationSlope(2, 1.0025);
+        Assert.Equal("CONFigure:ADC:chanCALM 2,1.0025", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetAdcCalibrationSlope_FormatsFractionalValueWithInvariantDecimalPoint()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            // A culture whose decimal separator is a comma must not corrupt the SCPI argument.
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            var message = ScpiMessageProducer.SetAdcCalibrationSlope(0, 2.5);
+            Assert.Equal("CONFigure:ADC:chanCALM 0,2.5", message.Data);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public void SetAdcCalibrationSlope_WithNegativeValue_FormatsLeadingMinus()
+    {
+        var message = ScpiMessageProducer.SetAdcCalibrationSlope(1, -0.5);
+        Assert.Equal("CONFigure:ADC:chanCALM 1,-0.5", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetAdcCalibrationSlope_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationSlope(-1, 1.0));
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void SetAdcCalibrationSlope_WithNonFiniteValue_Throws(double calM)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationSlope(0, calM));
+    }
+
+    [Fact]
+    public void SetAdcCalibrationOffset_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SetAdcCalibrationOffset(3, -0.0031);
+        Assert.Equal("CONFigure:ADC:chanCALB 3,-0.0031", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetAdcCalibrationOffset_FormatsFractionalValueWithInvariantDecimalPoint()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            var message = ScpiMessageProducer.SetAdcCalibrationOffset(0, 1.5);
+            Assert.Equal("CONFigure:ADC:chanCALB 0,1.5", message.Data);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public void SetAdcCalibrationOffset_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationOffset(-1, 1.0));
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void SetAdcCalibrationOffset_WithNonFiniteValue_Throws(double calB)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationOffset(0, calB));
+    }
+
+    [Fact]
+    public void GetAdcCalibrationSlope_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetAdcCalibrationSlope(0);
+        Assert.Equal("CONFigure:ADC:chanCALM? 0", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetAdcCalibrationSlope_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.GetAdcCalibrationSlope(-1));
+    }
+
+    [Fact]
+    public void GetAdcCalibrationOffset_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetAdcCalibrationOffset(5);
+        Assert.Equal("CONFigure:ADC:chanCALB? 5", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetAdcCalibrationOffset_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.GetAdcCalibrationOffset(-1));
+    }
+
+    [Fact]
+    public void SaveFactoryAdcCalibration_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.SaveFactoryAdcCalibration;
+        Assert.Equal("CONFigure:ADC:SAVEFcal", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void LoadFactoryAdcCalibration_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.LoadFactoryAdcCalibration;
+        Assert.Equal("CONFigure:ADC:LOADFcal", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void UseAdcCalibration_ReturnsCorrectCommand(int bank)
+    {
+        var message = ScpiMessageProducer.UseAdcCalibration(bank);
+        Assert.Equal($"CONFigure:ADC:USECal {bank}", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(2)]
+    public void UseAdcCalibration_WithInvalidBank_Throws(int bank)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.UseAdcCalibration(bank));
+    }
+
+    [Fact]
+    public void GetAdcCalibrationBank_ReturnsCorrectCommand()
+    {
+        var message = ScpiMessageProducer.GetAdcCalibrationBank;
+        Assert.Equal("CONFigure:ADC:USECal?", message.Data);
+        AssertMessageFormat(message);
+    }
+
     [Fact]
     public void SetLanFirmwareUpdateMode_ReturnsCorrectCommand()
     {

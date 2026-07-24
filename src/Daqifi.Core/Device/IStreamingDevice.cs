@@ -151,21 +151,74 @@ namespace Daqifi.Core.Device
         void Reboot();
 
         /// <summary>
-        /// Persists the device's current ADC calibration coefficients to NVM so they survive a reboot.
+        /// Persists the device's current ADC calibration coefficients to the <b>user</b> NVM bank so they survive a reboot.
         /// </summary>
         /// <remarks>
         /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:ADC:SAVEcal</c>). Pair with
-        /// <see cref="LoadAdcCalibration"/> to restore them.
+        /// <see cref="LoadAdcCalibration"/> to restore them. Use <see cref="SaveFactoryAdcCalibration"/> to write the
+        /// <b>factory</b> bank instead, and <see cref="UseAdcCalibration"/> to choose which bank the device applies.
         /// </remarks>
         void SaveAdcCalibration();
 
         /// <summary>
-        /// Restores the device's ADC calibration coefficients from NVM into its runtime.
+        /// Restores the device's ADC calibration coefficients from the <b>user</b> NVM bank into its runtime.
         /// </summary>
         /// <remarks>
         /// The inverse of <see cref="SaveAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADcal</c>).
         /// </remarks>
         void LoadAdcCalibration();
+
+        /// <summary>
+        /// Sets a single channel's ADC calibration slope (CalM) in device RAM.
+        /// </summary>
+        /// <param name="channelNumber">The analog input channel number.</param>
+        /// <param name="calM">The calibration slope (gain) coefficient.</param>
+        /// <remarks>
+        /// <b>RAM only</b> (firmware primitive <c>CONFigure:ADC:chanCALM</c>). The value is lost on reboot unless
+        /// persisted with <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/>
+        /// (factory bank).
+        /// </remarks>
+        void SetAdcCalibrationSlope(int channelNumber, double calM);
+
+        /// <summary>
+        /// Sets a single channel's ADC calibration offset (CalB) in device RAM.
+        /// </summary>
+        /// <param name="channelNumber">The analog input channel number.</param>
+        /// <param name="calB">The calibration offset coefficient.</param>
+        /// <remarks>
+        /// <b>RAM only</b> (firmware primitive <c>CONFigure:ADC:chanCALB</c>). The value is lost on reboot unless
+        /// persisted with <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/>
+        /// (factory bank).
+        /// </remarks>
+        void SetAdcCalibrationOffset(int channelNumber, double calB);
+
+        /// <summary>
+        /// Persists the device's current ADC calibration coefficients to the <b>factory</b> NVM bank.
+        /// </summary>
+        /// <remarks>
+        /// Firmware primitive <c>CONFigure:ADC:SAVEFcal</c>. Contrast with <see cref="SaveAdcCalibration"/>, which
+        /// writes the user bank. Which bank the device applies is chosen with <see cref="UseAdcCalibration"/>.
+        /// </remarks>
+        void SaveFactoryAdcCalibration();
+
+        /// <summary>
+        /// Restores the device's ADC calibration coefficients from the <b>factory</b> NVM bank into its runtime.
+        /// </summary>
+        /// <remarks>
+        /// The inverse of <see cref="SaveFactoryAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADFcal</c>).
+        /// </remarks>
+        void LoadFactoryAdcCalibration();
+
+        /// <summary>
+        /// Selects which ADC calibration bank the device applies (<c>0</c> = factory, <c>1</c> = user).
+        /// </summary>
+        /// <param name="bank">The calibration bank: <c>0</c> = factory, <c>1</c> = user.</param>
+        /// <remarks>
+        /// <b>Persisted</b> (firmware primitive <c>CONFigure:ADC:USECal</c>). The choice is written to NVM, the
+        /// runtime coefficients are immediately reloaded from the selected bank, and that bank is loaded on every
+        /// subsequent boot. Values other than 0 or 1 are rejected.
+        /// </remarks>
+        void UseAdcCalibration(int bank);
 
         /// <summary>
         /// Persists the device's current voltage precision setting to NVM so it survives a reboot.
