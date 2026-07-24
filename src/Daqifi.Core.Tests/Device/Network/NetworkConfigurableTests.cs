@@ -343,6 +343,88 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
+        public async Task UpdateNetworkConfigurationAsync_SavesBeforeApplying()
+        {
+            // Regression (#352): the save MUST precede the apply. ApplyNetworkLan restarts the WiFi
+            // module; a save sent afterwards can be lost to that restart, leaving the device
+            // applied-but-not-persisted (new config live now, gone on the next power cycle). The
+            // firmware persists the *staged* settings, so saving first is both valid and durable.
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var saveIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:SAVE");
+            var applyIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:APPLY");
+
+            Assert.True(saveIndex >= 0, "Expected a LAN:SAVE command to be sent.");
+            Assert.True(applyIndex >= 0, "Expected a LAN:APPLY command to be sent.");
+            Assert.True(
+                saveIndex < applyIndex,
+                $"LAN:SAVE (index {saveIndex}) must be sent before LAN:APPLY (index {applyIndex}).");
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_OverWifi_SavesBeforeApplying()
+        {
+            // The field case this ordering exists for: switching the device from one hotspot to
+            // another over a WiFi/TCP control link, with no USB cable available. The apply drops the
+            // connection by design — that is inherent to leaving the current network — so the config
+            // must already be in NVM before it fires.
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "OtherHotspot",
+                "OtherPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var saveIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:SAVE");
+            var applyIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:APPLY");
+
+            Assert.True(saveIndex >= 0, "Expected a LAN:SAVE command to be sent over WiFi.");
+            Assert.True(applyIndex >= 0, "Expected a LAN:APPLY command to be sent over WiFi.");
+            Assert.True(
+                saveIndex < applyIndex,
+                $"Over WiFi, LAN:SAVE (index {saveIndex}) must be sent before LAN:APPLY (index {applyIndex}).");
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_SendsNothingAfterApply()
+        {
+            // The apply is the last command by design: anything sent after it races the WiFi module
+            // restart and can be silently dropped over a WiFi/TCP transport. Guards against a future
+            // change appending a trailing command to the sequence.
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var applyIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:APPLY");
+
+            Assert.True(applyIndex >= 0, "Expected a LAN:APPLY command to be sent.");
+            Assert.True(
+                applyIndex == sentCommands.Count - 1,
+                "LAN:APPLY must be the final command sent; commands after it can be lost to the " +
+                $"WiFi module restart. Trailing commands: [{string.Join(", ", sentCommands.Skip(applyIndex + 1))}]");
+        }
+
+        [Fact]
         public void PrepareSdInterface_WhenDisconnected_ThrowsInvalidOperationException()
         {
             // Arrange
