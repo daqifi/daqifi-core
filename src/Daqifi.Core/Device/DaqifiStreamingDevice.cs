@@ -1492,25 +1492,22 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Minimum firmware for SD-card file transfer (LIST / GET / DELETE) over a WiFi/TCP
-        /// connection. Firmware <c>#598/#599</c> (first released <b>v3.7.0</b>) route the SD reply
-        /// to the requesting interface; before that the SD card and WiFi contend for the shared SPI
-        /// bus, so these operations are USB-only on older firmware. See
-        /// <see cref="DeviceFeature.SdFileTransferOverWifi"/> and ADR 0001.
+        /// Applies the transport predicate for an SD-card operation that drives the card while the
+        /// link is active (LIST / GET / DELETE and the storage-space query). Over USB (serial) these
+        /// are available on all SD-capable firmware and are not gated. Over WiFi/TCP they are gated
+        /// on <see cref="DeviceFeature.SdFileTransferOverWifi"/>, which
+        /// <see cref="DaqifiDevice.EnsureSupported"/> resolves against the requirement table
+        /// (ADR 0001) — pre-empting a command the firmware cannot service over WiFi, which would
+        /// otherwise stall on the shared SPI bus.
         /// </summary>
-        internal static readonly FirmwareVersion SdOverWifiMinFirmware = new(3, 7, 0, null, 0);
-
-        /// <summary>
-        /// Guards an SD-card file operation (LIST / GET / DELETE) against the transport it will run
-        /// on. Over USB (serial) these are always available on SD-capable firmware. Over WiFi/TCP
-        /// they require firmware &gt;= <see cref="SdOverWifiMinFirmware"/> — an unparseable or older
-        /// reported version is treated as unsupported and throws a typed, actionable
-        /// <see cref="FeatureNotSupportedException"/> up front (ADR 0001) rather than dispatching a
-        /// command the firmware cannot service over WiFi (which would stall on the shared SPI bus).
-        /// </summary>
+        /// <remarks>
+        /// This is only the transport half of the gate: which feature applies depends on the active
+        /// transport, but whether the device has that feature is the seam's answer, not this
+        /// method's.
+        /// </remarks>
         /// <exception cref="FeatureNotSupportedException">
-        /// Thrown when the active transport is not USB and the device firmware predates
-        /// <see cref="SdOverWifiMinFirmware"/>.
+        /// Thrown when the active transport is not USB and the device does not support
+        /// <see cref="DeviceFeature.SdFileTransferOverWifi"/>.
         /// </exception>
         private void EnsureSdFileTransferSupportedOnTransport()
         {
@@ -1519,15 +1516,7 @@ namespace Daqifi.Core.Device
                 return;
             }
 
-            if (!FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var firmware)
-                || firmware < SdOverWifiMinFirmware)
-            {
-                throw new FeatureNotSupportedException(
-                    DeviceFeature.SdFileTransferOverWifi,
-                    SdOverWifiMinFirmware,
-                    Metadata.FirmwareVersion,
-                    Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
-            }
+            EnsureSupported(DeviceFeature.SdFileTransferOverWifi);
         }
 
         /// <summary>
@@ -1715,15 +1704,13 @@ namespace Daqifi.Core.Device
             // A -113 "Undefined header" reply means the firmware doesn't recognize the storage
             // query at all — typically because it predates the version that introduced it — so
             // it gets the typed feature-gating exception instead of a generic operation error.
+            // The device's answer is authoritative here, so this throws on the wire response
+            // rather than on Supports(); the seam only supplies the required version and board.
             if (lastScpiError != null
                 && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var scpiErrorCode)
                 && scpiErrorCode == ScpiErrorCodeUndefinedHeader)
             {
-                throw new FeatureNotSupportedException(
-                    DeviceFeature.SdStorageQuery,
-                    MinSupportedFirmware,
-                    Metadata.FirmwareVersion,
-                    Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
+                throw CreateFeatureNotSupportedException(DeviceFeature.SdStorageQuery);
             }
 
             throw new SdCardOperationException(

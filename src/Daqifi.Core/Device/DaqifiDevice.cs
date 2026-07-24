@@ -67,6 +67,125 @@ namespace Daqifi.Core.Device
             FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var parsed) && parsed >= MinSupportedFirmware;
 
         /// <summary>
+        /// Gets a value indicating whether this device supports <paramref name="feature"/>, per the
+        /// requirement table behind ADR 0001 (docs/adr/0001-firmware-feature-gating.md). Consumers
+        /// branch on this instead of comparing firmware version strings themselves.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Evaluated against the current <see cref="Metadata"/> on every call — never cached —
+        /// because the board variant and the firmware version arrive in separate status-message
+        /// branches, so any precomputed flag would be snapshotted before one of them and go stale.
+        /// </para>
+        /// <para>
+        /// The two axes fail differently, deliberately:
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>
+        /// <b>Firmware version fails closed.</b> A version that is absent or does not parse yields
+        /// <c>false</c> for any version-gated feature. Dispatching a command the firmware may not
+        /// implement is the more expensive mistake (over WiFi, an SD command on pre-v3.7.0 firmware
+        /// stalls on the shared SPI bus), so an unknown version is not treated as permission.
+        /// </description></item>
+        /// <item><description>
+        /// <b>Board and hardware requirements are evaluated only once the board is known.</b> While
+        /// <see cref="DeviceMetadata.DeviceType"/> is <see cref="DeviceType.Unknown"/>,
+        /// <see cref="DeviceCapabilities.FromDeviceType"/> has not run and
+        /// <see cref="DeviceMetadata.Capabilities"/> holds all-<c>false</c> defaults that mean "not
+        /// yet known", not "hardware absent" — so those requirements are skipped rather than read
+        /// as violated, which would otherwise refuse features on a device that simply has not
+        /// reported its part number yet. The firmware's wire-level <c>-113</c> reply remains the
+        /// authoritative backstop for that window.
+        /// </description></item>
+        /// </list>
+        /// </remarks>
+        /// <param name="feature">The feature to test.</param>
+        /// <returns><c>true</c> if the device meets every requirement for <paramref name="feature"/>.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
+        /// </exception>
+        public bool Supports(DeviceFeature feature)
+        {
+            var requirement = DeviceFeatureRequirements.For(feature);
+
+            if (requirement.MinVersion.HasValue
+                && (!FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var firmware)
+                    || firmware < requirement.MinVersion.Value))
+            {
+                return false;
+            }
+
+            var board = Metadata.DeviceType;
+            if (board == DeviceType.Unknown)
+            {
+                return true;
+            }
+
+            if (requirement.Boards != null && Array.IndexOf(requirement.Boards, board) < 0)
+            {
+                return false;
+            }
+
+            var capabilities = Metadata.Capabilities;
+            if (requirement.Hardware.HasFlag(HardwareRequirement.SdCard) && !capabilities.HasSdCard)
+            {
+                return false;
+            }
+
+            if (requirement.Hardware.HasFlag(HardwareRequirement.WiFi) && !capabilities.HasWiFi)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Throws a typed <see cref="FeatureNotSupportedException"/> unless this device supports
+        /// <paramref name="feature"/>. The up-front counterpart to the firmware's wire-level
+        /// <c>-113</c> "Undefined header" backstop: it pre-empts the round-trip for a feature the
+        /// device is known to lack.
+        /// </summary>
+        /// <param name="feature">The feature the caller is about to use.</param>
+        /// <exception cref="FeatureNotSupportedException">
+        /// Thrown when <see cref="Supports"/> returns <c>false</c> for <paramref name="feature"/>.
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
+        /// </exception>
+        public void EnsureSupported(DeviceFeature feature)
+        {
+            if (!Supports(feature))
+            {
+                throw CreateFeatureNotSupportedException(feature);
+            }
+        }
+
+        /// <summary>
+        /// Builds the typed <see cref="FeatureNotSupportedException"/> for <paramref name="feature"/>,
+        /// populating the required version from the requirement table and the actual version and
+        /// board from the current <see cref="Metadata"/>.
+        /// </summary>
+        /// <remarks>
+        /// Used by <see cref="EnsureSupported"/> and by the wire-level <c>-113</c> backstop, which
+        /// throws on the firmware's authoritative answer rather than on a table lookup and so needs
+        /// to build the exception without first re-testing <see cref="Supports"/>.
+        /// </remarks>
+        /// <param name="feature">The feature the device does not support.</param>
+        /// <returns>The exception to throw.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
+        /// </exception>
+        protected FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
+        {
+            return new FeatureNotSupportedException(
+                feature,
+                DeviceFeatureRequirements.For(feature).MinVersion,
+                Metadata.FirmwareVersion,
+                Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
+        }
+
+        /// <summary>
         /// Gets the collection of channels populated from device status messages.
         /// </summary>
         /// <remarks>
