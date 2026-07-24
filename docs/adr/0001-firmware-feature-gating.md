@@ -251,6 +251,12 @@ The seam shipped. Two details differ from the sketch above, both settled during 
   known", not "hardware absent", so treating them as violations would newly refuse features on a
   device that has merely not reported its part number yet. The `-113` backstop still covers that
   window.
+- **The typed exception names only the axis that actually failed.** `EnsureSupported` reports a
+  `RequiredVersion` only when the *version* is what failed; a board or hardware shortfall on a
+  device whose firmware already meets the minimum would otherwise render as "Requires firmware
+  >= 3.7.0; the device reports '3.7.0'" and send the caller after an upgrade that cannot fix it.
+  The `-113` backstop is the deliberate exception: there the firmware itself reports it does not
+  know the command, so the table's minimum is the actionable answer.
 
 The table lives in
 [`DeviceFeatureRequirements`](../../src/Daqifi.Core/Device/DeviceFeatureRequirements.cs), seeded
