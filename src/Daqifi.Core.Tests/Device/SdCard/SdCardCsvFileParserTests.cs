@@ -634,7 +634,9 @@ public sealed class SdCardCsvFileParserTests
     [Fact]
     public async Task ParseAsync_WithCalibrationOffsets_AppliesFullFormula()
     {
-        // Arrange — test the full scaling formula: (raw / resolution * portRange * calM + calB) * internalScaleM
+        // Arrange — test the full scaling formula: raw / resolution * portRange * calM * internalScaleM + calB
+        // calB is an offset in volts and is not scaled by internalScaleM (daqifi-core#387), so this
+        // case (internalScaleM=2, calB=-0.05) also pins the SD path against the live-channel path.
         await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
             "TestDevice", "SN001", 100u,
             (1000u, new[] { 32768.0 })  // half-scale on 16-bit ADC
@@ -661,9 +663,9 @@ public sealed class SdCardCsvFileParserTests
         var session = await parser.ParseAsync(stream, "test.csv", options);
         var samples = await ToListAsync(session.Samples);
 
-        // Expected: (32768 / 65535 * 10.0 * 1.02 + (-0.05)) * 2.0
+        // Expected: 32768 / 65535 * 10.0 * 1.02 * 2.0 + (-0.05)
         var normalized = 32768.0 / 65535.0;
-        var expected = (normalized * 10.0 * 1.02 + (-0.05)) * 2.0;
+        var expected = normalized * 10.0 * 1.02 * 2.0 + (-0.05);
         Assert.Single(samples);
         Assert.Equal(expected, samples[0].AnalogValues[0], precision: 5);
     }

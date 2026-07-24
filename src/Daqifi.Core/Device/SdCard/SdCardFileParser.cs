@@ -337,7 +337,9 @@ public sealed class SdCardFileParser
 
     /// <summary>
     /// Scales raw ADC integer values using calibration parameters from the device config.
-    /// Formula: <c>(raw / resolution * portRange * calM + calB) * internalScaleM</c>
+    /// Formula: <c>raw / resolution * portRange * calM * internalScaleM + calB</c>
+    /// (see <see cref="Channel.AnalogScaling"/> — <c>calB</c> is an offset in volts and is
+    /// deliberately not scaled by <c>internalScaleM</c>).
     /// </summary>
     private static double[] ScaleRawAnalogValues(
         Google.Protobuf.Collections.RepeatedField<int> rawValues,
@@ -362,8 +364,7 @@ public sealed class SdCardFileParser
             var range = portRange != null && ch < portRange.Count ? portRange[ch] : 1.0;
             var scaleM = intScale != null && ch < intScale.Count ? intScale[ch] : 1.0;
 
-            var normalized = rawValues[ch] / resolution;
-            result[ch] = (normalized * range * calM + calB) * scaleM;
+            result[ch] = Channel.AnalogScaling.Scale(rawValues[ch], resolution, range, calM, scaleM, calB);
         }
 
         return result;

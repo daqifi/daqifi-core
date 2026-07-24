@@ -387,6 +387,48 @@ public sealed class SdCardJsonFileParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_WithNonUnityIntScaleAndOffset_DoesNotScaleTheOffset()
+    {
+        // daqifi-core#387: calB is an offset in volts, added after the internal scale factor —
+        // the SD path must agree with AnalogChannel.GetScaledValue and with the firmware.
+        await using var stream = SdCardTestJsonFileBuilder.BuildJsonFileWithIntegers(
+            (100u, new[] { 0, 32768, 0 }, "00")
+        );
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 3,
+            DigitalPortCount: 0,
+            TimestampFrequency: 100u,
+            DeviceSerialNumber: "SN001",
+            DevicePartNumber: "TestDevice",
+            FirmwareRevision: null,
+            CalibrationValues: new[] { (1.0, -0.05), (1.0, -0.05), (1.0, -0.05) },
+            Resolution: 65535,
+            PortRange: new[] { 10.0, 10.0, 10.0 },
+            InternalScaleM: new[] { 2.0, 2.0, 2.0 });
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            SessionStartTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            FallbackTimestampFrequency = 100,
+            ConfigurationOverride = overrideConfig
+        };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+
+        // At raw 0 the gain term vanishes, so the result is exactly calB — never calB * intScale.
+        // Correct: -0.05.  Old (bug): -0.05 * 2.0 = -0.10.
+        Assert.Equal(-0.05, samples[0].AnalogValues[0], precision: 6);
+
+        // Correct:  32768 / 65535 * 10.0 * 1.0 * 2.0 + (-0.05)
+        Assert.Equal(32768.0 / 65535.0 * 10.0 * 2.0 - 0.05, samples[0].AnalogValues[1], precision: 5);
+    }
+
+    [Fact]
     public async Task ParseAsync_WithoutCalibrationConfig_ReturnsRawValues()
     {
         // Arrange — no config override → values pass through as-is
