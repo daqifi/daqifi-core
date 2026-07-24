@@ -151,11 +151,12 @@ namespace Daqifi.Core.Device
         void Reboot();
 
         /// <summary>
-        /// Persists the device's current ADC calibration coefficients to NVM so they survive a reboot.
+        /// Persists the device's current ADC calibration coefficients to the <b>user</b> NVM bank so they survive a reboot.
         /// </summary>
         /// <remarks>
         /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:ADC:SAVEcal</c>). Pair with
-        /// <see cref="LoadAdcCalibration"/> to restore them.
+        /// <see cref="LoadAdcCalibration"/> to restore them. Use <see cref="SaveFactoryAdcCalibration"/> to write the
+        /// <b>factory</b> bank instead, and <see cref="UseAdcCalibration"/> to choose which bank the device applies.
         /// </remarks>
         void SaveAdcCalibration();
 
