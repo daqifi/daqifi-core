@@ -3153,6 +3153,447 @@ public class FirmwareUpdateServiceTests
             $"Expected the probe to wait out the settle delay between power-on and chip-info query, but the gap was only {gap.TotalMilliseconds}ms.");
     }
 
+    // ----- #299: standalone bootloader diagnostics (CheckBootloaderHealthAsync / ResetBootloaderAsync) -----
+
+    private static FirmwareUpdateService CreateDiagnosticsService(
+        FakeHidTransport hidTransport,
+        FakeHidDeviceEnumerator enumerator,
+        FirmwareUpdateServiceOptions? options = null)
+    {
+        return new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            enumerator,
+            options ?? CreateFastOptions());
+    }
+
+    private static FakeHidDeviceEnumerator SingleBootloaderEnumerator(string devicePath = "path-1") =>
+        new([[new HidDeviceInfo(0x04D8, 0x003C, devicePath, "SN-1", "DAQiFi Bootloader")]]);
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenBootloaderHealthy_ReturnsVersionAndDisconnects()
+    {
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // valid version response
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator());
+
+        var version = await service.CheckBootloaderHealthAsync();
+
+        Assert.Equal("1.0", version);
+        // Only the version request was written — no erase/program/jump. And the HID
+        // handle is released before returning so a later flow starts clean.
+        Assert.Equal(new byte[] { 0x11 }, Assert.Single(hidTransport.Writes));
+        Assert.False(hidTransport.IsConnected);
+        Assert.Equal(1, hidTransport.DisconnectCalls);
+        // A diagnostic is not an update: the update state machine is never driven.
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenTargetPathProvided_ConnectsByPath()
+    {
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator("path-42"));
+
+        await service.CheckBootloaderHealthAsync("path-42");
+
+        Assert.Equal(1, hidTransport.ConnectByPathAttempts);
+        Assert.Equal("path-42", hidTransport.LastConnectByPath);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenVersionResponseInvalid_ThrowsFirmwareUpdateExceptionWithConnectingGuidance()
+    {
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0xEE]); // FakeBootloaderProtocol decodes 0xEE → "Error"
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator());
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.CheckBootloaderHealthAsync());
+
+        Assert.Equal(FirmwareUpdateState.Connecting, ex.FailedState);
+        Assert.False(string.IsNullOrWhiteSpace(ex.RecoveryGuidance));
+        // Failed diagnostics must still leave the transport released and the service Idle.
+        Assert.False(hidTransport.IsConnected);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenNoBootloaderEnumerates_ThrowsWithWaitingForBootloaderGuidance()
+    {
+        var hidTransport = new FakeHidTransport();
+        // Enumerator only ever returns an empty list → WaitingForBootloader times out.
+        var enumerator = new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]);
+
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = CreateDiagnosticsService(hidTransport, enumerator, options);
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.CheckBootloaderHealthAsync());
+
+        Assert.Equal(FirmwareUpdateState.WaitingForBootloader, ex.FailedState);
+        Assert.IsType<TimeoutException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenTargetPathWhitespace_ThrowsArgumentException()
+    {
+        var service = CreateDiagnosticsService(new FakeHidTransport(), SingleBootloaderEnumerator());
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.CheckBootloaderHealthAsync("   "));
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenDisposed_ThrowsObjectDisposedException()
+    {
+        var service = CreateDiagnosticsService(new FakeHidTransport(), SingleBootloaderEnumerator());
+        service.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => service.CheckBootloaderHealthAsync());
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenBootloaderPresent_WritesJumpToAppAndDisconnects()
+    {
+        var hidTransport = new FakeHidTransport();
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator());
+
+        await service.ResetBootloaderAsync();
+
+        // Exactly the JMP_TO_APP message (0x55 in FakeBootloaderProtocol) — no version
+        // read, no erase, no program.
+        Assert.Equal(new byte[] { 0x55 }, Assert.Single(hidTransport.Writes));
+        Assert.False(hidTransport.IsConnected);
+        Assert.Equal(1, hidTransport.DisconnectCalls);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenTargetPathProvided_ConnectsByPath()
+    {
+        var hidTransport = new FakeHidTransport();
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator("path-9"));
+
+        await service.ResetBootloaderAsync("path-9");
+
+        Assert.Equal(1, hidTransport.ConnectByPathAttempts);
+        Assert.Equal("path-9", hidTransport.LastConnectByPath);
+        Assert.Equal(new byte[] { 0x55 }, Assert.Single(hidTransport.Writes));
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenNoBootloaderEnumerates_ThrowsFirmwareUpdateException()
+    {
+        var hidTransport = new FakeHidTransport();
+        var enumerator = new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]);
+
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = CreateDiagnosticsService(hidTransport, enumerator, options);
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.ResetBootloaderAsync());
+
+        Assert.Equal(FirmwareUpdateState.WaitingForBootloader, ex.FailedState);
+        Assert.Empty(hidTransport.Writes);
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenTargetPathWhitespace_ThrowsArgumentException()
+    {
+        var service = CreateDiagnosticsService(new FakeHidTransport(), SingleBootloaderEnumerator());
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.ResetBootloaderAsync("\t"));
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenJumpToAppWriteHangs_TimesOutInJumpingToAppState()
+    {
+        // The standalone JMP_TO_APP write must be bounded by JumpingToApplicationTimeout,
+        // just like the full update flow's jump step — a write that blocks (or ignores
+        // cancellation) must not let the reset run unbounded.
+        var hidTransport = new FakeHidTransport
+        {
+            WriteHook = (_, ct) => Task.Delay(Timeout.Infinite, ct)
+        };
+
+        var options = CreateFastOptions();
+        options.JumpingToApplicationTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator(), options);
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.ResetBootloaderAsync());
+
+        Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.IsType<TimeoutException>(ex.InnerException);
+        // The hung write never completed, so nothing was recorded, and the HID
+        // transport is still disconnected on the way out.
+        Assert.Empty(hidTransport.Writes);
+        Assert.False(hidTransport.IsConnected);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenDiagnosticFails_MessageDoesNotClaimAnUpdateFailed()
+    {
+        // A health check is what a consumer runs *instead of* starting an update — its
+        // failure must not read "Firmware update failed" in a recovery dialog. Observed
+        // on real hardware before the fix.
+        var hidTransport = new FakeHidTransport();
+        var enumerator = new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]);
+
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = CreateDiagnosticsService(hidTransport, enumerator, options);
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.CheckBootloaderHealthAsync());
+
+        Assert.DoesNotContain("Firmware update failed", ex.Message, StringComparison.Ordinal);
+        Assert.StartsWith("Bootloader health check failed", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenDiagnosticFails_MessageNamesTheSoftReset()
+    {
+        var hidTransport = new FakeHidTransport();
+        var enumerator = new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]);
+
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = CreateDiagnosticsService(hidTransport, enumerator, options);
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.ResetBootloaderAsync());
+
+        Assert.DoesNotContain("Firmware update failed", ex.Message, StringComparison.Ordinal);
+        Assert.StartsWith("Bootloader soft reset failed", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UpdateFirmwareAsync_WhenItFails_StillReportsAsAFirmwareUpdateFailure()
+    {
+        // Guards the failureSubject default: adding a subject for diagnostics must not
+        // change the wording the real update flow has always produced.
+        var hidTransport = new FakeHidTransport();
+        var device = new FakeStreamingDevice("COM3");
+
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]),
+            options);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateFirmwareAsync(device, hexPath));
+
+            Assert.StartsWith("Firmware update failed", ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenDisposed_ThrowsObjectDisposedException()
+    {
+        // Symmetry with CheckBootloaderHealthAsync's disposed guard.
+        var service = CreateDiagnosticsService(new FakeHidTransport(), SingleBootloaderEnumerator());
+        service.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => service.ResetBootloaderAsync());
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenTokenAlreadyCanceled_ThrowsOperationCanceled()
+    {
+        var service = CreateDiagnosticsService(new FakeHidTransport(), SingleBootloaderEnumerator());
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.CheckBootloaderHealthAsync(cancellationToken: cts.Token));
+
+        // A canceled diagnostic must not strand the service in a non-idle state.
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenTokenAlreadyCanceled_ThrowsOperationCanceled()
+    {
+        var hidTransport = new FakeHidTransport();
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator());
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.ResetBootloaderAsync(cancellationToken: cts.Token));
+
+        // Nothing may reach the wire on a pre-canceled reset.
+        Assert.Empty(hidTransport.Writes);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_ReentrantCallFromUpdateProgressCallback_ThrowsInsteadOfDeadlocking()
+    {
+        // A diagnostic owns the HID connect/version exchange, so unlike the read-only
+        // CheckWifiFirmwareStatusAsync probe it must NOT be allowed through from inside
+        // an in-flight update's synchronous callback. It must fail fast with
+        // InvalidOperationException rather than deadlock on the non-reentrant lock.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var options = CreateFastOptions();
+        options.WaitingForBootloaderTimeout = TimeSpan.FromMilliseconds(150);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]),
+            options);
+
+        Exception? reentrantFailure = null;
+        var reentryAttempted = false;
+
+        var progress = new SyncProgress<FirmwareUpdateProgress>(_ =>
+        {
+            if (reentryAttempted)
+            {
+                return;
+            }
+            reentryAttempted = true;
+            reentrantFailure = Record.ExceptionAsync(
+                () => service.CheckBootloaderHealthAsync()).GetAwaiter().GetResult();
+        });
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            // Hard timeout so a regression of the guard fails fast instead of hanging
+            // the run on the non-reentrant _operationLock.
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await Assert.ThrowsAnyAsync<Exception>(
+                () => service.UpdateFirmwareAsync(device, hexPath, progress)
+                    .WaitAsync(timeoutCts.Token));
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.True(reentryAttempted, "Progress callback never fired — test setup wrong.");
+        var failure = Assert.IsType<InvalidOperationException>(reentrantFailure);
+        Assert.Contains("in-flight firmware operation", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_ConcurrentCallFromSeparateContext_WaitsInsteadOfThrowing()
+    {
+        // The documented contract: only callback reentrancy is rejected. A concurrent
+        // call from a SEPARATE execution context must serialize on the shared lock and
+        // then proceed — it must not throw InvalidOperationException.
+        var releaseFirst = new TaskCompletionSource();
+        var firstCallHoldsLock = new TaskCompletionSource();
+
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var isFirstWrite = true;
+        hidTransport.WriteHook = async (_, _) =>
+        {
+            if (!isFirstWrite)
+            {
+                return;
+            }
+            isFirstWrite = false;
+            firstCallHoldsLock.TrySetResult();
+            await releaseFirst.Task;
+        };
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")],
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var service = CreateDiagnosticsService(hidTransport, enumerator);
+
+        var first = service.CheckBootloaderHealthAsync();
+        await firstCallHoldsLock.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var second = service.CheckBootloaderHealthAsync();
+
+        // The second call must be queued behind the first, not rejected.
+        await Task.WhenAny(second, Task.Delay(250));
+        Assert.False(
+            second.IsCompleted,
+            "Second diagnostic should still be waiting on the operation lock while the first holds it.");
+
+        releaseFirst.SetResult();
+
+        Assert.Equal("1.0", await first);
+        Assert.Equal("1.0", await second);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
+    [Fact]
+    public async Task BootloaderDiagnostic_AfterHealthCheck_ServiceStaysUsableForAnotherDiagnostic()
+    {
+        // A successful diagnostic must leave CurrentState Idle so a subsequent
+        // diagnostic (or a real update) is not blocked by a stale state.
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead([0x01, 0x10]);
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")],
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var service = CreateDiagnosticsService(hidTransport, enumerator);
+
+        var first = await service.CheckBootloaderHealthAsync();
+        var second = await service.CheckBootloaderHealthAsync();
+
+        Assert.Equal("1.0", first);
+        Assert.Equal("1.0", second);
+        Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+    }
+
     private sealed class SyncProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;
@@ -3490,7 +3931,14 @@ public class FirmwareUpdateServiceTests
             ConnectByPathAsync(devicePath).GetAwaiter().GetResult();
         }
 
-        public Task WriteAsync(byte[] data, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Optional hook invoked by <see cref="WriteAsync"/> before the write is recorded.
+        /// Lets a test make a write hang (honoring the linked cancellation token) to verify
+        /// per-state timeout enforcement.
+        /// </summary>
+        public Func<byte[], CancellationToken, Task>? WriteHook { get; set; }
+
+        public async Task WriteAsync(byte[] data, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsConnected)
@@ -3498,8 +3946,12 @@ public class FirmwareUpdateServiceTests
                 throw new InvalidOperationException("Not connected.");
             }
 
+            if (WriteHook is not null)
+            {
+                await WriteHook(data, cancellationToken).ConfigureAwait(false);
+            }
+
             Writes.Add(data.ToArray());
-            return Task.CompletedTask;
         }
 
         public void Write(byte[] data)
