@@ -1320,9 +1320,17 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.DisableStorageSd);
             Send(ScpiMessageProducer.EnableNetworkLan);
 
-            // Last point at which abandoning the operation is harmless: everything staged above
-            // lives only in the device's runtime settings — nothing persisted, nothing applied.
-            // Past the save below the device has committed, so cancellation stops being a way out.
+            // Cancellation boundary. This is the last point where abandoning still avoids the two
+            // things that matter: nothing has been persisted (no LAN:SAVE) and no module restart
+            // has been triggered (no LAN:APPLY), so the device keeps serving the network
+            // configuration it already had. Past the save below it has committed, and cancellation
+            // stops being a way out.
+            //
+            // This is deliberately NOT a side-effect-free point. The staged credentials, the LAN
+            // enable flag and the SD disable above have all reached the device's runtime state, and
+            // a later LAN:APPLY from any caller would pick up those staged values. No side-effect-
+            // free abort exists once the sequence has begun — only the check at the top of this
+            // method precedes every Send.
             cancellationToken.ThrowIfCancellationRequested();
 
             // Persist BEFORE applying (#352). LAN:SAVE copies the staged runtime settings straight
