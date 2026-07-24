@@ -1287,10 +1287,17 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Updates the device network configuration with the specified settings.
         /// </summary>
+        /// <remarks>
+        /// Requires a USB control connection. Applying the LAN settings restarts the WiFi module,
+        /// which would drop a WiFi/TCP control connection before the trailing save is delivered, so
+        /// this method throws <see cref="NetworkReconfigurationRequiresUsbException"/> over WiFi
+        /// rather than dispatch a sequence it cannot complete (#352).
+        /// </remarks>
         /// <param name="configuration">The new network configuration to apply.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="NetworkReconfigurationRequiresUsbException">Thrown when the active control transport is not USB.</exception>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when an unsupported WiFi mode or security type is specified.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
@@ -1306,6 +1313,17 @@ namespace Daqifi.Core.Device
             if (!IsConnected)
             {
                 throw new InvalidOperationException("Device is not connected.");
+            }
+
+            // Reject reconfiguration over WiFi/TCP up front. ApplyNetworkLan (and the later
+            // EnableNetworkLan) restart the WiFi module, tearing down a WiFi/TCP control connection
+            // before the trailing SaveNetworkLan is delivered — leaving the new config
+            // applied-but-not-persisted (lost on power cycle) or the tail undelivered. Fail before
+            // sending any command so nothing is half-applied; the caller must reconfigure over USB
+            // (#352).
+            if (!IsUsbConnection)
+            {
+                throw new NetworkReconfigurationRequiresUsbException();
             }
 
             // Stop streaming if active
@@ -1367,11 +1385,11 @@ namespace Daqifi.Core.Device
             await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
 
             // Re-enable the LAN interface after the reconfig. ApplyNetworkLan restarts the WiFi
-            // module, so this is a network-configuration step that OWNS the LAN state and must
-            // bring LAN back up regardless of the control transport. It deliberately does NOT call
-            // PrepareLanInterface() — that is the transport-aware SD-operation restore, which
-            // leaves the LAN alone over WiFi (where #598/#599 keep it up). Here the LAN enable is
-            // unconditional.
+            // module, so this is a network-configuration step that OWNS the LAN state and brings it
+            // back up. It deliberately does NOT call PrepareLanInterface() — that is the
+            // transport-aware SD-operation restore, which leaves the LAN alone over WiFi. Here the
+            // LAN enable is unconditional; the USB-only guard above guarantees this runs only over a
+            // control connection the WiFi-module restart cannot drop (#352).
             Send(ScpiMessageProducer.DisableStorageSd);
             Send(ScpiMessageProducer.EnableNetworkLan);
 
