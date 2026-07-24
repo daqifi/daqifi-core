@@ -1054,6 +1054,76 @@ namespace Daqifi.Core.Device
         }
 
         /// <inheritdoc />
+        public void SetAdcCalibrationSlope(int channelNumber, double calM)
+        {
+            if (channelNumber < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM));
+        }
+
+        /// <inheritdoc />
+        public void SetAdcCalibrationOffset(int channelNumber, double calB)
+        {
+            if (channelNumber < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB));
+        }
+
+        /// <inheritdoc />
+        public void SaveFactoryAdcCalibration()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
+        }
+
+        /// <inheritdoc />
+        public void LoadFactoryAdcCalibration()
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
+        }
+
+        /// <inheritdoc />
+        public void UseAdcCalibration(int bank)
+        {
+            if (bank is < 0 or > 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
+            }
+
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            Send(ScpiMessageProducer.UseAdcCalibration(bank));
+        }
+
+        /// <inheritdoc />
         public void SaveVoltagePrecision()
         {
             if (!IsConnected)
