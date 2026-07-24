@@ -67,6 +67,177 @@ namespace Daqifi.Core.Device
             FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var parsed) && parsed >= MinSupportedFirmware;
 
         /// <summary>
+        /// Gets a value indicating whether this device supports <paramref name="feature"/>, per the
+        /// requirement table behind ADR 0001 (docs/adr/0001-firmware-feature-gating.md). Consumers
+        /// branch on this instead of comparing firmware version strings themselves.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Evaluated against the current <see cref="Metadata"/> on every call — never cached —
+        /// because the board variant and the firmware version arrive in separate status-message
+        /// branches, so any precomputed flag would be snapshotted before one of them and go stale.
+        /// </para>
+        /// <para>
+        /// The two axes fail differently, deliberately:
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>
+        /// <b>Firmware version fails closed.</b> A version that is absent or does not parse yields
+        /// <c>false</c> for any version-gated feature. Dispatching a command the firmware may not
+        /// implement is the more expensive mistake (over WiFi, an SD command on pre-v3.7.0 firmware
+        /// stalls on the shared SPI bus), so an unknown version is not treated as permission.
+        /// </description></item>
+        /// <item><description>
+        /// <b>Board and hardware requirements are evaluated only once the board is known.</b> While
+        /// <see cref="DeviceMetadata.DeviceType"/> is <see cref="DeviceType.Unknown"/>,
+        /// <see cref="DeviceCapabilities.FromDeviceType"/> has not run and
+        /// <see cref="DeviceMetadata.Capabilities"/> holds all-<c>false</c> defaults that mean "not
+        /// yet known", not "hardware absent" — so those requirements are skipped rather than read
+        /// as violated, which would otherwise refuse features on a device that simply has not
+        /// reported its part number yet. The firmware's wire-level <c>-113</c> reply remains the
+        /// authoritative backstop for that window.
+        /// </description></item>
+        /// </list>
+        /// </remarks>
+        /// <param name="feature">The feature to test.</param>
+        /// <returns><c>true</c> if the device meets every requirement for <paramref name="feature"/>.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
+        /// </exception>
+        public bool Supports(DeviceFeature feature) =>
+            EvaluateSupport(feature) == SupportFailure.None;
+
+        /// <summary>
+        /// Which requirement axis a device failed for a feature. Determines what the typed
+        /// exception is allowed to claim: only a <see cref="FirmwareVersion"/> failure may report a
+        /// required firmware version, since attributing a board or hardware shortfall to the
+        /// firmware would tell the caller to perform an upgrade that cannot fix it.
+        /// </summary>
+        private enum SupportFailure
+        {
+            /// <summary>Every requirement is met.</summary>
+            None,
+
+            /// <summary>The reported firmware is absent, unparseable, or older than the minimum.</summary>
+            FirmwareVersion,
+
+            /// <summary>The board variant is not on the feature's allow-list.</summary>
+            Board,
+
+            /// <summary>The device lacks hardware the feature drives.</summary>
+            Hardware
+        }
+
+        /// <summary>
+        /// Evaluates every requirement for <paramref name="feature"/> against the current
+        /// <see cref="Metadata"/> and reports the first axis that failed. The single evaluation
+        /// path behind both <see cref="Supports"/> and <see cref="EnsureSupported"/>, so the two
+        /// can never disagree about whether — or why — a feature is unavailable.
+        /// </summary>
+        private SupportFailure EvaluateSupport(DeviceFeature feature)
+        {
+            var requirement = DeviceFeatureRequirements.For(feature);
+
+            if (requirement.MinVersion.HasValue
+                && (!FirmwareVersion.TryParse(Metadata.FirmwareVersion, out var firmware)
+                    || firmware < requirement.MinVersion.Value))
+            {
+                return SupportFailure.FirmwareVersion;
+            }
+
+            var board = Metadata.DeviceType;
+            if (board == DeviceType.Unknown)
+            {
+                return SupportFailure.None;
+            }
+
+            if (requirement.Boards.HasValue && !requirement.Boards.Value.Contains(board))
+            {
+                return SupportFailure.Board;
+            }
+
+            var capabilities = Metadata.Capabilities;
+            if (requirement.Hardware.HasFlag(HardwareRequirement.SdCard) && !capabilities.HasSdCard)
+            {
+                return SupportFailure.Hardware;
+            }
+
+            if (requirement.Hardware.HasFlag(HardwareRequirement.WiFi) && !capabilities.HasWiFi)
+            {
+                return SupportFailure.Hardware;
+            }
+
+            return SupportFailure.None;
+        }
+
+        /// <summary>
+        /// Throws a typed <see cref="FeatureNotSupportedException"/> unless this device supports
+        /// <paramref name="feature"/>. The up-front counterpart to the firmware's wire-level
+        /// <c>-113</c> "Undefined header" backstop: it pre-empts the round-trip for a feature the
+        /// device is known to lack.
+        /// </summary>
+        /// <param name="feature">The feature the caller is about to use.</param>
+        /// <exception cref="FeatureNotSupportedException">
+        /// Thrown when <see cref="Supports"/> returns <c>false</c> for <paramref name="feature"/>.
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
+        /// </exception>
+        public void EnsureSupported(DeviceFeature feature)
+        {
+            var failure = EvaluateSupport(feature);
+            if (failure == SupportFailure.None)
+            {
+                return;
+            }
+
+            // Report a required firmware version only when the version is what failed. A board or
+            // hardware shortfall on a device whose firmware already meets the minimum would
+            // otherwise produce a self-contradictory "Requires firmware >= 3.7.0; the device
+            // reports '3.7.0'" — pointing the caller at an upgrade that cannot help.
+            throw BuildFeatureNotSupportedException(
+                feature,
+                failure == SupportFailure.FirmwareVersion
+                    ? DeviceFeatureRequirements.For(feature).MinVersion
+                    : null);
+        }
+
+        /// <summary>
+        /// Builds the typed <see cref="FeatureNotSupportedException"/> for a feature the firmware
+        /// rejected on the wire, attributing the failure to the firmware version.
+        /// </summary>
+        /// <remarks>
+        /// For the <c>-113</c> "Undefined header" backstop, where the device itself is the
+        /// authority: the firmware does not recognize the command at all, so the required version
+        /// from the table is the actionable answer and no table re-evaluation is wanted. Up-front
+        /// checks go through <see cref="EnsureSupported"/> instead, which reports a required
+        /// version only when the version is the axis that actually failed.
+        /// </remarks>
+        /// <param name="feature">The feature the device does not support.</param>
+        /// <returns>The exception to throw.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when <paramref name="feature"/> has no entry in the requirement table.
+        /// </exception>
+        protected FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature) =>
+            BuildFeatureNotSupportedException(feature, DeviceFeatureRequirements.For(feature).MinVersion);
+
+        /// <summary>
+        /// Assembles a <see cref="FeatureNotSupportedException"/> from the current
+        /// <see cref="Metadata"/>, with the required version supplied by the caller so each entry
+        /// point controls whether a firmware version is claimed as the cause.
+        /// </summary>
+        private FeatureNotSupportedException BuildFeatureNotSupportedException(
+            DeviceFeature feature,
+            FirmwareVersion? requiredVersion)
+        {
+            return new FeatureNotSupportedException(
+                feature,
+                requiredVersion,
+                Metadata.FirmwareVersion,
+                Metadata.DeviceType == DeviceType.Unknown ? null : Metadata.DeviceType);
+        }
+
+        /// <summary>
         /// Gets the collection of channels populated from device status messages.
         /// </summary>
         /// <remarks>

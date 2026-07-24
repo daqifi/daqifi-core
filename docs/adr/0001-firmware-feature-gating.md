@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-06-19)
 - **Issue:** [#251](https://github.com/daqifi/daqifi-core/issues/251)
-- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal), [#256](https://github.com/daqifi/daqifi-core/issues/256) (deferred table + #327 reader)
+- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal), [#256](https://github.com/daqifi/daqifi-core/issues/256) (version table + `Supports()` seam; #327 reader still deferred)
 - **Supersedes:** —
 
 > **Note on the evidence section.** §"Context — firmware audit" below is a *living*
@@ -66,12 +66,14 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → v3.6.1
 >
 > **The first live, above-floor firmware-version gate is now active:** SD file transfer over
 > **WiFi/TCP** requires firmware **≥ v3.7.0** (#598/#599). This is not a hardware gate — the same
-> SD-capable WiFi device supports it on v3.7.0+ and rejects it below — so it is enforced at the
-> transport in `EnsureSdFileTransferSupportedOnTransport()` (LIST/GET/DELETE), which throws
-> `FeatureNotSupportedException(SdFileTransferOverWifi, v3.7.0, …)` when the active transport is
-> not USB and the reported firmware is older/unparseable. Over USB these operations are
-> unchanged (available on all SD-capable firmware). This is exactly the forward-looking case the
-> version-gating layer was built for — a command consumed *after* the floor.
+> SD-capable WiFi device supports it on v3.7.0+ and rejects it below. It arrived in core
+> [#347](https://github.com/daqifi/daqifi-core/pull/347) as a bespoke inline version compare;
+> that was the trigger condition for Decision 2's deferred item 3, so
+> [#256](https://github.com/daqifi/daqifi-core/issues/256) **built the version table and the
+> `Supports()` seam**, and the gate now resolves through it (see the implementation note under
+> Decision 2). Over USB these operations are unchanged (available on all SD-capable firmware).
+> This is exactly the forward-looking case the version-gating layer was built for — a command
+> consumed *after* the floor.
 
 **Breaking changes (behavior), by released version:**
 
@@ -165,8 +167,9 @@ forward-looking third:
    firmware's `**ERROR: -113` on the command path; an optional up-front version check (using
    the existing [`FirmwareVersion`](../../src/Daqifi.Core/Firmware/FirmwareVersion.cs)) can
    pre-empt the round-trip for UI.
-3. **`DeviceFeature` version table (deferred)** — introduce only when we start consuming a
-   command newer than the floor. Same shape as below; empty today, so unbuilt today.
+3. **`DeviceFeature` version table (deferred → built)** — introduce only when we start consuming
+   a command newer than the floor. That happened with SD-over-WiFi (≥ v3.7.0), so the table now
+   exists; see the implementation note below.
 4. **#327 capability document (later, non-blocking)** — when a device answers
    `CONFigure:CAPabilities:APIVersion?` ≥ 1, populate `DeviceCapabilities` from the live
    `CONFigure:CAPabilities:JSON?` document. The floor/board logic remains the bootstrap and
@@ -230,6 +233,39 @@ if (ResponseHasUndefinedHeader(lines))   // **ERROR: -113
 (`CommandRename`/version-selected emit from earlier drafts is **dropped** — Decision 1 makes
 it unnecessary. Reintroduce only if the supported floor is ever lowered below a hard rename.)
 
+### Implementation note (2026-07-24, issue [#256](https://github.com/daqifi/daqifi-core/issues/256))
+
+The seam shipped. Two details differ from the sketch above, both settled during implementation:
+
+- **`Supports` lives on the device, not on `DeviceCapabilities`.** The sketch wrote
+  `Capabilities.Supports(...)`, but `DeviceCapabilities` is board-derived and never sees the
+  firmware version, so it structurally cannot answer a version gate. `Supports(DeviceFeature)` and
+  `EnsureSupported(DeviceFeature)` are therefore on
+  [`DaqifiDevice`](../../src/Daqifi.Core/Device/DaqifiDevice.cs), which already owns
+  `MinSupportedFirmware`, `Metadata.FirmwareVersion`, and `Metadata.Capabilities`. The lazy-
+  evaluation rule above is unchanged and now enforced by test.
+- **The two axes fail differently.** The firmware-version axis **fails closed** — absent or
+  unparseable reports as unsupported, preserving #347's conservative rule. The board/hardware axis
+  is evaluated **only once the board is known**: while `DeviceType` is `Unknown`,
+  `FromDeviceType` has not run and `Capabilities` holds all-`false` defaults that mean "not yet
+  known", not "hardware absent", so treating them as violations would newly refuse features on a
+  device that has merely not reported its part number yet. The `-113` backstop still covers that
+  window.
+- **The typed exception names only the axis that actually failed.** `EnsureSupported` reports a
+  `RequiredVersion` only when the *version* is what failed; a board or hardware shortfall on a
+  device whose firmware already meets the minimum would otherwise render as "Requires firmware
+  >= 3.7.0; the device reports '3.7.0'" and send the caller after an upgrade that cannot fix it.
+  The `-113` backstop is the deliberate exception: there the firmware itself reports it does not
+  know the command, so the table's minimum is the actionable answer.
+
+The table lives in
+[`DeviceFeatureRequirements`](../../src/Daqifi.Core/Device/DeviceFeatureRequirements.cs), seeded
+from the firmware audit table above. Both previously hand-rolled gates — the SD-over-WiFi
+transport gate and the SD-storage-query `-113` backstop — now resolve their required version and
+board through it; `EnsureSdFileTransferSupportedOnTransport()` retains only the transport
+predicate (which feature applies over WiFi vs. USB) and delegates the support question to the
+seam. Part 2 — the `CONFigure:CAPabilities:JSON?` / `:APIVersion?` reader — remains deferred.
+
 ## Alternatives considered
 
 | Option | Why not (alone) |
@@ -267,9 +303,10 @@ their place.**
 2. [#255](https://github.com/daqifi/daqifi-core/issues/255) — **Remove dead code**: the
    `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?` query never existed in the
    firmware SCPI table. Public-API removal, separate from the #253 fix.
-3. [#256](https://github.com/daqifi/daqifi-core/issues/256) *(deferred)* — `DeviceFeature`
-   version table + lazy `Supports(...)` (only when we consume a post-v3.5.0 command), and the
-   `CONFigure:CAPabilities:JSON?` reader (#327 growth path).
+3. [#256](https://github.com/daqifi/daqifi-core/issues/256) — `DeviceFeature` version table +
+   lazy `Supports(...)`: **done** (triggered by SD-over-WiFi @ v3.7.0; see the implementation
+   note under Decision 2). The `CONFigure:CAPabilities:JSON?` reader (#327 growth path) is
+   **still deferred** and tracked separately.
 
 ## Out of scope
 
