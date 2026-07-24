@@ -343,6 +343,140 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
+        public async Task UpdateNetworkConfigurationAsync_SavesBeforeApplying()
+        {
+            // Regression (#352): the save MUST precede the apply. ApplyNetworkLan restarts the WiFi
+            // module; a save sent afterwards can be lost to that restart, leaving the device
+            // applied-but-not-persisted (new config live now, gone on the next power cycle). The
+            // firmware persists the *staged* settings, so saving first is both valid and durable.
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var saveIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:SAVE");
+            var applyIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:APPLY");
+
+            Assert.True(saveIndex >= 0, "Expected a LAN:SAVE command to be sent.");
+            Assert.True(applyIndex >= 0, "Expected a LAN:APPLY command to be sent.");
+            Assert.True(
+                saveIndex < applyIndex,
+                $"LAN:SAVE (index {saveIndex}) must be sent before LAN:APPLY (index {applyIndex}).");
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_OverWifi_SavesBeforeApplying()
+        {
+            // The field case this ordering exists for: switching the device from one hotspot to
+            // another over a WiFi/TCP control link, with no USB cable available. The apply drops the
+            // connection by design — that is inherent to leaving the current network — so the config
+            // must already be in NVM before it fires.
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "OtherHotspot",
+                "OtherPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var saveIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:SAVE");
+            var applyIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:APPLY");
+
+            Assert.True(saveIndex >= 0, "Expected a LAN:SAVE command to be sent over WiFi.");
+            Assert.True(applyIndex >= 0, "Expected a LAN:APPLY command to be sent over WiFi.");
+            Assert.True(
+                saveIndex < applyIndex,
+                $"Over WiFi, LAN:SAVE (index {saveIndex}) must be sent before LAN:APPLY (index {applyIndex}).");
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_SendsNothingAfterApply()
+        {
+            // The apply is the last command by design: anything sent after it races the WiFi module
+            // restart and can be silently dropped over a WiFi/TCP transport. Guards against a future
+            // change appending a trailing command to the sequence.
+            var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+
+            await device.UpdateNetworkConfigurationAsync(config);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            var applyIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:APPLY");
+
+            Assert.True(applyIndex >= 0, "Expected a LAN:APPLY command to be sent.");
+            Assert.True(
+                applyIndex == sentCommands.Count - 1,
+                "LAN:APPLY must be the final command sent; commands after it can be lost to the " +
+                $"WiFi module restart. Trailing commands: [{string.Join(", ", sentCommands.Skip(applyIndex + 1))}]");
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_CanceledBeforeCommit_SendsNeitherSaveNorApply()
+        {
+            // Cancellation before the save is a clean abort: everything sent so far only staged
+            // values in the device's runtime settings, so nothing is persisted or applied.
+            using var cts = new CancellationTokenSource();
+            var device = new CancelOnCommandDaqifiStreamingDevice(
+                "TestDevice", cancelAfterCommand: "SYSTem:STORage:SD:ENAble 0", cts: cts);
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "TestNetwork",
+                "TestPassword");
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => device.UpdateNetworkConfigurationAsync(config, cts.Token));
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:SAVE", sentCommands);
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:APPLY", sentCommands);
+        }
+
+        [Fact]
+        public async Task UpdateNetworkConfigurationAsync_CanceledDuringRestartWait_CompletesAndUpdatesLocalState()
+        {
+            // Past the save/apply the device has already committed. Cancelling during the restart
+            // wait must end the wait rather than fail the call — surfacing "canceled" here would
+            // tell the caller nothing happened while the device sits on the new configuration, and
+            // would strand NetworkConfiguration holding the old values.
+            using var cts = new CancellationTokenSource();
+            var device = new CancelOnCommandDaqifiStreamingDevice(
+                "TestDevice", cancelAfterCommand: "SYSTem:COMMunicate:LAN:APPLY", cts: cts);
+            device.Connect();
+            var config = new NetworkConfiguration(
+                WifiMode.ExistingNetwork,
+                WifiSecurityType.WpaPskPhrase,
+                "NewNetwork",
+                "NewPassword");
+
+            // Cancelling as APPLY goes out puts the token in a canceled state before the wait.
+            await device.UpdateNetworkConfigurationAsync(config, cts.Token);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:COMMunicate:LAN:SAVE", sentCommands);
+            Assert.Contains("SYSTem:COMMunicate:LAN:APPLY", sentCommands);
+
+            // Local state must reflect what the device actually committed.
+            Assert.Equal("NewNetwork", device.NetworkConfiguration.Ssid);
+            Assert.Equal(WifiMode.ExistingNetwork, device.NetworkConfiguration.Mode);
+        }
+
+        [Fact]
         public void PrepareSdInterface_WhenDisconnected_ThrowsInvalidOperationException()
         {
             // Arrange
@@ -566,6 +700,42 @@ namespace Daqifi.Core.Tests.Device.Network
         /// <summary>
         /// A testable version of DaqifiStreamingDevice that captures sent messages.
         /// </summary>
+        /// <summary>
+        /// Captures sent messages like <see cref="TestableDaqifiStreamingDevice"/>, but also trips a
+        /// <see cref="CancellationTokenSource"/> the moment a nominated command is dispatched. This
+        /// is how the cancellation tests land the cancel at an exact point mid-sequence — before the
+        /// save (a clean abort) or as the apply goes out (already committed).
+        /// </summary>
+        private class CancelOnCommandDaqifiStreamingDevice : DaqifiStreamingDevice
+        {
+            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+
+            private readonly string _cancelAfterCommand;
+            private readonly CancellationTokenSource _cts;
+
+            public CancelOnCommandDaqifiStreamingDevice(
+                string name, string cancelAfterCommand, CancellationTokenSource cts)
+                : base(name)
+            {
+                _cancelAfterCommand = cancelAfterCommand;
+                _cts = cts;
+            }
+
+            public override bool IsUsbConnection => true;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    SentMessages.Add(stringMessage);
+                    if (stringMessage.Data == _cancelAfterCommand)
+                    {
+                        _cts.Cancel();
+                    }
+                }
+            }
+        }
+
         private class TestableDaqifiStreamingDevice : DaqifiStreamingDevice
         {
             public List<IOutboundMessage<string>> SentMessages { get; } = new();

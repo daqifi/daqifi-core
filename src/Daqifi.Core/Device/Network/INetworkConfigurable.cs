@@ -30,11 +30,31 @@ namespace Daqifi.Core.Device.Network
         /// <item><description>Sets the security type</description></item>
         /// <item><description>Sets the password (if security is enabled)</description></item>
         /// <item><description>Sets the static IP, subnet mask, and gateway (only those provided as non-null)</description></item>
-        /// <item><description>Applies the LAN configuration</description></item>
-        /// <item><description>Waits for the WiFi module to restart</description></item>
-        /// <item><description>Re-enables the LAN interface</description></item>
+        /// <item><description>Enables the LAN interface</description></item>
         /// <item><description>Saves the configuration to persist across restarts</description></item>
+        /// <item><description>Applies the LAN configuration, restarting the WiFi module</description></item>
+        /// <item><description>Waits for the WiFi module to restart</description></item>
         /// </list>
+        /// <para>
+        /// The save deliberately precedes the apply. The device persists the staged settings rather
+        /// than only the live ones, so saving first makes the new configuration durable before the
+        /// applying restart can disturb the control connection. Applying last also means no command
+        /// follows the restart, so none can be lost to it (#352).
+        /// </para>
+        /// <para>
+        /// Cancellation applies only up to that save: past it the device has committed, so
+        /// cancelling during the restart wait ends the wait early rather than failing the call.
+        /// Reporting a cancellation there would tell the caller nothing happened while the device
+        /// was in fact already sitting on the new configuration.
+        /// </para>
+        /// <para>
+        /// <b>Over a WiFi/TCP control connection this is expected to drop the connection.</b>
+        /// Restarting the WiFi module takes the device off the network carrying the control link
+        /// whenever the new configuration points somewhere else — unavoidable when switching
+        /// networks, and harmless here because the configuration is already saved. Callers should
+        /// treat the device as disconnected once this method returns over WiFi and rediscover or
+        /// reconnect on the new network, typically at a new address.
+        /// </para>
         /// <para>
         /// Note: The SD card and LAN interfaces share the same SPI bus on the device hardware
         /// and cannot be used simultaneously. This method handles the interface switching automatically.

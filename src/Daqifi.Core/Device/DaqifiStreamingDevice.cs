@@ -1287,13 +1287,33 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Updates the device network configuration with the specified settings.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Supported over any transport, including WiFi/TCP. The settings are staged, persisted to
+        /// NVM, and only then applied, so the configuration is durable before the applying restart
+        /// can disturb the control connection (#352).
+        /// </para>
+        /// <para>
+        /// <b>Over a WiFi/TCP control connection this method is expected to drop the connection.</b>
+        /// Applying the settings restarts the WiFi module, and when the new configuration points at
+        /// a different network the device necessarily leaves the one carrying the control link.
+        /// That is normal: the configuration has already been saved at that point. Callers should
+        /// treat the device as disconnected once this method returns over WiFi and rediscover or
+        /// reconnect on the new network — typically at a new address.
+        /// </para>
+        /// </remarks>
         /// <param name="configuration">The new network configuration to apply.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when an unsupported WiFi mode or security type is specified.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        /// <exception cref="OperationCanceledException">
+        /// Thrown when the operation is canceled <b>before</b> the configuration is committed to the
+        /// device. Once the save and apply have been dispatched the operation always completes
+        /// successfully: cancelling during the restart wait ends the wait early instead of failing,
+        /// because the device has already persisted and applied the new settings.
+        /// </exception>
         public async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
         {
             if (configuration == null)
@@ -1360,23 +1380,57 @@ namespace Daqifi.Core.Device
                 Send(ScpiMessageProducer.SetLanGateway(configuration.Gateway));
             }
 
-            // Apply configuration
-            Send(ScpiMessageProducer.ApplyNetworkLan);
-
-            // Wait for WiFi module to restart
-            await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
-
-            // Re-enable the LAN interface after the reconfig. ApplyNetworkLan restarts the WiFi
-            // module, so this is a network-configuration step that OWNS the LAN state and must
-            // bring LAN back up regardless of the control transport. It deliberately does NOT call
-            // PrepareLanInterface() — that is the transport-aware SD-operation restore, which
-            // leaves the LAN alone over WiFi (where #598/#599 keep it up). Here the LAN enable is
-            // unconditional.
+            // Stage the LAN interface state alongside the credentials above. LAN:ENAbled writes
+            // isEnabled into the same runtime settings struct the SET commands populate and does
+            // not restart anything itself, so it belongs before the save (to be persisted) and
+            // before the apply (the firmware only fires a module REINIT when isEnabled is set).
+            // This deliberately does NOT call PrepareLanInterface() — that is the transport-aware
+            // SD-operation restore, which leaves the LAN alone over WiFi (where #598/#599 keep it
+            // up). Here the LAN enable is unconditional: reconfiguration owns the LAN state.
             Send(ScpiMessageProducer.DisableStorageSd);
             Send(ScpiMessageProducer.EnableNetworkLan);
 
-            // Save configuration to persist across restarts
+            // Cancellation boundary. This is the last point where abandoning still avoids the two
+            // things that matter: nothing has been persisted (no LAN:SAVE) and no module restart
+            // has been triggered (no LAN:APPLY), so the device keeps serving the network
+            // configuration it already had. Past the save below it has committed, and cancellation
+            // stops being a way out.
+            //
+            // This is deliberately NOT a side-effect-free point. The staged credentials, the LAN
+            // enable flag and the SD disable above have all reached the device's runtime state, and
+            // a later LAN:APPLY from any caller would pick up those staged values. No side-effect-
+            // free abort exists once the sequence has begun — only the check at the top of this
+            // method precedes every Send.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Persist BEFORE applying (#352). LAN:SAVE copies the staged runtime settings straight
+            // to NVM; it does NOT require them to have been applied first. Sending it here — while
+            // the control link is still guaranteed alive — is what makes the reconfiguration
+            // durable regardless of what the apply below does to the connection.
             Send(ScpiMessageProducer.SaveNetworkLan);
+
+            // Apply last: this restarts the WiFi module. Over a WiFi/TCP control connection that
+            // restart necessarily tears down the link — inherent to moving the device onto a
+            // different network, not a fault to be avoided. Because the save above already
+            // committed the configuration to NVM, losing the link here costs nothing: the device
+            // comes back on the new network with the settings intact. Nothing is sent after this
+            // command, so there is no tail left to drop.
+            Send(ScpiMessageProducer.ApplyNetworkLan);
+
+            // Hold for the module restart window before returning, so the apply is flushed to the
+            // transport rather than left buffered in a connection that is about to go away.
+            // Cancelling here ends the wait but does NOT fail the operation: the device has already
+            // persisted and applied the new configuration, so reporting "canceled" — and skipping
+            // the local-state update below — would leave the caller believing nothing happened
+            // while the device is sitting on a different network.
+            try
+            {
+                await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Already committed on the device; stop waiting early and complete normally.
+            }
 
             // Update local configuration. Static IP fields use null = "leave
             // unchanged" semantics, so only overwrite when the caller provided
