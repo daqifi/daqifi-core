@@ -275,17 +275,20 @@ public class AnalogChannel : IAnalogChannel
 
     /// <summary>
     /// Converts a raw ADC value to a scaled value using the calibration parameters.
-    /// Formula: ScaledValue = (RawValue / Resolution * PortRange * CalibrationM + CalibrationB) * InternalScaleM
+    /// Formula: ScaledValue = RawValue / Resolution * PortRange * CalibrationM * InternalScaleM + CalibrationB
     /// </summary>
+    /// <remarks>
+    /// <see cref="CalibrationB"/> is an offset in volts and is added after <see cref="InternalScaleM"/>
+    /// is applied — it is not scaled by it. This matches the firmware's own on-device conversion, so a
+    /// value scaled here agrees with what the device reports for <c>MEASure:VOLTage:DC?</c>.
+    /// </remarks>
     /// <param name="rawValue">The raw ADC value from the device.</param>
     /// <returns>The scaled value.</returns>
     public double GetScaledValue(int rawValue)
     {
         lock (_lock)
         {
-            double normalized = (double)rawValue / Resolution;
-            double scaled = (normalized * _portRange * _calibrationM + _calibrationB) * _internalScaleM;
-            return scaled;
+            return AnalogScaling.Scale(rawValue, _resolution, _portRange, _calibrationM, _internalScaleM, _calibrationB);
         }
     }
 

@@ -108,7 +108,7 @@ public class AnalogChannelTests
         var result = channel.GetScaledValue(32767); // Half of resolution
 
         // Assert
-        // Expected: (32767 / 65535) * 10.0 * 1.0 + 0.0) * 1.0 ≈ 5.0
+        // Expected: 32767 / 65535 * 10.0 * 1.0 * 1.0 + 0.0 ≈ 5.0
         Assert.Equal(5.0, result, precision: 2);
     }
 
@@ -128,7 +128,7 @@ public class AnalogChannelTests
         var result = channel.GetScaledValue(65535); // Max value
 
         // Assert
-        // Expected: (65535 / 65535) * 1.0 * 2.0 + 1.0 = 3.0
+        // Expected: 65535 / 65535 * 1.0 * 2.0 * 1.0 + 1.0 = 3.0
         Assert.Equal(3.0, result, precision: 6);
     }
 
@@ -148,8 +148,45 @@ public class AnalogChannelTests
         var result = channel.GetScaledValue(32767); // Half value
 
         // Assert
-        // Expected: ((32767 / 65535) * 1.0 * 1.0 + 0.0) * 10.0 ≈ 5.0
+        // Expected: 32767 / 65535 * 1.0 * 1.0 * 10.0 + 0.0 ≈ 5.0
         Assert.Equal(5.0, result, precision: 2);
+    }
+
+    [Fact]
+    public void GetScaledValue_WithInternalScaleAndOffset_DoesNotScaleTheOffset()
+    {
+        // Regression pin for daqifi-core#387: CalibrationB is an offset in volts and must be added
+        // after InternalScaleM is applied, matching the firmware's own conversion
+        // (MC12bADC.c: (range * scale * calM * raw) / resolution + calB, behind MEAS:VOLT:DC?).
+        // The old form multiplied CalibrationB by InternalScaleM, which diverged from the device
+        // whenever InternalScaleM != 1 and CalibrationB != 0.
+        var channel = new AnalogChannel(0, 65535)
+        {
+            PortRange = 10.0,
+            CalibrationM = 1.0,
+            CalibrationB = 0.25,
+            InternalScaleM = 2.0
+        };
+
+        // Correct:  65535 / 65535 * 10.0 * 1.0 * 2.0 + 0.25 = 20.25
+        // Old (bug): (65535 / 65535 * 10.0 * 1.0 + 0.25) * 2.0 = 20.50
+        Assert.Equal(20.25, channel.GetScaledValue(65535), precision: 6);
+    }
+
+    [Fact]
+    public void GetScaledValue_WithInternalScaleAndOffset_AtZeroRawReturnsTheOffsetUnscaled()
+    {
+        // At raw 0 the gain term vanishes, so the result is exactly CalibrationB — the cleanest
+        // statement that the offset is never multiplied by InternalScaleM (daqifi-core#387).
+        var channel = new AnalogChannel(0, 65535)
+        {
+            PortRange = 10.0,
+            CalibrationM = 1.0,
+            CalibrationB = -0.05,
+            InternalScaleM = 4.0
+        };
+
+        Assert.Equal(-0.05, channel.GetScaledValue(0), precision: 9);
     }
 
     [Fact]
@@ -428,8 +465,8 @@ public class AnalogChannelTests
     [Fact]
     public void GetScaledValue_WithNegativeRawAndOffset_AppliesOffsetAfterSignedGain()
     {
-        // Formula: (raw/Res * PortRange * M + B) * InternalScaleM.
-        // At -full scale with M=1, B=1: (-1 * 10 * 1 + 1) = -9.
+        // Formula: raw/Res * PortRange * M * InternalScaleM + B.
+        // At -full scale with M=1, InternalScaleM=1, B=1: (-1 * 10 * 1 * 1) + 1 = -9.
         var channel = new AnalogChannel(0, 262143)
         {
             PortRange = 10.0,

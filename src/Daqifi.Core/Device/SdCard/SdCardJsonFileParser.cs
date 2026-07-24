@@ -264,7 +264,9 @@ public sealed class SdCardJsonFileParser
 
     /// <summary>
     /// Scales raw ADC values to real voltage using device calibration data.
-    /// Formula: (raw / resolution * portRange * calM + calB) * internalScaleM
+    /// Formula: <c>raw / resolution * portRange * calM * internalScaleM + calB</c>
+    /// (see <see cref="Channel.AnalogScaling"/> — <c>calB</c> is an offset in volts and is
+    /// deliberately not scaled by <c>internalScaleM</c>).
     /// </summary>
     private static IReadOnlyList<double> ScaleRawAnalogValues(
         IReadOnlyList<double> rawValues,
@@ -289,8 +291,7 @@ public sealed class SdCardJsonFileParser
             var range = portRange != null && ch < portRange.Count ? portRange[ch] : 1.0;
             var scaleM = intScale != null && ch < intScale.Count ? intScale[ch] : 1.0;
 
-            var normalized = rawValues[ch] / resolution;
-            result[ch] = (normalized * range * calM + calB) * scaleM;
+            result[ch] = Channel.AnalogScaling.Scale(rawValues[ch], resolution, range, calM, scaleM, calB);
         }
 
         return result;

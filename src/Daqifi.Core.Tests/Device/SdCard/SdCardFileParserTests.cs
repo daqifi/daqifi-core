@@ -599,11 +599,40 @@ public class SdCardFileParserTests
         Assert.Single(samples);
         Assert.Equal(2, samples[0].AnalogValues.Count);
 
-        // Channel 0: (32768/65535 * 1.0 * 1.0 + 0.0) * 1.0 ≈ 0.50001
+        // Channel 0: 32768/65535 * 1.0 * 1.0 * 1.0 + 0.0 ≈ 0.50001
         Assert.InRange(samples[0].AnalogValues[0], 0.499, 0.501);
 
-        // Channel 1: (32768/65535 * 1.0 * 2.0 + 0.1) * 1.0 ≈ 1.1000
+        // Channel 1: 32768/65535 * 1.0 * 2.0 * 1.0 + 0.1 ≈ 1.1000
         Assert.InRange(samples[0].AnalogValues[1], 1.099, 1.101);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithNonUnityIntScaleAndOffset_DoesNotScaleTheOffset()
+    {
+        // daqifi-core#387: calB is an offset in volts, added after the internal scale factor —
+        // the SD path must agree with AnalogChannel.GetScaledValue and with the firmware.
+        var statusMsg = SdCardTestFileBuilder.CreateStatusMessage();
+        statusMsg.AnalogInRes = 65535;
+        statusMsg.AnalogInPortRange.AddRange(new[] { 1.0f });
+        statusMsg.AnalogInIntScaleM.AddRange(new[] { 2.0f });
+        statusMsg.AnalogInCalM.AddRange(new[] { 1.0f });
+        statusMsg.AnalogInCalB.AddRange(new[] { 0.1f });
+
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(statusMsg)
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: 1000,
+                analogIntValues: new[] { 32768 }));
+
+        using var stream = builder.Build();
+
+        var session = await _parser.ParseAsync(stream, "scaled-offset.bin");
+        var samples = await ToListAsync(session.Samples);
+
+        // Correct:  32768/65535 * 1.0 * 1.0 * 2.0 + 0.1 ≈ 1.10002
+        // Old (bug): (32768/65535 * 1.0 * 1.0 + 0.1) * 2.0 ≈ 1.20002
+        Assert.Single(samples);
+        Assert.InRange(samples[0].AnalogValues[0], 1.0999, 1.1001);
     }
 
     [Fact]
