@@ -186,6 +186,18 @@ public class DeviceMetadata
             DeviceType = detectedDeviceType;
             if (_capabilitiesBoard != detectedDeviceType)
             {
+                // Drop the retained document when the board actually *changes* — a reconnect to a
+                // different unit through the same instance — because it describes the board it was
+                // read from, and re-applying it would overlay the previous device's flags, channel
+                // counts and rate ceiling onto the new one. The overlay is durable across status
+                // messages by design; it is not durable across a board change. Deriving for the
+                // first time is not a change: there is no previous board, and a document read
+                // before the board was known was still read from this device.
+                if (_capabilitiesBoard.HasValue)
+                {
+                    CapabilityDocument = null;
+                }
+
                 Capabilities = DeviceCapabilities.FromDeviceType(detectedDeviceType);
                 _capabilitiesBoard = detectedDeviceType;
             }

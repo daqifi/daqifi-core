@@ -130,6 +130,41 @@ public class DaqifiDeviceCapabilityDocumentTests
         Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
+    [Theory]
+    [InlineData("1")]
+    [InlineData("2")]
+    public async Task ReadCapabilityDocumentAsync_WhenTheTwoReportedSchemaVersionsDisagree_DoesNotApply(
+        string reportedVersion)
+    {
+        // Both replies come back from one exchange, and the firmware emits both versions from a
+        // single macro — so a disagreement means the halves did not come from one coherent
+        // response, and the version that was vetted is not the version of the document in hand.
+        var device = CreateSupportedDevice();
+        device.Responses[ApiVersionCommand] = [reportedVersion];
+        device.Responses[DocumentCommand] =
+            [$"{{\"schema_version\":{(reportedVersion == "1" ? 2 : 1)},"
+             + "\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}"];
+
+        Assert.Null(await device.ReadCapabilityDocumentAsync());
+        Assert.Null(device.Metadata.CapabilityDocument);
+        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
+    }
+
+    [Fact]
+    public async Task ReadCapabilityDocumentAsync_WhenTheTwoReportedSchemaVersionsAgree_Applies()
+    {
+        var device = CreateSupportedDevice();
+        device.Responses[ApiVersionCommand] = ["1"];
+        device.Responses[DocumentCommand] =
+            ["{\"schema_version\":1,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":16000}}}"];
+
+        var document = await device.ReadCapabilityDocumentAsync();
+
+        Assert.NotNull(document);
+        Assert.Equal(1, document!.SchemaVersion);
+        Assert.Equal(16000, device.Metadata.Capabilities.MaxSamplingRate);
+    }
+
     [Fact]
     public async Task ReadCapabilityDocumentAsync_WhenDocumentDoesNotParse_LeavesCapabilitiesAlone()
     {

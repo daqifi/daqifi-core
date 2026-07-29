@@ -1219,6 +1219,20 @@ namespace Daqifi.Core.Device
                 return null;
             }
 
+            // The document body carries the same schema version the query reports — the firmware
+            // emits both from one macro. If they disagree, the two halves of this exchange did not
+            // come from one coherent response (a stale or interleaved line), so the version that
+            // was vetted above is not the version of the document in hand. Fail closed rather than
+            // apply a document nothing actually vouched for.
+            if (document.SchemaVersion != apiVersion)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] The document reports schema version {DocumentVersion} but the device reported {ApiVersion}; keeping board-derived capabilities.",
+                    document.SchemaVersion,
+                    apiVersion));
+                return null;
+            }
+
             Metadata.ApplyCapabilityDocument(document);
             return document;
         }

@@ -122,6 +122,28 @@ public class DeviceMetadataTests
     }
 
     [Fact]
+    public void UpdateFromProtobuf_ChangedPartNumber_DiscardsTheOldBoardsCapabilityDocument()
+    {
+        // The overlay is durable across status messages by design, but it describes the board it
+        // was read from — carrying it onto a different unit connected through the same object
+        // would overlay the previous device's flags, channel counts and rate ceiling.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+        Assert.True(CapabilityDocumentParser.TryParse(
+            "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}},"
+            + "\"channels\":[{\"id\":0,\"kind\":\"analog-input\"}]}",
+            out var document));
+        metadata.ApplyCapabilityDocument(document!);
+        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+
+        Assert.Null(metadata.CapabilityDocument);
+        Assert.Equal(1000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(0, metadata.Capabilities.AnalogInputChannels);
+    }
+
+    [Fact]
     public void ApplyCapabilityDocument_NullDocument_Throws()
     {
         var metadata = new DeviceMetadata();
