@@ -1613,6 +1613,13 @@ namespace Daqifi.Core.Device
         /// a plausible-looking empty list.
         /// </para>
         /// <para>
+        /// The terminator is only meaningful if it cannot be confused with a late reply to an
+        /// earlier command, so two things guard that boundary: the text exchange discards whatever
+        /// was already in flight when it opened, and this method does its SPI-bus switch and settle
+        /// delay before the exchange rather than inside it, leaving the exchange with no internal
+        /// gap for a stale reply to slip into.
+        /// </para>
+        /// <para>
         /// The terminator's error code is used only as a liveness marker, never for classification:
         /// the queue it pops can hold entries left by earlier commands, so attributing the code to
         /// this listing would misreport stale failures. SD errors continue to be classified from the
@@ -1654,24 +1661,31 @@ namespace Daqifi.Core.Device
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
                     }
 
-                    lines = await ExecuteTextCommandAsync(async ct =>
-                    {
-                        PrepareSdInterface();
+                    // Switch the shared SPI bus over to the SD card and let the firmware settle
+                    // BEFORE opening the text exchange. Querying the card too soon after the switch
+                    // makes the device answer -200 (Execution error), so the delay itself is not
+                    // optional — but running it outside the exchange leaves the exchange with no
+                    // internal gap at all, so its very first act is the LIST query. That matters for
+                    // the terminator: the exchange discards anything received before its setup
+                    // action sends, and a gap inside the action would widen that boundary into a
+                    // window where a late reply to an earlier command could still be mistaken for
+                    // this listing's terminator. The delay is unchanged from the device's point of
+                    // view — if anything longer, since the consumer swap now follows it.
+                    PrepareSdInterface();
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
 
-                        // Allow the device firmware to complete the SPI bus switch
-                        // before querying the SD card. Without this delay, the device
-                        // can return SCPI error -200 (Execution error).
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
+                    lines = await ExecuteTextCommandAsync(
+                        () =>
+                        {
+                            Send(ScpiMessageProducer.GetSdFileList);
 
-                        Send(ScpiMessageProducer.GetSdFileList);
-
-                        // End-of-listing terminator — see this method's remarks. Sent inside the
-                        // same text exchange so the ordering guarantee holds.
-                        Send(ScpiMessageProducer.GetSystemError);
-                    },
-                    responseTimeoutMs: 3000,
-                    completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
-                    cancellationToken: cancellationToken);
+                            // End-of-listing terminator — see this method's remarks. Sent inside
+                            // the same text exchange so the ordering guarantee holds.
+                            Send(ScpiMessageProducer.GetSystemError);
+                        },
+                        responseTimeoutMs: 3000,
+                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                        cancellationToken: cancellationToken);
 
                     isComplete = TrySplitAtSdListTerminator(lines, out listing);
 
