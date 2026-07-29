@@ -1658,7 +1658,7 @@ namespace Daqifi.Core.Device
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
                     }
 
                     // Switch the shared SPI bus over to the SD card and let the firmware settle
@@ -1672,7 +1672,7 @@ namespace Daqifi.Core.Device
                     // this listing's terminator. The delay is unchanged from the device's point of
                     // view — if anything longer, since the consumer swap now follows it.
                     PrepareSdInterface();
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
 
                     lines = await ExecuteTextCommandAsync(
                         () =>
