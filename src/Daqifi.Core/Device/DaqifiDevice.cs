@@ -738,7 +738,11 @@ namespace Daqifi.Core.Device
         /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
         /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A list of text lines received from the device.</returns>
+        /// <returns>
+        /// A list of text lines received from the device. Lines that were already in flight when the
+        /// exchange opened — late replies to earlier commands — are excluded: only what arrived once
+        /// <paramref name="setupAction"/> had begun sending is returned.
+        /// </returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
@@ -863,6 +867,10 @@ namespace Daqifi.Core.Device
                 var stream = _transport.Stream;
                 int? originalReadTimeout = null;
 
+                // Number of lines that were already in flight when this exchange opened — see the
+                // note at the point it is captured, below.
+                var staleLineCount = 0;
+
                 try
                 {
                     if (stream.CanTimeout)
@@ -910,6 +918,23 @@ namespace Daqifi.Core.Device
                     await Task.Delay(50, cancellationToken).ConfigureAwait(false);
 
                     SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+
+                    // Mark the boundary between "already in flight" and "answers to this exchange".
+                    // Anything captured before the setup action has sent anything is a late reply to
+                    // an EARLIER command, or line noise — never a response to a command this exchange
+                    // has yet to send. Those lines are dropped from the result below.
+                    //
+                    // Position matters as much as content: a caller that keys off response content —
+                    // e.g. the SD listing's end-of-listing terminator (#396) — would otherwise accept
+                    // a stale line as proof that the device answered a query it never even received,
+                    // and report a complete listing for a device that has gone silent.
+                    staleLineCount = collectedLines.Count;
+                    if (staleLineCount > 0)
+                    {
+                        SafeLog(() => _logger.LogDebug(
+                            "[ExecuteTextCommandAsync] Discarding {StaleLineCount} line(s) received before this exchange sent anything",
+                            staleLineCount));
+                    }
 
                     // Execute the setup action (sends SCPI commands). ConfigureAwait(false)
                     // matches the surrounding lock-protected awaits.
@@ -984,7 +1009,11 @@ namespace Daqifi.Core.Device
                     SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
                 }
 
-                return collectedLines;
+                // The text consumer is stopped by this point, so the list is no longer being
+                // appended to concurrently and can be re-projected safely.
+                return staleLineCount > 0
+                    ? collectedLines.Skip(staleLineCount).ToList()
+                    : collectedLines;
             }
             finally
             {

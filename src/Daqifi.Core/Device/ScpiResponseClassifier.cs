@@ -52,6 +52,67 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Returns true if the line is the reply to a <c>SYSTem:ERRor?</c> query — the IEEE 488.2
+        /// error-queue format <c>&lt;code&gt;,"&lt;message&gt;"</c>, e.g. <c>0,"No error"</c> or
+        /// <c>-200,"Execution error"</c>. Deliberately narrow: the code must be the first thing on
+        /// the line and the quoted message must run to the end of it, so a device-emitted SD listing
+        /// entry (always <c>&lt;path&gt; &lt;size&gt;</c>, space-separated, per the firmware's
+        /// <c>"%s %u\r\n"</c> format) can never match. Unlike <see cref="IsScpiErrorLine"/> this does
+        /// not require an <c>ERROR</c> token — the query reply carries the bare code.
+        /// </summary>
+        /// <remarks>
+        /// Used as the end-of-response marker for the SD card directory listing (closes #396): the
+        /// firmware emits no terminator of its own and writes nothing at all for an empty directory,
+        /// so Core appends a <c>SYSTem:ERRor?</c> query to the same text exchange and treats its
+        /// reply as proof that everything the device had to say about the listing has arrived.
+        /// </remarks>
+        internal static bool IsSystemErrorReplyLine(string line)
+        {
+            var trimmed = line.Trim();
+
+            var index = 0;
+            if (index < trimmed.Length && (trimmed[index] == '+' || trimmed[index] == '-'))
+            {
+                index++;
+            }
+
+            var digitStart = index;
+            while (index < trimmed.Length && trimmed[index] >= '0' && trimmed[index] <= '9')
+            {
+                index++;
+            }
+
+            if (index == digitStart)
+            {
+                return false;
+            }
+
+            index = SkipSpaces(trimmed, index);
+
+            if (index >= trimmed.Length || trimmed[index] != ',')
+            {
+                return false;
+            }
+
+            index = SkipSpaces(trimmed, index + 1);
+
+            // Require an opening quote and a distinct closing quote at end-of-line.
+            return index < trimmed.Length - 1
+                   && trimmed[index] == '"'
+                   && trimmed[trimmed.Length - 1] == '"';
+        }
+
+        private static int SkipSpaces(string value, int index)
+        {
+            while (index < value.Length && (value[index] == ' ' || value[index] == '\t'))
+            {
+                index++;
+            }
+
+            return index;
+        }
+
+        /// <summary>
         /// Extracts the numeric error code from a SCPI error line — e.g. <c>-200</c> from
         /// <c>**ERROR: -200,"Execution error"</c>, <c>ERROR -113,"Undefined header"</c>, or
         /// <c>**ERROR\t-113,...</c>. The delimiter between the <c>ERROR</c>/<c>**ERROR</c> token and
