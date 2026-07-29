@@ -1254,14 +1254,14 @@ namespace Daqifi.Core.Device
         /// The parsed document, which has already been applied to <see cref="Metadata"/>; or
         /// <c>null</c> when the device did not supply one this parser can trust.
         /// </returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public virtual async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
             CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (!Supports(DeviceFeature.CapabilityDocument))
