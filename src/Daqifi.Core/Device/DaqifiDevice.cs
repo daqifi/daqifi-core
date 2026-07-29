@@ -475,16 +475,21 @@ namespace Daqifi.Core.Device
                 // Create message producer and consumer from transport if needed
                 if (_transport != null)
                 {
+                    // The reader/writer loops are the first thing to notice a device that has
+                    // gone away; a transport that can act on that gets told (issue #382).
+                    var healthSink = _transport as ITransportHealthSink;
+
                     if (_messageProducer == null)
                     {
-                        _messageProducer = new MessageProducer<string>(_transport.Stream);
+                        _messageProducer = new MessageProducer<string>(_transport.Stream, healthSink: healthSink);
                     }
 
                     if (_messageConsumer == null)
                     {
                         _messageConsumer = new StreamMessageConsumer<DaqifiOutMessage>(
                             _transport.Stream,
-                            new ProtobufMessageParser());
+                            new ProtobufMessageParser(),
+                            healthSink: healthSink);
                     }
                 }
 
@@ -897,7 +902,8 @@ namespace Daqifi.Core.Device
                     // Create a temporary text consumer on the same stream
                     using var textConsumer = new StreamMessageConsumer<string>(
                         _transport.Stream,
-                        new LineBasedMessageParser());
+                        new LineBasedMessageParser(),
+                        healthSink: _transport as ITransportHealthSink);
 
                     textConsumer.MessageReceived += (_, e) =>
                     {

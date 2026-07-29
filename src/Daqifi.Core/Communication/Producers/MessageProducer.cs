@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Transport;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
@@ -14,6 +15,7 @@ public class MessageProducer<T> : IMessageProducer<T>
 {
     private readonly Stream _stream;
     private readonly ILogger<MessageProducer<T>> _logger;
+    private readonly ITransportHealthSink? _healthSink;
     private readonly ConcurrentQueue<IOutboundMessage<T>> _messageQueue;
     private readonly ManualResetEventSlim _messageAvailable = new(false);
     private volatile bool _isRunning;
@@ -29,11 +31,19 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// events. When omitted, a <see cref="NullLogger{T}"/> is used so existing
     /// consumers behave exactly as before.
     /// </param>
+    /// <param name="healthSink">
+    /// Optional transport to report write outcomes to. A write that keeps failing is, like a read
+    /// that keeps failing, evidence the device is gone; reporting it lets the transport escalate a
+    /// dead link to a lost connection instead of the producer quietly draining into nothing
+    /// (issue #382). When null, write failures are only logged, exactly as before.
+    /// </param>
     /// <exception cref="ArgumentNullException">Thrown when stream is null.</exception>
-    public MessageProducer(Stream stream, ILogger<MessageProducer<T>>? logger = null)
+    public MessageProducer(Stream stream, ILogger<MessageProducer<T>>? logger = null,
+        ITransportHealthSink? healthSink = null)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _logger = logger ?? NullLogger<MessageProducer<T>>.Instance;
+        _healthSink = healthSink;
         _messageQueue = new ConcurrentQueue<IOutboundMessage<T>>();
     }
 
@@ -161,11 +171,18 @@ public class MessageProducer<T> : IMessageProducer<T>
                         try
                         {
                             WriteMessageToStream(message);
+
+                            // A successful write clears any run of failures the transport has
+                            // accumulated: the link is demonstrably alive.
+                            _healthSink?.ReportIoSuccess();
                         }
                         catch (Exception ex)
                         {
                             // Surface the failure but keep draining the queue so a single
-                            // bad write doesn't stall the remaining messages.
+                            // bad write doesn't stall the remaining messages. Tell the transport
+                            // too — it is the only component that can decide a run of failures
+                            // means the device is gone rather than glitching.
+                            _healthSink?.ReportIoFault(ex);
                             SafeLog(() => _logger.LogWarning(ex, "Failed to write message to the stream; continuing with remaining queued messages."));
                         }
                     }
