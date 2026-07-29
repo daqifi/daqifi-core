@@ -2102,11 +2102,13 @@ namespace Daqifi.Core.Device
         /// On a timeout — or a cancellation the parked transfer cannot itself observe — the
         /// in-flight transfer is <b>abandoned</b> rather than awaited: it may be blocked in native
         /// serial I/O that no token can interrupt, and waiting for it is the hang this method
-        /// exists to bound. Two consequences for callers: the abandoned transfer can still write
-        /// to <paramref name="destinationStream"/> after this method has thrown, so the stream
-        /// must not be reused for anything else; and the device is left mid-<c>SD:GET</c>, so
-        /// reconnecting (or power-cycling, if its SD subsystem is genuinely wedged) is the
-        /// reliable way to resume normal operation.
+        /// exists to bound. The abandoned transfer's token is cancelled first, so it unwinds at
+        /// its next token check — but that check is only reached once whatever it is blocked in
+        /// returns, which may be never. Two consequences for callers: it can still write to
+        /// <paramref name="destinationStream"/> after this method has thrown, so the stream must
+        /// not be reused for anything else; and the device is left mid-<c>SD:GET</c> with the
+        /// protobuf consumer stopped, so reconnecting (or power-cycling, if its SD subsystem is
+        /// genuinely wedged) is the reliable way to resume normal operation.
         /// </remarks>
         public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,

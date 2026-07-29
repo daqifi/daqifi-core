@@ -29,10 +29,13 @@ public class SerialStreamTransport : IStreamTransport
     /// <summary>
     /// Blocking-write timeout applied once the port is open. Everything written over this
     /// transport is a short SCPI command line, so a healthy device drains a write in
-    /// milliseconds. Leaving the connect timeout in place (and, on a wedged device, blocking
-    /// for it) is the failure mode issue #399 is about: <see cref="SerialPort.Write(byte[], int, int)"/>
-    /// accepts no <see cref="CancellationToken"/>, so an unbounded write cannot be cancelled by
-    /// any caller. Bounding it turns "parked forever" into a fault the caller can observe.
+    /// milliseconds. Only <see cref="SerialPort.ReadTimeout"/> used to be lowered after open,
+    /// leaving writes bounded by the caller's <see cref="ConnectionRetryOptions.ConnectionTimeout"/>
+    /// for the life of the port — a value chosen for retry/backoff, not for how long a command
+    /// write may legitimately take, and one a consumer can set arbitrarily high. Since
+    /// <see cref="SerialPort.Write(byte[], int, int)"/> accepts no <see cref="CancellationToken"/>,
+    /// nothing else can shorten that wait on a device that has stopped draining its receive
+    /// buffer (#399).
     /// </summary>
     private const int OperationalWriteTimeoutMs = 2000;
 
