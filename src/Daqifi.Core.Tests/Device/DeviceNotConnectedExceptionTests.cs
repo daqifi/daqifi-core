@@ -37,7 +37,7 @@ namespace Daqifi.Core.Tests.Device
             // The two typed connectivity exceptions are deliberate siblings, not a hierarchy: a
             // device can fail its guard while its transport is healthy (mid-Disconnect), and a
             // transport can drop while the device still reports Connected.
-            Assert.IsNotType<TransportNotConnectedException>(new DeviceNotConnectedException());
+            Assert.IsNotAssignableFrom<TransportNotConnectedException>(new DeviceNotConnectedException());
             Assert.IsNotAssignableFrom<DeviceNotConnectedException>(new TransportNotConnectedException());
         }
 

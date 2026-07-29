@@ -71,7 +71,7 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void Send_WhenDisconnected_ThrowsInvalidOperationException()
+        public void Send_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiDevice("TestDevice");

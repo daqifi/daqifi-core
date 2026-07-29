@@ -27,7 +27,7 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public async Task UpdateNetworkConfigurationAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        public async Task UpdateNetworkConfigurationAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
@@ -477,7 +477,7 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public void PrepareSdInterface_WhenDisconnected_ThrowsInvalidOperationException()
+        public void PrepareSdInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
@@ -506,7 +506,7 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public void PrepareLanInterface_WhenDisconnected_ThrowsInvalidOperationException()
+        public void PrepareLanInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
@@ -641,7 +641,7 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public async Task LoadNetworkConfigurationAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        public async Task LoadNetworkConfigurationAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
 
@@ -676,7 +676,7 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public async Task FactoryResetNetworkAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        public async Task FactoryResetNetworkAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
 

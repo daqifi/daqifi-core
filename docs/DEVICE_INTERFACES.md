@@ -381,10 +381,13 @@ matching on the exception message:
 
 ```csharp
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.SdCard;
+
+var sdCard = (ISdCardOperations)device;
 
 try
 {
-    var files = await sdCard.GetSdCardFilesAsync();
+    IReadOnlyList<SdCardFileInfo> files = await sdCard.GetSdCardFilesAsync();
 }
 catch (DeviceNotConnectedException ex)
 {

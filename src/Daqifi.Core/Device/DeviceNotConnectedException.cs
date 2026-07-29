@@ -12,13 +12,6 @@ namespace Daqifi.Core.Device
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Derives from <see cref="InvalidOperationException"/> — the type these guards threw before —
-    /// so existing <c>catch (InvalidOperationException)</c> sites keep working unchanged, while new
-    /// code can catch this specific type. This mirrors
-    /// <see cref="Communication.Transport.TransportNotConnectedException"/>, which made the same
-    /// trade at the transport layer.
-    /// </para>
-    /// <para>
     /// The distinction this type exists to give callers is between an <em>ordinary, expected</em>
     /// condition — the device went away, the user pressed Disconnect while a refresh was in flight,
     /// WiFi dropped mid-transfer — and a genuine application defect. Clients that classify failures
@@ -28,12 +21,16 @@ namespace Daqifi.Core.Device
     /// exception message, which broke silently on any wording change.
     /// </para>
     /// <para>
-    /// This is the device-level counterpart of
+    /// Derives from <see cref="InvalidOperationException"/> — the type these guards threw before —
+    /// so existing <c>catch (InvalidOperationException)</c> sites keep working unchanged, while new
+    /// code can catch this specific type.
+    /// </para>
+    /// <para>
     /// <see cref="Communication.Transport.TransportNotConnectedException"/>, which reports that the
-    /// underlying transport's stream is gone. The two are deliberately siblings rather than one
-    /// deriving from the other: a device can fail this guard while holding a perfectly healthy
-    /// transport (for instance, mid-<see cref="DaqifiDevice.Disconnect"/>), and a transport can drop
-    /// while the device still reports <see cref="DaqifiDevice.IsConnected"/>.
+    /// underlying transport's stream is gone, made the same trade one layer down. The two are
+    /// deliberately siblings rather than one deriving from the other: a device can fail this guard
+    /// while holding a perfectly healthy transport (for instance, mid-<see cref="DaqifiDevice.Disconnect"/>),
+    /// and a transport can drop while the device still reports <see cref="DaqifiDevice.IsConnected"/>.
     /// </para>
     /// </remarks>
     public class DeviceNotConnectedException : InvalidOperationException
@@ -43,7 +40,7 @@ namespace Daqifi.Core.Device
         /// the message these guards threw before this type existed, so any downstream code still
         /// matching on it continues to work during migration.
         /// </summary>
-        internal const string DefaultMessage = "Device is not connected.";
+        private const string DefaultMessage = "Device is not connected.";
 
         /// <summary>
         /// Gets a value indicating whether the guard fired because the device is tearing down —

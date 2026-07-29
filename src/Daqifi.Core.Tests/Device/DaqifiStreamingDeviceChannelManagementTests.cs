@@ -571,7 +571,7 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void SetPwmEnabled_WhenDisconnected_ThrowsInvalidOperationException()
+        public void SetPwmEnabled_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = CreateConnectedDevice(digitalChannels: 8);
             var channel = DigitalChannelAt(device, 4);
@@ -688,7 +688,7 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void ChannelManagement_WhenDisconnected_ThrowsInvalidOperationException()
+        public void ChannelManagement_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Populate channels but do not connect.
             var device = new TestableDaqifiStreamingDevice("TestDevice");

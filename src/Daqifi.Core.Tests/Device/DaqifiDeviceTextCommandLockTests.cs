@@ -40,7 +40,7 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public async Task ExecuteTextCommandAsync_WhenDisposing_ThrowsInvalidOperation()
+        public async Task ExecuteTextCommandAsync_WhenDisposing_ThrowsDeviceNotConnected()
         {
             var device = new TextCommandTestableDevice("TestDevice");
             SetIsDisconnecting(device, true);
@@ -51,7 +51,7 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public async Task ExecuteTextCommandAsync_WhenDisposed_ThrowsInvalidOperation()
+        public async Task ExecuteTextCommandAsync_WhenDisposed_ThrowsDeviceNotConnected()
         {
             var device = new TextCommandTestableDevice("TestDevice");
             SetDisposed(device, true);
