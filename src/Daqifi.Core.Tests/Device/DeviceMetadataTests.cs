@@ -143,6 +143,30 @@ public class DeviceMetadataTests
         Assert.Equal(0, metadata.Capabilities.AnalogInputChannels);
     }
 
+    [Theory]
+    // Unknown board first (an unrecognized part number), then the real one — a discovery.
+    [InlineData("Xx9", "Nq1")]
+    // The real board first, then an unrecognized part number — says nothing about a swap.
+    [InlineData("Nq1", "Xx9")]
+    public void UpdateFromProtobuf_TransitionInvolvingUnknownBoard_KeepsTheCapabilityDocument(
+        string firstPartNumber, string secondPartNumber)
+    {
+        // Per ADR 0001, Unknown means "not yet known", not "a different board". The device that
+        // answered the capability query is the same one either way, so discarding the overlay
+        // would regress MaxSamplingRate to the stale board-table ceiling for no gain.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = firstPartNumber });
+        Assert.True(CapabilityDocumentParser.TryParse(
+            "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}",
+            out var document));
+        metadata.ApplyCapabilityDocument(document!);
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = secondPartNumber });
+
+        Assert.Same(document, metadata.CapabilityDocument);
+        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+    }
+
     [Fact]
     public void ApplyCapabilityDocument_NullDocument_Throws()
     {

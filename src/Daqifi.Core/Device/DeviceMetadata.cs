@@ -186,14 +186,23 @@ public class DeviceMetadata
             DeviceType = detectedDeviceType;
             if (_capabilitiesBoard != detectedDeviceType)
             {
-                // Drop the retained document when the board actually *changes* — a reconnect to a
-                // different unit through the same instance — because it describes the board it was
-                // read from, and re-applying it would overlay the previous device's flags, channel
-                // counts and rate ceiling onto the new one. The overlay is durable across status
-                // messages by design; it is not durable across a board change. Deriving for the
-                // first time is not a change: there is no previous board, and a document read
-                // before the board was known was still read from this device.
-                if (_capabilitiesBoard.HasValue)
+                // Drop the retained document only when this object moves between two *known*
+                // boards — a reconnect to a different unit through the same instance. The document
+                // describes the board it was read from, so re-applying it there would overlay the
+                // previous device's flags, channel counts and rate ceiling onto the new one. The
+                // overlay is durable across status messages by design; it is not durable across a
+                // board change.
+                //
+                // A transition involving Unknown is not a board change. Per ADR 0001, Unknown means
+                // "not yet known", not "a different board": before the first status message there
+                // is no previous board at all, and an unrecognized part number says nothing about
+                // the device having been swapped. In both directions the document was still read
+                // from this device, and discarding it would regress capabilities — notably
+                // MaxSamplingRate back to the stale board-table ceiling — for no gain.
+                var previousBoard = _capabilitiesBoard;
+                if (previousBoard is not null
+                    && previousBoard != DeviceType.Unknown
+                    && detectedDeviceType != DeviceType.Unknown)
                 {
                     CapabilityDocument = null;
                 }
