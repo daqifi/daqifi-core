@@ -1107,19 +1107,25 @@ namespace Daqifi.Core.Device
         /// </remarks>
         public const int MaximumCapabilityDocumentApiVersion = 2;
 
-        /// <summary>Time allowed for the one-line <c>CONFigure:CAPabilities:APIVersion?</c> reply.</summary>
-        private const int CapabilityApiVersionResponseTimeoutMs = 1000;
+        /// <summary>
+        /// Gap between the two capability queries sent in one exchange, so the firmware's SCPI
+        /// parser sees two commands rather than one write it has to split.
+        /// </summary>
+        private const int CapabilityQuerySpacingMs = 50;
 
-        /// <summary>Time allowed for the first line of the capability document.</summary>
+        /// <summary>Time allowed for the first line of the capability response.</summary>
         private const int CapabilityDocumentResponseTimeoutMs = 3000;
 
         /// <summary>
-        /// Inactivity window that ends capability-document collection. Generous because the
-        /// document is a single line of several kilobytes: on a device that echoes commands, the
-        /// echo arrives first and starts the completion clock while the document is still in
-        /// flight, so a short window would cut the response off before its only useful line.
+        /// Inactivity window that ends capability-document collection. The document is a single
+        /// line of several kilobytes, so the window has to outlast the gaps <i>within</i> the
+        /// transfer — otherwise, on a device that echoes commands, the echo would start the
+        /// completion clock and cut the response off before its only useful line. Measured on the
+        /// bench NQ1 over USB CDC: 8 KB delivered in ~25 ms end to end, longest inter-chunk gap
+        /// 8 ms. 250 ms is an order of magnitude of headroom over that while keeping the cost to
+        /// the connect sequence small.
         /// </summary>
-        private const int CapabilityDocumentCompletionTimeoutMs = 1500;
+        private const int CapabilityDocumentCompletionTimeoutMs = 250;
 
         /// <summary>
         /// Reads the device's capability document (<c>CONFigure:CAPabilities:JSON?</c>) and
@@ -1171,12 +1177,25 @@ namespace Daqifi.Core.Device
                 return null;
             }
 
-            var versionLines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetCapabilitiesApiVersion),
-                responseTimeoutMs: CapabilityApiVersionResponseTimeoutMs,
+            // Both queries go out in one text exchange. Swapping the protobuf consumer out and back
+            // costs far more than either reply does — the reader thread has to time out of its
+            // blocking read first — so a second exchange would roughly double what this adds to
+            // the connect sequence, to fetch a document that measures 8 KB in ~25 ms. The version
+            // is still checked before the document is *trusted*, which is what the gate is for;
+            // asking for both up front only means a device on an unreadable schema transferred a
+            // document that is then discarded.
+            var lines = await ExecuteTextCommandAsync(
+                async token =>
+                {
+                    Send(ScpiMessageProducer.GetCapabilitiesApiVersion);
+                    await Task.Delay(CapabilityQuerySpacingMs, token).ConfigureAwait(false);
+                    Send(ScpiMessageProducer.GetCapabilitiesJson);
+                },
+                responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
+                completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            if (!CapabilityDocumentParser.TryParseApiVersion(versionLines, out var apiVersion))
+            if (!CapabilityDocumentParser.TryParseApiVersion(lines, out var apiVersion))
             {
                 SafeLog(() => _logger.LogDebug(
                     "[ReadCapabilityDocumentAsync] The device did not report a capability schema version; keeping board-derived capabilities."));
@@ -1193,13 +1212,7 @@ namespace Daqifi.Core.Device
                 return null;
             }
 
-            var documentLines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetCapabilitiesJson),
-                responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
-                completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (!CapabilityDocumentParser.TryParseLines(documentLines, out var document))
+            if (!CapabilityDocumentParser.TryParseLines(lines, out var document))
             {
                 SafeLog(() => _logger.LogDebug(
                     "[ReadCapabilityDocumentAsync] The capability document did not parse; keeping board-derived capabilities."));

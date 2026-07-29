@@ -86,14 +86,16 @@ public class DaqifiDeviceCapabilityDocumentTests
     }
 
     [Fact]
-    public async Task ReadCapabilityDocumentAsync_WhenApiVersionQueryFails_DoesNotRequestTheDocument()
+    public async Task ReadCapabilityDocumentAsync_WhenApiVersionQueryFails_DoesNotTrustTheDocument()
     {
+        // The document arrives in the same exchange, so it is present and parseable — and still
+        // must not be applied, because nothing confirmed the schema it was written to.
         var device = CreateSupportedDevice();
         device.Responses[ApiVersionCommand] = ["**ERROR: -113, \"Undefined header\""];
         device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
-        Assert.Equal(new[] { ApiVersionCommand }, device.SentCommands);
+        Assert.Null(device.Metadata.CapabilityDocument);
         Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
@@ -108,8 +110,8 @@ public class DaqifiDeviceCapabilityDocumentTests
         device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
-        Assert.Equal(new[] { ApiVersionCommand }, device.SentCommands);
         Assert.Null(device.Metadata.CapabilityDocument);
+        Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
     [Fact]
@@ -124,7 +126,7 @@ public class DaqifiDeviceCapabilityDocumentTests
         device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
 
         Assert.Null(await device.ReadCapabilityDocumentAsync());
-        Assert.Equal(new[] { ApiVersionCommand }, device.SentCommands);
+        Assert.Null(device.Metadata.CapabilityDocument);
         Assert.Equal(1000, device.Metadata.Capabilities.MaxSamplingRate);
     }
 
@@ -209,15 +211,30 @@ public class DaqifiDeviceCapabilityDocumentTests
             cancellationToken.ThrowIfCancellationRequested();
             var before = SentCommands.Count;
             setupAction();
+            return Task.FromResult(ResponsesSince(before));
+        }
 
-            var lines = SentCommands
-                .Skip(before)
+        protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            Func<CancellationToken, Task> setupActionAsync,
+            int responseTimeoutMs = 1000,
+            int completionTimeoutMs = 250,
+            CancellationToken cancellationToken = default)
+        {
+            var before = SentCommands.Count;
+            await setupActionAsync(cancellationToken).ConfigureAwait(false);
+            return ResponsesSince(before);
+        }
+
+        /// <summary>
+        /// Concatenates the scripted replies for every command sent during one exchange, in the
+        /// order they were sent — the device answers a batched exchange the same way.
+        /// </summary>
+        private IReadOnlyList<string> ResponsesSince(int firstCommandIndex) =>
+            SentCommands
+                .Skip(firstCommandIndex)
                 .SelectMany(command => Responses.TryGetValue(command, out var response)
                     ? response
                     : Array.Empty<string>())
                 .ToList();
-
-            return Task.FromResult<IReadOnlyList<string>>(lines);
-        }
     }
 }

@@ -284,7 +284,11 @@ turns the reply into a
   upper bound is deliberate: firmware bumps that byte *only* on a breaking change, so a higher
   version is a document whose fields may no longer mean what this parser assumes — and the board
   table is a better answer than a plausible-but-wrong number. Raise the constant together with the
-  parser when adopting a newer schema.
+  parser when adopting a newer schema. Both queries go out in **one** text exchange: swapping the
+  protobuf consumer out and back costs far more than either reply does, and measured on the bench
+  a second exchange cost ~1 s of connect latency to avoid transferring a document that takes
+  ~25 ms. The version still gates whether the document is *trusted*, which is the point of the
+  gate.
 - **Merge, never replace.** `CapabilityDocument.MergeInto` overlays only the fields the document
   actually states; everything else keeps its `FromDeviceType` value. Every parsed field is
   nullable, so "omitted" can never read as "absent" — which is what preserves the `Unknown`-board
@@ -302,7 +306,7 @@ turns the reply into a
   and before `OnDeviceInitializingAsync`. A failed read is absorbed: the device keeps its
   board-derived capabilities, so nothing that works today starts failing. Callers needing a fresh
   `current_max_rate_hz`, which tracks the enabled channel set, call `ReadCapabilityDocumentAsync()`
-  again.
+  again. Measured cost on the bench NQ1 over USB: connect+initialize goes from ~3.16 s to ~4.29 s.
 
 Bench-validated against the NQ1 on firmware 3.7.2: the document agrees with `FromDeviceType` on
 every flag it states (SD, WiFi, USB) and supplies the channel counts (16 analog in, 0 analog out,
