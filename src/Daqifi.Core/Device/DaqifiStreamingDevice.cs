@@ -2122,13 +2122,23 @@ namespace Daqifi.Core.Device
             IReadOnlyList<string> lines;
             try
             {
-                lines = await ExecuteTextCommandAsync(async ct =>
-                {
-                    PrepareSdInterface();
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
-                    Send(ScpiMessageProducer.DeleteSdFile(fileName));
-                    Send(ScpiMessageProducer.GetSdFileList);
-                }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+                // Switch the shared SPI bus to the SD card and settle BEFORE opening the text
+                // exchange, for the same reason as GetSdCardFilesAsync: a gap inside the setup
+                // action is a window in which a late reply to an earlier command can be captured
+                // as part of this response. Here that would mean a stale error line triggering a
+                // pointless delete-and-relist retry rather than a bad listing, but it is the same
+                // defect, so it gets the same treatment.
+                PrepareSdInterface();
+                await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+
+                lines = await ExecuteTextCommandAsync(
+                    () =>
+                    {
+                        Send(ScpiMessageProducer.DeleteSdFile(fileName));
+                        Send(ScpiMessageProducer.GetSdFileList);
+                    },
+                    responseTimeoutMs: 3000,
+                    cancellationToken: cancellationToken);
 
                 if (ContainsScpiError(lines))
                 {
@@ -2136,15 +2146,19 @@ namespace Daqifi.Core.Device
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
 
-                        lines = await ExecuteTextCommandAsync(async ct =>
-                        {
-                            PrepareSdInterface();
-                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
-                            Send(ScpiMessageProducer.DeleteSdFile(fileName));
-                            Send(ScpiMessageProducer.GetSdFileList);
-                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+                        PrepareSdInterface();
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+
+                        lines = await ExecuteTextCommandAsync(
+                            () =>
+                            {
+                                Send(ScpiMessageProducer.DeleteSdFile(fileName));
+                                Send(ScpiMessageProducer.GetSdFileList);
+                            },
+                            responseTimeoutMs: 3000,
+                            cancellationToken: cancellationToken);
 
                         if (!ContainsScpiError(lines))
                         {
