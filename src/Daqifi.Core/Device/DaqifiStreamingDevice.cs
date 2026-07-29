@@ -2167,8 +2167,8 @@ namespace Daqifi.Core.Device
                                 fileName,
                                 progress,
                                 timeout: TimeSpan.FromMinutes(30),
-                                listedFileSizeBytes: listedFileSizeBytes,
-                                cancellationToken: ct).ConfigureAwait(false);
+                                cancellationToken: ct,
+                                listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
                             break;
                         }
                         catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)

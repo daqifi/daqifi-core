@@ -51,6 +51,7 @@ public sealed class SdCardFileReceiver
     /// If the timeout elapses before the EOF marker is received, a
     /// <see cref="SdCardTransferStalledException"/> is thrown.
     /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="listedFileSizeBytes">
     /// The size the device's directory listing reported for this file, when known. It is the only
     /// thing that separates a wedged SD subsystem from a genuinely 0-byte file, so a marker-only
@@ -59,7 +60,6 @@ public sealed class SdCardFileReceiver
     /// empty download. When <c>null</c> (no listing available) the conservative behavior is kept
     /// and a marker-only transfer throws.
     /// </param>
-    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The total number of file bytes written (excluding the EOF marker).</returns>
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress before the EOF marker arrives — the
@@ -75,13 +75,20 @@ public sealed class SdCardFileReceiver
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="listedFileSizeBytes"/> is negative.
     /// </exception>
+    // listedFileSizeBytes added AFTER cancellationToken (technically violates
+    // CA1068 "CancellationToken should be last") to avoid breaking source compat
+    // for any existing positional caller passing CancellationToken as the 5th
+    // argument. Additivity wins over strict style here, matching the same call
+    // made for UpdateWifiModuleAsync's skipVersionCheck in #143/PR #198.
+#pragma warning disable CA1068
     public async Task<long> ReceiveAsync(
         Stream destinationStream,
         string fileName,
         IProgress<SdCardTransferProgress>? progress = null,
         TimeSpan? timeout = null,
-        long? listedFileSizeBytes = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? listedFileSizeBytes = null)
+#pragma warning restore CA1068
     {
         ArgumentNullException.ThrowIfNull(destinationStream);
         ArgumentNullException.ThrowIfNull(fileName);

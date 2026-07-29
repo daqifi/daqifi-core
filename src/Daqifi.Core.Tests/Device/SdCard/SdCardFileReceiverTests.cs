@@ -316,6 +316,25 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
+    public async Task ReceiveAsync_LegacyPositionalCallShape_StillBinds()
+    {
+        // Compile-time regression guard: listedFileSizeBytes is deliberately appended AFTER
+        // cancellationToken so the pre-existing positional shape
+        // (dest, fileName, progress, timeout, cancellationToken) keeps binding for external
+        // callers. This call is positional on purpose — do not convert it to named arguments.
+        var fileData = new byte[] { 0x01, 0x02, 0x03 };
+        using var sourceStream = new MemoryStream(Combine(fileData, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+        using var cts = new CancellationTokenSource();
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "legacy.bin", null, TimeSpan.FromSeconds(5), cts.Token);
+
+        Assert.Equal(fileData.Length, bytesReceived);
+    }
+
+    [Fact]
     public async Task ReceiveAsync_NegativeListedSize_ThrowsArgumentOutOfRange()
     {
         using var sourceStream = new MemoryStream(EofMarker);
