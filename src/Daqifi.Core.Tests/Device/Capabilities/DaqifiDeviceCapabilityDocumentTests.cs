@@ -35,7 +35,9 @@ public class DaqifiDeviceCapabilityDocumentTests
     {
         var device = new TestableCapabilityDevice("BenchNq1");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        // Typed since #395; still an InvalidOperationException by inheritance, so a consumer's
+        // existing catch keeps working. ThrowsAsync matches exactly, hence the derived type here.
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.ReadCapabilityDocumentAsync());
     }
 

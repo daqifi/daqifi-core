@@ -599,16 +599,16 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
         /// <param name="message">The message to send to the device.</param>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="InvalidOperationException">
-        /// Thrown when the device is not connected, or when connected but has no transport or
-        /// stream to send on (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/>
-        /// constructor).
+        /// Thrown when the device is connected but has no transport or stream to send on
+        /// (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/> constructor).
         /// </exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Use the queued message producer when available and the message is string-based;
@@ -644,14 +644,15 @@ namespace Daqifi.Core.Device
         /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         protected virtual async Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (_transport == null)
@@ -763,7 +764,13 @@ namespace Daqifi.Core.Device
         /// exchange opened — late replies to earlier commands — are excluded: only what arrived once
         /// <paramref name="setupAction"/> had begun sending is returned.
         /// </returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">
+        /// Thrown when the device is not connected, or — with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set — when the device is
+        /// disposed, disposing, or disconnecting.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
+        /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         // prepareAsync is added AFTER cancellationToken (technically violating CA1068
         // "CancellationToken should be last") to keep existing positional callers working, matching
@@ -801,7 +808,13 @@ namespace Daqifi.Core.Device
         /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A list of text lines received from the device.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">
+        /// Thrown when the device is not connected, or — with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set — when the device is
+        /// disposed, disposing, or disconnecting.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
+        /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
@@ -849,14 +862,17 @@ namespace Daqifi.Core.Device
             {
                 await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
                 // Dispose() raced ahead of us and disposed the semaphore.
                 // Surface the same clean failure as the post-acquisition
                 // _disposed check below, instead of leaking a low-level
-                // teardown exception to callers.
-                throw new InvalidOperationException(
-                    "ExecuteTextCommandAsync cannot run because the device is disposed.");
+                // teardown exception to callers. The original is kept as
+                // InnerException so this rare race stays diagnosable.
+                throw new DeviceNotConnectedException(
+                    "ExecuteTextCommandAsync cannot run because the device is disposed.",
+                    ex,
+                    isShuttingDown: true);
             }
 
             _isInsideTextExchange.Value = true;
@@ -869,14 +885,15 @@ namespace Daqifi.Core.Device
                 // documented in #186).
                 if (_disposed || _isDisconnecting)
                 {
-                    throw new InvalidOperationException(
+                    throw new DeviceNotConnectedException(
                         "ExecuteTextCommandAsync cannot run while the device is "
-                        + "disposing or disconnecting.");
+                        + "disposing or disconnecting.",
+                        isShuttingDown: true);
                 }
 
                 if (!IsConnected)
                 {
-                    throw new InvalidOperationException("Device is not connected.");
+                    throw new DeviceNotConnectedException();
                 }
 
                 if (_transport == null)
@@ -1118,7 +1135,8 @@ namespace Daqifi.Core.Device
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The list of error strings popped from the queue (empty if the queue was already clean).</returns>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxIterations"/> is not positive.</exception>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public virtual async Task<IReadOnlyList<string>> DrainErrorQueueAsync(
             int maxIterations = 256,
@@ -1236,14 +1254,14 @@ namespace Daqifi.Core.Device
         /// The parsed document, which has already been applied to <see cref="Metadata"/>; or
         /// <c>null</c> when the device did not supply one this parser can trust.
         /// </returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public virtual async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
             CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (!Supports(DeviceFeature.CapabilityDocument))
@@ -1386,7 +1404,7 @@ namespace Daqifi.Core.Device
         /// surfaces a <see cref="TimeoutException"/>).
         /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="ScpiInitializationErrorException">Thrown when the device returns a SCPI error during initialization that persists after an internal retry.</exception>
         /// <exception cref="TimeoutException">Thrown when the device does not report its channel configuration within <paramref name="channelPopulationTimeout"/>.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
@@ -1396,7 +1414,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device must be connected before initialization.");
+                throw new DeviceNotConnectedException("Device must be connected before initialization.");
             }
 
             if (_isInitialized)

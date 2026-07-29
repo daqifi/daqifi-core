@@ -133,24 +133,24 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void StartStreaming_WhenDisconnected_ThrowsInvalidOperationException()
+        public void StartStreaming_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.StartStreaming());
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.StartStreaming());
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
         [Fact]
-        public void StopStreaming_WhenDisconnected_ThrowsInvalidOperationException()
+        public void StopStreaming_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.StopStreaming());
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.StopStreaming());
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -201,14 +201,14 @@ namespace Daqifi.Core.Tests.Device
 
         [Theory]
         [MemberData(nameof(NvmPersistenceCommands))]
-        public void NvmPersistence_WhenDisconnected_ThrowsInvalidOperationException(string methodName, string expectedCommand)
+        public void NvmPersistence_WhenDisconnected_ThrowsDeviceNotConnectedException(string methodName, string expectedCommand)
         {
             // Arrange
             _ = expectedCommand;
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<System.InvalidOperationException>(() => InvokeNvmMethod(device, methodName));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => InvokeNvmMethod(device, methodName));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -264,26 +264,26 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void SetAdcCalibrationSlope_WhenDisconnected_ThrowsInvalidOperationException()
+        public void SetAdcCalibrationSlope_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.SetAdcCalibrationSlope(0, 1.0));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.SetAdcCalibrationSlope(0, 1.0));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
         [Fact]
-        public void SetAdcCalibrationOffset_WhenDisconnected_ThrowsInvalidOperationException()
+        public void SetAdcCalibrationOffset_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.SetAdcCalibrationOffset(0, 1.0));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.SetAdcCalibrationOffset(0, 1.0));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
         [Fact]
-        public void UseAdcCalibration_WhenDisconnected_ThrowsInvalidOperationException()
+        public void UseAdcCalibration_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.UseAdcCalibration(1));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.UseAdcCalibration(1));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 

@@ -75,7 +75,7 @@ namespace Daqifi.Core.Tests.Device
         public void SetPwmFrequency_NotConnected_ThrowsAndSendsNothing()
         {
             var device = new CapturingStreamingDevice(); // not connected
-            Assert.Throws<System.InvalidOperationException>(() => device.SetPwmFrequency(2000));
+            Assert.Throws<DeviceNotConnectedException>(() => device.SetPwmFrequency(2000));
             Assert.Empty(device.PwmFrequencySends);
         }
 
