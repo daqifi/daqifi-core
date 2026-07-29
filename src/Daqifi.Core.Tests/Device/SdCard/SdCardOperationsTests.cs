@@ -1900,18 +1900,47 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 await Assert.ThrowsAsync<TimeoutException>(
                     () => device.DownloadSdCardFileAsync("data.bin", firstDestination));
 
-                // The first transfer is still parked, so the gate is still held.
-                var elapsed = Stopwatch.StartNew();
-                var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-                    () => device.DownloadSdCardFileAsync("other.bin", secondDestination));
-                elapsed.Stop();
+                // The first transfer is still parked, so the gate is still held. The exception TYPE
+                // is what proves the refusal came from the gate: waiting out another deadline would
+                // have produced TimeoutException, never InvalidOperationException. The wall-clock
+                // bound is only a hang guard, kept loose so a contended CI runner can't fail it.
+                var secondCall = device.DownloadSdCardFileAsync("other.bin", secondDestination);
+                var winner = await Task.WhenAny(secondCall, Task.Delay(TimeSpan.FromSeconds(30)));
+                Assert.Same((Task)secondCall, winner);
 
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => secondCall);
                 Assert.Contains("abandoned", ex.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
 
-                // Fail fast, not another full deadline.
-                Assert.True(
-                    elapsed.Elapsed < TimeSpan.FromMilliseconds(250),
-                    $"Second download took {elapsed.ElapsedMilliseconds}ms — it should be refused immediately.");
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenGateIsHeldAndCallerCancelled_ReportsCancellation()
+        {
+            // Cancellation outranks the gate: a caller who cancelled should get their own
+            // cancellation back, not a report about a different transfer they can do nothing about.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var firstDestination = new MemoryStream();
+            using var secondDestination = new MemoryStream();
+
+            try
+            {
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => device.DownloadSdCardFileAsync("data.bin", firstDestination));
+
+                // Cancel from inside the pre-flight StopStreaming send: that lands in the exact
+                // window this guards — after DownloadSdCardFileAsync's entry check, before the
+                // gate is examined. A token cancelled before the call would just trip the entry
+                // check and prove nothing.
+                using var cts = new CancellationTokenSource();
+                device.CancelOnNextSend = cts;
+
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => device.DownloadSdCardFileAsync("other.bin", secondDestination, null, cts.Token));
             }
             finally
             {
@@ -2321,13 +2350,23 @@ namespace Daqifi.Core.Tests.Device.SdCard
             /// <summary>Set once the transfer has actually reached the park.</summary>
             public ManualResetEventSlim Parked { get; } = new(false);
 
+            /// <summary>
+            /// When set, the next <see cref="Send{T}"/> cancels it. Lets a test cancel from inside
+            /// the download's pre-flight command, i.e. between its entry guard and the SD-download
+            /// gate check.
+            /// </summary>
+            public CancellationTokenSource? CancelOnNextSend { get; set; }
+
             public override bool IsUsbConnection => true;
 
             internal override TimeSpan SdCardDownloadTimeout => _budget;
 
             public override void Send<T>(IOutboundMessage<T> message)
             {
-                // Swallowed: this device never gets as far as exchanging commands.
+                // Otherwise swallowed: this device never gets as far as exchanging commands.
+                var cancelSource = CancelOnNextSend;
+                CancelOnNextSend = null;
+                cancelSource?.Cancel();
             }
 
             protected override async Task ExecuteRawCaptureAsync(

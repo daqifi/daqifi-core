@@ -2332,10 +2332,19 @@ namespace Daqifi.Core.Device
             string fileName,
             CancellationToken cancellationToken)
         {
+            // Checked before taking the gate so a cancelled caller neither acquires it nor gets an
+            // answer about some other transfer.
+            cancellationToken.ThrowIfCancellationRequested();
+
             // Fail fast rather than becoming a second reader on a stream an abandoned transfer
             // still holds. Wait(0) never blocks: this either takes the gate or reports the state.
             if (!_sdDownloadGate.Wait(0))
             {
+                // Cancellation wins when it raced the gate check — the same precedence the abandon
+                // path below applies. The caller asked to stop; that is a truer answer than a
+                // report about a different download.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 throw new InvalidOperationException(
                     "A previous SD card download is still in flight, or was abandoned after timing out and " +
                     "is still parked on the transport. Reconnect the device before retrying.");
