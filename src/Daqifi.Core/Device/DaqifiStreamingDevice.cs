@@ -1583,6 +1583,32 @@ namespace Daqifi.Core.Device
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (corrupt card, unreadable directory).</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. Empty directories return an empty list rather than throwing.</exception>
+        /// <exception cref="SdCardListIncompleteException">
+        /// Thrown when the listing did not arrive in full — the device never answered, or stopped
+        /// answering part-way through. Distinguishing this from a genuinely empty card is the whole
+        /// point of the terminator probe described in the remarks (closes #396).
+        /// </exception>
+        /// <remarks>
+        /// <para>
+        /// The firmware emits no end-of-listing marker, and for an empty directory it writes nothing
+        /// at all, so a lost or truncated reply is byte-for-byte indistinguishable from a healthy
+        /// empty card. Core closes that gap by appending a <c>SYSTem:ERRor?</c> query to the same
+        /// text exchange: the transport delivers in order and the firmware does not process the
+        /// next command until the listing has been handed to the output, so receiving the reply
+        /// proves both that the device is answering and that the listing ahead of it is complete.
+        /// Its absence means the response is incomplete, and the caller gets an exception instead of
+        /// a plausible-looking empty list.
+        /// </para>
+        /// <para>
+        /// The terminator's error code is used only as a liveness marker, never for classification:
+        /// the queue it pops can hold entries left by earlier commands, so attributing the code to
+        /// this listing would misreport stale failures. SD errors continue to be classified from the
+        /// listing lines themselves. Note the side effect this implies — each listing consumes one
+        /// entry from the device's SCPI error queue, so a
+        /// <see cref="DaqifiDevice.DrainErrorQueueAsync"/> run afterwards will not see the entry
+        /// this listing generated.
+        /// </para>
+        /// </remarks>
         public async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
@@ -1598,42 +1624,44 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.StopStreaming);
             IsStreaming = false;
 
-            IReadOnlyList<string> lines;
+            IReadOnlyList<string> lines = Array.Empty<string>();
+            IReadOnlyList<string> listing = Array.Empty<string>();
+            var isComplete = false;
             try
             {
-                lines = await ExecuteTextCommandAsync(async ct =>
+                // Attempt 0 plus SD_LIST_MAX_RETRIES retries. A SCPI error here is often a transient
+                // timing issue, and an unterminated response can be a one-off stall, so both are
+                // retried once after an additional settle delay before being surfaced.
+                for (var attempt = 0; attempt <= SD_LIST_MAX_RETRIES; attempt++)
                 {
-                    PrepareSdInterface();
-
-                    // Allow the device firmware to complete the SPI bus switch
-                    // before querying the SD card. Without this delay, the device
-                    // can return SCPI error -200 (Execution error).
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
-
-                    Send(ScpiMessageProducer.GetSdFileList);
-                }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
-
-                // If the response contains a SCPI error (transient timing issue),
-                // retry once after an additional settle delay.
-                if (ContainsScpiError(lines))
-                {
-                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                    if (attempt > 0)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
+                    }
 
-                        lines = await ExecuteTextCommandAsync(async ct =>
-                        {
-                            PrepareSdInterface();
-                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
-                            Send(ScpiMessageProducer.GetSdFileList);
-                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+                    lines = await ExecuteTextCommandAsync(async ct =>
+                    {
+                        PrepareSdInterface();
 
-                        if (!ContainsScpiError(lines))
-                        {
-                            break;
-                        }
+                        // Allow the device firmware to complete the SPI bus switch
+                        // before querying the SD card. Without this delay, the device
+                        // can return SCPI error -200 (Execution error).
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
+
+                        Send(ScpiMessageProducer.GetSdFileList);
+
+                        // End-of-listing terminator — see this method's remarks. Sent inside the
+                        // same text exchange so the ordering guarantee holds.
+                        Send(ScpiMessageProducer.GetSystemError);
+                    }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+
+                    isComplete = TrySplitAtSdListTerminator(lines, out listing);
+
+                    if (isComplete && !ContainsScpiError(listing))
+                    {
+                        break;
                     }
                 }
             }
@@ -1646,11 +1674,71 @@ namespace Daqifi.Core.Device
                 }
             }
 
-            ThrowIfSdCardListError(lines);
+            if (!isComplete)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
 
-            var files = SdCardFileListParser.ParseFileList(lines);
+            ThrowIfSdCardListError(listing);
+
+            var files = SdCardFileListParser.ParseFileList(listing);
             _sdCardFiles = files;
             return files;
+        }
+
+        /// <summary>
+        /// Splits a raw SD listing response at the <c>SYSTem:ERRor?</c> terminator reply that
+        /// <see cref="GetSdCardFilesAsync"/> appends to the exchange.
+        /// </summary>
+        /// <param name="lines">The raw response lines captured from the device.</param>
+        /// <param name="listingLines">
+        /// The lines that precede the terminator — the directory listing proper — when the method
+        /// returns <c>true</c>; otherwise the unmodified input.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> when the terminator was present, meaning the response is complete;
+        /// <c>false</c> when it never arrived, meaning the response is missing or truncated.
+        /// </returns>
+        private static bool TrySplitAtSdListTerminator(
+            IReadOnlyList<string> lines,
+            out IReadOnlyList<string> listingLines)
+        {
+            // Scan from the end. A terminator reply from a PREVIOUS, timed-out exchange can still
+            // be sitting in the transport buffer and lead this response; splitting at the first
+            // match would then discard the listing that follows it and report an empty card —
+            // exactly the failure this terminator exists to prevent.
+            var terminatorIndex = -1;
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                if (ScpiResponseClassifier.IsSystemErrorReplyLine(lines[i]))
+                {
+                    terminatorIndex = i;
+                    break;
+                }
+            }
+
+            if (terminatorIndex < 0)
+            {
+                listingLines = lines;
+                return false;
+            }
+
+            var listing = new List<string>(terminatorIndex);
+            for (var j = 0; j < terminatorIndex; j++)
+            {
+                // Any other terminator-shaped line is a stale reply of the same kind, not
+                // directory content — no firmware listing entry can match that shape, since
+                // entries are always "<path> <size>".
+                if (ScpiResponseClassifier.IsSystemErrorReplyLine(lines[j]))
+                {
+                    continue;
+                }
+
+                listing.Add(lines[j]);
+            }
+
+            listingLines = listing;
+            return true;
         }
 
         /// <summary>
@@ -2331,6 +2419,8 @@ namespace Daqifi.Core.Device
             }
 
             // No error lines and no content lines — empty directory. Caller continues.
+            // Safe to treat as empty rather than as a lost reply: GetSdCardFilesAsync only reaches
+            // this point once the device has answered the end-of-listing terminator (#396).
         }
 
         /// <summary>
