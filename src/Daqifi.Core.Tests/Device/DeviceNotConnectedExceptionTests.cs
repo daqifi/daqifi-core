@@ -237,6 +237,21 @@ namespace Daqifi.Core.Tests.Device
 
             Assert.True(ex.IsShuttingDown);
             Assert.Contains("disposed", ex.Message);
+
+            // The translation must not discard the cause: the original
+            // ObjectDisposedException survives so this rare race stays diagnosable.
+            Assert.IsType<ObjectDisposedException>(ex.InnerException);
+        }
+
+        [Fact]
+        public void DeviceNotConnectedException_CanCarryBothAnInnerExceptionAndTheShutdownFlag()
+        {
+            var inner = new ObjectDisposedException("SemaphoreSlim");
+            var ex = new DeviceNotConnectedException("tearing down", inner, isShuttingDown: true);
+
+            Assert.Equal("tearing down", ex.Message);
+            Assert.Same(inner, ex.InnerException);
+            Assert.True(ex.IsShuttingDown);
         }
 
         [Fact]

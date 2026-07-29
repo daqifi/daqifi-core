@@ -97,8 +97,30 @@ namespace Daqifi.Core.Device
         /// <param name="message">The message that describes the device's connectivity state.</param>
         /// <param name="innerException">The exception that caused the current exception, or <c>null</c>.</param>
         public DeviceNotConnectedException(string message, Exception? innerException)
+            : this(message, innerException, isShuttingDown: false)
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DeviceNotConnectedException"/> class with a
+        /// specified error message, the inner exception that caused it, and the teardown state.
+        /// </summary>
+        /// <remarks>
+        /// Use this when a guard translates a lower-level teardown exception — such as the
+        /// <see cref="ObjectDisposedException"/> from a <see cref="DaqifiDevice.Dispose()"/> racing
+        /// ahead of an in-flight call — so the original type and stack survive on
+        /// <see cref="Exception.InnerException"/> rather than being discarded.
+        /// </remarks>
+        /// <param name="message">The message that describes the device's connectivity state.</param>
+        /// <param name="innerException">The exception that caused the current exception, or <c>null</c>.</param>
+        /// <param name="isShuttingDown">
+        /// <c>true</c> when the guard fired because the device is disconnecting or disposing;
+        /// otherwise <c>false</c>. See <see cref="IsShuttingDown"/>.
+        /// </param>
+        public DeviceNotConnectedException(string message, Exception? innerException, bool isShuttingDown)
             : base(message, innerException)
         {
+            IsShuttingDown = isShuttingDown;
         }
     }
 }

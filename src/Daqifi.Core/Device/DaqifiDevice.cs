@@ -828,14 +828,16 @@ namespace Daqifi.Core.Device
             {
                 await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
                 // Dispose() raced ahead of us and disposed the semaphore.
                 // Surface the same clean failure as the post-acquisition
                 // _disposed check below, instead of leaking a low-level
-                // teardown exception to callers.
+                // teardown exception to callers. The original is kept as
+                // InnerException so this rare race stays diagnosable.
                 throw new DeviceNotConnectedException(
                     "ExecuteTextCommandAsync cannot run because the device is disposed.",
+                    ex,
                     isShuttingDown: true);
             }
 
