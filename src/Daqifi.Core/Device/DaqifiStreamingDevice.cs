@@ -73,6 +73,23 @@ namespace Daqifi.Core.Device
         private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
 
         /// <summary>
+        /// Admits one SD download at a time. A download that hits its deadline is ABANDONED, not
+        /// stopped — its worker can still be parked in native I/O holding the transport stream —
+        /// so the gate is released only when that worker actually finishes, however long that
+        /// takes. Without it, a caller retrying against a device that stays wedged (an "import
+        /// all" loop, say) would start a second reader on the same stream, which is the framing
+        /// corruption <see cref="DaqifiDevice"/> already refuses to risk when restarting the
+        /// protobuf consumer, and would stack another permanently blocked thread each time (#399).
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not disposed: we only ever call <see cref="SemaphoreSlim.Wait(int)"/> and
+        /// <see cref="SemaphoreSlim.Release()"/>, never <see cref="SemaphoreSlim.AvailableWaitHandle"/>,
+        /// so there is no handle to release — and an abandoned worker may release this long after
+        /// the device is disposed, which would otherwise fault a continuation nobody observes.
+        /// </remarks>
+        private readonly SemaphoreSlim _sdDownloadGate = new(1, 1);
+
+        /// <summary>
         /// Reconstructs host timestamps from the device's rolling 32-bit tick counter during a
         /// streaming session. Scoped to this device instance, so a single fixed key suffices.
         /// </summary>
@@ -2109,6 +2126,13 @@ namespace Daqifi.Core.Device
         /// not be reused for anything else; and the device is left mid-<c>SD:GET</c> with the
         /// protobuf consumer stopped, so reconnecting (or power-cycling, if its SD subsystem is
         /// genuinely wedged) is the reliable way to resume normal operation.
+        /// <para>
+        /// Until an abandoned transfer unwinds it still owns the transport, so a further download
+        /// on the same device fails fast with <see cref="InvalidOperationException"/> rather than
+        /// putting a second reader on the same stream. A caller looping over many files against a
+        /// wedged card therefore gets one timeout and then immediate, cheap failures — not a
+        /// growing pile of blocked threads.
+        /// </para>
         /// </remarks>
         public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
@@ -2298,12 +2322,48 @@ namespace Daqifi.Core.Device
         /// <param name="budget">The cooperative budget; the hard deadline is <see cref="HardDeadlineFor"/> of it.</param>
         /// <param name="fileName">Used only in the <see cref="TimeoutException"/> message.</param>
         /// <param name="cancellationToken">The caller's token, observed by the race itself and not only by the worker.</param>
-        private static async Task RunWithHardDeadlineAsync(
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when a previous download still owns <see cref="_sdDownloadGate"/> — it is either
+        /// genuinely in flight or was abandoned and is still parked on the transport.
+        /// </exception>
+        private async Task RunWithHardDeadlineAsync(
             Func<CancellationToken, Task> operation,
             TimeSpan budget,
             string fileName,
             CancellationToken cancellationToken)
         {
+            // Fail fast rather than becoming a second reader on a stream an abandoned transfer
+            // still holds. Wait(0) never blocks: this either takes the gate or reports the state.
+            if (!_sdDownloadGate.Wait(0))
+            {
+                throw new InvalidOperationException(
+                    "A previous SD card download is still in flight, or was abandoned after timing out and " +
+                    "is still parked on the transport. Reconnect the device before retrying.");
+            }
+
+            // Released exactly once, by whichever path is last to be done with the worker: the
+            // finally below in the normal case, or the abandon-path continuation when the worker
+            // finally unwinds. Interlocked because a worker that completes right at the deadline
+            // boundary can reach both.
+            var gateReleased = 0;
+            void ReleaseGate()
+            {
+                if (Interlocked.Exchange(ref gateReleased, 1) != 0)
+                {
+                    return;
+                }
+
+                try
+                {
+                    _sdDownloadGate.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The device was disposed while a transfer was still abandoned. Benign
+                    // teardown, and this can run from a discarded continuation — never throw.
+                }
+            }
+
             var hardDeadline = HardDeadlineFor(budget);
 
             // hardDeadlineCts runs on its own timer, independent of the Task.Delay race below, so
@@ -2358,6 +2418,9 @@ namespace Daqifi.Core.Device
                             _ = t.Exception;
                             linkedCts.Dispose();
                             hardDeadlineCts.Dispose();
+
+                            // Only now is the transport genuinely free for another download.
+                            ReleaseGate();
                         },
                         CancellationToken.None,
                         TaskContinuationOptions.ExecuteSynchronously,
@@ -2380,12 +2443,13 @@ namespace Daqifi.Core.Device
                 raceCts.Cancel();
                 raceCts.Dispose();
 
-                // The abandon path hands disposal to its continuation instead; dispose here only
-                // when the worker actually finished (the common, non-hung case).
+                // The abandon path hands disposal and the gate to its continuation instead; do it
+                // here only when the worker actually finished (the common, non-hung case).
                 if (workerTask.IsCompleted)
                 {
                     linkedCts.Dispose();
                     hardDeadlineCts.Dispose();
+                    ReleaseGate();
                 }
             }
         }

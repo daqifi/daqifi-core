@@ -1885,6 +1885,78 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DownloadSdCardFileAsync_WhileAPreviousTransferIsStillAbandoned_FailsFast()
+        {
+            // An abandoned transfer still owns the transport, so a retry must be refused rather
+            // than start a second reader on the same stream (and stack another blocked thread).
+            // A consumer looping over a wedged card's files gets one timeout, then cheap failures.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var firstDestination = new MemoryStream();
+            using var secondDestination = new MemoryStream();
+
+            try
+            {
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => device.DownloadSdCardFileAsync("data.bin", firstDestination));
+
+                // The first transfer is still parked, so the gate is still held.
+                var elapsed = Stopwatch.StartNew();
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => device.DownloadSdCardFileAsync("other.bin", secondDestination));
+                elapsed.Stop();
+
+                Assert.Contains("abandoned", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+                // Fail fast, not another full deadline.
+                Assert.True(
+                    elapsed.Elapsed < TimeSpan.FromMilliseconds(250),
+                    $"Second download took {elapsed.ElapsedMilliseconds}ms — it should be refused immediately.");
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_AfterAnAbandonedTransferUnwinds_IsAllowedAgain()
+        {
+            // The gate is a quarantine, not a one-shot latch: once the abandoned worker finally
+            // returns, the transport is free and downloads are accepted again.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var destination = new MemoryStream();
+
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => device.DownloadSdCardFileAsync("data.bin", destination));
+
+            // Let the abandoned worker unwind, then wait for the gate to come back.
+            device.Release();
+
+            InvalidOperationException? lastRefusal = null;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    // The park device completes its raw capture without ever calling the transfer
+                    // body, so an accepted download reports a zero-byte result rather than throwing.
+                    await device.DownloadSdCardFileAsync("data.bin", destination);
+                    lastRefusal = null;
+                    break;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    lastRefusal = ex;
+                    await Task.Delay(25);
+                }
+            }
+
+            Assert.Null(lastRefusal);
+        }
+
+        [Fact]
         public async Task DownloadSdCardFileAsync_SlowButHealthyTransfer_IsNotAborted()
         {
             // The bounding must only end transfers that are stuck. A slow-but-progressing one —
