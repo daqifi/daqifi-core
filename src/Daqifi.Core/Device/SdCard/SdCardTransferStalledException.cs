@@ -90,9 +90,9 @@ namespace Daqifi.Core.Device.SdCard
                         (timeout ?? TimeSpan.Zero).TotalSeconds,
                         received),
                 _ =>
-                    $"The device stopped sending data for SD card file '{fileName}' before the EOF marker " +
-                    $"arrived. {received} The transport is still open, so this is a stalled read rather " +
-                    "than a closed stream; retry the download."
+                    $"No data arrived for SD card file '{fileName}' before the EOF marker. {received} " +
+                    "The transport still reports itself readable, so the read returned empty rather " +
+                    "than the stream having been closed; retry the download."
             };
         }
     }

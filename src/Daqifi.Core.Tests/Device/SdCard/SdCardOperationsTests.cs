@@ -1836,6 +1836,42 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DownloadSdCardFileAsync_AmbiguousListedName_FallsBackToConservativeBehavior()
+        {
+            // Arrange — the listing keeps only leaf names, so the same name can appear twice from
+            // different directories with different sizes. Trusting the first 0 would wave through
+            // exactly the wedged-subsystem failure the empty-transfer guard exists to catch, so an
+            // ambiguous name is treated as "size unknown".
+            var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
+            device.ListingLines.Add("Daqifi/data.bin 0");
+            device.ListingLines.Add("Daqifi/archive/data.bin 4096");
+            device.Connect();
+            await device.GetSdCardFilesAsync();
+
+            using var destinationStream = new MemoryStream();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+                () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
+            Assert.Null(ex.ListedSizeInBytes);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WithoutAPriorListing_FallsBackToConservativeBehavior()
+        {
+            // Arrange — nothing has been listed, so there is no size to consult and the #264
+            // retry-then-throw behavior must stand unchanged.
+            var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+                () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
+            Assert.Null(ex.ListedSizeInBytes);
+        }
+
+        [Fact]
         public async Task GetSdCardFilesAsync_ListingWithSizes_ExposesReportedSizes()
         {
             // Firmware emits "<path> <size>" per entry; the size is what a later download needs to

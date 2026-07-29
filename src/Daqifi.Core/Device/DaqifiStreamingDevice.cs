@@ -2204,8 +2204,9 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Looks up the size the most recent directory listing reported for a file. Returns null
-        /// when no listing has been fetched, or when the listing did not include this file or a
-        /// size for it — "unknown", which the receiver treats conservatively.
+        /// ("unknown", which the receiver treats conservatively) when no listing has been fetched,
+        /// when the listing did not include this file or a size for it, or when more than one
+        /// listed entry shares the name.
         /// </summary>
         private long? TryGetListedFileSize(string fileName)
         {
@@ -2213,15 +2214,30 @@ namespace Daqifi.Core.Device
             // concurrent refresh swaps the reference rather than mutating what we enumerate.
             var listedFiles = _sdCardFiles;
 
+            long? matchedSize = null;
+            var matched = false;
+
             foreach (var file in listedFiles)
             {
-                if (string.Equals(file.FileName, fileName, StringComparison.OrdinalIgnoreCase))
+                // FAT names are case-insensitive. The listing keeps only the leaf name, so the
+                // same name can appear twice from different directories; that is ambiguous and
+                // an over-confident size here would wave through the very failure (a wedged
+                // subsystem serving nothing) the empty-transfer guard exists to catch.
+                if (!string.Equals(file.FileName, fileName, StringComparison.OrdinalIgnoreCase))
                 {
-                    return file.SizeInBytes;
+                    continue;
                 }
+
+                if (matched)
+                {
+                    return null;
+                }
+
+                matched = true;
+                matchedSize = file.SizeInBytes;
             }
 
-            return null;
+            return matchedSize;
         }
 
         /// <summary>

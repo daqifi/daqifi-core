@@ -10,10 +10,14 @@ namespace Daqifi.Core.Device.SdCard
     public enum SdCardTransferStallReason
     {
         /// <summary>
-        /// The transport returned zero bytes while still readable. Over USB serial this is the
-        /// <em>ordinary</em> stall signal, not an end-of-stream: Core sets a per-read
-        /// <c>SerialPort.ReadTimeout</c> and .NET's <c>SerialStream.ReadAsync</c> returns 0 on a
-        /// read timeout rather than throwing or honoring the cancellation token.
+        /// The transport returned zero bytes while still reporting itself readable. Over USB
+        /// serial — the transport SD download runs on in practice — this is the <em>ordinary</em>
+        /// stall signal, not an end-of-stream: Core sets a per-read <c>SerialPort.ReadTimeout</c>
+        /// and .NET's <c>SerialStream.ReadAsync</c> returns 0 on a read timeout rather than
+        /// throwing or honoring the cancellation token. On a stream-oriented network transport a
+        /// zero-length read can instead mean the peer closed the connection, which the stream
+        /// itself gives no way to tell apart; either way the download did not complete and a
+        /// retry is the reasonable response.
         /// </summary>
         NoDataReceived = 0,
 
