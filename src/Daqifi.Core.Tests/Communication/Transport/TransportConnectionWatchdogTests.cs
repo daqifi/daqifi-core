@@ -227,6 +227,33 @@ public class TransportConnectionWatchdogTests
     }
 
     [Fact]
+    public void PollPresence_WhenAProbeExceptionInterruptsAMissRun_DoesNotSignalLoss()
+    {
+        // The threshold is about CONSECUTIVE observed absences. "absent, could-not-observe,
+        // absent" never saw the port absent twice in a row, so it must not satisfy a two-miss
+        // threshold — the exception has to break the run, not merely fail to extend it.
+        var losses = new List<Exception>();
+        using var watchdog = CreateWatchdog(losses);
+        watchdog.Arm();
+
+        var step = 0;
+        watchdog.StartPresencePolling(
+            () => (step++ % 2 == 0)
+                ? false
+                : throw new UnauthorizedAccessException("the probe could not run"),
+            "port gone",
+            TimeSpan.FromHours(1));
+
+        for (var i = 0; i < TransportConnectionWatchdog.PresenceMissThreshold * 10; i++)
+        {
+            watchdog.PollPresence();
+        }
+
+        Assert.Empty(losses);
+        Assert.True(watchdog.IsArmed);
+    }
+
+    [Fact]
     public void StartPresencePolling_WhenNotArmed_DoesNotStart()
     {
         var losses = new List<Exception>();

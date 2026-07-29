@@ -258,6 +258,12 @@ internal sealed class TransportConnectionWatchdog : IDisposable
             // disconnect a healthy transport, and never let it kill the timer thread. Probes are
             // required to surface "could not answer" this way rather than returning false, which
             // would be indistinguishable from the device having actually gone.
+            //
+            // Clearing the run matters as much as not incrementing it. The threshold is about
+            // CONSECUTIVE observed absences; letting a miss survive an exception would make
+            // "absent, could-not-observe, absent" satisfy a two-miss threshold that never actually
+            // saw the port absent twice in a row.
+            Volatile.Write(ref _presenceMisses, 0);
         }
         finally
         {

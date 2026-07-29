@@ -250,9 +250,19 @@ public class SerialUnplugValidationTests
     /// </summary>
     private sealed class PortDisappearanceWatcher : IDisposable
     {
+        private const long NotObserved = -1;
+
         private readonly CancellationTokenSource _cts = new();
         private readonly Thread _thread;
-        private DateTime? _portGoneAtUtc;
+
+        /// <summary>
+        /// UTC ticks of the first observed absence, or <see cref="NotObserved"/>. Held as a
+        /// <see cref="long"/> and published with <see cref="Interlocked"/> so the reading thread
+        /// cannot observe a stale value — the whole point of this watcher is a trustworthy latency
+        /// number, and an unsynchronized <c>DateTime?</c> would undermine exactly that. The
+        /// compare-exchange also makes "record the FIRST absence, once" explicit.
+        /// </summary>
+        private long _portGoneAtTicks = NotObserved;
 
         public PortDisappearanceWatcher(string portName)
         {
@@ -264,7 +274,8 @@ public class SerialUnplugValidationTests
                     {
                         if (!SerialStreamTransport.IsPortEnumerated(portName))
                         {
-                            _portGoneAtUtc = DateTime.UtcNow;
+                            Interlocked.CompareExchange(
+                                ref _portGoneAtTicks, DateTime.UtcNow.Ticks, NotObserved);
                             return;
                         }
                     }
@@ -285,7 +296,14 @@ public class SerialUnplugValidationTests
             _thread.Start();
         }
 
-        public DateTime? PortGoneAtUtc => _portGoneAtUtc;
+        public DateTime? PortGoneAtUtc
+        {
+            get
+            {
+                var ticks = Interlocked.Read(ref _portGoneAtTicks);
+                return ticks == NotObserved ? null : new DateTime(ticks, DateTimeKind.Utc);
+            }
+        }
 
         public void Dispose()
         {
