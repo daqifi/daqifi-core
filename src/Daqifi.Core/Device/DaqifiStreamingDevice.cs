@@ -1661,20 +1661,15 @@ namespace Daqifi.Core.Device
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
                     }
 
-                    // Switch the shared SPI bus over to the SD card and let the firmware settle
-                    // BEFORE opening the text exchange. Querying the card too soon after the switch
-                    // makes the device answer -200 (Execution error), so the delay itself is not
-                    // optional — but running it outside the exchange leaves the exchange with no
-                    // internal gap at all, so its very first act is the LIST query. That matters for
-                    // the terminator: the exchange discards anything received before its setup
-                    // action sends, and a gap inside the action would widen that boundary into a
-                    // window where a late reply to an earlier command could still be mistaken for
-                    // this listing's terminator. The delay is unchanged from the device's point of
-                    // view — if anything longer, since the consumer swap now follows it.
-                    PrepareSdInterface();
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
-                    lines = await ExecuteTextCommandAsync(
+                    // The SPI bus switch and its settle wait run as the exchange's prepare phase:
+                    // inside the exchange lock, so a competing text exchange cannot restore the LAN
+                    // interface between the switch and the LIST, and ahead of the stale-line
+                    // boundary, so the settle wait does not become a window in which a late reply to
+                    // an earlier command could pass for this listing's terminator. Querying the card
+                    // too soon after the switch makes the device answer -200 (Execution error), so
+                    // the wait itself is not optional.
+                    lines = await ExecuteTextCommandWithPrepareAsync(
+                        PrepareSdInterfaceAndSettleAsync,
                         () =>
                         {
                             Send(ScpiMessageProducer.GetSdFileList);
@@ -1714,6 +1709,26 @@ namespace Daqifi.Core.Device
             var files = SdCardFileListParser.ParseFileList(listing);
             _sdCardFiles = files;
             return files;
+        }
+
+        /// <summary>
+        /// Prepare phase shared by the SD card text exchanges: switches the shared SPI bus over to
+        /// the card and waits for the firmware to complete the switch.
+        /// </summary>
+        /// <remarks>
+        /// Passed to <see cref="DaqifiDevice.ExecuteTextCommandWithPrepareAsync"/> rather than run
+        /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
+        /// LAN interface between the switch and the commands that depend on it would leave them
+        /// running against the wrong interface — and ahead of the exchange's stale-line boundary, so
+        /// the settle wait cannot be mistaken for a window in which the device was answering.
+        /// </remarks>
+        private async Task PrepareSdInterfaceAndSettleAsync(CancellationToken cancellationToken)
+        {
+            PrepareSdInterface();
+
+            // Querying the card too soon after the switch makes the device answer -200
+            // (Execution error), so this wait is not optional.
+            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -2122,16 +2137,13 @@ namespace Daqifi.Core.Device
             IReadOnlyList<string> lines;
             try
             {
-                // Switch the shared SPI bus to the SD card and settle BEFORE opening the text
-                // exchange, for the same reason as GetSdCardFilesAsync: a gap inside the setup
-                // action is a window in which a late reply to an earlier command can be captured
-                // as part of this response. Here that would mean a stale error line triggering a
-                // pointless delete-and-relist retry rather than a bad listing, but it is the same
-                // defect, so it gets the same treatment.
-                PrepareSdInterface();
-                await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
-                lines = await ExecuteTextCommandAsync(
+                // Same prepare-phase treatment as GetSdCardFilesAsync, for the same two reasons —
+                // the SPI switch stays serialized against competing text exchanges, and its settle
+                // wait stays outside the stale-line boundary. The consequence of a stale line is
+                // milder here (delete keys off ContainsScpiError, so it would mean a pointless
+                // delete-and-relist retry rather than a bad listing) but it is the same defect.
+                lines = await ExecuteTextCommandWithPrepareAsync(
+                    PrepareSdInterfaceAndSettleAsync,
                     () =>
                     {
                         Send(ScpiMessageProducer.DeleteSdFile(fileName));
@@ -2148,10 +2160,8 @@ namespace Daqifi.Core.Device
 
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
 
-                        PrepareSdInterface();
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
-                        lines = await ExecuteTextCommandAsync(
+                        lines = await ExecuteTextCommandWithPrepareAsync(
+                            PrepareSdInterfaceAndSettleAsync,
                             () =>
                             {
                                 Send(ScpiMessageProducer.DeleteSdFile(fileName));

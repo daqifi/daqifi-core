@@ -55,7 +55,49 @@ public class DaqifiDeviceStaleTextLineTests
         device.Disconnect();
     }
 
-    /// <summary>Exposes the protected text-exchange entry point.</summary>
+    [Fact]
+    public async Task ExecuteTextCommandWithPrepare_RunsPrepareBeforeTheSetupAction()
+    {
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Prepared Device", transport);
+
+        device.Connect();
+
+        var order = new List<string>();
+        await device.CallWithPrepareAsync(
+            _ => { order.Add("prepare"); return Task.CompletedTask; },
+            () => order.Add("setup"));
+
+        Assert.Equal(new[] { "prepare", "setup" }, order);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithPrepare_RunsPrepareInsideTheExchange()
+    {
+        // The property that matters for the SD card operations: the prepare phase holds the
+        // device-wide text-exchange lock, so no competing exchange can interleave between the SPI
+        // bus switch it performs and the commands that depend on it. Asserted through the
+        // exchange's own re-entrancy guard rather than by racing two threads — if prepare runs
+        // inside the critical section, a nested exchange must be refused, and if it had been
+        // hoisted back outside the lock this would silently succeed instead.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Nested Device", transport);
+
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => device.CallWithPrepareAsync(
+                async _ => await device.CallExecuteTextCommandAsync(() => { }),
+                () => { }));
+
+        Assert.Contains("not re-entrant", ex.Message);
+
+        device.Disconnect();
+    }
+
+    /// <summary>Exposes the protected text-exchange entry points.</summary>
     private class StaleLineTestableDevice : DaqifiDevice
     {
         public StaleLineTestableDevice(string name, IStreamTransport transport)
@@ -66,6 +108,14 @@ public class DaqifiDeviceStaleTextLineTests
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(Action setupAction)
         {
             return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 500, completionTimeoutMs: 150);
+        }
+
+        public Task<IReadOnlyList<string>> CallWithPrepareAsync(
+            Func<CancellationToken, Task> prepareAsync,
+            Action setupAction)
+        {
+            return ExecuteTextCommandWithPrepareAsync(
+                prepareAsync, setupAction, responseTimeoutMs: 500, completionTimeoutMs: 150);
         }
     }
 

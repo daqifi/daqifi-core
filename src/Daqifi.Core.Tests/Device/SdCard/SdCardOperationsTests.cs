@@ -1982,6 +1982,22 @@ namespace Daqifi.Core.Tests.Device.SdCard
                     response, SentMessages, sentBefore, ExecuteTextCommandCallCount, UnterminatedAttempts));
             }
 
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandWithPrepareAsync(
+                Func<CancellationToken, Task> prepareAsync,
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                // The prepare phase precedes the exchange proper, so its commands are outside the
+                // window whose replies belong to this response — mirroring the real device, where
+                // it runs before the consumer swap.
+                await prepareAsync(cancellationToken).ConfigureAwait(false);
+
+                return await ExecuteTextCommandAsync(
+                    setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken).ConfigureAwait(false);
+            }
+
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Func<CancellationToken, Task> setupActionAsync,
                 int responseTimeoutMs = 1000,
@@ -2099,6 +2115,19 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 _executeTextCommandCallCount++;
                 return Task.FromResult(SdCardTestResponses.AnswerErrorQuery(
                     CannedTextResponse, SentMessages, sentBefore, _executeTextCommandCallCount, UnterminatedAttempts));
+            }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandWithPrepareAsync(
+                Func<CancellationToken, Task> prepareAsync,
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                await prepareAsync(cancellationToken).ConfigureAwait(false);
+
+                return await ExecuteTextCommandAsync(
+                    setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken).ConfigureAwait(false);
             }
 
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
@@ -2366,6 +2395,19 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 setupAction();
                 return Task.FromResult(SdCardTestResponses.AnswerErrorQuery(
                     CannedTextResponse, SentMessages, sentBefore, attemptNumber: 1, unterminatedAttempts: 0));
+            }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandWithPrepareAsync(
+                Func<CancellationToken, Task> prepareAsync,
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                await prepareAsync(cancellationToken).ConfigureAwait(false);
+
+                return await ExecuteTextCommandAsync(
+                    setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken).ConfigureAwait(false);
             }
 
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
