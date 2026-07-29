@@ -260,10 +260,18 @@ public class SerialUnplugValidationTests
             {
                 while (!_cts.IsCancellationRequested)
                 {
-                    if (!SerialStreamTransport.IsPortEnumerated(portName))
+                    try
                     {
-                        _portGoneAtUtc = DateTime.UtcNow;
-                        return;
+                        if (!SerialStreamTransport.IsPortEnumerated(portName))
+                        {
+                            _portGoneAtUtc = DateTime.UtcNow;
+                            return;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // The probe could not answer this time; that is not the port going away.
+                        // Keep watching rather than recording a bogus disappearance time.
                     }
 
                     Thread.Sleep(20);

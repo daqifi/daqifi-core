@@ -109,6 +109,83 @@ public class SerialStreamTransportDropDetectionTests
     }
 
     [Fact]
+    public void WhenThePresenceProbeStartsThrowing_NoDropIsReported()
+    {
+        // A probe that cannot answer is a failure to observe, not evidence the port went away.
+        // Before this was fixed the default probe swallowed its own exceptions and returned
+        // "absent", so two transient enumeration failures looked like two consecutive misses and
+        // closed a healthy connection.
+        var firstCall = true;
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.FromHours(1))
+        {
+            PortPresenceProbe = _ =>
+            {
+                if (firstCall)
+                {
+                    firstCall = false;
+                    return true;
+                }
+
+                throw new UnauthorizedAccessException("the probe could not run");
+            }
+        };
+
+        var drops = 0;
+        transport.StatusChanged += (_, e) =>
+        {
+            if (!e.IsConnected)
+            {
+                Interlocked.Increment(ref drops);
+            }
+        };
+
+        transport.StartDropDetection();
+        Assert.True(transport.IsLivenessMonitorActive);
+
+        for (var i = 0; i < TransportConnectionWatchdog.PresenceMissThreshold * 5; i++)
+        {
+            transport.PollLivenessForTesting();
+        }
+
+        Assert.Equal(0, Volatile.Read(ref drops));
+        Assert.True(transport.IsLivenessMonitorActive);
+    }
+
+    [Fact]
+    public void WhenThePresenceProbeThrowsAtConnectTime_TheCheckIsNotArmedAndConnectStillSucceeds()
+    {
+        // No baseline observation means nothing to compare later polls against, so the check stays
+        // off — and the failure must not escape into the caller's successful connect.
+        using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: FastInterval)
+        {
+            PortPresenceProbe = _ => throw new UnauthorizedAccessException("the probe could not run")
+        };
+
+        var drops = 0;
+        transport.StatusChanged += (_, e) =>
+        {
+            if (!e.IsConnected)
+            {
+                Interlocked.Increment(ref drops);
+            }
+        };
+
+        transport.StartDropDetection();
+
+        Assert.False(transport.IsLivenessMonitorActive);
+        Thread.Sleep(400);
+        Assert.Equal(0, Volatile.Read(ref drops));
+
+        // Fault escalation still covers the port.
+        for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
+        {
+            transport.ReportIoFault(new IOException("device gone"));
+        }
+
+        Assert.Equal(1, Volatile.Read(ref drops));
+    }
+
+    [Fact]
     public void WhenTheLivenessIntervalIsZero_TheCheckIsDisabled()
     {
         using var transport = new SerialStreamTransport("/dev/ttyTest382", livenessCheckInterval: TimeSpan.Zero)

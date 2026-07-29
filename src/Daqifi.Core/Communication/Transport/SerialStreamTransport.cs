@@ -363,7 +363,18 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         // If a platform enumerates it under a different spelling than the caller passed, every
         // poll would read as "gone" and would disconnect a perfectly healthy connection — far
         // worse than not having the check. Fault escalation still covers that case.
-        if (!IsPortPresent())
+        //
+        // A probe that throws here is treated the same way: without a baseline observation there
+        // is nothing to compare later polls against, so the check stays off rather than guessing.
+        // The throw must not escape either — the port is open and the connect succeeded.
+        try
+        {
+            if (!IsPortPresent())
+            {
+                return;
+            }
+        }
+        catch (Exception)
         {
             return;
         }
@@ -388,13 +399,26 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// where a port name is a device node path — if that node still exists.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Deliberately requires <em>both</em> answers to be "absent" before reporting absence. The
     /// enumeration is the portable signal (and the only one on Windows); the filesystem check
-    /// covers a Unix port whose spelling the enumeration happens not to return. Errors from either
-    /// are treated as "no evidence", never as evidence of a drop.
+    /// covers a Unix port whose spelling the enumeration happens not to return.
+    /// </para>
+    /// <para>
+    /// A failure to observe is <b>not</b> absence, and this method must never conflate the two: a
+    /// probe that cannot answer throws, and the caller treats that as no evidence of a drop.
+    /// Returning <c>false</c> when the enumeration merely failed would let two transient failures
+    /// look like two consecutive misses and close a healthy connection. A failed enumeration is
+    /// therefore only swallowed when the filesystem check can still answer for this port name.
+    /// </para>
     /// </remarks>
+    /// <exception cref="Exception">
+    /// Propagates whatever the underlying probe raised when no source could answer.
+    /// </exception>
     internal static bool IsPortEnumerated(string portName)
     {
+        var isDeviceNodePath = portName.StartsWith('/');
+
         try
         {
             foreach (var name in SerialPort.GetPortNames())
@@ -405,26 +429,18 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                 }
             }
         }
-        catch (Exception)
+        catch (Exception) when (isDeviceNodePath)
         {
-            // Enumeration can fail transiently (a /dev scan racing a device change, a registry
-            // read on Windows). Fall through to the filesystem check rather than concluding the
-            // port has gone away.
+            // Enumeration can fail transiently (a /dev scan racing a device change). A Unix port
+            // name is also a filesystem path, so an independent answer is still available — the
+            // failure is only swallowed because that second source can actually answer. When it
+            // cannot (a Windows-style name), the exception propagates as "no observation".
+            return File.Exists(portName);
         }
 
-        try
-        {
-            if (portName.StartsWith('/'))
-            {
-                return File.Exists(portName);
-            }
-        }
-        catch (Exception)
-        {
-            // Same reasoning: an unreadable path is not evidence the device was unplugged.
-        }
-
-        return false;
+        // The enumeration answered and did not list this port. On Unix it may simply not enumerate
+        // the spelling the caller opened, so the device node is the tie-breaker.
+        return isDeviceNodePath && File.Exists(portName);
     }
 
     /// <summary>

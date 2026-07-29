@@ -254,8 +254,10 @@ internal sealed class TransportConnectionWatchdog : IDisposable
         }
         catch
         {
-            // A probe that throws is a broken observation, not evidence of a drop: never let it
-            // disconnect a healthy transport, and never let it kill the timer thread.
+            // A probe that throws is a failure to observe, not evidence of a drop: never let it
+            // disconnect a healthy transport, and never let it kill the timer thread. Probes are
+            // required to surface "could not answer" this way rather than returning false, which
+            // would be indistinguishable from the device having actually gone.
         }
         finally
         {
