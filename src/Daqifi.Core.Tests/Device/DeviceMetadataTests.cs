@@ -1,4 +1,6 @@
+using System;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using Google.Protobuf;
 using Xunit;
 
@@ -48,6 +50,149 @@ public class DeviceMetadataTests
         Assert.Equal(DeviceType.Nyquist3, metadata.DeviceType);
         Assert.True(metadata.Capabilities.HasSdCard);
         Assert.True(metadata.Capabilities.HasWiFi);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_RepeatedPartNumber_DoesNotDiscardChannelCounts()
+    {
+        // Status messages repeat the part number. Rebuilding the board-derived capabilities on
+        // each one reset the channel counts, which a status message carrying no port fields does
+        // not restore.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage
+        {
+            DevicePn = "Nq1",
+            AnalogInPortNum = 16,
+            DigitalPortNum = 16
+        });
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+
+        Assert.Equal(16, metadata.Capabilities.AnalogInputChannels);
+        Assert.Equal(16, metadata.Capabilities.DigitalChannels);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_ChangedPartNumber_RebuildsBoardDerivedCapabilities()
+    {
+        // The board really did change (a reconnect against a different unit on the same object),
+        // so the board-derived values must be rebuilt rather than carried over.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", AnalogOutPortNum = 4 });
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+
+        Assert.Equal(DeviceType.Nyquist3, metadata.DeviceType);
+        Assert.Equal(0, metadata.Capabilities.AnalogOutputChannels);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_BoardAssignedButCapabilitiesNeverDerived_StillDerivesThem()
+    {
+        // DeviceType has a public setter, so "the status message reports the board we already
+        // have" is not the same as "the capabilities were built for that board".
+        var metadata = new DeviceMetadata { DeviceType = DeviceType.Nyquist1 };
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+
+        Assert.True(metadata.Capabilities.HasSdCard);
+        Assert.True(metadata.Capabilities.HasWiFi);
+        Assert.True(metadata.Capabilities.HasUsb);
+    }
+
+    [Fact]
+    public void ApplyCapabilityDocument_OverlaysDocumentAndSurvivesLaterStatusMessages()
+    {
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
+
+        Assert.True(CapabilityDocumentParser.TryParse(
+            "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}",
+            out var document));
+        metadata.ApplyCapabilityDocument(document!);
+
+        Assert.Same(document, metadata.CapabilityDocument);
+        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+
+        // A later status message must not revert the device's own value to the board table's.
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1", AnalogInPortNum = 16 });
+
+        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(16, metadata.Capabilities.AnalogInputChannels);
+    }
+
+    [Fact]
+    public void UpdateFromProtobuf_ChangedPartNumber_DiscardsTheOldBoardsCapabilityDocument()
+    {
+        // The overlay is durable across status messages by design, but it describes the board it
+        // was read from — carrying it onto a different unit connected through the same object
+        // would overlay the previous device's flags, channel counts and rate ceiling.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+        Assert.True(CapabilityDocumentParser.TryParse(
+            "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}},"
+            + "\"channels\":[{\"id\":0,\"kind\":\"analog-input\"}]}",
+            out var document));
+        metadata.ApplyCapabilityDocument(document!);
+        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+
+        Assert.Null(metadata.CapabilityDocument);
+        Assert.Equal(1000, metadata.Capabilities.MaxSamplingRate);
+        Assert.Equal(0, metadata.Capabilities.AnalogInputChannels);
+    }
+
+    [Theory]
+    // Unknown board first (an unrecognized part number), then the real one — a discovery.
+    [InlineData("Xx9", "Nq1")]
+    // The real board first, then an unrecognized part number — says nothing about a swap.
+    [InlineData("Nq1", "Xx9")]
+    public void UpdateFromProtobuf_TransitionInvolvingUnknownBoard_KeepsTheCapabilityDocument(
+        string firstPartNumber, string secondPartNumber)
+    {
+        // Per ADR 0001, Unknown means "not yet known", not "a different board". The device that
+        // answered the capability query is the same one either way, so discarding the overlay
+        // would regress MaxSamplingRate to the stale board-table ceiling for no gain.
+        var metadata = new DeviceMetadata();
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = firstPartNumber });
+        Assert.True(CapabilityDocumentParser.TryParse(
+            "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}",
+            out var document));
+        metadata.ApplyCapabilityDocument(document!);
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = secondPartNumber });
+
+        Assert.Same(document, metadata.CapabilityDocument);
+        Assert.Equal(22000, metadata.Capabilities.MaxSamplingRate);
+    }
+
+    [Fact]
+    public void ApplyCapabilityDocument_NullDocument_Throws()
+    {
+        var metadata = new DeviceMetadata();
+
+        Assert.Throws<ArgumentNullException>(() => metadata.ApplyCapabilityDocument(null!));
+    }
+
+    [Fact]
+    public void CopyFrom_CarriesTheCapabilityDocument()
+    {
+        // Without it, the target's next status message would rebuild from the board table with
+        // nothing to re-overlay, silently discarding the device's own values.
+        var source = new DeviceMetadata();
+        source.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+        Assert.True(CapabilityDocumentParser.TryParse(
+            "{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":22000}}}",
+            out var document));
+        source.ApplyCapabilityDocument(document!);
+
+        var target = new DeviceMetadata();
+        target.CopyFrom(source);
+        target.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+
+        Assert.Same(document, target.CapabilityDocument);
+        Assert.Equal(22000, target.Capabilities.MaxSamplingRate);
     }
 
     [Fact]
