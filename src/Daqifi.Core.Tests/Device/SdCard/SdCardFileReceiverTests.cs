@@ -72,17 +72,82 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
-    public async Task ReceiveAsync_TimeoutWhenEofNeverArrives_ThrowsTimeoutException()
+    public async Task ReceiveAsync_StreamGoesQuietBeforeEof_ThrowsStalledWithNoDataReceived()
     {
-        // Arrange — stream that never contains EOF marker and eventually returns 0
+        // Arrange — a still-readable stream that stops producing data before the EOF marker.
+        // On USB serial this is the ordinary stall: SerialStream.ReadAsync returns 0 on a read
+        // timeout rather than throwing, so "the stream closed" would be factually wrong (#398 gap 1).
         var dataWithoutEof = new byte[] { 0x01, 0x02, 0x03 };
         using var sourceStream = new MemoryStream(dataWithoutEof);
         using var destinationStream = new MemoryStream();
         var receiver = new SdCardFileReceiver(sourceStream);
 
-        // Act & Assert — stream ends without EOF marker, should throw TimeoutException
-        await Assert.ThrowsAsync<TimeoutException>(
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
             () => receiver.ReceiveAsync(destinationStream, "test.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        // Assert
+        Assert.Equal(SdCardTransferStallReason.NoDataReceived, ex.Reason);
+        Assert.Equal("test.bin", ex.FileName);
+        Assert.Null(ex.Timeout);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransportClosedBeforeEof_ThrowsStalledWithTransportClosed()
+    {
+        // Arrange — a transport that is genuinely no longer readable, as opposed to one that is
+        // merely quiet. Retrying this download cannot succeed, so it gets its own reason.
+        using var sourceStream = new ClosableStream(new byte[20]);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destinationStream, "test.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        // Assert — the last markerLength (15) bytes are still held back in the trailing window
+        // as a possible partial EOF marker, so 5 of the 20 bytes had been written when the
+        // transport closed. The count is the partial-file progress, not the bytes read.
+        Assert.Equal(SdCardTransferStallReason.TransportClosed, ex.Reason);
+        Assert.Equal(20 - EofMarker.Length, ex.BytesReceived);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransferTimeoutElapses_ThrowsStalledWithTransferTimeout()
+    {
+        // Arrange — a stream that never yields anything, so only the overall transfer deadline
+        // ends the wait. The caller passes no cancellation token, so this is a timeout and must
+        // not surface as a cancellation.
+        using var sourceStream = new NeverEndingStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(
+                destinationStream, "test.bin", timeout: TimeSpan.FromMilliseconds(100)));
+
+        // Assert
+        Assert.Equal(SdCardTransferStallReason.TransferTimeout, ex.Reason);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), ex.Timeout);
+        Assert.Equal(0, ex.BytesReceived);
+        Assert.IsAssignableFrom<OperationCanceledException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_StalledException_IsAnSdCardOperationException()
+    {
+        // A consumer that already handles SD failures by catching SdCardOperationException must
+        // pick up stalls too — that is the point of typing them into the existing hierarchy.
+        var dataWithoutEof = new byte[] { 0x01, 0x02, 0x03 };
+        using var sourceStream = new MemoryStream(dataWithoutEof);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destinationStream, "test.bin"));
+
+        Assert.IsAssignableFrom<SdCardOperationException>(ex);
     }
 
     [Fact]
@@ -158,6 +223,107 @@ public class SdCardFileReceiverTests
         // Act & Assert
         await Assert.ThrowsAsync<SdCardEmptyTransferException>(
             () => receiver.ReceiveAsync(destinationStream, "empty.bin"));
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerOnlyTransferForListedNonEmptyFile_ThrowsWithListedSize()
+    {
+        // Arrange — the listing says 4096 bytes but the device sent none, so the SD subsystem
+        // really is wedged and the guard can now say so with evidence (#398 gap 2).
+        using var sourceStream = new MemoryStream(EofMarker);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "wedged.bin", listedFileSizeBytes: 4096));
+
+        // Assert
+        Assert.Equal(4096, ex.ListedSizeInBytes);
+        Assert.Contains("4096", ex.Message);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerOnlyTransferForListedEmptyFile_ReturnsZeroBytes()
+    {
+        // Arrange — a genuinely 0-byte file, routinely left on a FAT card by an interrupted
+        // logging session. It is indistinguishable on the wire from a wedged subsystem; only the
+        // listing's reported size separates them, and it says the file really is empty.
+        using var sourceStream = new MemoryStream(EofMarker);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "empty.bin", listedFileSizeBytes: 0);
+
+        // Assert
+        Assert.Equal(0, bytesReceived);
+        Assert.Empty(destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerOnlyTransferForListedEmptyFile_ReportsProgress()
+    {
+        // A legitimate empty download is a normal completion, so it reports terminal progress
+        // like any other finished transfer rather than silently returning.
+        using var sourceStream = new MemoryStream(EofMarker);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var progressReports = new System.Collections.Generic.List<SdCardTransferProgress>();
+        var progress = new SynchronousProgress<SdCardTransferProgress>(p => progressReports.Add(p));
+
+        await receiver.ReceiveAsync(destinationStream, "empty.bin", progress, listedFileSizeBytes: 0);
+
+        var report = Assert.Single(progressReports);
+        Assert.Equal("empty.bin", report.FileName);
+        Assert.Equal(0, report.BytesReceived);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_UnknownListedSize_KeepsConservativeEmptyTransferBehavior()
+    {
+        // Arrange — with no listing to consult we cannot rule out a wedged subsystem, so the
+        // #264 behavior stands and the caller's retry still covers it.
+        using var sourceStream = new MemoryStream(EofMarker);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "unknown.bin", listedFileSizeBytes: null));
+
+        // Assert
+        Assert.Null(ex.ListedSizeInBytes);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ListedEmptyFileThatActuallyHasContent_StillReturnsTheContent()
+    {
+        // A stale listing must not truncate a real transfer: the listed size only gates the
+        // marker-only case, it never limits what is written.
+        var fileData = Encoding.ASCII.GetBytes("not actually empty");
+        using var sourceStream = new MemoryStream(Combine(fileData, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "stale.bin", listedFileSizeBytes: 0);
+
+        Assert.Equal(fileData.Length, bytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_NegativeListedSize_ThrowsArgumentOutOfRange()
+    {
+        using var sourceStream = new MemoryStream(EofMarker);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => receiver.ReceiveAsync(destinationStream, "bad.bin", listedFileSizeBytes: -1));
     }
 
     [Fact]
@@ -359,6 +525,59 @@ public class SdCardFileReceiverTests
             if (available <= 0) return 0;
 
             var toRead = Math.Min(Math.Min(count, _chunkSize), available);
+            Array.Copy(_data, _position, buffer, offset, toRead);
+            _position += toRead;
+            return toRead;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Read(buffer, offset, count));
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A stream that serves a fixed payload and then reports itself unreadable, standing in for
+    /// a transport that was genuinely closed underneath the transfer (as opposed to one that is
+    /// merely quiet, which is what a serial read timeout looks like).
+    /// </summary>
+    private sealed class ClosableStream : Stream
+    {
+        private readonly byte[] _data;
+        private int _position;
+        private bool _closed;
+
+        public ClosableStream(byte[] data)
+        {
+            _data = data;
+        }
+
+        public override bool CanRead => !_closed;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => _data.Length;
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var available = _data.Length - _position;
+            if (available <= 0)
+            {
+                _closed = true;
+                return 0;
+            }
+
+            var toRead = Math.Min(count, available);
             Array.Copy(_data, _position, buffer, offset, toRead);
             _position += toRead;
             return toRead;

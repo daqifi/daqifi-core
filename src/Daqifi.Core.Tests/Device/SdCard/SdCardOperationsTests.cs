@@ -1787,6 +1787,73 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal(2, getCommands);
         }
 
+        [Fact]
+        public async Task DownloadSdCardFileAsync_ListedZeroByteFile_ReturnsEmptyFileWithoutRetrying()
+        {
+            // Arrange — the listing reports the file as genuinely 0 bytes (an interrupted logging
+            // session leaves these on a FAT card). A marker-only transfer is then the correct,
+            // complete answer, not a wedged SD subsystem, so it must neither retry nor throw
+            // "power-cycle the device" at the user (#398 gap 2).
+            var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
+            device.ListingLines.Add("Daqifi/data.bin 0");
+            device.Connect();
+            await device.GetSdCardFilesAsync();
+            device.SentMessages.Clear();
+
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert
+            Assert.Equal(0, result.FileSize);
+            Assert.Empty(destinationStream.ToArray());
+
+            var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
+            Assert.Equal(1, getCommands);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_ListedNonEmptyFile_RetriesThenReportsListedSize()
+        {
+            // Arrange — the listing says 4096 bytes, so a marker-only transfer really is a wedged
+            // SD subsystem: the #264 retry still applies and the failure now carries the evidence.
+            var device = new TestableRetryDownloadDevice(Array.Empty<byte>(), Array.Empty<byte>());
+            device.ListingLines.Add("Daqifi/data.bin 4096");
+            device.Connect();
+            await device.GetSdCardFilesAsync();
+            device.SentMessages.Clear();
+
+            using var destinationStream = new MemoryStream();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+                () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
+            Assert.Equal(4096, ex.ListedSizeInBytes);
+
+            var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
+            Assert.Equal(2, getCommands);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_ListingWithSizes_ExposesReportedSizes()
+        {
+            // Firmware emits "<path> <size>" per entry; the size is what a later download needs to
+            // tell a legitimately empty file from a wedged subsystem, so it must survive parsing.
+            var device = new TestableRetryDownloadDevice(Array.Empty<byte>());
+            device.ListingLines.Add("Daqifi/log_20240115_103000.bin 4096");
+            device.ListingLines.Add("Daqifi/empty.bin 0");
+            device.ListingLines.Add("Daqifi/nosize.bin");
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            Assert.Equal(3, files.Count);
+            Assert.Equal(4096, files[0].SizeInBytes);
+            Assert.Equal(0, files[1].SizeInBytes);
+            Assert.Null(files[2].SizeInBytes);
+        }
+
         #endregion
 
         /// <summary>
@@ -2041,6 +2108,13 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             public List<IOutboundMessage<string>> SentMessages { get; } = new();
 
+            /// <summary>
+            /// Lines returned for a SD:LIS? query, so a test can seed the directory listing that
+            /// <see cref="DaqifiStreamingDevice.DownloadSdCardFileAsync(string, Stream, IProgress{SdCardTransferProgress}?, CancellationToken)"/>
+            /// consults for the file's reported size.
+            /// </summary>
+            public List<string> ListingLines { get; } = new();
+
             public TestableRetryDownloadDevice(params byte[][] fileDataPerAttempt)
                 : base("TestDevice")
             {
@@ -2079,7 +2153,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 CancellationToken cancellationToken = default)
             {
                 await setupActionAsync(cancellationToken).ConfigureAwait(false);
-                return new List<string>();
+                return new List<string>(ListingLines);
             }
 
             protected override async Task ExecuteRawCaptureAsync(

@@ -178,6 +178,16 @@ namespace Daqifi.Core.Device.SdCard
         /// <returns>Metadata about the downloaded file.</returns>
         /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
         /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardEmptyTransferException">
+        /// Thrown when the device serves a marker-only (0-byte) transfer for a file the last
+        /// listing reported as non-empty (or whose listed size is unknown). A file the listing
+        /// reports as 0 bytes downloads successfully as a legitimate empty file.
+        /// </exception>
+        /// <exception cref="SdCardTransferStalledException">
+        /// Thrown when the transfer stops making progress before the end-of-file marker arrives;
+        /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a
+        /// closed transport and from an elapsed transfer deadline.
+        /// </exception>
         Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             Stream destinationStream,

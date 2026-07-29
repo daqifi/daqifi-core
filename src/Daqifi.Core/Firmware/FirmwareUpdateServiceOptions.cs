@@ -314,6 +314,10 @@ public sealed class FirmwareUpdateServiceOptions
             FirmwareUpdateState.ErasingFlash => ErasingFlashTimeout,
             FirmwareUpdateState.Programming => ProgrammingTimeout,
             FirmwareUpdateState.Verifying => VerifyingTimeout,
+            // The post-WiFi-flash reconnect ran under Verifying before it got its own state,
+            // so it keeps the same budget — a host that tuned VerifyingTimeout for a slow
+            // re-enumeration keeps that tuning.
+            FirmwareUpdateState.ReconnectingAfterFlash => VerifyingTimeout,
             FirmwareUpdateState.JumpingToApp => JumpingToApplicationTimeout,
             // Cleanup re-erases the application flash, so it is bounded by the
             // same budget as a normal erase.

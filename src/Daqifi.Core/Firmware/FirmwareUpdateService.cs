@@ -62,6 +62,7 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
             [FirmwareUpdateState.Programming] = new HashSet<FirmwareUpdateState>
             {
                 FirmwareUpdateState.Verifying,
+                FirmwareUpdateState.ReconnectingAfterFlash,
                 FirmwareUpdateState.JumpingToApp,
                 FirmwareUpdateState.CleaningUp,
                 FirmwareUpdateState.Failed
@@ -71,6 +72,14 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
                 FirmwareUpdateState.JumpingToApp,
                 FirmwareUpdateState.Complete,
                 FirmwareUpdateState.CleaningUp,
+                FirmwareUpdateState.Failed
+            },
+            // Terminal leg of the WiFi flow: the WINC image is already flashed and verified,
+            // so the only outcomes are a completed update or a reconnect failure. No cleanup
+            // path — there is no half-flashed PIC32 application to re-erase.
+            [FirmwareUpdateState.ReconnectingAfterFlash] = new HashSet<FirmwareUpdateState>
+            {
+                FirmwareUpdateState.Complete,
                 FirmwareUpdateState.Failed
             },
             [FirmwareUpdateState.JumpingToApp] = new HashSet<FirmwareUpdateState>
@@ -889,11 +898,16 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
                     BuildProcessLogExcerpt(processResult));
             }
 
-            TransitionToState(FirmwareUpdateState.Verifying, "Reconnecting device and restoring LAN configuration.");
-            ReportProgress(progress, FirmwareUpdateState.Verifying, 92, _currentOperation, 92, totalBytes);
+            // Everything past this point runs on an already-flashed, already-verified WINC image,
+            // so it gets its own state rather than sharing Verifying with the PIC32 CRC check —
+            // a reconnect timeout here is environmental, not a bad flash (#398 gap 4).
+            TransitionToState(
+                FirmwareUpdateState.ReconnectingAfterFlash,
+                "Reconnecting device and restoring LAN configuration.");
+            ReportProgress(progress, FirmwareUpdateState.ReconnectingAfterFlash, 92, _currentOperation, 92, totalBytes);
 
             await ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Verifying,
+                FirmwareUpdateState.ReconnectingAfterFlash,
                 "reconnect serial transport after WiFi flash",
                 async stateToken =>
                 {
@@ -2533,6 +2547,10 @@ public sealed class FirmwareUpdateService : IFirmwareUpdateService, IPic32Bootlo
             FirmwareUpdateState.Verifying =>
                 "Flash verification failed — the device's flash CRC did not match the firmware image. " +
                 "Retry the update and confirm the expected firmware package was selected.",
+            FirmwareUpdateState.ReconnectingAfterFlash =>
+                "The firmware was flashed and verified successfully; only reconnecting to the device " +
+                "afterwards timed out. Unplug and replug USB, then reconnect — the update itself does " +
+                "not need to be re-run.",
             FirmwareUpdateState.JumpingToApp =>
                 "The device did not return to application mode. Power-cycle the device and reconnect.",
             _ =>

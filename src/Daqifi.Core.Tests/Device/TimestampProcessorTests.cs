@@ -579,17 +579,134 @@ public class TimestampProcessorTests
     }
 
     [Fact]
-    public void ResetAll_ClearsDeviceTimestampFrequencies()
+    public void ResetAll_PreservesDeviceTimestampFrequencies()
     {
+        // The device's clock frequency is static configuration, not session state. Dropping it
+        // on ResetAll used to be silent: GetTickPeriod fell back to the 50MHz default while
+        // firmware clocks at 42MHz, scaling every reconstructed timestamp by ~1.19 (#398 gap 3).
         // Arrange
         var processor = new TimestampProcessor();
         processor.SetTimestampFrequency(TestDeviceId, 10_000_000);
+        processor.SetTimestampFrequency("second-device", 42_000_000);
+
+        // Act
+        processor.ResetAll();
+
+        // Assert
+        Assert.Equal(1.0 / 10_000_000, processor.GetTickPeriod(TestDeviceId));
+        Assert.Equal(1.0 / 42_000_000, processor.GetTickPeriod("second-device"));
+        Assert.True(processor.HasTimestampFrequency(TestDeviceId));
+        Assert.True(processor.HasTimestampFrequency("second-device"));
+    }
+
+    [Fact]
+    public void ResetAll_ClearsSessionBaselines()
+    {
+        // ResetAll must still do its actual job: the next message for every device starts a
+        // fresh session rather than continuing from the previous baseline.
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, 10_000_000);
+        processor.ProcessTimestamp(TestDeviceId, 1000);
+        processor.ProcessTimestamp(TestDeviceId, 2000);
+
+        // Act
+        processor.ResetAll();
+        var result = processor.ProcessTimestamp(TestDeviceId, 9999);
+
+        // Assert
+        Assert.True(result.IsFirstMessage);
+        Assert.False(result.UsedFallbackTickPeriod);
+    }
+
+    [Fact]
+    public void ResetAll_AfterClearingAFrequency_RevertsThatDeviceToFallback()
+    {
+        // The explicit way to drop a device's frequency is SetTimestampFrequency(id, 0);
+        // ResetAll must not resurrect it, and must not be needed to apply it.
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, 10_000_000);
+        processor.SetTimestampFrequency(TestDeviceId, 0);
 
         // Act
         processor.ResetAll();
 
         // Assert
         Assert.Equal(TimestampProcessor.DefaultTickPeriod, processor.GetTickPeriod(TestDeviceId));
+        Assert.False(processor.HasTimestampFrequency(TestDeviceId));
+    }
+
+    [Fact]
+    public void HasTimestampFrequency_UnconfiguredDevice_ReturnsFalse()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+
+        // Act & Assert
+        Assert.False(processor.HasTimestampFrequency(TestDeviceId));
+        Assert.Equal(TimestampProcessor.DefaultTickPeriod, processor.GetTickPeriod(TestDeviceId));
+    }
+
+    [Fact]
+    public void HasTimestampFrequency_FrequencyMatchingTheFallback_ReturnsTrue()
+    {
+        // A device that genuinely reports the fallback frequency is configured, even though
+        // GetTickPeriod alone cannot tell it apart from an unconfigured device — which is
+        // exactly why the silent fallback needed its own signal.
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, TimestampProcessor.DefaultTimestampFrequency);
+
+        // Act & Assert
+        Assert.True(processor.HasTimestampFrequency(TestDeviceId));
+        Assert.Equal(TimestampProcessor.DefaultTickPeriod, processor.GetTickPeriod(TestDeviceId));
+    }
+
+    [Fact]
+    public void HasTimestampFrequency_NullDeviceId_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() => processor.HasTimestampFrequency(null!));
+    }
+
+    [Fact]
+    public void ProcessTimestamp_WithoutConfiguredFrequency_ReportsFallbackUsage()
+    {
+        // The fallback used to be invisible — no exception, no log, just every timestamp
+        // scaled by defaultFrequency/actualFrequency (#398 gap 3).
+        // Arrange
+        var processor = new TimestampProcessor();
+
+        // Act
+        var first = processor.ProcessTimestamp(TestDeviceId, 1000);
+        var second = processor.ProcessTimestamp(TestDeviceId, 2000);
+
+        // Assert
+        Assert.True(first.UsedFallbackTickPeriod);
+        Assert.True(second.UsedFallbackTickPeriod);
+    }
+
+    [Fact]
+    public void ProcessTimestamp_WithConfiguredFrequency_DoesNotReportFallbackUsage()
+    {
+        // Arrange
+        var processor = new TimestampProcessor();
+        processor.SetTimestampFrequency(TestDeviceId, 42_000_000);
+
+        // Act
+        var first = processor.ProcessTimestamp(TestDeviceId, 1000);
+        var second = processor.ProcessTimestamp(TestDeviceId, 42_001_000);
+
+        // Assert
+        Assert.False(first.UsedFallbackTickPeriod);
+        Assert.False(second.UsedFallbackTickPeriod);
+
+        // Exactly 42,000,000 cycles = 1 second at 42MHz; the 50MHz fallback would say 0.84s.
+        Assert.InRange(second.SecondsBetweenMessages, 0.999, 1.001);
     }
 
     [Fact]
