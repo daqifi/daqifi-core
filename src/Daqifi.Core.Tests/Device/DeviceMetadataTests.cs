@@ -87,6 +87,20 @@ public class DeviceMetadataTests
     }
 
     [Fact]
+    public void UpdateFromProtobuf_BoardAssignedButCapabilitiesNeverDerived_StillDerivesThem()
+    {
+        // DeviceType has a public setter, so "the status message reports the board we already
+        // have" is not the same as "the capabilities were built for that board".
+        var metadata = new DeviceMetadata { DeviceType = DeviceType.Nyquist1 };
+
+        metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+
+        Assert.True(metadata.Capabilities.HasSdCard);
+        Assert.True(metadata.Capabilities.HasWiFi);
+        Assert.True(metadata.Capabilities.HasUsb);
+    }
+
+    [Fact]
     public void ApplyCapabilityDocument_OverlaysDocumentAndSurvivesLaterStatusMessages()
     {
         var metadata = new DeviceMetadata();

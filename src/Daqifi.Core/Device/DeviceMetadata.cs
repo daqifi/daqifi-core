@@ -37,6 +37,14 @@ public class DeviceMetadata
     private DeviceHealth _health = new();
 
     /// <summary>
+    /// The board <see cref="Capabilities"/> was last derived from, or <c>null</c> when it has
+    /// never been derived. Tracked separately from <see cref="DeviceType"/> — which has a public
+    /// setter — so <see cref="UpdateFromProtobuf"/> can tell "already built for this board" from
+    /// "the board was assigned but the capabilities were never built for it".
+    /// </summary>
+    private DeviceType? _capabilitiesBoard;
+
+    /// <summary>
     /// Gets or sets the device capabilities. Assigning <c>null</c> is coerced to a fresh instance so
     /// the status-processing path (which populates channel counts here) can never dereference null.
     /// </summary>
@@ -126,6 +134,7 @@ public class DeviceMetadata
         HardwareRevision = source.HardwareRevision;
         DeviceType = source.DeviceType;
         Capabilities = source.Capabilities?.Clone() ?? new DeviceCapabilities();
+        _capabilitiesBoard = source._capabilitiesBoard;
         // The document is immutable once parsed, so the reference is safe to share — and copying
         // it matters: without it, the target's next status message would rebuild Capabilities from
         // the board table with nothing to re-overlay, silently discarding the device's own values.
@@ -169,15 +178,16 @@ public class DeviceMetadata
         {
             PartNumber = message.DevicePn;
 
-            // Rebuild the board-derived capabilities only when the board itself changed. Status
-            // messages repeat the part number, and rebuilding on each one discarded everything
-            // learned since — the channel counts a status message with no port fields would not
-            // restore, and any capability-document overlay.
+            // Rebuild the board-derived capabilities only when they are not already built for this
+            // board. Status messages repeat the part number, and rebuilding on each one discarded
+            // everything learned since — the channel counts that a status message with no port
+            // fields does not restore, and any capability-document overlay.
             var detectedDeviceType = DeviceTypeDetector.DetectFromPartNumber(message.DevicePn);
-            if (detectedDeviceType != DeviceType)
+            DeviceType = detectedDeviceType;
+            if (_capabilitiesBoard != detectedDeviceType)
             {
-                DeviceType = detectedDeviceType;
-                Capabilities = DeviceCapabilities.FromDeviceType(DeviceType);
+                Capabilities = DeviceCapabilities.FromDeviceType(detectedDeviceType);
+                _capabilitiesBoard = detectedDeviceType;
             }
         }
 

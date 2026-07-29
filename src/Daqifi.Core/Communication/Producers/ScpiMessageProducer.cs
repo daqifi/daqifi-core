@@ -393,9 +393,15 @@ public class ScpiMessageProducer
     /// <summary>
     /// Creates a command message to start data streaming at the specified frequency.
     /// </summary>
-    /// <param name="frequency">The streaming frequency in Hz (1-1000).</param>
+    /// <param name="frequency">The streaming frequency in Hz.</param>
     /// <remarks>
-    /// Starts streaming data from enabled channels at the specified frequency.
+    /// Starts streaming data from enabled channels at the specified frequency. The usable range is
+    /// board- and configuration-dependent, not a fixed literal: the device's absolute ceiling is
+    /// <see cref="Device.DeviceCapabilities.MaxSamplingRate"/>, and the cap for the channel set
+    /// currently enabled is
+    /// <see cref="Device.Capabilities.CapabilityStreaming.CurrentMaximumRateHz"/>. Firmware
+    /// rejects a frequency above that cap with SCPI <c>-222</c> and does not start streaming — it
+    /// does not clamp — so pre-validate or handle the error.
     /// Command: SYSTem:StartStreamData frequency
     /// Example: messageProducer.Send(ScpiMessageProducer.StartStreaming(100)); // Stream at 100Hz
     /// </remarks>
