@@ -7,8 +7,47 @@ namespace Daqifi.Core.Communication.Transport;
 /// over serial connections. Handles connection lifecycle and provides the underlying
 /// SerialPort BaseStream for message producers and consumers.
 /// </summary>
-public class SerialStreamTransport : IStreamTransport
+/// <remarks>
+/// <para>
+/// <b>Drop detection.</b> <see cref="SerialPort.IsOpen"/> reflects the OS handle, which stays open
+/// after a USB device is physically unplugged, so it is not on its own a liveness signal. Two
+/// detectors sit on top of it (issue #382), and whichever notices first closes the port and raises
+/// <see cref="StatusChanged"/> with <c>IsConnected == false</c>, which a
+/// <see cref="Device.DaqifiDevice"/> surfaces as <see cref="Device.ConnectionStatus.Lost"/>:
+/// </para>
+/// <list type="bullet">
+/// <item><description>
+/// <b>Port-presence polling</b> at <see cref="DefaultLivenessCheckInterval"/> (1 s), requiring two
+/// consecutive misses. This bounds detection of an unplug at <b>roughly three seconds</b> even on
+/// a completely idle connection. Presence is <see cref="SerialPort.GetPortNames"/> containing the
+/// port, falling back to the device node still existing on Unix — no WMI, so it behaves
+/// identically on Windows, macOS, and Linux. It is armed only if the port is visible to that probe
+/// at connect time, so a platform or port-name spelling the probe cannot see disables the check
+/// rather than reporting a false drop.
+/// </description></item>
+/// <item><description>
+/// <b>I/O fault escalation</b> via <see cref="ITransportHealthSink"/>: the reader/writer loops
+/// report failures, and five consecutive failures with no successful transfer in between are
+/// treated as a drop. Under traffic this reports within a few hundred milliseconds; a single
+/// failed read that then recovers never disconnects, and a read or write that merely hits its
+/// timeout is not a failure at all.
+/// </description></item>
+/// </list>
+/// <para>
+/// An intentional <see cref="Disconnect"/> disarms both detectors first, so it reports a normal
+/// disconnect and never a loss.
+/// </para>
+/// </remarks>
+public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 {
+    /// <summary>
+    /// Default cadence at which an established connection is checked for the continued presence of
+    /// its serial port. Combined with the two consecutive misses required to act, an unplugged
+    /// device is reported within roughly three seconds.
+    /// </summary>
+    public static readonly TimeSpan DefaultLivenessCheckInterval =
+        TransportConnectionWatchdog.DefaultPresencePollInterval;
+
     private readonly string _portName;
     private readonly int _baudRate;
     private readonly Parity _parity;
@@ -16,8 +55,16 @@ public class SerialStreamTransport : IStreamTransport
     private readonly StopBits _stopBits;
     private readonly bool _enableDtr;
     private readonly bool _enableRts;
+    private readonly TimeSpan _livenessCheckInterval;
+    private readonly TransportConnectionWatchdog _watchdog;
     private SerialPort? _serialPort;
     private bool _disposed;
+
+    /// <summary>
+    /// Test seam: replaces the "is this port still enumerated?" probe so the liveness check can be
+    /// exercised without unplugging real hardware. Never set in production.
+    /// </summary>
+    internal Func<string, bool>? PortPresenceProbe { get; set; }
 
     /// <summary>
     /// Initializes a new instance of the SerialStreamTransport class.
@@ -29,8 +76,17 @@ public class SerialStreamTransport : IStreamTransport
     /// <param name="stopBits">The stop bits setting.</param>
     /// <param name="enableDtr">Whether to enable Data Terminal Ready (DTR) signal. Default is true.</param>
     /// <param name="enableRts">Whether to enable Request To Send (RTS) signal. Default is false.</param>
+    /// <param name="livenessCheckInterval">
+    /// How often an established connection re-checks that its port is still present. Defaults to
+    /// <see cref="DefaultLivenessCheckInterval"/>; pass <see cref="TimeSpan.Zero"/> to disable the
+    /// check and rely on I/O fault escalation alone.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="livenessCheckInterval"/> is negative.
+    /// </exception>
     public SerialStreamTransport(string portName, int baudRate = 9600, Parity parity = Parity.None,
-        int dataBits = 8, StopBits stopBits = StopBits.One, bool enableDtr = true, bool enableRts = false)
+        int dataBits = 8, StopBits stopBits = StopBits.One, bool enableDtr = true, bool enableRts = false,
+        TimeSpan? livenessCheckInterval = null)
     {
         _portName = portName ?? throw new ArgumentNullException(nameof(portName));
         _baudRate = baudRate;
@@ -39,6 +95,17 @@ public class SerialStreamTransport : IStreamTransport
         _stopBits = stopBits;
         _enableDtr = enableDtr;
         _enableRts = enableRts;
+
+        _livenessCheckInterval = livenessCheckInterval ?? DefaultLivenessCheckInterval;
+        if (_livenessCheckInterval < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(livenessCheckInterval), _livenessCheckInterval,
+                "Liveness check interval cannot be negative. Use TimeSpan.Zero to disable the check.");
+        }
+
+        _watchdog = new TransportConnectionWatchdog(
+            $"Serial transport ({_portName})",
+            HandleConnectionLost);
     }
 
     /// <summary>
@@ -185,6 +252,8 @@ public class SerialStreamTransport : IStreamTransport
                 _serialPort = null;
             },
             onStatusChanged: OnStatusChanged);
+
+        StartDropDetection();
     }
 
     /// <summary>
@@ -193,6 +262,11 @@ public class SerialStreamTransport : IStreamTransport
     /// <returns>A task representing the asynchronous disconnect operation.</returns>
     public async Task DisconnectAsync()
     {
+        // Disarm before touching the port. Closing it makes any in-flight read fail, and the
+        // port stops being "present" the moment it is released, so a still-armed watchdog could
+        // report an intentional disconnect as a lost connection.
+        _watchdog.Disarm();
+
         if (!IsConnected)
             return;
 
@@ -240,6 +314,159 @@ public class SerialStreamTransport : IStreamTransport
         return SerialPort.GetPortNames();
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Escalates to a lost connection only after five failures with no successful transfer in
+    /// between, so a transient read error cannot tear down a healthy port.
+    /// </remarks>
+    public void ReportIoFault(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        _watchdog.RecordFault(error);
+    }
+
+    /// <inheritdoc />
+    public void ReportIoSuccess()
+    {
+        _watchdog.RecordSuccess();
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether port-presence polling is currently running. Exposed for
+    /// tests and diagnostics; polling is skipped when the interval is
+    /// <see cref="TimeSpan.Zero"/> or the port is not visible to the presence probe at connect time.
+    /// </summary>
+    internal bool IsLivenessMonitorActive => _watchdog.IsPollingPresence;
+
+    /// <summary>
+    /// Test seam: runs one port-presence check immediately instead of waiting for the timer.
+    /// </summary>
+    internal void PollLivenessForTesting() => _watchdog.PollPresence();
+
+    /// <summary>
+    /// Arms drop detection after a successful open and, when possible, starts port-presence polling.
+    /// </summary>
+    /// <remarks>
+    /// Internal rather than private so the arming decision and the presence-driven loss can be
+    /// exercised without a real port to unplug (paired with <see cref="PortPresenceProbe"/>).
+    /// </remarks>
+    internal void StartDropDetection()
+    {
+        _watchdog.Arm();
+
+        if (_livenessCheckInterval <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        // Only arm the presence check if the probe can actually see the port we just opened.
+        // If a platform enumerates it under a different spelling than the caller passed, every
+        // poll would read as "gone" and would disconnect a perfectly healthy connection — far
+        // worse than not having the check. Fault escalation still covers that case.
+        //
+        // A probe that throws here is treated the same way: without a baseline observation there
+        // is nothing to compare later polls against, so the check stays off rather than guessing.
+        // The throw must not escape either — the port is open and the connect succeeded.
+        try
+        {
+            if (!IsPortPresent())
+            {
+                return;
+            }
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        _watchdog.StartPresencePolling(
+            IsPortPresent,
+            $"Serial port {_portName} is no longer present; the device appears to have been disconnected.",
+            _livenessCheckInterval);
+    }
+
+    /// <summary>
+    /// Reports whether the configured port is still present on the system.
+    /// </summary>
+    private bool IsPortPresent()
+    {
+        var probe = PortPresenceProbe;
+        return probe != null ? probe(_portName) : IsPortEnumerated(_portName);
+    }
+
+    /// <summary>
+    /// Default presence probe: the port is present if the framework enumerates it, or — on Unix,
+    /// where a port name is a device node path — if that node still exists.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately requires <em>both</em> answers to be "absent" before reporting absence. The
+    /// enumeration is the portable signal (and the only one on Windows); the filesystem check
+    /// covers a Unix port whose spelling the enumeration happens not to return.
+    /// </para>
+    /// <para>
+    /// A failure to observe is <b>not</b> absence, and this method must never conflate the two: a
+    /// probe that cannot answer throws, and the caller treats that as no evidence of a drop.
+    /// Returning <c>false</c> when the enumeration merely failed would let two transient failures
+    /// look like two consecutive misses and close a healthy connection. A failed enumeration is
+    /// therefore only swallowed when the filesystem check can still answer for this port name.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="Exception">
+    /// Propagates whatever the underlying probe raised when no source could answer.
+    /// </exception>
+    internal static bool IsPortEnumerated(string portName)
+    {
+        var isDeviceNodePath = portName.StartsWith('/');
+
+        try
+        {
+            foreach (var name in SerialPort.GetPortNames())
+            {
+                if (string.Equals(name, portName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception) when (isDeviceNodePath)
+        {
+            // Enumeration can fail transiently (a /dev scan racing a device change). A Unix port
+            // name is also a filesystem path, so an independent answer is still available — the
+            // failure is only swallowed because that second source can actually answer. When it
+            // cannot (a Windows-style name), the exception propagates as "no observation".
+            return File.Exists(portName);
+        }
+
+        // The enumeration answered and did not list this port. On Unix it may simply not enumerate
+        // the spelling the caller opened, so the device node is the tie-breaker.
+        return isDeviceNodePath && File.Exists(portName);
+    }
+
+    /// <summary>
+    /// Tears down a connection that was detected as dropped and reports it as a loss.
+    /// </summary>
+    /// <param name="error">The condition that identified the drop.</param>
+    private void HandleConnectionLost(Exception error)
+    {
+        // Drop the reference before anything that can block: IsConnected must already read false
+        // when StatusChanged fires, so a handler (or the device registry's pruning) sees the truth.
+        // Closing a port whose device has physically vanished is the one call here that can stall,
+        // so it happens after the notification.
+        var port = Interlocked.Exchange(ref _serialPort, null);
+
+        OnStatusChanged(false, error);
+
+        try
+        {
+            port?.Dispose();
+        }
+        catch (Exception)
+        {
+            // The device is already gone; failing to close its handle changes nothing.
+        }
+    }
+
     /// <summary>
     /// Raises the StatusChanged event.
     /// </summary>
@@ -275,6 +502,7 @@ public class SerialStreamTransport : IStreamTransport
                 // Ignore errors during disposal
             }
 
+            _watchdog.Dispose();
             _serialPort?.Dispose();
             _disposed = true;
         }

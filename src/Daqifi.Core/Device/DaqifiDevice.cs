@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Protocol;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging;
@@ -475,16 +476,21 @@ namespace Daqifi.Core.Device
                 // Create message producer and consumer from transport if needed
                 if (_transport != null)
                 {
+                    // The reader/writer loops are the first thing to notice a device that has
+                    // gone away; a transport that can act on that gets told (issue #382).
+                    var healthSink = _transport as ITransportHealthSink;
+
                     if (_messageProducer == null)
                     {
-                        _messageProducer = new MessageProducer<string>(_transport.Stream);
+                        _messageProducer = new MessageProducer<string>(_transport.Stream, healthSink: healthSink);
                     }
 
                     if (_messageConsumer == null)
                     {
                         _messageConsumer = new StreamMessageConsumer<DaqifiOutMessage>(
                             _transport.Stream,
-                            new ProtobufMessageParser());
+                            new ProtobufMessageParser(),
+                            healthSink: healthSink);
                     }
                 }
 
@@ -509,7 +515,7 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
         /// tearing down the consumer / producer / transport. This prevents
-        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
@@ -593,16 +599,16 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
         /// <param name="message">The message to send to the device.</param>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="InvalidOperationException">
-        /// Thrown when the device is not connected, or when connected but has no transport or
-        /// stream to send on (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/>
-        /// constructor).
+        /// Thrown when the device is connected but has no transport or stream to send on
+        /// (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/> constructor).
         /// </exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Use the queued message producer when available and the message is string-based;
@@ -638,14 +644,15 @@ namespace Daqifi.Core.Device
         /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         protected virtual async Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (_transport == null)
@@ -738,24 +745,60 @@ namespace Daqifi.Core.Device
         /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
         /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A list of text lines received from the device.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <param name="prepareAsync">
+        /// Optional phase that puts the device into the state the commands require, for callers that
+        /// need one — the SD card operations use it to switch the shared SPI bus over to the card and
+        /// wait for the firmware to settle.
+        /// <para>
+        /// It runs inside the device-wide text-exchange lock, so no competing exchange can interleave
+        /// between it and <paramref name="setupAction"/> and undo what it established. It also runs
+        /// before the consumer swap, and therefore before the stale-line boundary below: a settle
+        /// wait placed inside <paramref name="setupAction"/> would widen that boundary into a window
+        /// where a late reply to an earlier command could be captured as part of this response
+        /// (#396). Anything the device emits in reply to it goes to the protobuf consumer, exactly as
+        /// it did before this exchange began.
+        /// </para>
+        /// </param>
+        /// <returns>
+        /// A list of text lines received from the device. Lines that were already in flight when the
+        /// exchange opened — late replies to earlier commands — are excluded: only what arrived once
+        /// <paramref name="setupAction"/> had begun sending is returned.
+        /// </returns>
+        /// <exception cref="DeviceNotConnectedException">
+        /// Thrown when the device is not connected, or — with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set — when the device is
+        /// disposed, disposing, or disconnecting.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
+        /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        // prepareAsync is added AFTER cancellationToken (technically violating CA1068
+        // "CancellationToken should be last") to keep existing positional callers working, matching
+        // the convention established in IFirmwareUpdateService for the same reason. It is a
+        // parameter on this seam rather than a second virtual method deliberately: a parallel
+        // method would be bypassed silently by any subclass that overrides only this one, which for
+        // an instrumented device or a test double means the override quietly stops intercepting SD
+        // operations with nothing to indicate it. Overriders must widen their signature — a compile
+        // error, which is the point.
+#pragma warning disable CA1068
         protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            Func<CancellationToken, Task>? prepareAsync = null)
         {
             return ExecuteTextCommandCoreAsync(
+                prepareAsync,
                 _ => { setupAction(); return Task.CompletedTask; },
                 responseTimeoutMs,
                 completionTimeoutMs,
                 cancellationToken);
         }
+#pragma warning restore CA1068
 
         /// <summary>
-        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>
+        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
         /// that accepts an async setup action so callers can <c>await</c> cancellable operations
         /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
         /// blocking the thread-pool thread.
@@ -765,7 +808,13 @@ namespace Daqifi.Core.Device
         /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A list of text lines received from the device.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">
+        /// Thrown when the device is not connected, or — with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set — when the device is
+        /// disposed, disposing, or disconnecting.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
+        /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Func<CancellationToken, Task> setupActionAsync,
@@ -774,6 +823,7 @@ namespace Daqifi.Core.Device
             CancellationToken cancellationToken = default)
         {
             return ExecuteTextCommandCoreAsync(
+                prepareAsync: null,
                 setupActionAsync,
                 responseTimeoutMs,
                 completionTimeoutMs,
@@ -781,6 +831,7 @@ namespace Daqifi.Core.Device
         }
 
         private async Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
+            Func<CancellationToken, Task>? prepareAsync,
             Func<CancellationToken, Task> setupActionAsync,
             int responseTimeoutMs,
             int completionTimeoutMs,
@@ -811,14 +862,17 @@ namespace Daqifi.Core.Device
             {
                 await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
                 // Dispose() raced ahead of us and disposed the semaphore.
                 // Surface the same clean failure as the post-acquisition
                 // _disposed check below, instead of leaking a low-level
-                // teardown exception to callers.
-                throw new InvalidOperationException(
-                    "ExecuteTextCommandAsync cannot run because the device is disposed.");
+                // teardown exception to callers. The original is kept as
+                // InnerException so this rare race stays diagnosable.
+                throw new DeviceNotConnectedException(
+                    "ExecuteTextCommandAsync cannot run because the device is disposed.",
+                    ex,
+                    isShuttingDown: true);
             }
 
             _isInsideTextExchange.Value = true;
@@ -831,14 +885,15 @@ namespace Daqifi.Core.Device
                 // documented in #186).
                 if (_disposed || _isDisconnecting)
                 {
-                    throw new InvalidOperationException(
+                    throw new DeviceNotConnectedException(
                         "ExecuteTextCommandAsync cannot run while the device is "
-                        + "disposing or disconnecting.");
+                        + "disposing or disconnecting.",
+                        isShuttingDown: true);
                 }
 
                 if (!IsConnected)
                 {
-                    throw new InvalidOperationException("Device is not connected.");
+                    throw new DeviceNotConnectedException();
                 }
 
                 if (_transport == null)
@@ -859,9 +914,26 @@ namespace Daqifi.Core.Device
                 }
 
                 var sw = Stopwatch.StartNew();
+
+                // Prepare phase, if any. Deliberately here: inside the lock, so no competing text
+                // exchange can interleave between it and the setup action below and undo the state
+                // it establishes; and before the consumer swap, so the wait it typically needs
+                // cannot widen the stale-line boundary taken further down. Any device output it
+                // provokes goes to the protobuf consumer, which is still running at this point.
+                if (prepareAsync != null)
+                {
+                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+
+                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                }
+
                 var collectedLines = new List<string>();
                 var stream = _transport.Stream;
                 int? originalReadTimeout = null;
+
+                // Number of lines that were already in flight when this exchange opened — see the
+                // note at the point it is captured, below.
+                var staleLineCount = 0;
 
                 try
                 {
@@ -897,7 +969,8 @@ namespace Daqifi.Core.Device
                     // Create a temporary text consumer on the same stream
                     using var textConsumer = new StreamMessageConsumer<string>(
                         _transport.Stream,
-                        new LineBasedMessageParser());
+                        new LineBasedMessageParser(),
+                        healthSink: _transport as ITransportHealthSink);
 
                     textConsumer.MessageReceived += (_, e) =>
                     {
@@ -910,6 +983,23 @@ namespace Daqifi.Core.Device
                     await Task.Delay(50, cancellationToken).ConfigureAwait(false);
 
                     SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+
+                    // Mark the boundary between "already in flight" and "answers to this exchange".
+                    // Anything captured before the setup action has sent anything is a late reply to
+                    // an EARLIER command, or line noise — never a response to a command this exchange
+                    // has yet to send. Those lines are dropped from the result below.
+                    //
+                    // Position matters as much as content: a caller that keys off response content —
+                    // e.g. the SD listing's end-of-listing terminator (#396) — would otherwise accept
+                    // a stale line as proof that the device answered a query it never even received,
+                    // and report a complete listing for a device that has gone silent.
+                    staleLineCount = collectedLines.Count;
+                    if (staleLineCount > 0)
+                    {
+                        SafeLog(() => _logger.LogDebug(
+                            "[ExecuteTextCommandAsync] Discarding {StaleLineCount} line(s) received before this exchange sent anything",
+                            staleLineCount));
+                    }
 
                     // Execute the setup action (sends SCPI commands). ConfigureAwait(false)
                     // matches the surrounding lock-protected awaits.
@@ -984,7 +1074,11 @@ namespace Daqifi.Core.Device
                     SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
                 }
 
-                return collectedLines;
+                // The text consumer is stopped by this point, so the list is no longer being
+                // appended to concurrently and can be re-projected safely.
+                return staleLineCount > 0
+                    ? collectedLines.Skip(staleLineCount).ToList()
+                    : collectedLines;
             }
             finally
             {
@@ -1024,7 +1118,7 @@ namespace Daqifi.Core.Device
         /// on hardware faults, or discard them if known-stale.
         /// </para>
         /// <para>
-        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>, which
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>, which
         /// pauses the protobuf consumer for the duration of the text exchange.
         /// Avoid calling this during active streaming or concurrently with
         /// other text commands.
@@ -1041,7 +1135,8 @@ namespace Daqifi.Core.Device
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The list of error strings popped from the queue (empty if the queue was already clean).</returns>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxIterations"/> is not positive.</exception>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public virtual async Task<IReadOnlyList<string>> DrainErrorQueueAsync(
             int maxIterations = 256,
@@ -1085,6 +1180,155 @@ namespace Daqifi.Core.Device
 
             SafeLog(() => _logger.LogWarning("[DrainErrorQueueAsync] Did not converge after {MaxIterations} iterations; queue may still contain entries.", maxIterations));
             return popped;
+        }
+
+        /// <summary>
+        /// Lowest capability-document schema version daqifi-core will parse.
+        /// </summary>
+        public const int MinimumCapabilityDocumentApiVersion = 1;
+
+        /// <summary>
+        /// Highest capability-document schema version daqifi-core has been written against.
+        /// </summary>
+        /// <remarks>
+        /// The firmware bumps its schema version only on a <i>breaking</i> change — a field
+        /// renamed, removed, retyped, given new semantics, or the layout reshaped — while additive
+        /// fields ship without a bump. A version above this one is therefore a document whose
+        /// existing fields may no longer mean what this parser assumes, and trusting it could hand
+        /// a consumer a plausible but wrong number. Such a device keeps its board-derived
+        /// capabilities instead, which is the same safe outcome as a device that cannot answer at
+        /// all. Raise this constant together with the parser when adopting a newer schema.
+        /// </remarks>
+        public const int MaximumCapabilityDocumentApiVersion = 2;
+
+        /// <summary>
+        /// Gap between the two capability queries sent in one exchange, so the firmware's SCPI
+        /// parser sees two commands rather than one write it has to split.
+        /// </summary>
+        private const int CapabilityQuerySpacingMs = 50;
+
+        /// <summary>Time allowed for the first line of the capability response.</summary>
+        private const int CapabilityDocumentResponseTimeoutMs = 3000;
+
+        /// <summary>
+        /// Inactivity window that ends capability-document collection. The document is a single
+        /// line of several kilobytes, so the window has to outlast the gaps <i>within</i> the
+        /// transfer — otherwise, on a device that echoes commands, the echo would start the
+        /// completion clock and cut the response off before its only useful line. Measured on the
+        /// bench NQ1 over USB CDC: 8 KB delivered in ~25 ms end to end, longest inter-chunk gap
+        /// 8 ms. 250 ms is an order of magnitude of headroom over that while keeping the cost to
+        /// the connect sequence small.
+        /// </summary>
+        private const int CapabilityDocumentCompletionTimeoutMs = 250;
+
+        /// <summary>
+        /// Reads the device's capability document (<c>CONFigure:CAPabilities:JSON?</c>) and
+        /// overlays it onto <see cref="DeviceMetadata.Capabilities"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Best-effort and non-destructive to what is already known. The read is skipped unless
+        /// <see cref="Supports"/> reports <see cref="DeviceFeature.CapabilityDocument"/> (firmware
+        /// v3.5.0 and newer), and the document is only trusted after
+        /// <c>CONFigure:CAPabilities:APIVersion?</c> reports a schema version this parser
+        /// understands. Any other outcome — an unanswered query, an out-of-range schema version,
+        /// an unparseable reply — returns <c>null</c> and leaves the board-derived capabilities
+        /// exactly as they were.
+        /// </para>
+        /// <para>
+        /// The overlay is a merge: <see cref="DeviceCapabilities.FromDeviceType"/> remains the
+        /// bootstrap and the fallback for every field the document does not state
+        /// (<see cref="CapabilityDocument.MergeInto"/>). <see cref="InitializeAsync"/> calls this
+        /// once, after the device reports its board and firmware version. Call it again whenever a
+        /// fresh <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed — that figure is
+        /// computed from the channel set enabled at the moment of the read, so it goes stale as
+        /// soon as the enabled set changes.
+        /// </para>
+        /// <para>
+        /// This runs a text-mode exchange, which pauses the protobuf consumer for its duration.
+        /// Do not call it while streaming.
+        /// </para>
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe while reading.</param>
+        /// <returns>
+        /// The parsed document, which has already been applied to <see cref="Metadata"/>; or
+        /// <c>null</c> when the device did not supply one this parser can trust.
+        /// </returns>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public virtual async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
+            CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new DeviceNotConnectedException();
+            }
+
+            if (!Supports(DeviceFeature.CapabilityDocument))
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] Skipped: the device does not report support for the capability document."));
+                return null;
+            }
+
+            // Both queries go out in one text exchange. Swapping the protobuf consumer out and back
+            // costs far more than either reply does — the reader thread has to time out of its
+            // blocking read first — so a second exchange would roughly double what this adds to
+            // the connect sequence, to fetch a document that measures 8 KB in ~25 ms. The version
+            // is still checked before the document is *trusted*, which is what the gate is for;
+            // asking for both up front only means a device on an unreadable schema transferred a
+            // document that is then discarded.
+            var lines = await ExecuteTextCommandAsync(
+                async token =>
+                {
+                    Send(ScpiMessageProducer.GetCapabilitiesApiVersion);
+                    await Task.Delay(CapabilityQuerySpacingMs, token).ConfigureAwait(false);
+                    Send(ScpiMessageProducer.GetCapabilitiesJson);
+                },
+                responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
+                completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (!CapabilityDocumentParser.TryParseApiVersion(lines, out var apiVersion))
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] The device did not report a capability schema version; keeping board-derived capabilities."));
+                return null;
+            }
+
+            if (apiVersion < MinimumCapabilityDocumentApiVersion || apiVersion > MaximumCapabilityDocumentApiVersion)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] Capability schema version {ApiVersion} is outside the supported range {MinVersion}..{MaxVersion}; keeping board-derived capabilities.",
+                    apiVersion,
+                    MinimumCapabilityDocumentApiVersion,
+                    MaximumCapabilityDocumentApiVersion));
+                return null;
+            }
+
+            if (!CapabilityDocumentParser.TryParseLines(lines, out var document))
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] The capability document did not parse; keeping board-derived capabilities."));
+                return null;
+            }
+
+            // The document body carries the same schema version the query reports — the firmware
+            // emits both from one macro. If they disagree, the two halves of this exchange did not
+            // come from one coherent response (a stale or interleaved line), so the version that
+            // was vetted above is not the version of the document in hand. Fail closed rather than
+            // apply a document nothing actually vouched for.
+            if (document.SchemaVersion != apiVersion)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] The document reports schema version {DocumentVersion} but the device reported {ApiVersion}; keeping board-derived capabilities.",
+                    document.SchemaVersion,
+                    apiVersion));
+                return null;
+            }
+
+            Metadata.ApplyCapabilityDocument(document);
+            return document;
         }
 
         /// <summary>
@@ -1160,7 +1404,7 @@ namespace Daqifi.Core.Device
         /// surfaces a <see cref="TimeoutException"/>).
         /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="ScpiInitializationErrorException">Thrown when the device returns a SCPI error during initialization that persists after an internal retry.</exception>
         /// <exception cref="TimeoutException">Thrown when the device does not report its channel configuration within <paramref name="channelPopulationTimeout"/>.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
@@ -1170,7 +1414,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device must be connected before initialization.");
+                throw new DeviceNotConnectedException("Device must be connected before initialization.");
             }
 
             if (_isInitialized)
@@ -1276,6 +1520,16 @@ namespace Daqifi.Core.Device
                     effectiveChannelPopulationTimeout,
                     cancellationToken).ConfigureAwait(false);
 
+                // Ask the device to describe itself, now that it has reported its board and
+                // firmware version — Supports(CapabilityDocument) fails closed on an unknown
+                // firmware version, so an earlier read would skip on every device. This is its own
+                // SCPI round-trip rather than something folded into status processing: the
+                // document does not ride along in the protobuf status message, and a text exchange
+                // pauses the protobuf consumer, which is only safe at a quiescent point like this
+                // one. It runs before OnDeviceInitializingAsync so derived-class initialization
+                // already sees the device's own capabilities.
+                await TryReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+
                 // Run any derived-class initialization (e.g. routing the stream to USB) as part of
                 // this try/catch so a failure there leaves the device in a consistent terminal state
                 // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
@@ -1314,6 +1568,33 @@ namespace Daqifi.Core.Device
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         protected virtual Task OnDeviceInitializingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        /// <summary>
+        /// Runs the capability-document read during initialization, absorbing any failure.
+        /// </summary>
+        /// <remarks>
+        /// The document is an enrichment, never a requirement: a device that cannot supply one is
+        /// fully usable on its board-derived capabilities, so letting a failed read fail the whole
+        /// initialization would newly refuse devices that work today. Cancellation still
+        /// propagates — that is the caller's own request, not a device fault.
+        /// </remarks>
+        private async Task TryReadCapabilityDocumentAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    ex,
+                    "[InitializeAsync] Reading the capability document failed; keeping board-derived capabilities."));
+            }
+        }
 
         /// <summary>
         /// Sends <c>GetDeviceInfo</c> and waits for the device to report its channel

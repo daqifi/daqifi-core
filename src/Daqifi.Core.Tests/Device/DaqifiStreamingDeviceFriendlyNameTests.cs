@@ -36,7 +36,7 @@ namespace Daqifi.Core.Tests.Device
         public async Task SetFriendlyNameAsync_NotConnected_Throws()
         {
             var device = new CapturingStreamingDevice(); // not connected
-            await Assert.ThrowsAsync<InvalidOperationException>(() => device.SetFriendlyNameAsync("Lab Nq1"));
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.SetFriendlyNameAsync("Lab Nq1"));
         }
 
         [Fact]

@@ -77,7 +77,7 @@ public class DaqifiDeviceWithMessageProducerTests
         using var device = new DaqifiDevice("Test Device", stream);
         
         // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
+        Assert.Throws<DeviceNotConnectedException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
     }
 
     [Fact]

@@ -87,7 +87,7 @@ namespace Daqifi.Core.Tests.Device
             // Not connected
 
             // Act & Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.InitializeAsync());
             Assert.Equal("Device must be connected before initialization.", ex.Message);
         }
@@ -428,23 +428,30 @@ namespace Daqifi.Core.Tests.Device
                 }
             }
 
-            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
-                CancellationToken cancellationToken = default)
+                CancellationToken cancellationToken = default,
+                Func<CancellationToken, Task>? prepareAsync = null)
             {
+                // Honor the exchange's prepare phase the way the real device does: it runs first,
+                // before anything this exchange sends (#396).
+                if (prepareAsync != null)
+                {
+                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 // Run the setup action so that Send() calls inside it are captured
                 setupAction();
                 TextCommandAttemptCount++;
 
                 if (_failFirstAttempt && TextCommandAttemptCount == 1)
                 {
-                    return Task.FromResult<IReadOnlyList<string>>(
-                        new[] { "**ERROR: -200, \"Execution error\"\r\n" });
+                    return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
                 }
 
-                return Task.FromResult(_textCommandResponse);
+                return _textCommandResponse;
             }
         }
 
@@ -501,12 +508,20 @@ namespace Daqifi.Core.Tests.Device
                 }
             }
 
-            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
-                CancellationToken cancellationToken = default)
+                CancellationToken cancellationToken = default,
+                Func<CancellationToken, Task>? prepareAsync = null)
             {
+                // Honor the exchange's prepare phase the way the real device does: it runs first,
+                // before anything this exchange sends (#396).
+                if (prepareAsync != null)
+                {
+                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 var before = _sent.Count;
                 setupAction();
                 var sentThisCall = _sent.Skip(before).ToList();
@@ -519,13 +534,11 @@ namespace Daqifi.Core.Tests.Device
                     switch (_usbStepBehavior)
                     {
                         case UsbStepBehavior.ScpiError:
-                            return Task.FromResult<IReadOnlyList<string>>(
-                                new[] { "**ERROR: -200, \"Execution error\"\r\n" });
+                            return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
                         case UsbStepBehavior.ScpiErrorThenSucceed:
                             if (UsbStepAttemptCount == 1)
                             {
-                                return Task.FromResult<IReadOnlyList<string>>(
-                                    new[] { "**ERROR: -200, \"Execution error\"\r\n" });
+                                return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
                             }
                             break;
                         case UsbStepBehavior.Cancel:
@@ -533,7 +546,7 @@ namespace Daqifi.Core.Tests.Device
                     }
                 }
 
-                return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+                return Array.Empty<string>();
             }
         }
     }

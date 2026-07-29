@@ -71,13 +71,13 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void Send_WhenDisconnected_ThrowsInvalidOperationException()
+        public void Send_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiDevice("TestDevice");
 
             // Act & Assert
-            Assert.Throws<System.InvalidOperationException>(() => device.Send(new Daqifi.Core.Communication.Messages.ScpiMessage("")));
+            Assert.Throws<DeviceNotConnectedException>(() => device.Send(new Daqifi.Core.Communication.Messages.ScpiMessage("")));
         }
 
         [Fact]

@@ -571,13 +571,13 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void SetPwmEnabled_WhenDisconnected_ThrowsInvalidOperationException()
+        public void SetPwmEnabled_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = CreateConnectedDevice(digitalChannels: 8);
             var channel = DigitalChannelAt(device, 4);
             device.Disconnect();
 
-            Assert.Throws<InvalidOperationException>(() => device.SetPwmEnabled(channel, true));
+            Assert.Throws<DeviceNotConnectedException>(() => device.SetPwmEnabled(channel, true));
         }
 
         [Fact]
@@ -688,7 +688,7 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public void ChannelManagement_WhenDisconnected_ThrowsInvalidOperationException()
+        public void ChannelManagement_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Populate channels but do not connect.
             var device = new TestableDaqifiStreamingDevice("TestDevice");
@@ -701,14 +701,14 @@ namespace Daqifi.Core.Tests.Device
             var analog = AnalogChannelAt(device, 0);
             var digital = DigitalChannelAt(device, 0);
 
-            Assert.Throws<InvalidOperationException>(() => device.EnableChannel(analog));
-            Assert.Throws<InvalidOperationException>(() => device.EnableChannels(new[] { analog }));
-            Assert.Throws<InvalidOperationException>(() => device.DisableChannel(analog));
-            Assert.Throws<InvalidOperationException>(() => device.DisableAllChannels());
-            Assert.Throws<InvalidOperationException>(() => device.SetDioDirection(digital, ChannelDirection.Output));
-            Assert.Throws<InvalidOperationException>(() => device.SetDioValue(digital, true));
-            Assert.Throws<InvalidOperationException>(() => device.SetAnalogOutput(0, 1.0));
-            Assert.Throws<InvalidOperationException>(() => device.Reboot());
+            Assert.Throws<DeviceNotConnectedException>(() => device.EnableChannel(analog));
+            Assert.Throws<DeviceNotConnectedException>(() => device.EnableChannels(new[] { analog }));
+            Assert.Throws<DeviceNotConnectedException>(() => device.DisableChannel(analog));
+            Assert.Throws<DeviceNotConnectedException>(() => device.DisableAllChannels());
+            Assert.Throws<DeviceNotConnectedException>(() => device.SetDioDirection(digital, ChannelDirection.Output));
+            Assert.Throws<DeviceNotConnectedException>(() => device.SetDioValue(digital, true));
+            Assert.Throws<DeviceNotConnectedException>(() => device.SetAnalogOutput(0, 1.0));
+            Assert.Throws<DeviceNotConnectedException>(() => device.Reboot());
         }
 
         #endregion

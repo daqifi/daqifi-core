@@ -33,6 +33,28 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
+    public void GetCapabilitiesApiVersion_ReturnsCorrectCommand()
+    {
+        // Act
+        var message = ScpiMessageProducer.GetCapabilitiesApiVersion;
+
+        // Assert
+        Assert.Equal("CONFigure:CAPabilities:APIVersion?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetCapabilitiesJson_ReturnsCorrectCommand()
+    {
+        // Act
+        var message = ScpiMessageProducer.GetCapabilitiesJson;
+
+        // Assert
+        Assert.Equal("CONFigure:CAPabilities:JSON?", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
     public void DisableDeviceEcho_ReturnsCorrectCommand()
     {
         // Act

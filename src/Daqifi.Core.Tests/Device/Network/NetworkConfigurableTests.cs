@@ -27,7 +27,7 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public async Task UpdateNetworkConfigurationAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        public async Task UpdateNetworkConfigurationAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
@@ -38,7 +38,7 @@ namespace Daqifi.Core.Tests.Device.Network
                 "TestPassword");
 
             // Act & Assert
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            var exception = await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.UpdateNetworkConfigurationAsync(config));
             Assert.Equal("Device is not connected.", exception.Message);
         }
@@ -477,13 +477,13 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public void PrepareSdInterface_WhenDisconnected_ThrowsInvalidOperationException()
+        public void PrepareSdInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<InvalidOperationException>(() => device.PrepareSdInterface());
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.PrepareSdInterface());
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -506,13 +506,13 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public void PrepareLanInterface_WhenDisconnected_ThrowsInvalidOperationException()
+        public void PrepareLanInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             // Arrange
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<InvalidOperationException>(() => device.PrepareLanInterface());
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.PrepareLanInterface());
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -641,11 +641,11 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public async Task LoadNetworkConfigurationAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        public async Task LoadNetworkConfigurationAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            var exception = await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.LoadNetworkConfigurationAsync());
             Assert.Equal("Device is not connected.", exception.Message);
         }
@@ -676,11 +676,11 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public async Task FactoryResetNetworkAsync_WhenDisconnected_ThrowsInvalidOperationException()
+        public async Task FactoryResetNetworkAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            var exception = await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.FactoryResetNetworkAsync());
             Assert.Equal("Device is not connected.", exception.Message);
         }

@@ -24,7 +24,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The buffered log entries, oldest first; empty when the buffer was empty.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -32,7 +32,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task ClearSystemLogAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -42,7 +42,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <param name="level">The log level: 0 = None, 1 = Error, 2 = Info, 3 = Debug.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The level actually applied, as echoed by the device (may be capped by the module's ceiling).</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="System.ArgumentException">Thrown when <paramref name="module"/> is null, empty, or contains invalid characters.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">Thrown when <paramref name="level"/> is outside 0–3.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device rejected the request or returned an unparseable response.</exception>
@@ -53,7 +53,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The remembered commands, newest first; empty when there is no history.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task<IReadOnlyList<string>> GetCommandHistoryAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -61,7 +61,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task TestSystemLogAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -70,7 +70,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The current error-queue depth.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device returned an unparseable response.</exception>
         Task<int> GetSystemErrorCountAsync(CancellationToken cancellationToken = default);
 
@@ -79,7 +79,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The parsed streaming statistics.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device returned an unparseable response.</exception>
         Task<StreamStats> GetStreamStatsAsync(CancellationToken cancellationToken = default);
 
@@ -88,7 +88,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>The parsed memory diagnostics.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device returned an unparseable response.</exception>
         Task<MemoryDiagnostics> GetMemoryDiagnosticsAsync(CancellationToken cancellationToken = default);
     }

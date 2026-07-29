@@ -40,23 +40,23 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
-        public async Task ExecuteTextCommandAsync_WhenDisposing_ThrowsInvalidOperation()
+        public async Task ExecuteTextCommandAsync_WhenDisposing_ThrowsDeviceNotConnected()
         {
             var device = new TextCommandTestableDevice("TestDevice");
             SetIsDisconnecting(device, true);
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.CallExecuteTextCommandAsync(() => { }));
             Assert.Contains("disposing or disconnecting", ex.Message);
         }
 
         [Fact]
-        public async Task ExecuteTextCommandAsync_WhenDisposed_ThrowsInvalidOperation()
+        public async Task ExecuteTextCommandAsync_WhenDisposed_ThrowsDeviceNotConnected()
         {
             var device = new TextCommandTestableDevice("TestDevice");
             SetDisposed(device, true);
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.CallExecuteTextCommandAsync(() => { }));
             Assert.Contains("disposing or disconnecting", ex.Message);
         }
@@ -70,12 +70,12 @@ namespace Daqifi.Core.Tests.Device
             // not block on WaitAsync.
             var device = new TextCommandTestableDevice("TestDevice");
 
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.CallExecuteTextCommandAsync(() => { }));
             // Second call: also throws, but ONLY if the lock was released.
             // If the lock leaked, this would deadlock and xunit's per-test
             // budget would time it out instead.
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.CallExecuteTextCommandAsync(() => { }));
         }
 
@@ -87,7 +87,7 @@ namespace Daqifi.Core.Tests.Device
             // the same flow doesn't false-positive the re-entrancy check.
             var device = new TextCommandTestableDevice("TestDevice");
 
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.CallExecuteTextCommandAsync(() => { }));
 
             Assert.False(GetIsInsideTextExchange(device).Value);
