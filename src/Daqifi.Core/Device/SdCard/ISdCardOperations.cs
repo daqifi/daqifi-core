@@ -188,6 +188,16 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardEmptyTransferException">
+        /// Thrown when the device serves a marker-only (0-byte) transfer for a file the last
+        /// listing reported as non-empty (or whose listed size is unknown). A file the listing
+        /// reports as 0 bytes downloads successfully as a legitimate empty file.
+        /// </exception>
+        /// <exception cref="SdCardTransferStalledException">
+        /// Thrown when the transfer stops making progress before the end-of-file marker arrives;
+        /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a
+        /// closed transport and from an elapsed transfer deadline.
+        /// </exception>
         Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             Stream destinationStream,

@@ -1492,6 +1492,80 @@ public class FirmwareUpdateServiceTests
         Assert.NotNull(externalProcessRunner.LastRequest);
         Assert.Contains(progressEvents, p => p.State == FirmwareUpdateState.Programming && p.PercentComplete > 20);
         Assert.Contains(progressEvents, p => p.State == FirmwareUpdateState.Complete && p.PercentComplete == 100);
+
+        // The post-flash reconnect runs in its own state rather than borrowing Verifying, which
+        // means only the PIC32 CRC check (a genuine flash failure) is ever reported as Verifying.
+        Assert.Contains(progressEvents, p => p.State == FirmwareUpdateState.ReconnectingAfterFlash);
+        Assert.DoesNotContain(progressEvents, p => p.State == FirmwareUpdateState.Verifying);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenPostFlashReconnectTimesOut_FailsInReconnectingAfterFlash()
+    {
+        // The WINC image flashed and verified fine; only the host's serial re-enumeration timed
+        // out. That is benign and environmental, and used to be indistinguishable from a PIC32
+        // flash CRC mismatch — both arrived as FailedState = Verifying, leaving a consumer to
+        // discriminate on a human-readable progress string and telling a user whose flash
+        // succeeded that their flash CRC did not match (#398 gap 4).
+        var device = new FakeStreamingDevice("COM9")
+        {
+            // Never reconnects, so the state timeout is the only way out.
+            ConnectFailuresBeforeSuccess = int.MaxValue
+        };
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["begin write operation", "begin verify operation", "verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        // Also the ReconnectingAfterFlash budget — the step kept the timeout it had when it ran
+        // under Verifying, so a host that tuned VerifyingTimeout keeps that tuning.
+        options.VerifyingTimeout = TimeSpan.FromMilliseconds(300);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var stateTransitions = new List<FirmwareUpdateState>();
+        service.StateChanged += (_, args) => stateTransitions.Add(args.CurrentState);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            // The structural discriminator: the state itself, not the Operation progress string.
+            Assert.Equal(FirmwareUpdateState.ReconnectingAfterFlash, exception.FailedState);
+            Assert.NotEqual(FirmwareUpdateState.Verifying, exception.FailedState);
+            Assert.Contains(FirmwareUpdateState.ReconnectingAfterFlash, stateTransitions);
+
+            // Guidance is keyed on the same discriminator, so a successful flash no longer tells
+            // the user their flash CRC mismatched.
+            Assert.NotNull(exception.RecoveryGuidance);
+            Assert.Contains("flashed and verified successfully", exception.RecoveryGuidance);
+            Assert.DoesNotContain("CRC", exception.RecoveryGuidance);
+
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
     }
 
     [Fact]

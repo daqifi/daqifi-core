@@ -38,6 +38,20 @@ public interface ITimestampProcessor
     double GetTickPeriod(string deviceId);
 
     /// <summary>
+    /// Gets a value indicating whether a device-specific frequency has been set for a device via
+    /// <see cref="SetTimestampFrequency"/>. Use this to make the otherwise-silent fallback
+    /// observable: processing timestamps for a device with no configured frequency scales every
+    /// reconstructed timestamp by <c>actualFrequency / </c><see cref="TickPeriod"/>'s frequency,
+    /// which is very often a bug rather than an intentional default.
+    /// </summary>
+    /// <param name="deviceId">Unique identifier for the device (e.g., serial number).</param>
+    /// <returns>
+    /// <c>true</c> when the device has its own frequency configured; <c>false</c> when
+    /// <see cref="GetTickPeriod"/> would fall back to <see cref="TickPeriod"/>.
+    /// </returns>
+    bool HasTimestampFrequency(string deviceId);
+
+    /// <summary>
     /// Processes a device timestamp and returns the calculated system timestamp.
     /// Handles uint32 rollover detection with a 10-second sanity check to avoid
     /// false positive rollover detection.
@@ -58,9 +72,15 @@ public interface ITimestampProcessor
     void Reset(string deviceId);
 
     /// <summary>
-    /// Resets all timestamp state for all devices, including any device-specific
-    /// frequencies set via <see cref="SetTimestampFrequency"/>.
-    /// Call this when the processor should be completely cleared.
+    /// Resets the session baselines for every device. Call this when all streaming sessions
+    /// should start over.
     /// </summary>
+    /// <remarks>
+    /// Like <see cref="Reset"/>, device-specific frequencies set via
+    /// <see cref="SetTimestampFrequency"/> are preserved: the timestamp clock frequency is static
+    /// device configuration, not session state, and dropping it silently reverts the device to
+    /// <see cref="TickPeriod"/> and rescales every reconstructed timestamp. Clear a single
+    /// device's frequency explicitly with <c>SetTimestampFrequency(deviceId, 0)</c>.
+    /// </remarks>
     void ResetAll();
 }

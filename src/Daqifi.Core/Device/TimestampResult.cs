@@ -37,6 +37,15 @@ public sealed class TimestampResult
     public bool IsFirstMessage { get; }
 
     /// <summary>
+    /// Gets a value indicating whether this result was calculated with the processor-wide
+    /// fallback tick period because the device had no frequency configured via
+    /// <see cref="ITimestampProcessor.SetTimestampFrequency"/>. Makes the otherwise-silent
+    /// fallback observable: a device whose real clock differs from the fallback produces
+    /// timestamps that are wrong by a constant factor with no error, log, or warning.
+    /// </summary>
+    public bool UsedFallbackTickPeriod { get; }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="TimestampResult"/> class.
     /// </summary>
     /// <param name="timestamp">The calculated system timestamp.</param>
@@ -44,18 +53,23 @@ public sealed class TimestampResult
     /// <param name="clockCyclesBetweenMessages">The number of clock cycles between messages.</param>
     /// <param name="secondsBetweenMessages">The time in seconds between messages.</param>
     /// <param name="isFirstMessage">Whether this is the first message in the session.</param>
+    /// <param name="usedFallbackTickPeriod">
+    /// Whether the fallback tick period was used because the device had no configured frequency.
+    /// </param>
     public TimestampResult(
         DateTime timestamp,
         bool wasRollover,
         uint clockCyclesBetweenMessages,
         double secondsBetweenMessages,
-        bool isFirstMessage)
+        bool isFirstMessage,
+        bool usedFallbackTickPeriod = false)
     {
         Timestamp = timestamp;
         WasRollover = wasRollover;
         ClockCyclesBetweenMessages = clockCyclesBetweenMessages;
         SecondsBetweenMessages = secondsBetweenMessages;
         IsFirstMessage = isFirstMessage;
+        UsedFallbackTickPeriod = usedFallbackTickPeriod;
     }
 
     /// <summary>
@@ -63,14 +77,21 @@ public sealed class TimestampResult
     /// </summary>
     /// <param name="timestamp">The current system timestamp.</param>
     /// <param name="deviceTimestamp">The device timestamp.</param>
+    /// <param name="usedFallbackTickPeriod">
+    /// Whether the fallback tick period was used because the device had no configured frequency.
+    /// </param>
     /// <returns>A new <see cref="TimestampResult"/> for the first message.</returns>
-    internal static TimestampResult CreateFirstMessage(DateTime timestamp, uint deviceTimestamp)
+    internal static TimestampResult CreateFirstMessage(
+        DateTime timestamp,
+        uint deviceTimestamp,
+        bool usedFallbackTickPeriod = false)
     {
         return new TimestampResult(
             timestamp: timestamp,
             wasRollover: false,
             clockCyclesBetweenMessages: 0,
             secondsBetweenMessages: 0,
-            isFirstMessage: true);
+            isFirstMessage: true,
+            usedFallbackTickPeriod: usedFallbackTickPeriod);
     }
 }

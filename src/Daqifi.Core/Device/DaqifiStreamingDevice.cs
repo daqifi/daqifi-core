@@ -2236,9 +2236,13 @@ namespace Daqifi.Core.Device
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         /// <exception cref="SdCardEmptyTransferException">
-        /// Thrown when the device serves a marker-only (0-byte) transfer for the file across all
-        /// retry attempts, indicating its SD subsystem is not ready rather than the file being
-        /// legitimately empty.
+        /// Thrown when the device serves a marker-only (0-byte) transfer across all retry attempts
+        /// for a file the last <see cref="GetSdCardFilesAsync"/> listing reported as non-empty (or
+        /// whose listed size is unknown), indicating its SD subsystem is not ready. A file the
+        /// listing reports as 0 bytes downloads successfully as a legitimate empty file.
+        /// </exception>
+        /// <exception cref="SdCardTransferStalledException">
+        /// Thrown when the transfer stops making progress before the end-of-file marker arrives.
         /// </exception>
         public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
@@ -2291,11 +2295,15 @@ namespace Daqifi.Core.Device
                     // Send the SCPI command to request the file
                     Send(ScpiMessageProducer.GetSdFile(fileName));
 
-                    // Receive the file data. A marker-only (0-byte) transfer means the device's
-                    // SD subsystem wasn't ready when it opened the file - the same kind of
-                    // transient condition GetSdCardFilesAsync's LIST retry already absorbs - so
-                    // retry the GET a bounded number of times before giving up (see #264).
+                    // Receive the file data. A marker-only (0-byte) transfer for a file the
+                    // listing reports as non-empty means the device's SD subsystem wasn't ready
+                    // when it opened the file - the same kind of transient condition
+                    // GetSdCardFilesAsync's LIST retry already absorbs - so retry the GET a
+                    // bounded number of times before giving up (see #264). Passing the listed
+                    // size keeps that retry off a genuinely 0-byte file, which is a legitimate
+                    // empty download rather than a wedged subsystem (#398 gap 2).
                     var receiver = new SdCardFileReceiver(stream);
+                    var listedFileSizeBytes = TryGetListedFileSize(fileName);
                     long bytesReceived;
                     var attempt = 0;
                     while (true)
@@ -2307,7 +2315,8 @@ namespace Daqifi.Core.Device
                                 fileName,
                                 progress,
                                 timeout: TimeSpan.FromMinutes(30),
-                                cancellationToken: ct).ConfigureAwait(false);
+                                cancellationToken: ct,
+                                listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
                             break;
                         }
                         catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
@@ -2339,6 +2348,44 @@ namespace Daqifi.Core.Device
 
             stopwatch.Stop();
             return new SdCardDownloadResult(fileName, fileSize, stopwatch.Elapsed);
+        }
+
+        /// <summary>
+        /// Looks up the size the most recent directory listing reported for a file. Returns null
+        /// ("unknown", which the receiver treats conservatively) when no listing has been fetched,
+        /// when the listing did not include this file or a size for it, or when more than one
+        /// listed entry shares the name.
+        /// </summary>
+        private long? TryGetListedFileSize(string fileName)
+        {
+            // Snapshot the field: GetSdCardFilesAsync replaces the list wholesale, so a
+            // concurrent refresh swaps the reference rather than mutating what we enumerate.
+            var listedFiles = _sdCardFiles;
+
+            long? matchedSize = null;
+            var matched = false;
+
+            foreach (var file in listedFiles)
+            {
+                // FAT names are case-insensitive. The listing keeps only the leaf name, so the
+                // same name can appear twice from different directories; that is ambiguous and
+                // an over-confident size here would wave through the very failure (a wedged
+                // subsystem serving nothing) the empty-transfer guard exists to catch.
+                if (!string.Equals(file.FileName, fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (matched)
+                {
+                    return null;
+                }
+
+                matched = true;
+                matchedSize = file.SizeInBytes;
+            }
+
+            return matchedSize;
         }
 
         /// <summary>
