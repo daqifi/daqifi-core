@@ -49,6 +49,19 @@ namespace Daqifi.Core.Device
         private const int SD_LIST_MAX_RETRIES = 1;
 
         /// <summary>
+        /// Inactivity window that ends the SD listing text exchange, in milliseconds.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately longer than the 250ms default. The listing is only accepted once its
+        /// end-of-listing terminator has been seen (see <see cref="GetSdCardFilesAsync"/>), and the
+        /// terminator can trail the last listing line by more than the default window — the firmware
+        /// walks the directory tree between chunks, and a congested WiFi link adds its own gaps. With
+        /// the default, a merely-slow terminator would read as a missing one and fail a listing that
+        /// was about to complete.
+        /// </remarks>
+        private const int SD_LIST_COMPLETION_TIMEOUT_MS = 1000;
+
+        /// <summary>
         /// Maximum number of retry attempts for the USB stream-interface command sent during
         /// <see cref="OnDeviceInitializingAsync"/> when the device returns a transient SCPI error
         /// (e.g. because the firmware still has the interface set from a prior WiFi session).
@@ -1655,7 +1668,10 @@ namespace Daqifi.Core.Device
                         // End-of-listing terminator — see this method's remarks. Sent inside the
                         // same text exchange so the ordering guarantee holds.
                         Send(ScpiMessageProducer.GetSystemError);
-                    }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+                    },
+                    responseTimeoutMs: 3000,
+                    completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                    cancellationToken: cancellationToken);
 
                     isComplete = TrySplitAtSdListTerminator(lines, out listing);
 
