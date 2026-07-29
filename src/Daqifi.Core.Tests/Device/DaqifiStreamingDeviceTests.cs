@@ -139,7 +139,7 @@ namespace Daqifi.Core.Tests.Device
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.StartStreaming());
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.StartStreaming());
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -150,7 +150,7 @@ namespace Daqifi.Core.Tests.Device
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.StopStreaming());
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.StopStreaming());
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -208,7 +208,7 @@ namespace Daqifi.Core.Tests.Device
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            var exception = Assert.Throws<System.InvalidOperationException>(() => InvokeNvmMethod(device, methodName));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => InvokeNvmMethod(device, methodName));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -267,7 +267,7 @@ namespace Daqifi.Core.Tests.Device
         public void SetAdcCalibrationSlope_WhenDisconnected_ThrowsInvalidOperationException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.SetAdcCalibrationSlope(0, 1.0));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.SetAdcCalibrationSlope(0, 1.0));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -275,7 +275,7 @@ namespace Daqifi.Core.Tests.Device
         public void SetAdcCalibrationOffset_WhenDisconnected_ThrowsInvalidOperationException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.SetAdcCalibrationOffset(0, 1.0));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.SetAdcCalibrationOffset(0, 1.0));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 
@@ -283,7 +283,7 @@ namespace Daqifi.Core.Tests.Device
         public void UseAdcCalibration_WhenDisconnected_ThrowsInvalidOperationException()
         {
             var device = new DaqifiStreamingDevice("TestDevice");
-            var exception = Assert.Throws<System.InvalidOperationException>(() => device.UseAdcCalibration(1));
+            var exception = Assert.Throws<DeviceNotConnectedException>(() => device.UseAdcCalibration(1));
             Assert.Equal("Device is not connected.", exception.Message);
         }
 

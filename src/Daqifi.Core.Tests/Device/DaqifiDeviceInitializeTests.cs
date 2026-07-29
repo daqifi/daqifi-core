@@ -87,7 +87,7 @@ namespace Daqifi.Core.Tests.Device
             // Not connected
 
             // Act & Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.InitializeAsync());
             Assert.Equal("Device must be connected before initialization.", ex.Message);
         }

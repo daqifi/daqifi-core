@@ -24,7 +24,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.GetSdCardFilesAsync());
         }
 
@@ -616,7 +616,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.StartSdCardLoggingAsync());
         }
 
@@ -627,7 +627,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.StopSdCardLoggingAsync());
         }
 
@@ -690,7 +690,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.DeleteSdCardFileAsync("data.bin"));
         }
 
@@ -1156,7 +1156,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var device = new DaqifiStreamingDevice("TestDevice");
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.FormatSdCardAsync());
         }
 
@@ -1253,7 +1253,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         {
             var device = new DaqifiStreamingDevice("TestDevice");
 
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.GetSdCardStorageAsync());
         }
 
@@ -1509,7 +1509,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         {
             var device = new TestableSdCardStreamingDevice("TestDevice");
 
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.CheckSdCardSpaceAsync());
         }
 
@@ -1547,7 +1547,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         {
             var device = new DaqifiStreamingDevice("TestDevice");
 
-            Assert.Throws<InvalidOperationException>(() => device.SetSdCardMinimumFreeSpace(52428800));
+            Assert.Throws<DeviceNotConnectedException>(() => device.SetSdCardMinimumFreeSpace(52428800));
         }
 
         [Fact]
@@ -1571,7 +1571,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             using var stream = new MemoryStream();
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<DeviceNotConnectedException>(
                 () => device.DownloadSdCardFileAsync("test.bin", stream));
         }
 

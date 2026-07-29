@@ -83,7 +83,7 @@ public class DaqifiDeviceWithTransportTests
         using var device = new DaqifiDevice("Test Device", transport);
         
         // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
+        Assert.Throws<DeviceNotConnectedException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
     }
 
     [Fact]

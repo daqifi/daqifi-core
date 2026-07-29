@@ -17,7 +17,7 @@ public class DeviceDiagnosticsTests
     {
         var device = new TestableDiagnosticsDevice("TestDevice");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => device.GetSystemLogAsync());
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetSystemLogAsync());
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class DeviceDiagnosticsTests
     {
         var device = new TestableDiagnosticsDevice("TestDevice");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => device.ClearSystemLogAsync());
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.ClearSystemLogAsync());
     }
 
     [Fact]
@@ -276,7 +276,7 @@ public class DeviceDiagnosticsTests
     {
         var device = new TestableDiagnosticsDevice("TestDevice");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => device.GetMemoryDiagnosticsAsync());
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetMemoryDiagnosticsAsync());
     }
 
     /// <summary>

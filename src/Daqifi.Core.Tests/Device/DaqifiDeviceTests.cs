@@ -77,7 +77,7 @@ namespace Daqifi.Core.Tests.Device
             var device = new DaqifiDevice("TestDevice");
 
             // Act & Assert
-            Assert.Throws<System.InvalidOperationException>(() => device.Send(new Daqifi.Core.Communication.Messages.ScpiMessage("")));
+            Assert.Throws<DeviceNotConnectedException>(() => device.Send(new Daqifi.Core.Communication.Messages.ScpiMessage("")));
         }
 
         [Fact]

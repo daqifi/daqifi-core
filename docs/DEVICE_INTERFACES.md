@@ -373,6 +373,50 @@ catch (OperationCanceledException)
 }
 ```
 
+#### Telling "the device went away" apart from a bug
+
+Every device operation opens with a connectivity guard. When it fails, it throws
+`DeviceNotConnectedException` — a typed exception, so a disconnect can be classified without
+matching on the exception message:
+
+```csharp
+using Daqifi.Core.Device;
+
+try
+{
+    var files = await sdCard.GetSdCardFilesAsync();
+}
+catch (DeviceNotConnectedException ex)
+{
+    // Ordinary and expected: the user pressed Disconnect mid-refresh, or WiFi dropped.
+    // Log at warning with reconnect guidance — do NOT raise an error-tracker issue.
+    logger.LogWarning(ex, ex.IsShuttingDown
+        ? "Device is disconnecting; skipping refresh."
+        : "Device is not connected. Reconnect and try again.");
+}
+catch (InvalidOperationException ex)
+{
+    // Everything else on this path really is a defect — e.g. calling a text command
+    // re-entrantly, or using a device constructed without a transport.
+    logger.LogError(ex, "Bug: invalid SD card operation.");
+}
+```
+
+Notes:
+
+- `DeviceNotConnectedException` derives from `InvalidOperationException`, which is what these
+  guards threw before, so existing `catch (InvalidOperationException)` blocks keep working. Order
+  the `catch` clauses most-specific-first, as above.
+- `IsShuttingDown` is `true` when the guard fired because a `Disconnect()` or `Dispose()` is in
+  flight (or already finished) rather than because the device was never connected. Both mean "the
+  device is unavailable"; the flag is there for callers that want to suppress a retry prompt when
+  the user initiated the disconnect themselves.
+- `TransportNotConnectedException` is its sibling, not its base: it reports that the underlying
+  stream is gone (a serial unplug, a dropped TCP socket) while the device still believed it was
+  connected. Catch `DeviceNotConnectedException` for the device-state case and
+  `TransportNotConnectedException` for the transport case — or both, since they classify the same
+  way for reporting purposes.
+
 ### Connection Status Monitoring
 
 ```csharp

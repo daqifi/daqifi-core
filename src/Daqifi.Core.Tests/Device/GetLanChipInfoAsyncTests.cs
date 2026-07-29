@@ -17,7 +17,7 @@ public class GetLanChipInfoAsyncTests
     {
         var device = new TestableLanChipInfoDevice("TestDevice");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => device.GetLanChipInfoAsync());
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetLanChipInfoAsync());
     }
 
     [Fact]
