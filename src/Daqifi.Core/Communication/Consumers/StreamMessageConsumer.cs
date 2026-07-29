@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Transport;
 using System.Net.Sockets;
 using System.Text;
 
@@ -13,6 +14,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
 {
     private readonly Stream _stream;
     private readonly IMessageParser<T> _messageParser;
+    private readonly ITransportHealthSink? _healthSink;
     private readonly byte[] _buffer;
     private readonly List<byte> _messageBuffer;
 
@@ -63,10 +65,19 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// <param name="stream">The stream to read messages from.</param>
     /// <param name="messageParser">The parser to convert raw data to messages.</param>
     /// <param name="bufferSize">The size of the read buffer in bytes.</param>
-    public StreamMessageConsumer(Stream stream, IMessageParser<T> messageParser, int bufferSize = 4096)
+    /// <param name="healthSink">
+    /// Optional transport to report read outcomes to. This reader loop is the first thing to see a
+    /// device that has gone away, and a transport cannot tell from its own OS handle — so when
+    /// supplied, every failed read and every successful read is reported, letting the transport
+    /// escalate a persistently failing stream to a lost connection (issue #382). When null, read
+    /// failures are only surfaced through <see cref="ErrorOccurred"/>, exactly as before.
+    /// </param>
+    public StreamMessageConsumer(Stream stream, IMessageParser<T> messageParser, int bufferSize = 4096,
+        ITransportHealthSink? healthSink = null)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _messageParser = messageParser ?? throw new ArgumentNullException(nameof(messageParser));
+        _healthSink = healthSink;
         _buffer = new byte[bufferSize];
         _messageBuffer = new List<byte>();
     }
@@ -348,6 +359,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 }
                 catch (Exception ex)
                 {
+                    // Tell the transport before raising the error event: a read that keeps
+                    // throwing is how a physically disconnected device announces itself, and the
+                    // transport is the only thing that can turn a run of them into a lost
+                    // connection (issue #382). One failure escalates nothing.
+                    _healthSink?.ReportIoFault(ex);
                     OnErrorOccurred(ex);
                     Thread.Sleep(100); // Back off on error
                     continue;
@@ -355,9 +371,23 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
 
                 if (bytesRead == 0)
                 {
+                    // A NetworkStream returns 0 only after the peer has performed an orderly
+                    // shutdown — the connection is over, and every subsequent read will also
+                    // return 0. Report it so the transport can escalate; other stream types
+                    // legitimately return 0 for "nothing right now" and must not be escalated.
+                    if (_stream is NetworkStream)
+                    {
+                        _healthSink?.ReportIoFault(new EndOfStreamException(
+                            "The remote endpoint closed the connection (a socket read returned 0 bytes)."));
+                    }
+
                     Thread.Sleep(10); // No data available, wait briefly
                     continue;
                 }
+
+                // A successful read clears any run of failures the transport has accumulated, so
+                // a stream that glitches and recovers is never mistaken for a disconnected device.
+                _healthSink?.ReportIoSuccess();
 
                 // Add received data to message buffer (guarded: a caller may be reading
                 // QueuedMessageCount and ClearBuffer's drain runs on this same thread).

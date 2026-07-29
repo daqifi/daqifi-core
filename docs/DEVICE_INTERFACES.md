@@ -315,14 +315,10 @@ The policy is asked once per connection attempt, not again after connecting.
 **Ownership and liveness.** The registry disconnects and disposes every device it removes,
 including duplicates it rejects — once a device is passed to `ConnectAsync` or `Register`, don't
 dispose it yourself. Registrations whose device stops reporting `IsConnected` are pruned before
-every registration attempt (and by `PruneDisconnected()` on demand). The registry does not
-reconnect on its own.
-
-> **Know this limit:** pruning is only as good as the transport's drop detection.
-> `SerialStreamTransport.IsConnected` reports the OS handle's state, which stays open after a USB
-> device is physically unplugged, so that device keeps reporting `IsConnected` and is *not* pruned —
-> a later `ConnectAsync` under the same key hands back the dead handle rather than reconnecting.
-> Devices you `Disconnect()` yourself, and drops a transport does report, prune as described.
+every registration attempt (and by `PruneDisconnected()` on demand). Pruning covers a physically
+unplugged USB device: the transport detects the drop itself (see
+[Detecting a dropped connection](#detecting-a-dropped-connection)) and stops reporting
+`IsConnected`, within the bounds documented there. The registry does not reconnect on its own.
 
 All members are safe to call from any thread; reads return snapshots, and the duplicate policy is
 always invoked without the internal lock held, so a policy that blocks on a user prompt never
@@ -444,6 +440,55 @@ device.StatusChanged += (sender, args) =>
     }
 };
 ```
+
+### Detecting a dropped connection
+
+`ConnectionStatus.Lost` means the connection ended without anyone asking it to — the USB cable was
+pulled, the device lost power, the network dropped. `Disconnect()` reports
+`ConnectionStatus.Disconnected` instead, never `Lost`, so the two are always distinguishable.
+
+Neither OS handle is a liveness signal on its own: `SerialPort.IsOpen` stays `true` after a USB
+device is physically unplugged, and `TcpClient.Connected` describes the last completed operation
+rather than the current link. The transports therefore watch for a drop directly, and the detection
+time is bounded:
+
+| Transport | Drop | Reported within |
+|---|---|---|
+| Serial | Cable unplugged / device re-enumerated | **~3 s** — port-presence poll (1 s cadence, 2 consecutive misses) |
+| Serial | Reads or writes failing while traffic flows | **< 1 s** — 5 consecutive I/O failures with no successful transfer between them |
+| TCP | Peer closed, connection reset | **< 1 s** — same I/O fault escalation |
+| TCP | Link silently severed (power loss, WiFi drop) | **~20 s** — TCP keep-alive (10 s idle, 3 s probes, 3 retries) |
+
+Both serial detectors are cross-platform and behave identically on Windows, macOS, and Linux: port
+presence is `SerialPort.GetPortNames()` (falling back to the device node on Unix), with no WMI or
+other OS-specific device-change watcher. The presence poll is armed only if the port is visible to
+that probe at connect time, so an exotic port-name spelling disables the check rather than
+producing a false drop.
+
+A single failed read never disconnects anything. Escalation requires a *run* of failures with no
+successful transfer in between, so a stream that glitches and recovers stays connected. A read or
+write *timeout* is not a failure at all — it is what an idle or momentarily busy device looks
+like. To disable the serial presence poll and rely on I/O escalation alone, construct the transport
+with `livenessCheckInterval: TimeSpan.Zero`.
+
+When a drop is detected the transport closes its handle, so `IsConnected` already reads `false` by
+the time `StatusChanged` fires. The device's message consumer and producer are *not* stopped
+automatically — call `Disconnect()` (or `Dispose()`) once you have handled `Lost` to release them.
+
+`Lost` is raised on an internal thread — the reader loop or the liveness timer, whichever detected
+the drop — so treat the handler like any background callback: do the minimum, and push teardown or
+reconnection onto your own thread rather than blocking inside it.
+
+```csharp
+device.StatusChanged += (_, e) =>
+{
+    if (e.Status != ConnectionStatus.Lost) return;
+    _ = Task.Run(() => device.Disconnect());   // don't tear down inside the callback
+};
+```
+
+Custom transports can opt into the same escalation by implementing `ITransportHealthSink`; the
+reader and writer loops report every read/write outcome to a transport that does.
 
 ### Working with Device Metadata
 
