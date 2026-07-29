@@ -509,7 +509,7 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
         /// tearing down the consumer / producer / transport. This prevents
-        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
@@ -738,6 +738,20 @@ namespace Daqifi.Core.Device
         /// <param name="responseTimeoutMs">The time in milliseconds to wait for the first text response after sending commands.</param>
         /// <param name="completionTimeoutMs">The time in milliseconds of inactivity after the first response before considering the response complete. Defaults to 250ms.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+        /// <param name="prepareAsync">
+        /// Optional phase that puts the device into the state the commands require, for callers that
+        /// need one — the SD card operations use it to switch the shared SPI bus over to the card and
+        /// wait for the firmware to settle.
+        /// <para>
+        /// It runs inside the device-wide text-exchange lock, so no competing exchange can interleave
+        /// between it and <paramref name="setupAction"/> and undo what it established. It also runs
+        /// before the consumer swap, and therefore before the stale-line boundary below: a settle
+        /// wait placed inside <paramref name="setupAction"/> would widen that boundary into a window
+        /// where a late reply to an earlier command could be captured as part of this response
+        /// (#396). Anything the device emits in reply to it goes to the protobuf consumer, exactly as
+        /// it did before this exchange began.
+        /// </para>
+        /// </param>
         /// <returns>
         /// A list of text lines received from the device. Lines that were already in flight when the
         /// exchange opened — late replies to earlier commands — are excluded: only what arrived once
@@ -745,21 +759,33 @@ namespace Daqifi.Core.Device
         /// </returns>
         /// <exception cref="InvalidOperationException">Thrown when the device is not connected or has no transport.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        // prepareAsync is added AFTER cancellationToken (technically violating CA1068
+        // "CancellationToken should be last") to keep existing positional callers working, matching
+        // the convention established in IFirmwareUpdateService for the same reason. It is a
+        // parameter on this seam rather than a second virtual method deliberately: a parallel
+        // method would be bypassed silently by any subclass that overrides only this one, which for
+        // an instrumented device or a test double means the override quietly stops intercepting SD
+        // operations with nothing to indicate it. Overriders must widen their signature — a compile
+        // error, which is the point.
+#pragma warning disable CA1068
         protected virtual Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            Func<CancellationToken, Task>? prepareAsync = null)
         {
             return ExecuteTextCommandCoreAsync(
+                prepareAsync,
                 _ => { setupAction(); return Task.CompletedTask; },
                 responseTimeoutMs,
                 completionTimeoutMs,
                 cancellationToken);
         }
+#pragma warning restore CA1068
 
         /// <summary>
-        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>
+        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
         /// that accepts an async setup action so callers can <c>await</c> cancellable operations
         /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
         /// blocking the thread-pool thread.
@@ -778,6 +804,7 @@ namespace Daqifi.Core.Device
             CancellationToken cancellationToken = default)
         {
             return ExecuteTextCommandCoreAsync(
+                prepareAsync: null,
                 setupActionAsync,
                 responseTimeoutMs,
                 completionTimeoutMs,
@@ -785,6 +812,7 @@ namespace Daqifi.Core.Device
         }
 
         private async Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
+            Func<CancellationToken, Task>? prepareAsync,
             Func<CancellationToken, Task> setupActionAsync,
             int responseTimeoutMs,
             int completionTimeoutMs,
@@ -863,6 +891,19 @@ namespace Daqifi.Core.Device
                 }
 
                 var sw = Stopwatch.StartNew();
+
+                // Prepare phase, if any. Deliberately here: inside the lock, so no competing text
+                // exchange can interleave between it and the setup action below and undo the state
+                // it establishes; and before the consumer swap, so the wait it typically needs
+                // cannot widen the stale-line boundary taken further down. Any device output it
+                // provokes goes to the protobuf consumer, which is still running at this point.
+                if (prepareAsync != null)
+                {
+                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+
+                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                }
+
                 var collectedLines = new List<string>();
                 var stream = _transport.Stream;
                 int? originalReadTimeout = null;
@@ -1053,7 +1094,7 @@ namespace Daqifi.Core.Device
         /// on hardware faults, or discard them if known-stale.
         /// </para>
         /// <para>
-        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken)"/>, which
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>, which
         /// pauses the protobuf consumer for the duration of the text exchange.
         /// Avoid calling this during active streaming or concurrently with
         /// other text commands.
