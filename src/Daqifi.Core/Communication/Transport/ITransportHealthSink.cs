@@ -24,6 +24,11 @@ namespace Daqifi.Core.Communication.Transport;
 /// expected to escalate only on a run of consecutive failures with no successful transfer in
 /// between, so a recoverable blip never tears down a healthy connection.
 /// </para>
+/// <para>
+/// Callers must not report an operation that merely hit its configured timeout: that is what an
+/// idle device (or one that is momentarily not draining its receive buffer) looks like, and
+/// treating it as a failure would disconnect a healthy connection.
+/// </para>
 /// </remarks>
 public interface ITransportHealthSink
 {

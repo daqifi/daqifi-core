@@ -419,13 +419,26 @@ that probe at connect time, so an exotic port-name spelling disables the check r
 producing a false drop.
 
 A single failed read never disconnects anything. Escalation requires a *run* of failures with no
-successful transfer in between, so a stream that glitches and recovers stays connected. To disable
-the serial presence poll and rely on I/O escalation alone, construct the transport with
-`livenessCheckInterval: TimeSpan.Zero`.
+successful transfer in between, so a stream that glitches and recovers stays connected. A read or
+write *timeout* is not a failure at all — it is what an idle or momentarily busy device looks
+like. To disable the serial presence poll and rely on I/O escalation alone, construct the transport
+with `livenessCheckInterval: TimeSpan.Zero`.
 
 When a drop is detected the transport closes its handle, so `IsConnected` already reads `false` by
 the time `StatusChanged` fires. The device's message consumer and producer are *not* stopped
-automatically — call `Disconnect()` (or `Dispose()`) from your `Lost` handler to release them.
+automatically — call `Disconnect()` (or `Dispose()`) once you have handled `Lost` to release them.
+
+`Lost` is raised on an internal thread — the reader loop or the liveness timer, whichever detected
+the drop — so treat the handler like any background callback: do the minimum, and push teardown or
+reconnection onto your own thread rather than blocking inside it.
+
+```csharp
+device.StatusChanged += (_, e) =>
+{
+    if (e.Status != ConnectionStatus.Lost) return;
+    _ = Task.Run(() => device.Disconnect());   // don't tear down inside the callback
+};
+```
 
 Custom transports can opt into the same escalation by implementing `ITransportHealthSink`; the
 reader and writer loops report every read/write outcome to a transport that does.

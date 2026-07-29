@@ -18,16 +18,16 @@ namespace Daqifi.Core.Communication.Transport;
 /// <list type="bullet">
 /// <item><description>
 /// <b>I/O fault escalation</b> via <see cref="ITransportHealthSink"/>. The reader loop reports
-/// failed reads — including a zero-byte read, which on a socket means the peer closed — and
-/// <see cref="TransportConnectionWatchdog.ConsecutiveFaultThreshold"/> consecutive failures with
-/// no successful transfer in between close the socket and raise <see cref="StatusChanged"/> with
-/// <c>IsConnected == false</c>. A closed or reset connection is therefore reported within a
-/// fraction of a second.
+/// failed reads — including a zero-byte read, which on a socket means the peer closed — and five
+/// consecutive failures with no successful transfer in between close the socket and raise
+/// <see cref="StatusChanged"/> with <c>IsConnected == false</c>. A closed or reset connection is
+/// therefore reported within a fraction of a second. A read that merely hits its timeout is not a
+/// failure and is never reported.
 /// </description></item>
 /// <item><description>
-/// <b>TCP keep-alive</b> (see <see cref="KeepAliveTimeSeconds"/>), so a link that is silently
-/// severed — a device losing power or dropping off WiFi, where no FIN or RST ever arrives — still
-/// fails a read instead of hanging forever. This bounds detection of a silent drop at roughly
+/// <b>TCP keep-alive</b> (10 s idle, 3 s probes, 3 retries), so a link that is silently severed —
+/// a device losing power or dropping off WiFi, where no FIN or RST ever arrives — still fails a
+/// read instead of hanging forever. This bounds detection of a silent drop at roughly
 /// <b>twenty seconds</b> of idleness.
 /// </description></item>
 /// </list>
@@ -354,9 +354,8 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
 
     /// <inheritdoc />
     /// <remarks>
-    /// Escalates to a lost connection only after
-    /// <see cref="TransportConnectionWatchdog.ConsecutiveFaultThreshold"/> failures with no
-    /// successful transfer in between, so a transient read error cannot tear down a healthy socket.
+    /// Escalates to a lost connection only after five failures with no successful transfer in
+    /// between, so a transient read error cannot tear down a healthy socket.
     /// </remarks>
     public void ReportIoFault(Exception error)
     {

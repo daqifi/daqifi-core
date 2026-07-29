@@ -48,6 +48,27 @@ public class MessageProducerHealthReportingTests
     }
 
     [Fact]
+    public void WhenWritesTimeOut_NoFaultIsReported()
+    {
+        // A write timeout means the device is not draining its buffer right now, not that the
+        // link is gone. Escalating it would disconnect a healthy but momentarily busy device.
+        using var stream = new FailingWriteStream { TimeoutWrites = true };
+        var sink = new CountingHealthSink();
+        using var producer = new MessageProducer<string>(stream, healthSink: sink);
+
+        producer.Start();
+        for (var i = 0; i < 5; i++)
+        {
+            producer.Send(new ScpiMessage($"CMD{i}"));
+        }
+
+        Assert.True(WaitUntil(() => producer.QueuedMessageCount == 0, TimeSpan.FromSeconds(5)));
+        Thread.Sleep(100);
+        Assert.Equal(0, sink.FaultCount);
+        Assert.Equal(0, sink.SuccessCount);
+    }
+
+    [Fact]
     public void WithNoHealthSink_TheProducerBehavesExactlyAsBefore()
     {
         using var stream = new FailingWriteStream { FailWrites = true };
@@ -91,9 +112,15 @@ public class MessageProducerHealthReportingTests
     private sealed class FailingWriteStream : MemoryStream
     {
         public volatile bool FailWrites;
+        public volatile bool TimeoutWrites;
 
         public override void Write(byte[] buffer, int offset, int count)
         {
+            if (TimeoutWrites)
+            {
+                throw new TimeoutException("the device is not draining its buffer");
+            }
+
             if (FailWrites)
             {
                 throw new IOException("the device is gone");

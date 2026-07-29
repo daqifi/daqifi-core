@@ -182,7 +182,17 @@ public class MessageProducer<T> : IMessageProducer<T>
                             // bad write doesn't stall the remaining messages. Tell the transport
                             // too — it is the only component that can decide a run of failures
                             // means the device is gone rather than glitching.
-                            _healthSink?.ReportIoFault(ex);
+                            //
+                            // A write TIMEOUT is deliberately excluded: it means the device is not
+                            // draining its receive buffer right now (busy, or flow-controlled), not
+                            // that the link is gone. Treating it as evidence of a disconnect could
+                            // tear down a healthy connection to a momentarily busy device — the
+                            // same reason the reader loop treats a read timeout as benign.
+                            if (ex is not TimeoutException)
+                            {
+                                _healthSink?.ReportIoFault(ex);
+                            }
+
                             SafeLog(() => _logger.LogWarning(ex, "Failed to write message to the stream; continuing with remaining queued messages."));
                         }
                     }

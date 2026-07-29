@@ -17,20 +17,20 @@ namespace Daqifi.Core.Communication.Transport;
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <b>Port-presence polling</b> at <see cref="DefaultLivenessCheckInterval"/> (1 s), requiring
-/// <see cref="TransportConnectionWatchdog.PresenceMissThreshold"/> consecutive misses. This bounds
-/// detection of an unplug at <b>roughly three seconds</b> even on a completely idle connection.
-/// Presence is <see cref="SerialPort.GetPortNames"/> containing the port, falling back to the
-/// device node still existing on Unix — no WMI, so it behaves identically on Windows, macOS, and
-/// Linux. It is armed only if the port is visible to that probe at connect time, so a platform or
-/// port-name spelling the probe cannot see disables the check rather than reporting a false drop.
+/// <b>Port-presence polling</b> at <see cref="DefaultLivenessCheckInterval"/> (1 s), requiring two
+/// consecutive misses. This bounds detection of an unplug at <b>roughly three seconds</b> even on
+/// a completely idle connection. Presence is <see cref="SerialPort.GetPortNames"/> containing the
+/// port, falling back to the device node still existing on Unix — no WMI, so it behaves
+/// identically on Windows, macOS, and Linux. It is armed only if the port is visible to that probe
+/// at connect time, so a platform or port-name spelling the probe cannot see disables the check
+/// rather than reporting a false drop.
 /// </description></item>
 /// <item><description>
 /// <b>I/O fault escalation</b> via <see cref="ITransportHealthSink"/>: the reader/writer loops
-/// report failures, and <see cref="TransportConnectionWatchdog.ConsecutiveFaultThreshold"/>
-/// consecutive failures with no successful transfer in between are treated as a drop. Under
-/// traffic this reports within a few hundred milliseconds; a single failed read that then recovers
-/// never disconnects.
+/// report failures, and five consecutive failures with no successful transfer in between are
+/// treated as a drop. Under traffic this reports within a few hundred milliseconds; a single
+/// failed read that then recovers never disconnects, and a read or write that merely hits its
+/// timeout is not a failure at all.
 /// </description></item>
 /// </list>
 /// <para>
@@ -42,9 +42,8 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 {
     /// <summary>
     /// Default cadence at which an established connection is checked for the continued presence of
-    /// its serial port. Combined with
-    /// <see cref="TransportConnectionWatchdog.PresenceMissThreshold"/> consecutive misses, an
-    /// unplugged device is reported within roughly three seconds.
+    /// its serial port. Combined with the two consecutive misses required to act, an unplugged
+    /// device is reported within roughly three seconds.
     /// </summary>
     public static readonly TimeSpan DefaultLivenessCheckInterval =
         TransportConnectionWatchdog.DefaultPresencePollInterval;
@@ -317,9 +316,8 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 
     /// <inheritdoc />
     /// <remarks>
-    /// Escalates to a lost connection only after
-    /// <see cref="TransportConnectionWatchdog.ConsecutiveFaultThreshold"/> failures with no
-    /// successful transfer in between, so a transient read error cannot tear down a healthy port.
+    /// Escalates to a lost connection only after five failures with no successful transfer in
+    /// between, so a transient read error cannot tear down a healthy port.
     /// </remarks>
     public void ReportIoFault(Exception error)
     {
