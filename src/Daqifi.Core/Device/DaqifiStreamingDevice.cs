@@ -1668,8 +1668,7 @@ namespace Daqifi.Core.Device
                     // an earlier command could pass for this listing's terminator. Querying the card
                     // too soon after the switch makes the device answer -200 (Execution error), so
                     // the wait itself is not optional.
-                    lines = await ExecuteTextCommandWithPrepareAsync(
-                        PrepareSdInterfaceAndSettleAsync,
+                    lines = await ExecuteTextCommandAsync(
                         () =>
                         {
                             Send(ScpiMessageProducer.GetSdFileList);
@@ -1680,7 +1679,8 @@ namespace Daqifi.Core.Device
                         },
                         responseTimeoutMs: 3000,
                         completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
-                        cancellationToken: cancellationToken);
+                        cancellationToken: cancellationToken,
+                        prepareAsync: PrepareSdInterfaceAndSettleAsync);
 
                     isComplete = TrySplitAtSdListTerminator(lines, out listing);
 
@@ -1716,7 +1716,9 @@ namespace Daqifi.Core.Device
         /// the card and waits for the firmware to complete the switch.
         /// </summary>
         /// <remarks>
-        /// Passed to <see cref="DaqifiDevice.ExecuteTextCommandWithPrepareAsync"/> rather than run
+        /// Passed as the <c>prepareAsync</c> phase of
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
+        /// rather than run
         /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
         /// LAN interface between the switch and the commands that depend on it would leave them
         /// running against the wrong interface — and ahead of the exchange's stale-line boundary, so
@@ -2142,15 +2144,15 @@ namespace Daqifi.Core.Device
                 // wait stays outside the stale-line boundary. The consequence of a stale line is
                 // milder here (delete keys off ContainsScpiError, so it would mean a pointless
                 // delete-and-relist retry rather than a bad listing) but it is the same defect.
-                lines = await ExecuteTextCommandWithPrepareAsync(
-                    PrepareSdInterfaceAndSettleAsync,
+                lines = await ExecuteTextCommandAsync(
                     () =>
                     {
                         Send(ScpiMessageProducer.DeleteSdFile(fileName));
                         Send(ScpiMessageProducer.GetSdFileList);
                     },
                     responseTimeoutMs: 3000,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken,
+                    prepareAsync: PrepareSdInterfaceAndSettleAsync);
 
                 if (ContainsScpiError(lines))
                 {
@@ -2160,15 +2162,15 @@ namespace Daqifi.Core.Device
 
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
 
-                        lines = await ExecuteTextCommandWithPrepareAsync(
-                            PrepareSdInterfaceAndSettleAsync,
+                        lines = await ExecuteTextCommandAsync(
                             () =>
                             {
                                 Send(ScpiMessageProducer.DeleteSdFile(fileName));
                                 Send(ScpiMessageProducer.GetSdFileList);
                             },
                             responseTimeoutMs: 3000,
-                            cancellationToken: cancellationToken);
+                            cancellationToken: cancellationToken,
+                            prepareAsync: PrepareSdInterfaceAndSettleAsync);
 
                         if (!ContainsScpiError(lines))
                         {

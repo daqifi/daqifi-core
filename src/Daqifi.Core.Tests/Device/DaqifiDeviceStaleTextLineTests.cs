@@ -97,6 +97,63 @@ public class DaqifiDeviceStaleTextLineTests
         device.Disconnect();
     }
 
+    [Fact]
+    public async Task ExecuteTextCommand_CarryingAPreparePhase_IsStillCaughtByASubclassOverride()
+    {
+        // The prepare phase is a parameter on the existing virtual rather than a second virtual
+        // method, so a subclass that overrides ExecuteTextCommandAsync keeps intercepting the SD
+        // operations that use it. A parallel seam would route past such an override with no compile
+        // error and no runtime signal — an instrumented device or test double would simply stop
+        // seeing SD traffic. If this ever regresses to a sibling method, this test fails.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new InterceptingTestableDevice("Intercepting Device", transport);
+
+        device.Connect();
+
+        var prepared = false;
+        var lines = await device.CallWithPrepareAsync(
+            _ => { prepared = true; return Task.CompletedTask; },
+            () => { });
+
+        Assert.True(device.Intercepted, "The subclass override did not see the call.");
+        Assert.True(prepared, "The override was handed the prepare phase and ran it.");
+        Assert.Equal(new[] { "from the override" }, lines);
+
+        device.Disconnect();
+    }
+
+    /// <summary>
+    /// Stands in for a downstream subclass or test double that intercepts the text exchange —
+    /// the case the single-seam design protects.
+    /// </summary>
+    private sealed class InterceptingTestableDevice : StaleLineTestableDevice
+    {
+        public InterceptingTestableDevice(string name, IStreamTransport transport)
+            : base(name, transport)
+        {
+        }
+
+        public bool Intercepted { get; private set; }
+
+        protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            Action setupAction,
+            int responseTimeoutMs = 1000,
+            int completionTimeoutMs = 250,
+            CancellationToken cancellationToken = default,
+            Func<CancellationToken, Task>? prepareAsync = null)
+        {
+            Intercepted = true;
+
+            if (prepareAsync != null)
+            {
+                await prepareAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            setupAction();
+            return new List<string> { "from the override" };
+        }
+    }
+
     /// <summary>Exposes the protected text-exchange entry points.</summary>
     private class StaleLineTestableDevice : DaqifiDevice
     {
@@ -114,8 +171,11 @@ public class DaqifiDeviceStaleTextLineTests
             Func<CancellationToken, Task> prepareAsync,
             Action setupAction)
         {
-            return ExecuteTextCommandWithPrepareAsync(
-                prepareAsync, setupAction, responseTimeoutMs: 500, completionTimeoutMs: 150);
+            return ExecuteTextCommandAsync(
+                setupAction,
+                responseTimeoutMs: 500,
+                completionTimeoutMs: 150,
+                prepareAsync: prepareAsync);
         }
     }
 
