@@ -237,16 +237,25 @@ public class DaqifiDeviceCapabilityDocumentTests
             }
         }
 
-        protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+        protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            Func<CancellationToken, Task>? prepareAsync = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Honor the exchange's prepare phase the way the real device does: it runs first,
+            // before anything this exchange sends (#396).
+            if (prepareAsync != null)
+            {
+                await prepareAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             var before = SentCommands.Count;
             setupAction();
-            return Task.FromResult(ResponsesSince(before));
+            return ResponsesSince(before);
         }
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
