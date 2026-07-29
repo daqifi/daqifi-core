@@ -121,6 +121,37 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetSystemError => new ScpiMessage("SYSTem:ERRor?");
 
     /// <summary>
+    /// Creates a query message to read the schema version of the device's capability document.
+    /// </summary>
+    /// <remarks>
+    /// Returns a single unsigned integer — the capability schema version byte. The firmware bumps
+    /// it only on a <i>breaking</i> schema change (field rename/removal, type change, semantics
+    /// change, layout reshape); additive fields do not bump it. Issue this before
+    /// <see cref="GetCapabilitiesJson"/> and dispatch on the result rather than assuming the
+    /// document's shape is stable across firmware versions.
+    /// Requires firmware v3.5.0 or newer (<see cref="Device.DeviceFeature.CapabilityDocument"/>).
+    /// Command: CONFigure:CAPabilities:APIVersion?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetCapabilitiesApiVersion);
+    /// </remarks>
+    public static IOutboundMessage<string> GetCapabilitiesApiVersion =>
+        new ScpiMessage("CONFigure:CAPabilities:APIVersion?");
+
+    /// <summary>
+    /// Creates a query message to read the device's capability document.
+    /// </summary>
+    /// <remarks>
+    /// Returns the device's self-description as a single line of JSON (several kilobytes on a
+    /// 16-channel board): identity, a flat <c>channels[]</c> array, and <c>streaming</c>,
+    /// <c>storage</c>, <c>power</c>, <c>transports</c> and <c>triggers</c> blocks. Parse it with
+    /// <see cref="Device.Capabilities.CapabilityDocumentParser"/>.
+    /// Requires firmware v3.5.0 or newer (<see cref="Device.DeviceFeature.CapabilityDocument"/>).
+    /// Command: CONFigure:CAPabilities:JSON?
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetCapabilitiesJson);
+    /// </remarks>
+    public static IOutboundMessage<string> GetCapabilitiesJson =>
+        new ScpiMessage("CONFigure:CAPabilities:JSON?");
+
+    /// <summary>
     /// Creates a command message to force the device into bootloader mode.
     /// </summary>
     /// <remarks>

@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Protocol;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging;
@@ -1088,6 +1089,128 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Lowest capability-document schema version daqifi-core will parse.
+        /// </summary>
+        public const int MinimumCapabilityDocumentApiVersion = 1;
+
+        /// <summary>
+        /// Highest capability-document schema version daqifi-core has been written against.
+        /// </summary>
+        /// <remarks>
+        /// The firmware bumps its schema version only on a <i>breaking</i> change — a field
+        /// renamed, removed, retyped, given new semantics, or the layout reshaped — while additive
+        /// fields ship without a bump. A version above this one is therefore a document whose
+        /// existing fields may no longer mean what this parser assumes, and trusting it could hand
+        /// a consumer a plausible but wrong number. Such a device keeps its board-derived
+        /// capabilities instead, which is the same safe outcome as a device that cannot answer at
+        /// all. Raise this constant together with the parser when adopting a newer schema.
+        /// </remarks>
+        public const int MaximumCapabilityDocumentApiVersion = 2;
+
+        /// <summary>Time allowed for the one-line <c>CONFigure:CAPabilities:APIVersion?</c> reply.</summary>
+        private const int CapabilityApiVersionResponseTimeoutMs = 1000;
+
+        /// <summary>Time allowed for the first line of the capability document.</summary>
+        private const int CapabilityDocumentResponseTimeoutMs = 3000;
+
+        /// <summary>
+        /// Inactivity window that ends capability-document collection. Generous because the
+        /// document is a single line of several kilobytes: on a device that echoes commands, the
+        /// echo arrives first and starts the completion clock while the document is still in
+        /// flight, so a short window would cut the response off before its only useful line.
+        /// </summary>
+        private const int CapabilityDocumentCompletionTimeoutMs = 1500;
+
+        /// <summary>
+        /// Reads the device's capability document (<c>CONFigure:CAPabilities:JSON?</c>) and
+        /// overlays it onto <see cref="DeviceMetadata.Capabilities"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Best-effort and non-destructive to what is already known. The read is skipped unless
+        /// <see cref="Supports"/> reports <see cref="DeviceFeature.CapabilityDocument"/> (firmware
+        /// v3.5.0 and newer), and the document is only trusted after
+        /// <c>CONFigure:CAPabilities:APIVersion?</c> reports a schema version this parser
+        /// understands. Any other outcome — an unanswered query, an out-of-range schema version,
+        /// an unparseable reply — returns <c>null</c> and leaves the board-derived capabilities
+        /// exactly as they were.
+        /// </para>
+        /// <para>
+        /// The overlay is a merge: <see cref="DeviceCapabilities.FromDeviceType"/> remains the
+        /// bootstrap and the fallback for every field the document does not state
+        /// (<see cref="CapabilityDocument.MergeInto"/>). <see cref="InitializeAsync"/> calls this
+        /// once, after the device reports its board and firmware version. Call it again whenever a
+        /// fresh <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> is needed — that figure is
+        /// computed from the channel set enabled at the moment of the read, so it goes stale as
+        /// soon as the enabled set changes.
+        /// </para>
+        /// <para>
+        /// This runs a text-mode exchange, which pauses the protobuf consumer for its duration.
+        /// Do not call it while streaming.
+        /// </para>
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe while reading.</param>
+        /// <returns>
+        /// The parsed document, which has already been applied to <see cref="Metadata"/>; or
+        /// <c>null</c> when the device did not supply one this parser can trust.
+        /// </returns>
+        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public virtual async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
+            CancellationToken cancellationToken = default)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Device is not connected.");
+            }
+
+            if (!Supports(DeviceFeature.CapabilityDocument))
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] Skipped: the device does not report support for the capability document."));
+                return null;
+            }
+
+            var versionLines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetCapabilitiesApiVersion),
+                responseTimeoutMs: CapabilityApiVersionResponseTimeoutMs,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (!CapabilityDocumentParser.TryParseApiVersion(versionLines, out var apiVersion))
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] The device did not report a capability schema version; keeping board-derived capabilities."));
+                return null;
+            }
+
+            if (apiVersion < MinimumCapabilityDocumentApiVersion || apiVersion > MaximumCapabilityDocumentApiVersion)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] Capability schema version {ApiVersion} is outside the supported range {MinVersion}..{MaxVersion}; keeping board-derived capabilities.",
+                    apiVersion,
+                    MinimumCapabilityDocumentApiVersion,
+                    MaximumCapabilityDocumentApiVersion));
+                return null;
+            }
+
+            var documentLines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetCapabilitiesJson),
+                responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
+                completionTimeoutMs: CapabilityDocumentCompletionTimeoutMs,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (!CapabilityDocumentParser.TryParseLines(documentLines, out var document))
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] The capability document did not parse; keeping board-derived capabilities."));
+                return null;
+            }
+
+            Metadata.ApplyCapabilityDocument(document);
+            return document;
+        }
+
+        /// <summary>
         /// Raises the <see cref="MessageReceived"/> event when a message is received from the device.
         /// </summary>
         /// <param name="message">The message received from the device.</param>
@@ -1276,6 +1399,16 @@ namespace Daqifi.Core.Device
                     effectiveChannelPopulationTimeout,
                     cancellationToken).ConfigureAwait(false);
 
+                // Ask the device to describe itself, now that it has reported its board and
+                // firmware version — Supports(CapabilityDocument) fails closed on an unknown
+                // firmware version, so an earlier read would skip on every device. This is its own
+                // SCPI round-trip rather than something folded into status processing: the
+                // document does not ride along in the protobuf status message, and a text exchange
+                // pauses the protobuf consumer, which is only safe at a quiescent point like this
+                // one. It runs before OnDeviceInitializingAsync so derived-class initialization
+                // already sees the device's own capabilities.
+                await TryReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+
                 // Run any derived-class initialization (e.g. routing the stream to USB) as part of
                 // this try/catch so a failure there leaves the device in a consistent terminal state
                 // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
@@ -1314,6 +1447,33 @@ namespace Daqifi.Core.Device
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         protected virtual Task OnDeviceInitializingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        /// <summary>
+        /// Runs the capability-document read during initialization, absorbing any failure.
+        /// </summary>
+        /// <remarks>
+        /// The document is an enrichment, never a requirement: a device that cannot supply one is
+        /// fully usable on its board-derived capabilities, so letting a failed read fail the whole
+        /// initialization would newly refuse devices that work today. Cancellation still
+        /// propagates — that is the caller's own request, not a device fault.
+        /// </remarks>
+        private async Task TryReadCapabilityDocumentAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    ex,
+                    "[InitializeAsync] Reading the capability document failed; keeping board-derived capabilities."));
+            }
+        }
 
         /// <summary>
         /// Sends <c>GetDeviceInfo</c> and waits for the device to report its channel

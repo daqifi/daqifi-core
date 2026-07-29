@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-06-19)
 - **Issue:** [#251](https://github.com/daqifi/daqifi-core/issues/251)
-- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal), [#256](https://github.com/daqifi/daqifi-core/issues/256) (version table + `Supports()` seam; #327 reader still deferred)
+- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal), [#256](https://github.com/daqifi/daqifi-core/issues/256) (version table + `Supports()` seam), [#390](https://github.com/daqifi/daqifi-core/issues/390) (capability-document reader)
 - **Supersedes:** —
 
 > **Note on the evidence section.** §"Context — firmware audit" below is a *living*
@@ -170,12 +170,13 @@ forward-looking third:
 3. **`DeviceFeature` version table (deferred → built)** — introduce only when we start consuming
    a command newer than the floor. That happened with SD-over-WiFi (≥ v3.7.0), so the table now
    exists; see the implementation note below.
-4. **#327 capability document (later, non-blocking)** — when a device answers
-   `CONFigure:CAPabilities:APIVersion?` ≥ 1, populate `DeviceCapabilities` from the live
-   `CONFigure:CAPabilities:JSON?` document. The floor/board logic remains the bootstrap and
-   the fallback for anything that predates or omits the query. Note: #327 the *issue* is
-   closed, but the capability *commands* shipped in v3.5.0 and are maintained (#548), so this
-   is a real growth path — we just don't lean on "#327 the framework."
+4. **Capability document (deferred → built)** — when a device answers
+   `CONFigure:CAPabilities:APIVersion?` with a schema version this parser understands, populate
+   `DeviceCapabilities` from the live `CONFigure:CAPabilities:JSON?` document. The floor/board
+   logic remains the bootstrap and the fallback for anything that predates or omits the query.
+   Built in [#390](https://github.com/daqifi/daqifi-core/issues/390); see the implementation note
+   below. Note: firmware #327 the *issue* is closed, but the capability *commands* shipped in
+   v3.5.0 and are maintained (#548) — we depend on the commands, not on "#327 the framework."
 
 ### Evaluate `Supports` lazily — don't cache version-derived flags
 
@@ -264,7 +265,50 @@ from the firmware audit table above. Both previously hand-rolled gates — the S
 transport gate and the SD-storage-query `-113` backstop — now resolve their required version and
 board through it; `EnsureSdFileTransferSupportedOnTransport()` retains only the transport
 predicate (which feature applies over WiFi vs. USB) and delegates the support question to the
-seam. Part 2 — the `CONFigure:CAPabilities:JSON?` / `:APIVersion?` reader — remains deferred.
+seam. Part 2 — the `CONFigure:CAPabilities:JSON?` / `:APIVersion?` reader — followed in #390; see
+the next note.
+
+### Implementation note (2026-07-29, issue [#390](https://github.com/daqifi/daqifi-core/issues/390))
+
+Decision 2 item 4 is **built**. `DaqifiDevice.ReadCapabilityDocumentAsync()` issues
+`CONFigure:CAPabilities:APIVersion?` and `CONFigure:CAPabilities:JSON?`, and
+[`CapabilityDocumentParser`](../../src/Daqifi.Core/Device/Capabilities/CapabilityDocumentParser.cs)
+turns the reply into a
+[`CapabilityDocument`](../../src/Daqifi.Core/Device/Capabilities/CapabilityDocument.cs) kept on
+`DeviceMetadata.CapabilityDocument`. Four details worth recording:
+
+- **Two gates, not one.** The read is skipped entirely unless
+  `Supports(DeviceFeature.CapabilityDocument)` (already in the table at v3.5.0), and the document
+  is only trusted when the reported schema version falls within
+  `MinimumCapabilityDocumentApiVersion..MaximumCapabilityDocumentApiVersion` (1..2 today). The
+  upper bound is deliberate: firmware bumps that byte *only* on a breaking change, so a higher
+  version is a document whose fields may no longer mean what this parser assumes — and the board
+  table is a better answer than a plausible-but-wrong number. Raise the constant together with the
+  parser when adopting a newer schema.
+- **Merge, never replace.** `CapabilityDocument.MergeInto` overlays only the fields the document
+  actually states; everything else keeps its `FromDeviceType` value. Every parsed field is
+  nullable, so "omitted" can never read as "absent" — which is what preserves the `Unknown`-board
+  rule above. `HasWincWifiModule` and `SupportsStreaming` are never overlaid: the schema carries no
+  chipset facts by design, and it emits the `streaming` block unconditionally.
+- **`UpdateFromProtobuf` had to stop replacing.** It rebuilt `Capabilities` from the board table on
+  *every* status message carrying a part number, which would have discarded the overlay mid-session
+  (and was already discarding channel counts). It now rebuilds only when the detected board
+  actually changes, and re-applies the document overlay last, so the device's own answer outranks
+  both the board table and the status message's port counts.
+- **The refresh point is the connect sequence, not status processing.** The document is a real SCPI
+  round-trip — it does not ride along in the protobuf status message, and reading it pauses the
+  protobuf consumer — so `InitializeAsync` reads it once after the device reports its board and
+  firmware version (the version gate fails closed, so an earlier read would skip on every device)
+  and before `OnDeviceInitializingAsync`. A failed read is absorbed: the device keeps its
+  board-derived capabilities, so nothing that works today starts failing. Callers needing a fresh
+  `current_max_rate_hz`, which tracks the enabled channel set, call `ReadCapabilityDocumentAsync()`
+  again.
+
+Bench-validated against the NQ1 on firmware 3.7.2: the document agrees with `FromDeviceType` on
+every flag it states (SD, WiFi, USB) and supplies the channel counts (16 analog in, 0 analog out,
+16 digital). The single disagreement is `MaxSamplingRate` — the table's hardcoded `1000` against
+the device's `22000` — and it is the disagreement this reader exists to resolve: that literal
+predates firmware v3.5.0 removing the Type-2 muxed scan-rate cap (firmware #528).
 
 ## Alternatives considered
 
@@ -305,12 +349,17 @@ their place.**
    firmware SCPI table. Public-API removal, separate from the #253 fix.
 3. [#256](https://github.com/daqifi/daqifi-core/issues/256) — `DeviceFeature` version table +
    lazy `Supports(...)`: **done** (triggered by SD-over-WiFi @ v3.7.0; see the implementation
-   note under Decision 2). The `CONFigure:CAPabilities:JSON?` reader (#327 growth path) is
-   **still deferred** and tracked separately.
+   note under Decision 2).
+4. [#390](https://github.com/daqifi/daqifi-core/issues/390) — `CONFigure:CAPabilities:JSON?` /
+   `:APIVersion?` reader populating `DeviceCapabilities`: **done** (triggered by
+   daqifi-desktop [#118](https://github.com/daqifi/daqifi-desktop/issues/118), which needs a
+   per-configuration streaming ceiling the static table cannot express; see the implementation
+   note under Decision 2).
 
 ## Out of scope
 
-The full #327 capability-document reader; the version table (until a post-floor command needs
-it); version-selected command emit (obviated by the floor). This ADR covers the
-investigation, the strategy decision, the v3.5.0 floor, and the minimal board-gate + typed
-`-113` backstop.
+The version table (until a post-floor command needs it) and version-selected command emit
+(obviated by the floor) were both out of scope for this ADR's original decision; the table has
+since been built under #256, and the capability-document reader — deferred at the time of writing
+— under #390. This ADR covers the investigation, the strategy decision, the v3.5.0 floor, and the
+minimal board-gate + typed `-113` backstop.
