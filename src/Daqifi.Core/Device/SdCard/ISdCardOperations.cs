@@ -40,6 +40,11 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (e.g. corrupt card, unreadable directory).</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. An empty directory returns an empty list rather than throwing.</exception>
+        /// <exception cref="SdCardListIncompleteException">
+        /// Thrown when the device did not answer the listing query, or stopped answering part-way
+        /// through it. An empty result therefore always means an empty card — never an unreachable
+        /// device — so callers can render it as such (closes #396).
+        /// </exception>
         Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
