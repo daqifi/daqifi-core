@@ -99,6 +99,14 @@ public sealed class SdCardFileReceiver
                         $"Received {totalBytesReceived} bytes before timeout.");
                 }
 
+                // A read can complete without ever having observed the token: System.IO.Ports'
+                // SerialStream ignores the CancellationToken once a read is in flight, so a
+                // cancellation requested mid-read is only visible here. Checking it every
+                // iteration is what makes the accepted token actually honored rather than
+                // merely accepted (#399) — including on the zero-byte path below, which would
+                // otherwise report a cancelled transfer as a timeout.
+                token.ThrowIfCancellationRequested();
+
                 if (bytesRead == 0)
                 {
                     // Stream ended without EOF marker — treat as timeout/error

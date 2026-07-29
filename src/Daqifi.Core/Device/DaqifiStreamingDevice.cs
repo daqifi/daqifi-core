@@ -2092,6 +2092,22 @@ namespace Daqifi.Core.Device
         /// retry attempts, indicating its SD subsystem is not ready rather than the file being
         /// legitimately empty.
         /// </exception>
+        /// <exception cref="TimeoutException">
+        /// Thrown when the download does not finish within <see cref="SdCardDownloadTimeout"/>.
+        /// The deadline is enforced by this method itself, so it still applies when the transfer
+        /// is parked in a call that cannot observe a cancellation token (#399).
+        /// </exception>
+        /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
+        /// <remarks>
+        /// On a timeout — or a cancellation the parked transfer cannot itself observe — the
+        /// in-flight transfer is <b>abandoned</b> rather than awaited: it may be blocked in native
+        /// serial I/O that no token can interrupt, and waiting for it is the hang this method
+        /// exists to bound. Two consequences for callers: the abandoned transfer can still write
+        /// to <paramref name="destinationStream"/> after this method has thrown, so the stream
+        /// must not be reused for anything else; and the device is left mid-<c>SD:GET</c>, so
+        /// reconnecting (or power-cycling, if its SD subsystem is genuinely wedged) is the
+        /// reliable way to resume normal operation.
+        /// </remarks>
         public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             Stream destinationStream,
@@ -2129,49 +2145,56 @@ namespace Daqifi.Core.Device
 
             var stopwatch = Stopwatch.StartNew();
             long fileSize = 0;
+            var budget = SdCardDownloadTimeout;
 
             try
             {
-                await ExecuteRawCaptureAsync(async (stream, ct) =>
+                await RunWithHardDeadlineAsync(async token =>
                 {
-                    // Prepare SD card interface
-                    PrepareSdInterface();
-
-                    // Small delay to let the interface switch settle
-                    await Task.Delay(50, ct).ConfigureAwait(false);
-
-                    // Send the SCPI command to request the file
-                    Send(ScpiMessageProducer.GetSdFile(fileName));
-
-                    // Receive the file data. A marker-only (0-byte) transfer means the device's
-                    // SD subsystem wasn't ready when it opened the file - the same kind of
-                    // transient condition GetSdCardFilesAsync's LIST retry already absorbs - so
-                    // retry the GET a bounded number of times before giving up (see #264).
-                    var receiver = new SdCardFileReceiver(stream);
-                    long bytesReceived;
-                    var attempt = 0;
-                    while (true)
+                    await ExecuteRawCaptureAsync(async (stream, ct) =>
                     {
-                        try
-                        {
-                            bytesReceived = await receiver.ReceiveAsync(
-                                destinationStream,
-                                fileName,
-                                progress,
-                                timeout: TimeSpan.FromMinutes(30),
-                                cancellationToken: ct).ConfigureAwait(false);
-                            break;
-                        }
-                        catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
-                        {
-                            attempt++;
-                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
-                            Send(ScpiMessageProducer.GetSdFile(fileName));
-                        }
-                    }
+                        // Prepare SD card interface
+                        PrepareSdInterface();
 
-                    fileSize = bytesReceived;
-                }, cancellationToken).ConfigureAwait(false);
+                        // Small delay to let the interface switch settle
+                        await Task.Delay(50, ct).ConfigureAwait(false);
+
+                        // Send the SCPI command to request the file
+                        Send(ScpiMessageProducer.GetSdFile(fileName));
+
+                        // Receive the file data. A marker-only (0-byte) transfer means the device's
+                        // SD subsystem wasn't ready when it opened the file - the same kind of
+                        // transient condition GetSdCardFilesAsync's LIST retry already absorbs - so
+                        // retry the GET a bounded number of times before giving up (see #264).
+                        var receiver = new SdCardFileReceiver(stream);
+                        long bytesReceived;
+                        var attempt = 0;
+                        while (true)
+                        {
+                            try
+                            {
+                                // Each attempt gets what is left of the overall budget, never a
+                                // fresh full one: retries must not be able to push the total past
+                                // the deadline the caller was promised.
+                                bytesReceived = await receiver.ReceiveAsync(
+                                    destinationStream,
+                                    fileName,
+                                    progress,
+                                    timeout: RemainingBudget(budget, stopwatch),
+                                    cancellationToken: ct).ConfigureAwait(false);
+                                break;
+                            }
+                            catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
+                            {
+                                attempt++;
+                                await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
+                                Send(ScpiMessageProducer.GetSdFile(fileName));
+                            }
+                        }
+
+                        fileSize = bytesReceived;
+                    }, token).ConfigureAwait(false);
+                }, budget, fileName, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -2229,6 +2252,139 @@ namespace Daqifi.Core.Device
             {
                 try { File.Delete(tempPath); } catch { /* ignore cleanup failures */ }
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Overall wall-clock budget for one
+        /// <see cref="DownloadSdCardFileAsync(string, Stream, IProgress{SdCardTransferProgress}?, CancellationToken)"/>
+        /// call, covering every GET attempt. This is the per-transfer limit the receiver has
+        /// always applied; what #399 changed is that the download now enforces it itself instead
+        /// of trusting whatever the transfer is parked in to notice a cancellation token.
+        /// </summary>
+        /// <remarks>Virtual only as a test seam — a 30-minute budget is not unit-testable.</remarks>
+        internal virtual TimeSpan SdCardDownloadTimeout => TimeSpan.FromMinutes(30);
+
+        /// <summary>
+        /// The part of <paramref name="budget"/> not yet consumed, floored at zero (a negative
+        /// timeout is not a legal <see cref="CancellationTokenSource"/> delay).
+        /// </summary>
+        private static TimeSpan RemainingBudget(TimeSpan budget, Stopwatch stopwatch)
+        {
+            var remaining = budget - stopwatch.Elapsed;
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+
+        /// <summary>
+        /// The instant the download is given up on regardless of what it is doing. It sits just
+        /// past the cooperative <paramref name="budget"/> so that a transfer which IS observing
+        /// its token still fails through the receiver's own timeout — which reports how many
+        /// bytes arrived — and the hard deadline only decides the case where it is not.
+        /// </summary>
+        private static TimeSpan HardDeadlineFor(TimeSpan budget)
+        {
+            var graceMs = Math.Clamp(budget.TotalMilliseconds * 0.1, 100, 5000);
+            return budget + TimeSpan.FromMilliseconds(graceMs);
+        }
+
+        /// <summary>
+        /// Runs an SD download on a worker task and races it against a hard deadline, so neither
+        /// the deadline nor the caller's cancellation depends on the transfer being somewhere it
+        /// can observe a token (#399). On expiry the worker is abandoned rather than awaited.
+        /// </summary>
+        /// <param name="operation">The transfer. Receives a token cancelled by caller cancellation or the deadline, whichever comes first.</param>
+        /// <param name="budget">The cooperative budget; the hard deadline is <see cref="HardDeadlineFor"/> of it.</param>
+        /// <param name="fileName">Used only in the <see cref="TimeoutException"/> message.</param>
+        /// <param name="cancellationToken">The caller's token, observed by the race itself and not only by the worker.</param>
+        private static async Task RunWithHardDeadlineAsync(
+            Func<CancellationToken, Task> operation,
+            TimeSpan budget,
+            string fileName,
+            CancellationToken cancellationToken)
+        {
+            var hardDeadline = HardDeadlineFor(budget);
+
+            // hardDeadlineCts runs on its own timer, independent of the Task.Delay race below, so
+            // it still reaches the worker if the worker only returns long after the race was
+            // decided. linkedCts is what the worker observes: caller cancellation OR the deadline.
+            var hardDeadlineCts = new CancellationTokenSource(hardDeadline);
+            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardDeadlineCts.Token);
+
+            // Stops the racing delay the moment the outcome is decided — without it, a download
+            // that finishes in a second would leave a 30-minute timer registered behind it.
+            var raceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            // LongRunning (a dedicated thread, not a pooled one): the transfer's synchronous
+            // prefix — the consumer stop-and-join, PrepareSdInterface's blocking writes — otherwise
+            // runs on the CALLING thread up to the first await, which on a UI thread means a
+            // wedged device freezes the window, and which would put that prefix outside the very
+            // deadline it needs to be inside. A pooled Task.Run would also tie up a worker for the
+            // transfer's full blocking duration. Pass CancellationToken.None to StartNew itself:
+            // the worker's own token still cancels its waits, and "cancelled before start" must
+            // not surface as an operation fault. (Mirrors WifiBridgeActivator, #294/#295/#326.)
+            var workerTask = Task.Factory.StartNew(
+                () => operation(linkedCts.Token),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default).Unwrap();
+
+            try
+            {
+                var winner = await Task.WhenAny(
+                    workerTask,
+                    Task.Delay(hardDeadline, raceCts.Token)).ConfigureAwait(false);
+
+                // Only abandon when the worker is genuinely still running: WhenAny can hand back
+                // the delay even though the worker completed at that same boundary, and awaiting
+                // it below honors that result instead of discarding it.
+                if (winner != workerTask && !workerTask.IsCompleted)
+                {
+                    // Cancel explicitly instead of relying on the deadline timer having fired: the
+                    // delay above and hardDeadlineCts are two separate timers of the same duration,
+                    // so the delay can win by a hair and leave a late-returning worker running one
+                    // more state-changing step after the caller already threw. Idempotent.
+                    hardDeadlineCts.Cancel();
+
+                    // The worker may be parked in native serial I/O that no token can interrupt, so
+                    // it is ABANDONED, not awaited — waiting for it is the hang being bounded here.
+                    // Observe its eventual fault so it cannot resurface as an UnobservedTaskException,
+                    // and dispose the sources only once it is done with them (disposing early would
+                    // turn its pending waits into ObjectDisposedException instead of cancellation).
+                    _ = workerTask.ContinueWith(
+                        t =>
+                        {
+                            _ = t.Exception;
+                            linkedCts.Dispose();
+                            hardDeadlineCts.Dispose();
+                        },
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+
+                    // Prefer surfacing caller cancellation over a generic timeout when both raced.
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    throw new TimeoutException(
+                        $"SD card download of '{fileName}' did not complete within " +
+                        $"{hardDeadline.TotalSeconds:0.#}s and was abandoned. The device's SD " +
+                        "subsystem is not responding; reconnect (or power-cycle) before retrying.");
+                }
+
+                // Propagate success or the transfer's own exception unchanged.
+                await workerTask.ConfigureAwait(false);
+            }
+            finally
+            {
+                raceCts.Cancel();
+                raceCts.Dispose();
+
+                // The abandon path hands disposal to its continuation instead; dispose here only
+                // when the worker actually finished (the common, non-hung case).
+                if (workerTask.IsCompleted)
+                {
+                    linkedCts.Dispose();
+                    hardDeadlineCts.Dispose();
+                }
             }
         }
 

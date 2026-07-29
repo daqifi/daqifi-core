@@ -20,6 +20,23 @@ public class SerialStreamTransport : IStreamTransport
     private bool _disposed;
 
     /// <summary>
+    /// Blocking-read timeout applied once the port is open. The connection timeout is only
+    /// needed for retry/backoff logic, not for reads during normal operation; a short value
+    /// keeps consumer threads stoppable (StopSafely).
+    /// </summary>
+    private const int OperationalReadTimeoutMs = 500;
+
+    /// <summary>
+    /// Blocking-write timeout applied once the port is open. Everything written over this
+    /// transport is a short SCPI command line, so a healthy device drains a write in
+    /// milliseconds. Leaving the connect timeout in place (and, on a wedged device, blocking
+    /// for it) is the failure mode issue #399 is about: <see cref="SerialPort.Write(byte[], int, int)"/>
+    /// accepts no <see cref="CancellationToken"/>, so an unbounded write cannot be cancelled by
+    /// any caller. Bounding it turns "parked forever" into a fault the caller can observe.
+    /// </summary>
+    private const int OperationalWriteTimeoutMs = 2000;
+
+    /// <summary>
     /// Initializes a new instance of the SerialStreamTransport class.
     /// </summary>
     /// <param name="portName">The name of the serial port (e.g., "COM1", "/dev/ttyUSB0").</param>
@@ -171,11 +188,9 @@ public class SerialStreamTransport : IStreamTransport
 
                 _serialPort.Open();
 
-                // After a successful open, lower the ReadTimeout to a short operational
-                // value. The connection timeout is only needed for retry/backoff logic,
-                // not for blocking reads during normal operation. A short ReadTimeout
-                // ensures consumer threads can be stopped promptly (StopSafely).
-                _serialPort.ReadTimeout = 500;
+                // After a successful open, swap the connect timeouts for the (shorter)
+                // operational ones — both directions, not just reads (#399).
+                ApplyOperationalTimeouts(_serialPort);
 
                 return Task.CompletedTask;
             },
@@ -185,6 +200,19 @@ public class SerialStreamTransport : IStreamTransport
                 _serialPort = null;
             },
             onStatusChanged: OnStatusChanged);
+    }
+
+    /// <summary>
+    /// Replaces the connect-phase timeouts with the operational ones on an opened port.
+    /// Internal (not inlined at the call site) so the values can be asserted without a real
+    /// port: <see cref="SerialPort.ReadTimeout"/>/<see cref="SerialPort.WriteTimeout"/> are
+    /// settable while the port is closed and are carried into the handle on open.
+    /// </summary>
+    /// <param name="port">The port to configure.</param>
+    internal static void ApplyOperationalTimeouts(SerialPort port)
+    {
+        port.ReadTimeout = OperationalReadTimeoutMs;
+        port.WriteTimeout = OperationalWriteTimeoutMs;
     }
 
     /// <summary>
