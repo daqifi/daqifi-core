@@ -752,6 +752,24 @@ Parallel.For(0, 10, i =>
 
 However, for connection state changes (Connect/Disconnect), coordinate access from a single thread or use proper synchronization.
 
+## Delivery Failures
+
+`Send()` is fire-and-forget: it queues the message and returns before the background thread
+writes it, so delivery is not guaranteed. If the write fails — including a timeout, meaning the
+device isn't draining its receive buffer right now — `Send()` does not throw. `DaqifiDevice` logs
+a warning through its `ILogger` for every failed write, and code that needs to react to a
+delivery failure (not just read it from logs) can subscribe to `DaqifiDevice.SendFailed`:
+
+```csharp
+device.SendFailed += (_, e) =>
+{
+    Console.WriteLine($"Delivery failed (timeout: {e.IsTimeout}): {e.Error.Message}");
+};
+```
+
+A single failed write does not stop the queue: the producer keeps draining the remaining
+messages regardless of whether anything observes the failure.
+
 ## Features
 
 - **Simple Factory API**: Single-call connection with `DaqifiDeviceFactory`

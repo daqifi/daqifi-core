@@ -57,6 +57,9 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// </summary>
     public bool IsRunning => _isRunning;
 
+    /// <inheritdoc />
+    public event EventHandler<MessageSendFailedEventArgs<T>>? SendFailed;
+
     /// <summary>
     /// Starts the message producer, beginning background message processing.
     /// </summary>
@@ -133,6 +136,11 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// <summary>
     /// Queues a message for sending. The background thread will process it asynchronously.
     /// </summary>
+    /// <remarks>
+    /// This call returns before the write happens, so delivery is not guaranteed: a write that
+    /// fails on the background thread does not throw back here. Subscribe to
+    /// <see cref="SendFailed"/> if the caller needs to know a specific message was not delivered.
+    /// </remarks>
     /// <param name="message">The message to send.</param>
     /// <exception cref="ArgumentNullException">Thrown when message is null.</exception>
     /// <exception cref="InvalidOperationException">Thrown when producer is not running.</exception>
@@ -188,12 +196,25 @@ public class MessageProducer<T> : IMessageProducer<T>
                             // that the link is gone. Treating it as evidence of a disconnect could
                             // tear down a healthy connection to a momentarily busy device — the
                             // same reason the reader loop treats a read timeout as benign.
-                            if (ex is not TimeoutException)
+                            var isTimeout = ex is TimeoutException;
+                            if (!isTimeout)
                             {
                                 _healthSink?.ReportIoFault(ex);
                             }
 
-                            SafeLog(() => _logger.LogWarning(ex, "Failed to write message to the stream; continuing with remaining queued messages."));
+                            // A timeout gets its own greppable message so "the write never
+                            // happened because the device isn't draining" (busy/flow-controlled)
+                            // can be told apart from any other write failure in the logs.
+                            var logMessage = isTimeout
+                                ? "Timed out writing message to the stream; continuing with remaining queued messages."
+                                : "Failed to write message to the stream; continuing with remaining queued messages.";
+                            SafeLog(() => _logger.LogWarning(ex, logMessage));
+
+                            // The only signal a caller gets that this specific message was not
+                            // delivered (issue #408). A throwing subscriber must not take down
+                            // the background loop, so this goes through the same SafeLog guard
+                            // used for the logger above.
+                            SafeLog(() => SendFailed?.Invoke(this, new MessageSendFailedEventArgs<T>(message, ex)));
                         }
                     }
                 }
