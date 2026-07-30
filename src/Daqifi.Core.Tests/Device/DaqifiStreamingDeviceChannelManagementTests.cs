@@ -300,7 +300,20 @@ namespace Daqifi.Core.Tests.Device
             finally
             {
                 stop.Cancel();
-                await resyncTask;
+
+                // The cancellation token only stops the loop between iterations — it can't
+                // interrupt a PopulateChannelsFromStatus call already in progress. If a
+                // reintroduced deadlock ever wedges that call, awaiting resyncTask unbounded would
+                // hang CI instead of failing the test. Bound the wait so a deadlock regression
+                // fails deterministically instead.
+                try
+                {
+                    await resyncTask.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (TimeoutException)
+                {
+                    Assert.Fail("The status-resync worker did not stop within 5s of cancellation — possible deadlock regression.");
+                }
             }
         }
 
