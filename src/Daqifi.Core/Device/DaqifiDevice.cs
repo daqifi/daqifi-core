@@ -593,10 +593,15 @@ namespace Daqifi.Core.Device
 
             try
             {
-                // Unsubscribe from message consumer events
+                // Unsubscribe from message consumer/producer events
                 if (_messageConsumer != null)
                 {
                     _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                }
+
+                if (_messageProducer != null)
+                {
+                    _messageProducer.SendFailed -= OnMessageSendFailed;
                 }
 
                 // Stop message consumer and producer safely if available
