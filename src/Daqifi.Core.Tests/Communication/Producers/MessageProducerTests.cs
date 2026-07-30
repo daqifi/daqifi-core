@@ -230,6 +230,94 @@ public class MessageProducerTests
     }
 
     [Fact]
+    public void MessageProducer_WhenWriteThrows_ShouldRaiseSendFailed()
+    {
+        // Arrange
+        using var stream = new ThrowOnWriteStream();
+        using var producer = new MessageProducer<string>(stream);
+        MessageSendFailedEventArgs<string>? captured = null;
+        producer.SendFailed += (_, e) => captured = e;
+        producer.Start();
+
+        // Act - the background thread will attempt to write and fail
+        var message = new ScpiMessage("TEST:COMMAND");
+        producer.Send(message);
+        var raised = SpinWait.SpinUntil(() => captured != null, TimeSpan.FromSeconds(2));
+        producer.StopSafely();
+
+        // Assert - the caller has a way to observe that this specific message was not delivered
+        Assert.True(raised, "Expected SendFailed to be raised when the stream write throws.");
+        Assert.Same(message, captured!.Message);
+        Assert.IsType<IOException>(captured.Error);
+        Assert.False(captured.IsTimeout);
+    }
+
+    [Fact]
+    public void MessageProducer_WhenWriteTimesOut_ShouldRaiseSendFailedWithIsTimeoutTrue()
+    {
+        // Arrange
+        using var stream = new ThrowOnWriteStream(new TimeoutException("Simulated write timeout."));
+        var logger = new CaptureLogger<MessageProducer<string>>();
+        using var producer = new MessageProducer<string>(stream, logger);
+        MessageSendFailedEventArgs<string>? captured = null;
+        producer.SendFailed += (_, e) => captured = e;
+        producer.Start();
+
+        // Act
+        producer.Send(new ScpiMessage("TEST:COMMAND"));
+        var raised = SpinWait.SpinUntil(() => captured != null, TimeSpan.FromSeconds(2));
+        producer.StopSafely();
+
+        // Assert - a timeout is distinguishable both on the event and in the log text, so the
+        // "device is busy" case can be told apart from any other delivery failure (issue #408).
+        Assert.True(raised, "Expected SendFailed to be raised when the stream write times out.");
+        Assert.True(captured!.IsTimeout);
+        var warning = logger.Entries.First(e => e.Level == LogLevel.Warning);
+        Assert.Contains("Timed out", warning.Message);
+    }
+
+    [Fact]
+    public void MessageProducer_WhenSendFailedSubscriberThrows_ShouldKeepDrainingAndStopCleanly()
+    {
+        // Arrange - a subscriber that throws must not be allowed to take down the background loop,
+        // mirroring the existing guarantee for a faulting ILogger.
+        using var stream = new ThrowOnWriteStream();
+        using var producer = new MessageProducer<string>(stream);
+        producer.SendFailed += (_, _) => throw new InvalidOperationException("Simulated subscriber failure.");
+        producer.Start();
+
+        // Act
+        for (var i = 0; i < 5; i++)
+        {
+            producer.Send(new ScpiMessage($"CMD{i}"));
+        }
+        var stopped = producer.StopSafely(2000);
+
+        // Assert
+        Assert.True(stopped, "StopSafely should not hang when a SendFailed subscriber throws.");
+        Assert.False(producer.IsRunning);
+        Assert.Equal(0, producer.QueuedMessageCount);
+    }
+
+    [Fact]
+    public void MessageProducer_Send_WhenSucceeding_ShouldNotRaiseSendFailed()
+    {
+        // Arrange
+        using var stream = new MemoryStream();
+        using var producer = new MessageProducer<string>(stream);
+        var raised = false;
+        producer.SendFailed += (_, _) => raised = true;
+        producer.Start();
+
+        // Act
+        producer.Send(new ScpiMessage("TEST:COMMAND"));
+        producer.StopSafely();
+
+        // Assert
+        Assert.False(raised);
+    }
+
+    [Fact]
     public void MessageProducer_WhenStoppedNormally_ShouldLogCleanExit()
     {
         // Arrange
@@ -323,6 +411,13 @@ public class MessageProducerTests
     /// </summary>
     private sealed class ThrowOnWriteStream : Stream
     {
+        private readonly Exception _exceptionToThrow;
+
+        public ThrowOnWriteStream(Exception? exceptionToThrow = null)
+        {
+            _exceptionToThrow = exceptionToThrow ?? new IOException("Simulated write failure for error-handling test.");
+        }
+
         public override bool CanRead => false;
         public override bool CanSeek => false;
         public override bool CanWrite => true;
@@ -337,7 +432,6 @@ public class MessageProducerTests
 
         public override void SetLength(long value) => throw new NotSupportedException();
 
-        public override void Write(byte[] buffer, int offset, int count) =>
-            throw new IOException("Simulated write failure for error-handling test.");
+        public override void Write(byte[] buffer, int offset, int count) => throw _exceptionToThrow;
     }
 }

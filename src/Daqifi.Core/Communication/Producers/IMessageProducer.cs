@@ -28,8 +28,24 @@ public interface IMessageProducer<T> : IDisposable
     /// <summary>
     /// Queues a message for sending to the device.
     /// </summary>
+    /// <remarks>
+    /// This is fire-and-forget: the message is handed to a background thread and this call
+    /// returns before the write happens, so delivery is not guaranteed. A write that fails —
+    /// including one that never reaches the device — does not throw back to the caller; it is
+    /// only observable via <see cref="SendFailed"/> (issue #408).
+    /// </remarks>
     /// <param name="message">The message to send.</param>
     void Send(IOutboundMessage<T> message);
+
+    /// <summary>
+    /// Occurs when a queued message fails to write to the underlying stream.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Send"/> never throws for a failed write, so this is the only signal a caller
+    /// gets that a specific message was not delivered. Raised on the producer's background
+    /// thread; the producer keeps draining the remaining queue regardless of subscribers.
+    /// </remarks>
+    event EventHandler<MessageSendFailedEventArgs<T>>? SendFailed;
 
     /// <summary>
     /// Gets the number of messages currently queued for sending.

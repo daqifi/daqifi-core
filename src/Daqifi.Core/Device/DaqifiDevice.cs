@@ -442,6 +442,18 @@ namespace Daqifi.Core.Device
         public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated;
 
         /// <summary>
+        /// Occurs when a message queued via <see cref="Send{T}"/> fails to write to the device.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Send{T}"/> is fire-and-forget, so this is the only way a caller can learn
+        /// that a specific command never reached the device (issue #408) — a warning is also
+        /// logged, but subscribing here lets a caller react (e.g. retry, surface a UI warning)
+        /// instead of only reading it from logs. Raised on the producer's background thread and
+        /// purely observational: it does not change <see cref="Status"/> or stop the queue.
+        /// </remarks>
+        public event EventHandler<MessageSendFailedEventArgs<string>>? SendFailed;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiDevice"/> class.
         /// </summary>
         /// <param name="name">The name of the device.</param>
@@ -469,6 +481,7 @@ namespace Daqifi.Core.Device
             _status = ConnectionStatus.Disconnected;
             _logger = logger ?? NullLogger.Instance;
             _messageProducer = new MessageProducer<string>(stream);
+            _messageProducer.SendFailed += OnMessageSendFailed;
             _directStream = stream;
         }
 
@@ -512,6 +525,7 @@ namespace Daqifi.Core.Device
                     if (_messageProducer == null)
                     {
                         _messageProducer = new MessageProducer<string>(_transport.Stream, healthSink: healthSink);
+                        _messageProducer.SendFailed += OnMessageSendFailed;
                     }
 
                     if (_messageConsumer == null)
@@ -1389,6 +1403,27 @@ namespace Daqifi.Core.Device
                     Status = ConnectionStatus.Lost;
                 }
             }
+        }
+
+        /// <summary>
+        /// Logs a message that the producer's background thread could not deliver.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="IMessageProducer{T}.Send"/> is fire-and-forget, so this is the device's only
+        /// visibility into a command that never reached the wire (issue #408). Purely observational:
+        /// it does not change <see cref="Status"/> or retry the message — the producer already keeps
+        /// draining the rest of the queue on its own.
+        /// </remarks>
+        private void OnMessageSendFailed(object? sender, MessageSendFailedEventArgs<string> e)
+        {
+            SafeLog(() => _logger.LogWarning(
+                e.Error,
+                "A queued message was not delivered to the device (timeout: {IsTimeout}).",
+                e.IsTimeout));
+
+            // A throwing subscriber must not be allowed to take down the producer's
+            // background thread, so this goes through the same SafeLog guard as the logger above.
+            SafeLog(() => SendFailed?.Invoke(this, e));
         }
 
         /// <summary>
