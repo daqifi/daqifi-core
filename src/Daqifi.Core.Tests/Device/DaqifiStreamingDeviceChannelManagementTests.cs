@@ -7,6 +7,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device
@@ -235,6 +237,84 @@ namespace Daqifi.Core.Tests.Device
 
             var sent = Assert.Single(device.SentMessages);
             Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
+        }
+
+        #endregion
+
+        #region Concurrent status resync (#409)
+
+        [Fact]
+        public async Task EnableChannel_ConcurrentWithStatusResync_AlwaysSendsMaskIncludingJustEnabledChannel()
+        {
+            // Regression test for #409: PopulateChannelsFromStatus now resyncs analog IsEnabled
+            // from the device's reported mask on the consumer thread. Without a shared critical
+            // section, a status frame could interleave between EnableChannel's IsEnabled mutation
+            // and the ADC mask it computes and sends, silently dropping the just-enabled channel
+            // from the outbound mask. Hammer a concurrent status resync (reporting everything
+            // disabled) against repeated EnableChannel calls and assert the sent mask always
+            // reflects what was just requested.
+            var device = CreateConnectedDevice(analogChannels: 2, digitalChannels: 0);
+            var channel0 = AnalogChannelAt(device, 0);
+            var allDisabledStatus = new DaqifiOutMessage
+            {
+                AnalogInPortNum = 2,
+                AnalogInRes = 65535,
+                AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0000)
+            };
+
+            // Safety net so a regression that reintroduces a deadlock fails the test instead of
+            // hanging CI indefinitely.
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var resyncTask = Task.Run(() =>
+            {
+                var iteration = 0;
+                while (!stop.IsCancellationRequested)
+                {
+                    device.PopulateChannelsFromStatus(allDisabledStatus);
+                    // Yield periodically rather than every iteration — yielding every iteration
+                    // (e.g. via SpinWait.SpinOnce) spaces status frames out enough that this loop
+                    // stops reliably landing inside EnableChannel's now-much-shorter critical
+                    // section, silently defeating the regression coverage. Yielding every 64th
+                    // iteration keeps the interleaving pressure while still relinquishing the core
+                    // regularly enough to avoid pegging it.
+                    if (++iteration % 64 == 0)
+                    {
+                        Thread.Yield();
+                    }
+                }
+            });
+
+            try
+            {
+                for (var i = 0; i < 500; i++)
+                {
+                    device.DisableAllChannels();
+                    device.SentMessages.Clear();
+
+                    device.EnableChannel(channel0);
+
+                    var sent = Assert.Single(device.SentMessages);
+                    Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
+                }
+            }
+            finally
+            {
+                stop.Cancel();
+
+                // The cancellation token only stops the loop between iterations — it can't
+                // interrupt a PopulateChannelsFromStatus call already in progress. If a
+                // reintroduced deadlock ever wedges that call, awaiting resyncTask unbounded would
+                // hang CI instead of failing the test. Bound the wait so a deadlock regression
+                // fails deterministically instead.
+                try
+                {
+                    await resyncTask.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (TimeoutException)
+                {
+                    Assert.Fail("The status-resync worker did not stop within 5s of cancellation — possible deadlock regression.");
+                }
+            }
         }
 
         #endregion

@@ -416,6 +416,127 @@ public class ChannelPopulationTests
         Assert.Equal(4095u, ((IAnalogChannel)newAnalog0).Resolution);
     }
 
+    [Fact]
+    public void PopulateChannelsFromStatus_WithAnalogInPortEnabled_SetsIsEnabledFromDevice()
+    {
+        // Arrange - device reports channels 0 and 2 enabled, 1 and 3 disabled via a bit-packed
+        // mask (byte 0b00000101 = 5): confirmed on the bench against a real Nq1 (fw 3.7.2),
+        // whose 16-channel status reported AnalogInPortEnabled as 2 bytes, [5,0], after enabling
+        // channels 0 and 2 — the same little-endian bit-per-channel layout Core sends outbound
+        // via EnableAdcChannels, not a byte-per-channel array (#409).
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 4,
+            AnalogInRes = 65535,
+            AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0101)
+        };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        var analogChannels = device.Channels.Where(c => c.Type == ChannelType.Analog).ToList();
+        Assert.True(analogChannels[0].IsEnabled);
+        Assert.False(analogChannels[1].IsEnabled);
+        Assert.True(analogChannels[2].IsEnabled);
+        Assert.False(analogChannels[3].IsEnabled);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_WithAnalogInPortEnabledSpanningMultipleBytes_SetsIsEnabledFromDevice()
+    {
+        // Arrange - a device with more than 8 analog channels packs the mask across multiple
+        // bytes; channel 9 is bit 1 of byte 1. Mirrors the bench-observed 2-byte mask for a
+        // 16-channel Nq1.
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 16,
+            AnalogInRes = 65535,
+            AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0000, 0b0000_0010)
+        };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        var analogChannels = device.Channels.Where(c => c.Type == ChannelType.Analog).ToList();
+        Assert.False(analogChannels[0].IsEnabled);
+        Assert.True(analogChannels[9].IsEnabled);
+        Assert.False(analogChannels[10].IsEnabled);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_WithoutAnalogInPortEnabled_DefaultsToDisabled()
+    {
+        // Arrange - older firmware never populates field 22; an empty byte string must not be
+        // read as "every channel disabled by the device" but simply "not reported".
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 2,
+            AnalogInRes = 65535
+        };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        var analogChannels = device.Channels.Where(c => c.Type == ChannelType.Analog).ToList();
+        Assert.All(analogChannels, c => Assert.False(c.IsEnabled));
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_RepopulatingWithAnalogInPortEnabled_ResyncsExistingChannelFromDevice()
+    {
+        // A later status refresh must resync IsEnabled from the device's report rather than
+        // preserving whatever Core last set locally, so Core's view can't drift from the
+        // device's (#409).
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage { AnalogInPortNum = 2, AnalogInRes = 65535 };
+        device.PopulateChannelsFromStatus(message);
+
+        var analog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        analog0.IsEnabled = true; // Core enabled it locally.
+
+        // Act - the device reports channel 0 as actually disabled.
+        var refreshed = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 2,
+            AnalogInRes = 65535,
+            AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0000)
+        };
+        device.PopulateChannelsFromStatus(refreshed);
+
+        // Assert - same instance, reused, but IsEnabled now reflects the device.
+        var newAnalog0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+        Assert.Same(analog0, newAnalog0);
+        Assert.False(newAnalog0.IsEnabled);
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_WithShorterAnalogInPortEnabled_TreatsMissingByteAsDisabled()
+    {
+        // Arrange - device reports fewer enabled-mask bytes than channels need (e.g. a truncated
+        // frame): channels 8+ have no byte to read and must default to disabled rather than throw.
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 9,
+            AnalogInRes = 65535,
+            AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0001)
+        };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        var analogChannels = device.Channels.Where(c => c.Type == ChannelType.Analog).ToList();
+        Assert.True(analogChannels[0].IsEnabled);
+        Assert.All(analogChannels.Skip(1), c => Assert.False(c.IsEnabled));
+    }
+
     #endregion
 
     #region Digital Channel Population

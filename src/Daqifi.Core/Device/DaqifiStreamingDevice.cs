@@ -731,14 +731,34 @@ namespace Daqifi.Core.Device
                 throw new DeviceNotConnectedException();
             }
 
-            foreach (var channel in SnapshotChannels())
+            (bool HasChannels, uint Mask) adcMask = default;
+            (bool HasChannels, bool AnyEnabled) dioState = default;
+
+            // Mutate and derive the outbound masks in one critical section — see the matching
+            // comment in SetChannelsEnabled (#409) for why the gap matters.
+            WithChannelsLock(() =>
             {
-                channel.IsEnabled = false;
-            }
+                foreach (var channel in SnapshotChannels())
+                {
+                    channel.IsEnabled = false;
+                }
+
+                adcMask = ComputeAdcEnableMask();
+                dioState = ComputeDioEnableState();
+            });
 
             // Push the cleared state for whichever channel types this device actually has.
-            SendAdcEnableMask();
-            SendDioEnableState();
+            if (adcMask.HasChannels)
+            {
+                Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            if (dioState.HasChannels)
+            {
+                Send(dioState.AnyEnabled
+                    ? ScpiMessageProducer.EnableDioPorts()
+                    : ScpiMessageProducer.DisableDioPorts());
+            }
         }
 
         /// <inheritdoc />
@@ -1200,38 +1220,60 @@ namespace Daqifi.Core.Device
 
             var touchedAnalog = false;
             var touchedDigital = false;
+            var adcMask = (HasChannels: false, Mask: 0u);
+            var dioState = (HasChannels: false, AnyEnabled: false);
 
-            foreach (var channel in channels)
+            // Mutate IsEnabled and derive the outbound masks from it in one critical section, so
+            // a status frame resyncing analog IsEnabled from the device (#409) on the consumer
+            // thread cannot interleave between the mutation and the read that computes the mask —
+            // which would otherwise send a mask reflecting a value the status frame is about to
+            // overwrite, silently failing to apply the requested enable/disable on the device.
+            WithChannelsLock(() =>
             {
-                channel.IsEnabled = enabled;
+                foreach (var channel in channels)
+                {
+                    channel.IsEnabled = enabled;
 
-                if (channel.Type == ChannelType.Analog)
-                {
-                    touchedAnalog = true;
+                    if (channel.Type == ChannelType.Analog)
+                    {
+                        touchedAnalog = true;
+                    }
+                    else if (channel.Type == ChannelType.Digital)
+                    {
+                        touchedDigital = true;
+                    }
                 }
-                else if (channel.Type == ChannelType.Digital)
+
+                if (touchedAnalog)
                 {
-                    touchedDigital = true;
+                    adcMask = ComputeAdcEnableMask();
                 }
+
+                if (touchedDigital)
+                {
+                    dioState = ComputeDioEnableState();
+                }
+            });
+
+            if (touchedAnalog && adcMask.HasChannels)
+            {
+                Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
             }
 
-            if (touchedAnalog)
+            if (touchedDigital && dioState.HasChannels)
             {
-                SendAdcEnableMask();
-            }
-
-            if (touchedDigital)
-            {
-                SendDioEnableState();
+                Send(dioState.AnyEnabled
+                    ? ScpiMessageProducer.EnableDioPorts()
+                    : ScpiMessageProducer.DisableDioPorts());
             }
         }
 
         /// <summary>
-        /// Recomputes the ADC enable bitmask over all currently-enabled analog channels and sends it.
-        /// Does nothing when the device has no analog channels. The firmware treats the value as a
-        /// set-replace, so the full mask of enabled analog channels is sent every time.
+        /// Computes the ADC enable bitmask over all currently-enabled analog channels. Must be
+        /// called under <see cref="DaqifiDevice.WithChannelsLock{T}"/> alongside any IsEnabled
+        /// mutation it should reflect (#409) — see <see cref="SetChannelsEnabled"/>.
         /// </summary>
-        private void SendAdcEnableMask()
+        private (bool HasChannels, uint Mask) ComputeAdcEnableMask()
         {
             uint mask = 0;
             var hasAnalogChannels = false;
@@ -1259,6 +1301,18 @@ namespace Daqifi.Core.Device
                 mask |= 1u << channel.ChannelNumber;
             }
 
+            return (hasAnalogChannels, mask);
+        }
+
+        /// <summary>
+        /// Recomputes the ADC enable bitmask over all currently-enabled analog channels and sends it.
+        /// Does nothing when the device has no analog channels. The firmware treats the value as a
+        /// set-replace, so the full mask of enabled analog channels is sent every time.
+        /// </summary>
+        private void SendAdcEnableMask()
+        {
+            var (hasAnalogChannels, mask) = WithChannelsLock(ComputeAdcEnableMask);
+
             if (!hasAnalogChannels)
             {
                 return;
@@ -1268,11 +1322,11 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Sends the global DIO enable command reflecting whether any digital channel is enabled.
-        /// Does nothing when the device has no digital channels. The firmware exposes only a global
-        /// DIO enable, so per-channel digital enabling is collapsed to this aggregate state.
+        /// Computes whether any digital channel is enabled. Must be called under
+        /// <see cref="DaqifiDevice.WithChannelsLock{T}"/> alongside any IsEnabled mutation it
+        /// should reflect — see <see cref="SetChannelsEnabled"/>.
         /// </summary>
-        private void SendDioEnableState()
+        private (bool HasChannels, bool AnyEnabled) ComputeDioEnableState()
         {
             var hasDigitalChannels = false;
             var anyEnabled = false;
@@ -1291,6 +1345,18 @@ namespace Daqifi.Core.Device
                     anyEnabled = true;
                 }
             }
+
+            return (hasDigitalChannels, anyEnabled);
+        }
+
+        /// <summary>
+        /// Sends the global DIO enable command reflecting whether any digital channel is enabled.
+        /// Does nothing when the device has no digital channels. The firmware exposes only a global
+        /// DIO enable, so per-channel digital enabling is collapsed to this aggregate state.
+        /// </summary>
+        private void SendDioEnableState()
+        {
+            var (hasDigitalChannels, anyEnabled) = WithChannelsLock(ComputeDioEnableState);
 
             if (!hasDigitalChannels)
             {

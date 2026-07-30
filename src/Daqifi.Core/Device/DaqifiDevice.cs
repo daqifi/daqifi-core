@@ -271,6 +271,35 @@ namespace Daqifi.Core.Device
         protected IReadOnlyList<IChannel> SnapshotChannels() => GetChannelsSnapshot();
 
         /// <summary>
+        /// Runs <paramref name="action"/> under the same lock that guards structural access to
+        /// <see cref="_channels"/> and the status-driven <c>IsEnabled</c> resync in
+        /// <see cref="PopulateChannelsFromStatus"/>. A subclass's channel-management API (e.g.
+        /// enable/disable) should mutate <see cref="IChannel.IsEnabled"/> and compute any derived
+        /// outbound state (an ADC/DIO enable mask) inside this critical section, so a concurrent
+        /// status frame on the consumer thread cannot interleave between the mutation and the
+        /// read that derives the mask — which would send a mask computed from a value the status
+        /// frame is about to overwrite (#409). Callers must perform blocking I/O (e.g. <c>Send</c>)
+        /// outside this method; the lock is reentrant, so calling <see cref="SnapshotChannels"/>
+        /// from within <paramref name="action"/> is safe.
+        /// </summary>
+        protected T WithChannelsLock<T>(Func<T> action)
+        {
+            lock (_channelsLock)
+            {
+                return action();
+            }
+        }
+
+        /// <inheritdoc cref="WithChannelsLock{T}"/>
+        protected void WithChannelsLock(Action action)
+        {
+            lock (_channelsLock)
+            {
+                action();
+            }
+        }
+
+        /// <summary>
         /// Gets the device's timestamp clock frequency in Hz.
         /// Populated from the <c>TimestampFreq</c> field of the status message.
         /// Used as the fallback frequency for SD card log file parsing when no
@@ -1778,6 +1807,9 @@ namespace Daqifi.Core.Device
         /// For analog channels, calibration parameters (CalM, CalB, InternalScaleM, PortRange)
         /// are extracted from the message. If there's a mismatch between the declared channel
         /// count and the available calibration data, default values are used for missing parameters.
+        /// Analog channel <c>IsEnabled</c> is likewise taken from the device-reported enabled mask
+        /// (field 22, <c>analog_in_port_enabled</c>) when the message carries one, so it reflects
+        /// the device's own view rather than only what Core previously commanded.
         ///
         /// For digital channels, only the channel count is used to create instances.
         /// </remarks>
@@ -1805,8 +1837,11 @@ namespace Daqifi.Core.Device
             {
                 // Index existing channels by identity (type, number). Channels whose identity
                 // is unchanged are updated in place rather than replaced below, so consumer-held
-                // IChannel references — and the configuration on them (enable/direction/output/
-                // PWM state) — survive a routine status re-population untouched.
+                // IChannel references — and the configuration on them (direction/output/PWM
+                // state) — survive a routine status re-population untouched. IsEnabled is the
+                // exception: analog channels resync it from the device-reported enabled mask
+                // (field 22) whenever the device sends one, so Core's view cannot silently drift
+                // from the device's (#409).
                 var existingByKey = new Dictionary<(ChannelType, int), IChannel>();
                 foreach (var existing in _channels)
                 {
@@ -1857,6 +1892,12 @@ namespace Daqifi.Core.Device
             var analogInCalibrationMValues = message.AnalogInCalM;
             var analogInInternalScaleMValues = message.AnalogInIntScaleM;
             var analogInResolution = message.AnalogInRes;
+            var analogInPortEnabled = message.AnalogInPortEnabled;
+
+            // Firmware before v3.5.0 never populates this field, so an empty byte string is
+            // ambiguous between "no channels enabled" and "not reported". Only trust it as the
+            // source of truth for IsEnabled when the device actually sent something.
+            var enabledIsReported = analogInPortEnabled.Length > 0;
 
             var count = (int)message.AnalogInPortNum;
 
@@ -1894,6 +1935,10 @@ namespace Daqifi.Core.Device
                 if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
                 {
                     existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange, resolutionIsAssumed);
+                    if (enabledIsReported)
+                    {
+                        existingAnalog.IsEnabled = IsChannelBitSet(analogInPortEnabled, i);
+                    }
                     destination.Add(existingAnalog);
                     continue;
                 }
@@ -1902,7 +1947,7 @@ namespace Daqifi.Core.Device
                 {
                     Name = $"AI{i}",
                     Direction = ChannelDirection.Input,
-                    IsEnabled = false,
+                    IsEnabled = enabledIsReported && IsChannelBitSet(analogInPortEnabled, i),
                     CalibrationB = calibrationB,
                     CalibrationM = calibrationM,
                     InternalScaleM = internalScaleM,
@@ -1992,6 +2037,19 @@ namespace Daqifi.Core.Device
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// Reads bit <paramref name="channelNumber"/> from a device-reported per-channel enable
+        /// bitmask (analog_in_port_enabled, field 22 — confirmed bit-packed on the bench: 2 bytes
+        /// for 16 channels, little-endian, bit <c>n</c> = channel <c>n</c> — the same layout Core
+        /// sends outbound via <see cref="Communication.Producers.ScpiMessageProducer.EnableAdcChannels"/>).
+        /// Returns false when the channel number falls outside the bytes actually sent.
+        /// </summary>
+        private static bool IsChannelBitSet(Google.Protobuf.ByteString mask, int channelNumber)
+        {
+            var byteIndex = channelNumber / 8;
+            return byteIndex < mask.Length && (mask[byteIndex] & (1 << (channelNumber % 8))) != 0;
         }
 
         /// <summary>
