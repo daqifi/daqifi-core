@@ -345,19 +345,20 @@ public sealed class DaqifiAgent
 
             // The device's advertised hardware ceiling always applies (Core validates
             // StreamingFrequency against it too); --max-sample-rate-hz can only lower it.
-            // Guard against a non-positive cap so the applied rate is always a valid >= 1 value.
+            // Guard against a non-positive cap so the effective cap is always a valid >= 1 value.
             var hardwareMax = Math.Max(1, device.Metadata.Capabilities.MaxSamplingRate);
             var cap = _options.MaxSampleRateHz is { } max
                 ? Math.Clamp(max, 1, hardwareMax)
                 : hardwareMax;
 
-            var applied = Math.Min(rateHz, cap);
-            streaming.StreamingFrequency = applied;
+            if (rateHz > cap)
+            {
+                throw new InvalidOperationException(
+                    $"Requested {rateHz} Hz exceeds the maximum {cap} Hz for this device.");
+            }
 
-            var note = applied != rateHz
-                ? $"Requested {rateHz} Hz clamped to {applied} Hz (maximum {cap} Hz)."
-                : null;
-            return new SampleRateResult(deviceId, rateHz, applied, applied != rateHz, note);
+            streaming.StreamingFrequency = rateHz;
+            return new SampleRateResult(deviceId, rateHz);
         }
         finally
         {

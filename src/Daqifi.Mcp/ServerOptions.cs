@@ -12,7 +12,8 @@ public sealed class ServerOptions
     public bool ReadOnly { get; init; }
 
     /// <summary>
-    /// Optional upper bound applied to <c>set_sample_rate</c>. Null means no clamp.
+    /// Optional upper bound enforced by <c>set_sample_rate</c>; requests above it are rejected.
+    /// Null means only the device's hardware ceiling applies.
     /// </summary>
     public int? MaxSampleRateHz { get; init; }
 
@@ -29,7 +30,7 @@ public sealed class ServerOptions
                     readOnly = true;
                     break;
                 case "--max-sample-rate-hz" when i + 1 < args.Length:
-                    // Ignore non-positive values; a clamp of <= 0 would otherwise force an invalid rate.
+                    // Ignore non-positive values; a cap of <= 0 would otherwise reject every rate.
                     if (int.TryParse(args[++i], out var rate) && rate >= 1)
                     {
                         maxRate = rate;

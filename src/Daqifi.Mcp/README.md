@@ -48,7 +48,7 @@ dotnet run --project src/Daqifi.Mcp
 
 ```
 --read-only               Expose discovery/introspection only; block configuration and logging.
---max-sample-rate-hz <n>  Clamp set_sample_rate to at most <n> Hz.
+--max-sample-rate-hz <n>  Reject set_sample_rate requests above <n> Hz.
 -h, --help                Show help.
 ```
 

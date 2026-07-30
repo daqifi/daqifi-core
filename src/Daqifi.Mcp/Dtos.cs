@@ -140,11 +140,11 @@ public sealed record PwmResult(string DeviceId, int Channel, bool Enabled, int D
 }
 
 /// <summary>
-/// Result of a sample-rate change. <see cref="Clamped"/> is true when <see cref="RequestedRateHz"/>
-/// exceeded the effective ceiling (1000 Hz hardware limit, or a lower <c>--max-sample-rate-hz</c>),
-/// in which case <see cref="Note"/> explains the adjustment.
+/// Result of a sample-rate change. A request exceeding the effective ceiling (the device's
+/// hardware limit, or a lower <c>--max-sample-rate-hz</c>) is rejected outright rather than
+/// clamped — see <see cref="DaqifiAgent.SetSampleRateAsync"/>.
 /// </summary>
-public sealed record SampleRateResult(string DeviceId, int RequestedRateHz, int AppliedRateHz, bool Clamped, string? Note);
+public sealed record SampleRateResult(string DeviceId, int RequestedRateHz);
 
 /// <summary>Result of starting SD-card logging.</summary>
 public sealed record StartLoggingResult(
