@@ -262,12 +262,25 @@ namespace Daqifi.Core.Tests.Device
                 AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0000)
             };
 
-            using var stop = new CancellationTokenSource();
+            // Safety net so a regression that reintroduces a deadlock fails the test instead of
+            // hanging CI indefinitely.
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var resyncTask = Task.Run(() =>
             {
+                var iteration = 0;
                 while (!stop.IsCancellationRequested)
                 {
                     device.PopulateChannelsFromStatus(allDisabledStatus);
+                    // Yield periodically rather than every iteration — yielding every iteration
+                    // (e.g. via SpinWait.SpinOnce) spaces status frames out enough that this loop
+                    // stops reliably landing inside EnableChannel's now-much-shorter critical
+                    // section, silently defeating the regression coverage. Yielding every 64th
+                    // iteration keeps the interleaving pressure while still relinquishing the core
+                    // regularly enough to avoid pegging it.
+                    if (++iteration % 64 == 0)
+                    {
+                        Thread.Yield();
+                    }
                 }
             });
 
