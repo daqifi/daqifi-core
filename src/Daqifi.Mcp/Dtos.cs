@@ -140,9 +140,9 @@ public sealed record PwmResult(string DeviceId, int Channel, bool Enabled, int D
 }
 
 /// <summary>
-/// Result of a sample-rate change. A request exceeding the effective ceiling (the device's
-/// hardware limit, or a lower <c>--max-sample-rate-hz</c>) is rejected outright rather than
-/// clamped — see <see cref="DaqifiAgent.SetSampleRateAsync"/>.
+/// Result of a sample-rate change. A request exceeding the effective ceiling (the device's cap
+/// for its currently enabled channels, or a lower <c>--max-sample-rate-hz</c>) is rejected
+/// outright rather than clamped — see <see cref="DaqifiAgent.SetSampleRateAsync"/>.
 /// </summary>
 public sealed record SampleRateResult(string DeviceId, int RequestedRateHz);
 

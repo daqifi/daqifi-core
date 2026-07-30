@@ -111,11 +111,11 @@ public static class DaqifiTools
         => GuardAsync(() => agent.DisablePwmAsync(deviceId, channel));
 
     [McpServerTool(Name = "set_sample_rate")]
-    [Description("Set the device sample (streaming) rate in Hz, applied to streaming and SD-card logging. Nyquist hardware supports 1–1000 Hz; requests above 1000 Hz (or above --max-sample-rate-hz) are rejected — the call throws rather than silently applying a lower rate.")]
+    [Description("Set the device sample (streaming) rate in Hz, applied to streaming and SD-card logging. The achievable maximum depends on how many channels are currently enabled (configure channels first for an accurate ceiling) and is further capped by --max-sample-rate-hz if set; a request above the effective cap is rejected — the call throws rather than silently applying a lower rate.")]
     public static Task<SampleRateResult> SetSampleRate(
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
-        [Description("Sample rate in Hz (1–1000).")] int rateHz)
+        [Description("Sample rate in Hz. The ceiling varies with the enabled channel count; get_device_status or a prior configure_analog_channels call error message reports the current limit.")] int rateHz)
         => GuardAsync(() => agent.SetSampleRateAsync(deviceId, rateHz));
 
     [McpServerTool(Name = "start_sd_logging")]

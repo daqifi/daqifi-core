@@ -23,7 +23,7 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `set_digital_output` | Drive a digital channel high or low (switches it to output if needed). |
 | `set_pwm_output` | Start PWM on a capable channel: duty 1-100%, shared frequency 6-50000 Hz. |
 | `disable_pwm` | Stop PWM on a channel (pin is left high-impedance). |
-| `set_sample_rate` | Set sample rate in Hz (Nyquist hardware supports up to 1000 Hz). |
+| `set_sample_rate` | Set sample rate in Hz (ceiling depends on the enabled channel count; over-cap requests are rejected). |
 | `start_sd_logging` | Start on-device SD logging (**requires a USB/serial connection**). |
 | `stop_sd_logging` | Stop SD logging. |
 

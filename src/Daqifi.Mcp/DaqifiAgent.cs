@@ -165,6 +165,11 @@ public sealed class DaqifiAgent
                 streaming.EnableChannels(toEnable);
             }
 
+            // The device's authoritative rate cap (CapabilityStreaming.CurrentMaximumRateHz) is
+            // scoped to the channel set enabled when the document was read — refresh it now so
+            // set_sample_rate validates against the configuration that is actually live.
+            await RefreshCapabilityDocumentAsync(device).ConfigureAwait(false);
+
             return new ConfigureResult(deviceId, EnabledAnalog(device), streaming.StreamingFrequency);
         }
         finally
@@ -207,6 +212,10 @@ public sealed class DaqifiAgent
             {
                 streaming.EnableChannels(toEnable);
             }
+
+            // See ConfigureAnalogChannelsAsync: keeps CurrentMaximumRateHz current for
+            // set_sample_rate even though the rate model itself ignores digital channels.
+            await RefreshCapabilityDocumentAsync(device).ConfigureAwait(false);
 
             return new ConfigureDigitalResult(deviceId, EnabledDigital(device));
         }
@@ -343,18 +352,21 @@ public sealed class DaqifiAgent
             RequireControl();
             var (device, streaming) = RequireStreaming(deviceId);
 
-            // The device's advertised hardware ceiling always applies (Core validates
-            // StreamingFrequency against it too); --max-sample-rate-hz can only lower it.
-            // Guard against a non-positive cap so the effective cap is always a valid >= 1 value.
+            // MaxSamplingRate is the absolute sampling-ISR ceiling, not what the device will
+            // actually accept for the channels enabled right now — that is
+            // CapabilityStreaming.CurrentMaximumRateHz, refreshed after every channel-
+            // configuration call (see ConfigureAnalogChannelsAsync/ConfigureDigitalChannelsAsync).
+            // Guard against a non-positive board-table value so the fallback is always >= 1; a
+            // reported CurrentMaximumRateHz of 0 is a real answer ("no channels enabled") and is
+            // deliberately not floored the same way.
             var hardwareMax = Math.Max(1, device.Metadata.Capabilities.MaxSamplingRate);
-            var cap = _options.MaxSampleRateHz is { } max
-                ? Math.Clamp(max, 1, hardwareMax)
-                : hardwareMax;
+            var deviceCap = device.Metadata.CapabilityDocument?.Streaming?.CurrentMaximumRateHz ?? hardwareMax;
+            var cap = _options.MaxSampleRateHz is { } max ? Math.Min(max, deviceCap) : deviceCap;
 
             if (rateHz > cap)
             {
                 throw new InvalidOperationException(
-                    $"Requested {rateHz} Hz exceeds the maximum {cap} Hz for this device.");
+                    $"Requested {rateHz} Hz exceeds the maximum {cap} Hz for the currently enabled channels.");
             }
 
             streaming.StreamingFrequency = rateHz;
@@ -471,6 +483,25 @@ public sealed class DaqifiAgent
                 $"Device '{deviceId}' does not support streaming/configuration operations.");
         }
         return (device, streaming);
+    }
+
+    // Best-effort: a device that doesn't support the capability document (or a query that
+    // fails/times out) just leaves CurrentMaximumRateHz stale or absent, and SetSampleRateAsync
+    // falls back to the board-derived ceiling. Not fatal to the channel-configuration call that
+    // triggered the refresh.
+    private static async Task RefreshCapabilityDocumentAsync(DaqifiDevice device)
+    {
+        try
+        {
+            await device.ReadCapabilityDocumentAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private static ISdCardOperations RequireSdCard(DaqifiDevice device)
