@@ -128,6 +128,84 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public void ParseFileList_WithSizeToken_ParsesSize()
+        {
+            // Firmware emits "<path> <size>" per entry. The size is the only thing that lets a
+            // later download tell a legitimately empty file from a wedged SD subsystem, so it is
+            // retained rather than discarded with the rest of the line (#398 gap 2).
+            // Arrange
+            var lines = new[] { "Daqifi/log_20240115_103000.bin 4096" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("log_20240115_103000.bin", result[0].FileName);
+            Assert.Equal(4096, result[0].SizeInBytes);
+        }
+
+        [Fact]
+        public void ParseFileList_WithZeroSizeToken_ParsesZeroRatherThanUnknown()
+        {
+            // A listed 0 is meaningful — it is what makes a marker-only download a legitimate
+            // empty file — so it must not collapse into "size unknown".
+            // Arrange
+            var lines = new[] { "Daqifi/empty.bin 0" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Equal(0, result[0].SizeInBytes);
+        }
+
+        [Fact]
+        public void ParseFileList_WithoutSizeToken_LeavesSizeUnknown()
+        {
+            // Arrange
+            var lines = new[] { "Daqifi/log_20240115_103000.bin" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Null(result[0].SizeInBytes);
+        }
+
+        [Theory]
+        [InlineData("Daqifi/data.bin notanumber")]
+        [InlineData("Daqifi/data.bin -5")]
+        [InlineData("Daqifi/data.bin 4096 extra")]
+        [InlineData("Daqifi/data.bin 99999999999999999999")]
+        [InlineData("Daqifi/data.bin  ")]
+        public void ParseFileList_WithUnparseableSizeToken_LeavesSizeUnknown(string line)
+        {
+            // Anything that is not a plain non-negative integer is reported as "unknown" rather
+            // than guessed at — a wrong size is worse than no size for the empty-file decision.
+            // Act
+            var result = SdCardFileListParser.ParseFileList(new[] { line });
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("data.bin", result[0].FileName);
+            Assert.Null(result[0].SizeInBytes);
+        }
+
+        [Fact]
+        public void ParseFileList_WithTabSeparatedSizeToken_ParsesSize()
+        {
+            // Arrange
+            var lines = new[] { "Daqifi/data.bin\t512" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert
+            Assert.Equal(512, result[0].SizeInBytes);
+        }
+
+        [Fact]
         public void ParseFileList_WithScpiError_SkipsErrorLines()
         {
             // Arrange - simulates the error response from issue #119

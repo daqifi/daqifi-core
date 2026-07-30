@@ -18,7 +18,15 @@ namespace Daqifi.Core.Device;
 /// device-reported timestamp frequency (the <c>timestamp_freq</c> field of the protobuf
 /// system info message, surfaced as <see cref="DaqifiDevice.TimestampFrequency"/>) via
 /// <see cref="SetTimestampFrequency"/>. Devices without a configured frequency fall back
-/// to the processor-wide <see cref="TickPeriod"/>.
+/// to the processor-wide <see cref="TickPeriod"/>; that fallback is reported by
+/// <see cref="TimestampResult.UsedFallbackTickPeriod"/> and can be checked up front with
+/// <see cref="HasTimestampFrequency"/>, since a device whose real clock differs from the
+/// fallback otherwise produces timestamps wrong by a constant factor with no error at all.
+/// </para>
+/// <para>
+/// Configured frequencies are device configuration rather than session state, so neither
+/// <see cref="Reset"/> nor <see cref="ResetAll"/> discards them; both only clear session
+/// baselines. Clear a device's frequency explicitly with <c>SetTimestampFrequency(id, 0)</c>.
 /// </para>
 /// <para>
 /// A 10-second sanity check is applied to detected rollovers. If the calculated
@@ -106,11 +114,23 @@ public sealed class TimestampProcessor : ITimestampProcessor
     }
 
     /// <inheritdoc />
+    public bool HasTimestampFrequency(string deviceId)
+    {
+        ArgumentNullException.ThrowIfNull(deviceId);
+
+        return _deviceTickPeriods.ContainsKey(deviceId);
+    }
+
+    /// <inheritdoc />
     public TimestampResult ProcessTimestamp(string deviceId, uint deviceTimestamp)
     {
         ArgumentNullException.ThrowIfNull(deviceId);
 
-        var tickPeriod = GetTickPeriod(deviceId);
+        // Read the device entry once so the fallback flag reported on the result cannot
+        // disagree with the tick period actually used for this message.
+        var hasDeviceTickPeriod = _deviceTickPeriods.TryGetValue(deviceId, out var deviceTickPeriod);
+        var tickPeriod = hasDeviceTickPeriod ? deviceTickPeriod : TickPeriod;
+        var usedFallbackTickPeriod = !hasDeviceTickPeriod;
         var state = _deviceStates.GetOrAdd(deviceId, _ => new DeviceTimestampState());
 
         lock (state.SyncLock)
@@ -123,7 +143,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
                 state.PreviousDeviceTimestamp = deviceTimestamp;
                 state.HasPreviousTimestamp = true;
 
-                return TimestampResult.CreateFirstMessage(now, deviceTimestamp);
+                return TimestampResult.CreateFirstMessage(now, deviceTimestamp, usedFallbackTickPeriod);
             }
 
             // Calculate clock cycles between messages, handling rollover
@@ -165,7 +185,8 @@ public sealed class TimestampProcessor : ITimestampProcessor
                 wasRollover: rollover,
                 clockCyclesBetweenMessages: clockCyclesBetweenMessages,
                 secondsBetweenMessages: secondsBetweenMessages,
-                isFirstMessage: false);
+                isFirstMessage: false,
+                usedFallbackTickPeriod: usedFallbackTickPeriod);
         }
     }
 
@@ -179,8 +200,14 @@ public sealed class TimestampProcessor : ITimestampProcessor
     /// <inheritdoc />
     public void ResetAll()
     {
+        // Session baselines only. Device tick periods are static device configuration, not
+        // session state: clearing them used to be silent (GetTickPeriod falls back to the
+        // 50 MHz default while current firmware clocks at 42 MHz, scaling every reconstructed
+        // timestamp by ~1.19), and forced every consumer to re-apply the frequency after each
+        // reset behind its own "have I applied it yet" gate. Reset(deviceId) has always
+        // preserved them; ResetAll now matches (#398 gap 3). Clear a single device's frequency
+        // with SetTimestampFrequency(deviceId, 0).
         _deviceStates.Clear();
-        _deviceTickPeriods.Clear();
     }
 
     /// <summary>

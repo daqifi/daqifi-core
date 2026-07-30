@@ -8,8 +8,53 @@ namespace Daqifi.Core.Communication.Transport;
 /// over TCP connections. Handles connection lifecycle and provides the underlying
 /// NetworkStream for message producers and consumers.
 /// </summary>
-public class TcpStreamTransport : IStreamTransport
+/// <remarks>
+/// <para>
+/// <b>Drop detection.</b> <see cref="TcpClient.Connected"/> describes the last completed operation
+/// rather than the current link, and nothing used to raise <see cref="StatusChanged"/> for an
+/// unexpected drop, so <see cref="Device.ConnectionStatus.Lost"/> was unreachable here too
+/// (issue #382). Two things now cover it:
+/// </para>
+/// <list type="bullet">
+/// <item><description>
+/// <b>I/O fault escalation</b> via <see cref="ITransportHealthSink"/>. The reader loop reports
+/// failed reads — including a zero-byte read, which on a socket means the peer closed — and five
+/// consecutive failures with no successful transfer in between close the socket and raise
+/// <see cref="StatusChanged"/> with <c>IsConnected == false</c>. A closed or reset connection is
+/// therefore reported within a fraction of a second. A read that merely hits its timeout is not a
+/// failure and is never reported.
+/// </description></item>
+/// <item><description>
+/// <b>TCP keep-alive</b> (10 s idle, 3 s probes, 3 retries), so a link that is silently severed —
+/// a device losing power or dropping off WiFi, where no FIN or RST ever arrives — still fails a
+/// read instead of hanging forever. This bounds detection of a silent drop at roughly
+/// <b>twenty seconds</b> of idleness.
+/// </description></item>
+/// </list>
+/// <para>
+/// An intentional <see cref="Disconnect"/> disarms detection first, so it reports a normal
+/// disconnect and never a loss.
+/// </para>
+/// </remarks>
+public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
 {
+    /// <summary>
+    /// Idle time, in seconds, before TCP keep-alive probing starts on an established connection.
+    /// </summary>
+    internal const int KeepAliveTimeSeconds = 10;
+
+    /// <summary>
+    /// Interval, in seconds, between TCP keep-alive probes once probing has started.
+    /// </summary>
+    internal const int KeepAliveIntervalSeconds = 3;
+
+    /// <summary>
+    /// Number of unanswered TCP keep-alive probes before the OS fails the connection. With
+    /// <see cref="KeepAliveTimeSeconds"/> and <see cref="KeepAliveIntervalSeconds"/> this bounds
+    /// detection of a silently severed link at roughly twenty seconds.
+    /// </summary>
+    internal const int KeepAliveRetryCount = 3;
+
     /// <summary>
     /// Socket receive timeout applied once the connection is established, in milliseconds.
     /// </summary>
@@ -27,6 +72,7 @@ public class TcpStreamTransport : IStreamTransport
 
     private readonly IPEndPoint _endPoint;
     private readonly IPAddress? _localInterface;
+    private readonly TransportConnectionWatchdog _watchdog;
     private TcpClient? _tcpClient;
     private NetworkStream? _networkStream;
     private bool _disposed;
@@ -52,6 +98,7 @@ public class TcpStreamTransport : IStreamTransport
     {
         _endPoint = new IPEndPoint(ipAddress, port);
         _localInterface = localInterface;
+        _watchdog = CreateWatchdog();
     }
 
     /// <summary>
@@ -77,6 +124,17 @@ public class TcpStreamTransport : IStreamTransport
             Hostname = host;
         }
         _localInterface = localInterface;
+        _watchdog = CreateWatchdog();
+    }
+
+    /// <summary>
+    /// Creates the drop detector shared by both constructors.
+    /// </summary>
+    private TransportConnectionWatchdog CreateWatchdog()
+    {
+        return new TransportConnectionWatchdog(
+            $"TCP transport ({Hostname ?? _endPoint.Address.ToString()}:{_endPoint.Port})",
+            HandleConnectionLost);
     }
 
     /// <summary>
@@ -203,6 +261,8 @@ public class TcpStreamTransport : IStreamTransport
                 // download path uses ReadAsync, which ignores SO_RCVTIMEO and keeps its own
                 // long timeout. See OperationalReceiveTimeoutMs.
                 _tcpClient.ReceiveTimeout = OperationalReceiveTimeoutMs;
+
+                EnableKeepAlive(_tcpClient);
             },
             onAttemptFailed: () =>
             {
@@ -211,6 +271,34 @@ public class TcpStreamTransport : IStreamTransport
                 _networkStream = null;
             },
             onStatusChanged: OnStatusChanged);
+
+        _watchdog.Arm();
+    }
+
+    /// <summary>
+    /// Turns on TCP keep-alive so a silently severed link (device powered off, WiFi dropped) fails
+    /// a read instead of blocking forever with no FIN or RST ever arriving.
+    /// </summary>
+    /// <remarks>
+    /// The per-socket tuning knobs are supported on Windows, macOS, and Linux, but a platform or
+    /// socket that rejects one must not fail the connect: keep-alive is a detection improvement,
+    /// not a requirement, and I/O fault escalation still covers a link that produces read errors.
+    /// </remarks>
+    private static void EnableKeepAlive(TcpClient client)
+    {
+        try
+        {
+            var socket = client.Client;
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, KeepAliveTimeSeconds);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, KeepAliveIntervalSeconds);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, KeepAliveRetryCount);
+        }
+        catch (Exception)
+        {
+            // Not every platform/socket accepts every knob. A connection without keep-alive tuning
+            // is still a working connection.
+        }
     }
 
     /// <summary>
@@ -219,6 +307,10 @@ public class TcpStreamTransport : IStreamTransport
     /// <returns>A task representing the asynchronous disconnect operation.</returns>
     public async Task DisconnectAsync()
     {
+        // Disarm before touching the socket: closing it makes any in-flight read fail, and a
+        // still-armed watchdog would report an intentional disconnect as a lost connection.
+        _watchdog.Disarm();
+
         if (!IsConnected)
             return;
 
@@ -260,6 +352,47 @@ public class TcpStreamTransport : IStreamTransport
         DisconnectAsync().GetAwaiter().GetResult();
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Escalates to a lost connection only after five failures with no successful transfer in
+    /// between, so a transient read error cannot tear down a healthy socket.
+    /// </remarks>
+    public void ReportIoFault(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        _watchdog.RecordFault(error);
+    }
+
+    /// <inheritdoc />
+    public void ReportIoSuccess()
+    {
+        _watchdog.RecordSuccess();
+    }
+
+    /// <summary>
+    /// Tears down a connection that was detected as dropped and reports it as a loss.
+    /// </summary>
+    /// <param name="error">The condition that identified the drop.</param>
+    private void HandleConnectionLost(Exception error)
+    {
+        // Drop the references before anything that can block: IsConnected must already read false
+        // when StatusChanged fires, so a handler (or the device registry's pruning) sees the truth.
+        var stream = Interlocked.Exchange(ref _networkStream, null);
+        var client = Interlocked.Exchange(ref _tcpClient, null);
+
+        OnStatusChanged(false, error);
+
+        try
+        {
+            stream?.Dispose();
+            client?.Dispose();
+        }
+        catch (Exception)
+        {
+            // The peer is already gone; failing to close the socket changes nothing.
+        }
+    }
+
     /// <summary>
     /// Raises the StatusChanged event.
     /// </summary>
@@ -295,6 +428,7 @@ public class TcpStreamTransport : IStreamTransport
                 // Ignore errors during disposal
             }
 
+            _watchdog.Dispose();
             _networkStream?.Dispose();
             _tcpClient?.Dispose();
             _disposed = true;

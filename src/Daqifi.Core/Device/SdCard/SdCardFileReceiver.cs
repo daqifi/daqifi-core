@@ -48,25 +48,58 @@ public sealed class SdCardFileReceiver
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="timeout">
     /// Maximum time to wait for the complete file transfer.
-    /// If the timeout elapses before the EOF marker is received, a <see cref="TimeoutException"/> is thrown.
+    /// If the timeout elapses before the EOF marker is received, a
+    /// <see cref="SdCardTransferStalledException"/> is thrown.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="listedFileSizeBytes">
+    /// The size the device's directory listing reported for this file, when known. It is the only
+    /// thing that separates a wedged SD subsystem from a genuinely 0-byte file, so a marker-only
+    /// transfer raises <see cref="SdCardEmptyTransferException"/> only when this says the file is
+    /// non-empty. Pass <c>0</c> for a listed empty file to have it return 0 bytes as a legitimate
+    /// empty download. When <c>null</c> (no listing available) the conservative behavior is kept
+    /// and a marker-only transfer throws.
+    /// </param>
     /// <returns>The total number of file bytes written (excluding the EOF marker).</returns>
-    /// <exception cref="TimeoutException">Thrown when the EOF marker is not received within the timeout period.</exception>
+    /// <exception cref="SdCardTransferStalledException">
+    /// Thrown when the transfer stops making progress before the EOF marker arrives — the
+    /// transport went quiet, closed, or the timeout elapsed. Inspect
+    /// <see cref="SdCardTransferStalledException.Reason"/> to tell those apart.
+    /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     /// <exception cref="SdCardEmptyTransferException">
-    /// Thrown when the EOF marker arrives with zero preceding file bytes, meaning the device
-    /// opened the file but sent no content before closing it.
+    /// Thrown when the EOF marker arrives with zero preceding file bytes for a file that
+    /// <paramref name="listedFileSizeBytes"/> reports as non-empty (or whose listed size is
+    /// unknown), meaning the device opened the file but sent no content before closing it.
     /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="listedFileSizeBytes"/> is negative.
+    /// </exception>
+    // listedFileSizeBytes added AFTER cancellationToken (technically violates
+    // CA1068 "CancellationToken should be last") to avoid breaking source compat
+    // for any existing positional caller passing CancellationToken as the 5th
+    // argument. Additivity wins over strict style here, matching the same call
+    // made for UpdateWifiModuleAsync's skipVersionCheck in #143/PR #198.
+#pragma warning disable CA1068
     public async Task<long> ReceiveAsync(
         Stream destinationStream,
         string fileName,
         IProgress<SdCardTransferProgress>? progress = null,
         TimeSpan? timeout = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? listedFileSizeBytes = null)
+#pragma warning restore CA1068
     {
         ArgumentNullException.ThrowIfNull(destinationStream);
         ArgumentNullException.ThrowIfNull(fileName);
+
+        if (listedFileSizeBytes is < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(listedFileSizeBytes),
+                listedFileSizeBytes,
+                "Listed file size cannot be negative.");
+        }
 
         var effectiveTimeout = timeout ?? TimeSpan.FromMinutes(30);
         using var timeoutCts = new CancellationTokenSource(effectiveTimeout);
@@ -92,11 +125,14 @@ public sealed class SdCardFileReceiver
                     bytesRead = await _sourceStream.ReadAsync(buffer, 0, buffer.Length, token)
                         .ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
-                    throw new TimeoutException(
-                        $"SD card file download timed out after {effectiveTimeout.TotalSeconds:F0} seconds. " +
-                        $"Received {totalBytesReceived} bytes before timeout.");
+                    throw new SdCardTransferStalledException(
+                        fileName,
+                        totalBytesReceived,
+                        SdCardTransferStallReason.TransferTimeout,
+                        effectiveTimeout,
+                        ex);
                 }
 
                 // A read can complete without ever having observed the token: System.IO.Ports'
@@ -109,10 +145,17 @@ public sealed class SdCardFileReceiver
 
                 if (bytesRead == 0)
                 {
-                    // Stream ended without EOF marker — treat as timeout/error
-                    throw new TimeoutException(
-                        $"Transport stream closed before receiving the EOF marker. " +
-                        $"Received {totalBytesReceived} bytes.");
+                    // A zero-byte read is NOT proof the stream closed. Over USB serial — the
+                    // transport SD download runs on — Core sets a per-read SerialPort.ReadTimeout
+                    // and .NET's SerialStream.ReadAsync returns 0 on that timeout instead of
+                    // throwing, so zero bytes is the ORDINARY stall signal there. Only an
+                    // unreadable stream is genuinely closed; report the two distinctly so a
+                    // caller can retry a stall and give up on a closed transport (#398 gap 1).
+                    var reason = _sourceStream.CanRead
+                        ? SdCardTransferStallReason.NoDataReceived
+                        : SdCardTransferStallReason.TransportClosed;
+
+                    throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason);
                 }
 
                 // Check if the EOF marker is contained in or spans the new data
@@ -158,12 +201,16 @@ public sealed class SdCardFileReceiver
                         }
                     }
 
-                    if (totalBytesReceived == 0)
+                    if (totalBytesReceived == 0 && listedFileSizeBytes != 0)
                     {
-                        // An immediate EOF marker with no preceding file bytes means the device
-                        // opened the file but never sent any content — a transient/wedged SD
-                        // subsystem, not a legitimate empty download. See #264.
-                        throw new SdCardEmptyTransferException(fileName);
+                        // An immediate EOF marker with no preceding file bytes is ambiguous on the
+                        // wire: a transient/wedged SD subsystem opens the file and sends nothing
+                        // (#264), and so does a genuinely 0-byte file left behind by an interrupted
+                        // logging session. The listing's reported size is the only discriminator,
+                        // so honor it — a listed 0-byte file falls through and returns 0 bytes as a
+                        // legitimate empty download. With no listed size we keep the conservative
+                        // #264 behavior so a wedged subsystem is still caught (#398 gap 2).
+                        throw new SdCardEmptyTransferException(fileName, listedFileSizeBytes);
                     }
 
                     progress?.Report(new SdCardTransferProgress(totalBytesReceived, fileName));
@@ -227,11 +274,14 @@ public sealed class SdCardFileReceiver
                 progress?.Report(new SdCardTransferProgress(totalBytesReceived, fileName));
             }
         }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            throw new TimeoutException(
-                $"SD card file download timed out after {effectiveTimeout.TotalSeconds:F0} seconds. " +
-                $"Received {totalBytesReceived} bytes before timeout.");
+            throw new SdCardTransferStalledException(
+                fileName,
+                totalBytesReceived,
+                SdCardTransferStallReason.TransferTimeout,
+                effectiveTimeout,
+                ex);
         }
     }
 

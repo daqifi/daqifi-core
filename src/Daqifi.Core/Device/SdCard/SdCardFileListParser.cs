@@ -49,10 +49,14 @@ namespace Daqifi.Core.Device.SdCard
                     continue;
                 }
 
-                // If a file size is present after the path, keep only the first token.
+                // Firmware emits "<path> <size>" per entry. Keep the path as the first token and
+                // retain the size — it is what lets a download tell a legitimately empty file from
+                // a wedged SD subsystem serving nothing (see SdCardEmptyTransferException).
+                long? sizeInBytes = null;
                 var tokenEnd = path.IndexOfAny(new[] { ' ', '\t' });
                 if (tokenEnd > 0)
                 {
+                    sizeInBytes = TryParseSize(path.Substring(tokenEnd + 1));
                     path = path.Substring(0, tokenEnd);
                 }
 
@@ -76,10 +80,33 @@ namespace Daqifi.Core.Device.SdCard
                 }
 
                 var createdDate = TryParseDateFromLogFileName(fileName);
-                files.Add(new SdCardFileInfo(fileName, createdDate));
+                files.Add(new SdCardFileInfo(fileName, createdDate, sizeInBytes));
             }
 
             return files;
+        }
+
+        /// <summary>
+        /// Parses the size token that follows a listing entry's path. Anything that is not a
+        /// plain non-negative integer (extra columns, a malformed line) yields <c>null</c> —
+        /// "size unknown" — rather than a guessed value.
+        /// </summary>
+        private static long? TryParseSize(string sizeToken)
+        {
+            var trimmed = sizeToken.Trim();
+
+            if (trimmed.Length == 0)
+            {
+                return null;
+            }
+
+            return long.TryParse(
+                       trimmed,
+                       NumberStyles.None,
+                       CultureInfo.InvariantCulture,
+                       out var size)
+                ? size
+                : null;
         }
 
         /// <summary>

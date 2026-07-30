@@ -36,7 +36,10 @@ public enum FirmwareUpdateState
     Programming = 5,
 
     /// <summary>
-    /// Verifying successful update and reconnect behavior.
+    /// Verifying that the flashed image is correct — the PIC32 flash CRC is read back and
+    /// compared against the firmware image. A failure here means the firmware is NOT correctly
+    /// installed. Post-flash reconnect is <see cref="ReconnectingAfterFlash"/>, a separate state
+    /// with the opposite severity.
     /// </summary>
     Verifying = 6,
 
@@ -71,5 +74,19 @@ public enum FirmwareUpdateState
     /// installed — but the device is safe and recoverable by re-running the
     /// update.
     /// </summary>
-    Recovered = 11
+    Recovered = 11,
+
+    /// <summary>
+    /// Re-establishing the serial transport after a fully flashed and verified WiFi (WINC)
+    /// module image, and restoring the device's LAN configuration.
+    /// </summary>
+    /// <remarks>
+    /// A failure in this state is benign and environmental: the firmware flashed and verified
+    /// successfully, and only the host's re-enumeration of the serial port timed out. It is
+    /// deliberately distinct from <see cref="Verifying"/>, which is a genuine flash failure —
+    /// the two used to share <see cref="Verifying"/>, leaving a consumer to discriminate on a
+    /// human-readable progress string and users of a successful WiFi flash being told their
+    /// flash CRC mismatched (#398 gap 4).
+    /// </remarks>
+    ReconnectingAfterFlash = 12
 }

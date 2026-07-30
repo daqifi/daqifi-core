@@ -17,7 +17,7 @@ public class GetLanChipInfoAsyncTests
     {
         var device = new TestableLanChipInfoDevice("TestDevice");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => device.GetLanChipInfoAsync());
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetLanChipInfoAsync());
     }
 
     [Fact]
@@ -90,15 +90,23 @@ public class GetLanChipInfoAsyncTests
             }
         }
 
-        protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+        protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            Func<CancellationToken, Task>? prepareAsync = null)
         {
+            // Honor the exchange's prepare phase the way the real device does: it runs first,
+            // before anything this exchange sends (#396).
+            if (prepareAsync != null)
+            {
+                await prepareAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             setupAction();
-            return Task.FromResult<IReadOnlyList<string>>(CannedTextResponse.ToList());
+            return CannedTextResponse.ToList();
         }
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(

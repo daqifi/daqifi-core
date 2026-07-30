@@ -36,7 +36,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (e.g. corrupt card, unreadable directory).</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. An empty directory returns an empty list rather than throwing.</exception>
@@ -52,7 +52,8 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="Daqifi.Core.Device.FeatureNotSupportedException">Thrown when the device's firmware does not recognize the storage query (SCPI -113 "Undefined header"), typically because it predates the minimum supported firmware.</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error or an unparseable response.</exception>
@@ -75,7 +76,8 @@ namespace Daqifi.Core.Device.SdCard
         /// A task that resolves to the evaluated <see cref="SdCardSpaceCheckResult"/>. The check never blocks
         /// logging; callers decide whether to proceed based on <see cref="SdCardSpaceCheckResult.ShouldWarn"/>.
         /// </returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error or an unparseable response.</exception>
         Task<SdCardSpaceCheckResult> CheckSdCardSpaceAsync(
@@ -90,7 +92,7 @@ namespace Daqifi.Core.Device.SdCard
         /// firmware gate; the client-side <see cref="LowSdSpaceWarning"/> remains the primary UX surface.
         /// </summary>
         /// <param name="bytes">The minimum free space to keep available, in bytes. Use 0 to disable the gate.</param>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">Thrown when <paramref name="bytes"/> is negative.</exception>
         void SetSdCardMinimumFreeSpace(long bytes);
 
@@ -120,7 +122,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <see cref="StartSdCardLoggingSessionAsync"/> instead, which returns an
         /// <see cref="SdCardLoggingSession"/>.
         /// </remarks>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -144,7 +146,7 @@ namespace Daqifi.Core.Device.SdCard
         /// A task that resolves to an <see cref="SdCardLoggingSession"/> with the effective on-card
         /// file name and logging format.
         /// </returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -152,7 +154,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -161,7 +163,8 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="fileName">The name of the file to delete.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default);
 
@@ -170,7 +173,8 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
         Task FormatSdCardAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -181,8 +185,19 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="progress">Optional progress reporting.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>Metadata about the downloaded file.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardEmptyTransferException">
+        /// Thrown when the device serves a marker-only (0-byte) transfer for a file the last
+        /// listing reported as non-empty (or whose listed size is unknown). A file the listing
+        /// reports as 0 bytes downloads successfully as a legitimate empty file.
+        /// </exception>
+        /// <exception cref="SdCardTransferStalledException">
+        /// Thrown when the transfer stops making progress before the end-of-file marker arrives;
+        /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a
+        /// closed transport and from an elapsed transfer deadline.
+        /// </exception>
         /// <exception cref="System.TimeoutException">
         /// Thrown when the transfer does not finish within the implementation's download deadline.
         /// The deadline is enforced by the download itself, so it holds even when the transfer is
@@ -202,7 +217,8 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="progress">Optional progress reporting.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>Metadata about the downloaded file, including the local <see cref="SdCardDownloadResult.FilePath"/>.</returns>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         /// <exception cref="System.TimeoutException">
         /// Thrown when the transfer does not finish within the implementation's download deadline

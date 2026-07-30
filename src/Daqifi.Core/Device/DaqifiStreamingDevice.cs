@@ -332,12 +332,12 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Starts streaming data from the device at the configured frequency.
         /// </summary>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void StartStreaming()
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (IsStreaming) return;
@@ -366,12 +366,12 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Stops streaming data from the device.
         /// </summary>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void StopStreaming()
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (!IsStreaming) return;
@@ -728,7 +728,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             foreach (var channel in SnapshotChannels())
@@ -760,7 +760,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             EnsureChannelBelongs(channel);
@@ -786,7 +786,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             EnsureChannelBelongs(channel);
@@ -855,7 +855,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             EnsureChannelBelongs(channel);
@@ -906,7 +906,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             EnsureChannelBelongs(channel);
@@ -931,7 +931,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Skip the redundant round-trip when the device already has this frequency (from a
@@ -975,7 +975,7 @@ namespace Daqifi.Core.Device
         /// <returns>A task that completes once both commands have been sent.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null.</exception>
         /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> fails validation.</exception>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
         public Task SetFriendlyNameAsync(string name, CancellationToken cancellationToken = default)
         {
@@ -993,7 +993,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -1036,7 +1036,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Analog-output (DAC) channels are addressed by number; they are not part of the
@@ -1051,7 +1051,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.RebootDevice);
@@ -1066,7 +1066,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.SaveAdcCalibration);
@@ -1077,7 +1077,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.LoadAdcCalibration);
@@ -1093,7 +1093,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM));
@@ -1109,7 +1109,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB));
@@ -1120,7 +1120,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
@@ -1131,7 +1131,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
@@ -1147,7 +1147,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.UseAdcCalibration(bank));
@@ -1158,7 +1158,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.SaveVoltagePrecision);
@@ -1169,7 +1169,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.LoadVoltagePrecision);
@@ -1184,7 +1184,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Validate everything up front so a bad entry can't leave a partially-applied state.
@@ -1335,7 +1335,7 @@ namespace Daqifi.Core.Device
         /// <param name="configuration">The new network configuration to apply.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when an unsupported WiFi mode or security type is specified.</exception>
         /// <exception cref="OperationCanceledException">
@@ -1355,7 +1355,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Stop streaming if active
@@ -1488,7 +1488,7 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)
         {
@@ -1496,7 +1496,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Re-check right before the state-changing send so a cancellation requested after the
@@ -1511,7 +1511,7 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default)
         {
@@ -1519,7 +1519,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Re-check right before the state-changing send so a cancellation requested after the
@@ -1537,12 +1537,12 @@ namespace Daqifi.Core.Device
         /// very TCP channel that requested it, so disabling LAN would drop the control channel
         /// mid-operation. Only the SD subsystem is enabled in that case.
         /// </summary>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void PrepareSdInterface()
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (IsUsbConnection)
@@ -1559,12 +1559,12 @@ namespace Daqifi.Core.Device
         /// <see cref="PrepareSdInterface"/>). Over WiFi/TCP the LAN was never disabled, so it is
         /// left alone — re-enabling it would re-initialize the WiFi module and drop the connection.
         /// </summary>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void PrepareLanInterface()
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.DisableStorageSd);
@@ -1608,7 +1608,7 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (corrupt card, unreadable directory).</exception>
@@ -1650,7 +1650,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             EnsureSdFileTransferSupportedOnTransport();
@@ -1678,19 +1678,13 @@ namespace Daqifi.Core.Device
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
                     }
 
-                    // Switch the shared SPI bus over to the SD card and let the firmware settle
-                    // BEFORE opening the text exchange. Querying the card too soon after the switch
-                    // makes the device answer -200 (Execution error), so the delay itself is not
-                    // optional — but running it outside the exchange leaves the exchange with no
-                    // internal gap at all, so its very first act is the LIST query. That matters for
-                    // the terminator: the exchange discards anything received before its setup
-                    // action sends, and a gap inside the action would widen that boundary into a
-                    // window where a late reply to an earlier command could still be mistaken for
-                    // this listing's terminator. The delay is unchanged from the device's point of
-                    // view — if anything longer, since the consumer swap now follows it.
-                    PrepareSdInterface();
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
+                    // The SPI bus switch and its settle wait run as the exchange's prepare phase:
+                    // inside the exchange lock, so a competing text exchange cannot restore the LAN
+                    // interface between the switch and the LIST, and ahead of the stale-line
+                    // boundary, so the settle wait does not become a window in which a late reply to
+                    // an earlier command could pass for this listing's terminator. Querying the card
+                    // too soon after the switch makes the device answer -200 (Execution error), so
+                    // the wait itself is not optional.
                     lines = await ExecuteTextCommandAsync(
                         () =>
                         {
@@ -1702,7 +1696,8 @@ namespace Daqifi.Core.Device
                         },
                         responseTimeoutMs: 3000,
                         completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
-                        cancellationToken: cancellationToken);
+                        cancellationToken: cancellationToken,
+                        prepareAsync: PrepareSdInterfaceAndSettleAsync);
 
                     isComplete = TrySplitAtSdListTerminator(lines, out listing);
 
@@ -1731,6 +1726,28 @@ namespace Daqifi.Core.Device
             var files = SdCardFileListParser.ParseFileList(listing);
             _sdCardFiles = files;
             return files;
+        }
+
+        /// <summary>
+        /// Prepare phase shared by the SD card text exchanges: switches the shared SPI bus over to
+        /// the card and waits for the firmware to complete the switch.
+        /// </summary>
+        /// <remarks>
+        /// Passed as the <c>prepareAsync</c> phase of
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
+        /// rather than run
+        /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
+        /// LAN interface between the switch and the commands that depend on it would leave them
+        /// running against the wrong interface — and ahead of the exchange's stale-line boundary, so
+        /// the settle wait cannot be mistaken for a window in which the device was answering.
+        /// </remarks>
+        private async Task PrepareSdInterfaceAndSettleAsync(CancellationToken cancellationToken)
+        {
+            PrepareSdInterface();
+
+            // Querying the card too soon after the switch makes the device answer -200
+            // (Execution error), so this wait is not optional.
+            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -1793,7 +1810,8 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="FeatureNotSupportedException">
@@ -1808,7 +1826,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (_isLoggingToSdCard)
@@ -1957,7 +1975,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
@@ -1973,7 +1991,7 @@ namespace Daqifi.Core.Device
         /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
             => StartSdCardLoggingSessionAsync(fileName, channelMask, format, cancellationToken);
@@ -1997,13 +2015,13 @@ namespace Daqifi.Core.Device
         /// A task that resolves to an <see cref="SdCardLoggingSession"/> carrying the effective on-card
         /// file name (supplied or auto-generated) and the logging format.
         /// </returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public async Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (!IsUsbConnection)
@@ -2068,13 +2086,13 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2106,14 +2124,15 @@ namespace Daqifi.Core.Device
         /// <param name="fileName">The name of the file to delete.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public async Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (_isLoggingToSdCard)
@@ -2139,15 +2158,11 @@ namespace Daqifi.Core.Device
             IReadOnlyList<string> lines;
             try
             {
-                // Switch the shared SPI bus to the SD card and settle BEFORE opening the text
-                // exchange, for the same reason as GetSdCardFilesAsync: a gap inside the setup
-                // action is a window in which a late reply to an earlier command can be captured
-                // as part of this response. Here that would mean a stale error line triggering a
-                // pointless delete-and-relist retry rather than a bad listing, but it is the same
-                // defect, so it gets the same treatment.
-                PrepareSdInterface();
-                await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
+                // Same prepare-phase treatment as GetSdCardFilesAsync, for the same two reasons —
+                // the SPI switch stays serialized against competing text exchanges, and its settle
+                // wait stays outside the stale-line boundary. The consequence of a stale line is
+                // milder here (delete keys off ContainsScpiError, so it would mean a pointless
+                // delete-and-relist retry rather than a bad listing) but it is the same defect.
                 lines = await ExecuteTextCommandAsync(
                     () =>
                     {
@@ -2155,7 +2170,8 @@ namespace Daqifi.Core.Device
                         Send(ScpiMessageProducer.GetSdFileList);
                     },
                     responseTimeoutMs: 3000,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken,
+                    prepareAsync: PrepareSdInterfaceAndSettleAsync);
 
                 if (ContainsScpiError(lines))
                 {
@@ -2165,9 +2181,6 @@ namespace Daqifi.Core.Device
 
                         await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
 
-                        PrepareSdInterface();
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
                         lines = await ExecuteTextCommandAsync(
                             () =>
                             {
@@ -2175,7 +2188,8 @@ namespace Daqifi.Core.Device
                                 Send(ScpiMessageProducer.GetSdFileList);
                             },
                             responseTimeoutMs: 3000,
-                            cancellationToken: cancellationToken);
+                            cancellationToken: cancellationToken,
+                            prepareAsync: PrepareSdInterfaceAndSettleAsync);
 
                         if (!ContainsScpiError(lines))
                         {
@@ -2200,13 +2214,14 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is currently logging to SD card.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         public Task FormatSdCardAsync(CancellationToken cancellationToken = default)
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             if (_isLoggingToSdCard)
@@ -2234,12 +2249,17 @@ namespace Daqifi.Core.Device
         /// <param name="progress">Optional progress reporting.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>Metadata about the downloaded file.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         /// <exception cref="SdCardEmptyTransferException">
-        /// Thrown when the device serves a marker-only (0-byte) transfer for the file across all
-        /// retry attempts, indicating its SD subsystem is not ready rather than the file being
-        /// legitimately empty.
+        /// Thrown when the device serves a marker-only (0-byte) transfer across all retry attempts
+        /// for a file the last <see cref="GetSdCardFilesAsync"/> listing reported as non-empty (or
+        /// whose listed size is unknown), indicating its SD subsystem is not ready. A file the
+        /// listing reports as 0 bytes downloads successfully as a legitimate empty file.
+        /// </exception>
+        /// <exception cref="SdCardTransferStalledException">
+        /// Thrown when the transfer stops making progress before the end-of-file marker arrives.
         /// </exception>
         /// <exception cref="TimeoutException">
         /// Thrown when the download does not finish within <see cref="SdCardDownloadTimeout"/>.
@@ -2274,7 +2294,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             // Over WiFi/TCP this requires firmware >= v3.7.0 (#598/#599); over USB it is always
@@ -2320,11 +2340,15 @@ namespace Daqifi.Core.Device
                         // Send the SCPI command to request the file
                         Send(ScpiMessageProducer.GetSdFile(fileName));
 
-                        // Receive the file data. A marker-only (0-byte) transfer means the device's
-                        // SD subsystem wasn't ready when it opened the file - the same kind of
-                        // transient condition GetSdCardFilesAsync's LIST retry already absorbs - so
-                        // retry the GET a bounded number of times before giving up (see #264).
+                        // Receive the file data. A marker-only (0-byte) transfer for a file the
+                        // listing reports as non-empty means the device's SD subsystem wasn't ready
+                        // when it opened the file - the same kind of transient condition
+                        // GetSdCardFilesAsync's LIST retry already absorbs - so retry the GET a
+                        // bounded number of times before giving up (see #264). Passing the listed
+                        // size keeps that retry off a genuinely 0-byte file, which is a legitimate
+                        // empty download rather than a wedged subsystem (#398 gap 2).
                         var receiver = new SdCardFileReceiver(stream);
+                        var listedFileSizeBytes = TryGetListedFileSize(fileName);
                         long bytesReceived;
                         var attempt = 0;
                         while (true)
@@ -2339,7 +2363,8 @@ namespace Daqifi.Core.Device
                                     fileName,
                                     progress,
                                     timeout: RemainingBudget(budget, stopwatch),
-                                    cancellationToken: ct).ConfigureAwait(false);
+                                    cancellationToken: ct,
+                                    listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
                                 break;
                             }
                             catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
@@ -2375,13 +2400,52 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Looks up the size the most recent directory listing reported for a file. Returns null
+        /// ("unknown", which the receiver treats conservatively) when no listing has been fetched,
+        /// when the listing did not include this file or a size for it, or when more than one
+        /// listed entry shares the name.
+        /// </summary>
+        private long? TryGetListedFileSize(string fileName)
+        {
+            // Snapshot the field: GetSdCardFilesAsync replaces the list wholesale, so a
+            // concurrent refresh swaps the reference rather than mutating what we enumerate.
+            var listedFiles = _sdCardFiles;
+
+            long? matchedSize = null;
+            var matched = false;
+
+            foreach (var file in listedFiles)
+            {
+                // FAT names are case-insensitive. The listing keeps only the leaf name, so the
+                // same name can appear twice from different directories; that is ambiguous and
+                // an over-confident size here would wave through the very failure (a wedged
+                // subsystem serving nothing) the empty-transfer guard exists to catch.
+                if (!string.Equals(file.FileName, fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (matched)
+                {
+                    return null;
+                }
+
+                matched = true;
+                matchedSize = file.SizeInBytes;
+            }
+
+            return matchedSize;
+        }
+
+        /// <summary>
         /// Downloads a file from the device's SD card over USB to a temporary file.
         /// </summary>
         /// <param name="fileName">The name of the file to download.</param>
         /// <param name="progress">Optional progress reporting.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>Metadata about the downloaded file, including the local file path.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the device is not connected or is not using a USB/serial transport.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
@@ -2718,7 +2782,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             var lines = await ExecuteTextCommandAsync(
@@ -2808,7 +2872,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2834,7 +2898,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2859,7 +2923,7 @@ namespace Daqifi.Core.Device
 
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2891,7 +2955,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2916,7 +2980,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2936,7 +3000,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2969,7 +3033,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2994,7 +3058,7 @@ namespace Daqifi.Core.Device
         {
             if (!IsConnected)
             {
-                throw new InvalidOperationException("Device is not connected.");
+                throw new DeviceNotConnectedException();
             }
 
             cancellationToken.ThrowIfCancellationRequested();
