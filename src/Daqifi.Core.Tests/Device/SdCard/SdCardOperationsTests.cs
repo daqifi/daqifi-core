@@ -5,6 +5,7 @@ using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -2102,6 +2103,230 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Null(files[2].SizeInBytes);
         }
 
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenTransferParksIgnoringItsToken_ThrowsTimeoutException()
+        {
+            // #399: against a wedged SD subsystem the transfer parks somewhere that never looks
+            // at the token it was handed, so the only thing that can end the call is a deadline
+            // the download enforces itself.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            try
+            {
+                var elapsed = Stopwatch.StartNew();
+                var opTask = device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+                // Guard the assertion rather than the test run: if the deadline never fires this
+                // fails instead of hanging CI forever.
+                var winner = await Task.WhenAny(opTask, Task.Delay(TimeSpan.FromSeconds(30)));
+                Assert.Same((Task)opTask, winner);
+
+                var ex = await Assert.ThrowsAsync<TimeoutException>(() => opTask);
+                elapsed.Stop();
+
+                Assert.Contains("data.bin", ex.Message);
+
+                // It waited for the budget instead of failing early — the deadline is what ended
+                // it, not some unrelated fault.
+                Assert.True(
+                    elapsed.Elapsed >= TimeSpan.FromMilliseconds(300),
+                    $"Download failed after only {elapsed.ElapsedMilliseconds}ms, before the budget elapsed.");
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenTransferParksSynchronously_StillTimesOut()
+        {
+            // The suspected park in #399 (a blocking SerialPort.Write on a device that stopped
+            // draining) is in the transfer's SYNCHRONOUS prefix — before the first await. Unless
+            // that prefix runs on the worker task, it blocks the caller before any deadline can
+            // even be armed, and the call never returns a Task at all. Hence the Task.Run: it
+            // keeps the test thread free so a regression fails here instead of wedging the run.
+            var device = new ParkedDownloadDevice(ParkMode.Synchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            try
+            {
+                var opTask = Task.Run(() => device.DownloadSdCardFileAsync("data.bin", destinationStream));
+
+                var winner = await Task.WhenAny(opTask, Task.Delay(TimeSpan.FromSeconds(30)));
+                Assert.Same((Task)opTask, winner);
+
+                await Assert.ThrowsAsync<TimeoutException>(() => opTask);
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenTransferParksIgnoringItsToken_CallerCancellationStillEndsTheCall()
+        {
+            // The consumer-side stall watchdog described in #399: it cancels its token at 90s and
+            // nothing happens, because the parked path never polls it. The download must observe
+            // the caller's token itself so cancelling actually ends the await — well before the
+            // (deliberately distant) deadline below.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromSeconds(60));
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+            using var cts = new CancellationTokenSource();
+
+            try
+            {
+                var opTask = device.DownloadSdCardFileAsync("data.bin", destinationStream, null, cts.Token);
+
+                // Only cancel once the transfer is genuinely parked, so the test proves the token
+                // reaches a call already in flight rather than the up-front guard.
+                Assert.True(device.Parked.Wait(TimeSpan.FromSeconds(30)), "Transfer never reached the park.");
+                cts.Cancel();
+
+                var winner = await Task.WhenAny(opTask, Task.Delay(TimeSpan.FromSeconds(30)));
+                Assert.Same((Task)opTask, winner);
+
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => opTask);
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhileAPreviousTransferIsStillAbandoned_FailsFast()
+        {
+            // An abandoned transfer still owns the transport, so a retry must be refused rather
+            // than start a second reader on the same stream (and stack another blocked thread).
+            // A consumer looping over a wedged card's files gets one timeout, then cheap failures.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var firstDestination = new MemoryStream();
+            using var secondDestination = new MemoryStream();
+
+            try
+            {
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => device.DownloadSdCardFileAsync("data.bin", firstDestination));
+
+                // The first transfer is still parked, so the gate is still held. The exception TYPE
+                // is what proves the refusal came from the gate: waiting out another deadline would
+                // have produced TimeoutException, never InvalidOperationException. The wall-clock
+                // bound is only a hang guard, kept loose so a contended CI runner can't fail it.
+                var secondCall = device.DownloadSdCardFileAsync("other.bin", secondDestination);
+                var winner = await Task.WhenAny(secondCall, Task.Delay(TimeSpan.FromSeconds(30)));
+                Assert.Same((Task)secondCall, winner);
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => secondCall);
+                Assert.Contains("abandoned", ex.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenGateIsHeldAndCallerCancelled_ReportsCancellation()
+        {
+            // Cancellation outranks the gate: a caller who cancelled should get their own
+            // cancellation back, not a report about a different transfer they can do nothing about.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var firstDestination = new MemoryStream();
+            using var secondDestination = new MemoryStream();
+
+            try
+            {
+                await Assert.ThrowsAsync<TimeoutException>(
+                    () => device.DownloadSdCardFileAsync("data.bin", firstDestination));
+
+                // Cancel from inside the pre-flight StopStreaming send: that lands in the exact
+                // window this guards — after DownloadSdCardFileAsync's entry check, before the
+                // gate is examined. A token cancelled before the call would just trip the entry
+                // check and prove nothing.
+                using var cts = new CancellationTokenSource();
+                device.CancelOnNextSend = cts;
+
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => device.DownloadSdCardFileAsync("other.bin", secondDestination, null, cts.Token));
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_AfterAnAbandonedTransferUnwinds_IsAllowedAgain()
+        {
+            // The gate is a quarantine, not a one-shot latch: once the abandoned worker finally
+            // returns, the transport is free and downloads are accepted again.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var destination = new MemoryStream();
+
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => device.DownloadSdCardFileAsync("data.bin", destination));
+
+            // Let the abandoned worker unwind, then wait for the gate to come back.
+            device.Release();
+
+            InvalidOperationException? lastRefusal = null;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    // The park device completes its raw capture without ever calling the transfer
+                    // body, so an accepted download reports a zero-byte result rather than throwing.
+                    await device.DownloadSdCardFileAsync("data.bin", destination);
+                    lastRefusal = null;
+                    break;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    lastRefusal = ex;
+                    await Task.Delay(25);
+                }
+            }
+
+            Assert.Null(lastRefusal);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_SlowButHealthyTransfer_IsNotAborted()
+        {
+            // The bounding must only end transfers that are stuck. A slow-but-progressing one —
+            // a large file, a busy device — has to run to completion untouched.
+            var fileData = new byte[240];
+            new Random(399).NextBytes(fileData);
+
+            var device = new SlowDownloadDevice(
+                fileData,
+                chunkSize: 16,
+                chunkDelay: TimeSpan.FromMilliseconds(40),
+                budget: TimeSpan.FromSeconds(10));
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            // Act
+            var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            // Assert — every byte arrived, and the transfer really did take its time getting here.
+            Assert.Equal(fileData, destinationStream.ToArray());
+            Assert.Equal(fileData.Length, result.FileSize);
+            Assert.True(
+                result.Duration >= TimeSpan.FromMilliseconds(200),
+                $"Transfer completed in {result.Duration.TotalMilliseconds}ms — too fast to prove a slow transfer survives.");
+        }
+
         #endregion
 
         /// <summary>
@@ -2537,6 +2762,180 @@ namespace Daqifi.Core.Tests.Device.SdCard
             {
                 await rawAction(_stream, cancellationToken);
             }
+        }
+
+        /// <summary>
+        /// How <see cref="ParkedDownloadDevice"/> simulates a wedged transfer.
+        /// </summary>
+        private enum ParkMode
+        {
+            /// <summary>Parks in an awaited task that never observes the token (a read that never returns).</summary>
+            Asynchronous,
+
+            /// <summary>Blocks the calling thread outright, before the first await (a blocking write that never drains).</summary>
+            Synchronous
+        }
+
+        /// <summary>
+        /// A device whose raw-capture path parks and never observes the cancellation token it was
+        /// handed — the #399 failure mode, where neither the caller's token nor a consumer-side
+        /// watchdog can reach whatever the transfer is stuck in. <see cref="Release"/> unblocks the
+        /// abandoned worker at the end of the test so it cannot outlive it.
+        /// </summary>
+        private sealed class ParkedDownloadDevice : DaqifiStreamingDevice
+        {
+            private readonly TaskCompletionSource _asyncPark = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly ManualResetEventSlim _syncPark = new(false);
+            private readonly ParkMode _mode;
+            private readonly TimeSpan _budget;
+
+            public ParkedDownloadDevice(ParkMode mode, TimeSpan budget)
+                : base("TestDevice")
+            {
+                _mode = mode;
+                _budget = budget;
+            }
+
+            /// <summary>Set once the transfer has actually reached the park.</summary>
+            public ManualResetEventSlim Parked { get; } = new(false);
+
+            /// <summary>
+            /// When set, the next <see cref="Send{T}"/> cancels it. Lets a test cancel from inside
+            /// the download's pre-flight command, i.e. between its entry guard and the SD-download
+            /// gate check.
+            /// </summary>
+            public CancellationTokenSource? CancelOnNextSend { get; set; }
+
+            public override bool IsUsbConnection => true;
+
+            internal override TimeSpan SdCardDownloadTimeout => _budget;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                // Otherwise swallowed: this device never gets as far as exchanging commands.
+                var cancelSource = CancelOnNextSend;
+                CancelOnNextSend = null;
+                cancelSource?.Cancel();
+            }
+
+            protected override async Task ExecuteRawCaptureAsync(
+                Func<Stream, CancellationToken, Task> rawAction,
+                CancellationToken cancellationToken = default)
+            {
+                Parked.Set();
+
+                // Deliberately ignores cancellationToken — that is the whole point.
+                if (_mode == ParkMode.Synchronous)
+                {
+                    _syncPark.Wait();
+                    return;
+                }
+
+                await _asyncPark.Task.ConfigureAwait(false);
+            }
+
+            /// <summary>Lets the abandoned transfer finish so no thread is left parked after the test.</summary>
+            public void Release()
+            {
+                _asyncPark.TrySetResult();
+                _syncPark.Set();
+            }
+        }
+
+        /// <summary>
+        /// A device that serves a healthy file slowly — small chunks with a delay between them —
+        /// so tests can show that bounding a stuck download does not abort a progressing one.
+        /// </summary>
+        private sealed class SlowDownloadDevice : DaqifiStreamingDevice
+        {
+            private readonly SlowChunkStream _stream;
+            private readonly TimeSpan _budget;
+
+            public SlowDownloadDevice(byte[] fileData, int chunkSize, TimeSpan chunkDelay, TimeSpan budget)
+                : base("TestDevice")
+            {
+                _stream = new SlowChunkStream(fileData, chunkSize, chunkDelay);
+                _budget = budget;
+            }
+
+            public override bool IsUsbConnection => true;
+
+            internal override TimeSpan SdCardDownloadTimeout => _budget;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                // Not asserted on by the slow-transfer tests.
+            }
+
+            protected override async Task ExecuteRawCaptureAsync(
+                Func<Stream, CancellationToken, Task> rawAction,
+                CancellationToken cancellationToken = default)
+            {
+                await rawAction(_stream, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Serves file data plus the EOF marker in small chunks, pausing between them, to imitate
+        /// a large transfer trickling in over USB.
+        /// </summary>
+        private sealed class SlowChunkStream : Stream
+        {
+            private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
+
+            private readonly byte[] _data;
+            private readonly int _chunkSize;
+            private readonly TimeSpan _chunkDelay;
+            private int _position;
+
+            public SlowChunkStream(byte[] fileData, int chunkSize, TimeSpan chunkDelay)
+            {
+                _data = new byte[fileData.Length + EofMarker.Length];
+                Array.Copy(fileData, 0, _data, 0, fileData.Length);
+                Array.Copy(EofMarker, 0, _data, fileData.Length, EofMarker.Length);
+                _chunkSize = chunkSize;
+                _chunkDelay = chunkDelay;
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => _data.Length;
+            public override long Position
+            {
+                get => _position;
+                set => throw new NotSupportedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                Thread.Sleep(_chunkDelay);
+                var available = _data.Length - _position;
+                if (available <= 0) return 0;
+
+                var toRead = Math.Min(Math.Min(count, _chunkSize), available);
+                Array.Copy(_data, _position, buffer, offset, toRead);
+                _position += toRead;
+                return toRead;
+            }
+
+            public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            {
+                await Task.Delay(_chunkDelay, cancellationToken).ConfigureAwait(false);
+
+                var available = _data.Length - _position;
+                if (available <= 0) return 0;
+
+                var toRead = Math.Min(Math.Min(count, _chunkSize), available);
+                Array.Copy(_data, _position, buffer, offset, toRead);
+                _position += toRead;
+                return toRead;
+            }
+
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
 
         /// <summary>

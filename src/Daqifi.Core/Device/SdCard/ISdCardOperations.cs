@@ -198,6 +198,12 @@ namespace Daqifi.Core.Device.SdCard
         /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a
         /// closed transport and from an elapsed transfer deadline.
         /// </exception>
+        /// <exception cref="System.TimeoutException">
+        /// Thrown when the transfer does not finish within the implementation's download deadline.
+        /// The deadline is enforced by the download itself, so it holds even when the transfer is
+        /// parked in a call that cannot observe a cancellation token; the in-flight transfer is
+        /// then abandoned rather than awaited (#399).
+        /// </exception>
         Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             Stream destinationStream,
@@ -214,6 +220,10 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="System.ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="System.TimeoutException">
+        /// Thrown when the transfer does not finish within the implementation's download deadline
+        /// (see the <see cref="Stream"/> overload above); the temporary file is removed.
+        /// </exception>
         Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             IProgress<SdCardTransferProgress>? progress = null,

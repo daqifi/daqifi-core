@@ -54,6 +54,26 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
+    public void SerialStreamTransport_ApplyOperationalTimeouts_BoundsBothDirections()
+    {
+        // #399: only ReadTimeout used to be lowered after open, so WriteTimeout kept the connect
+        // timeout for the life of the port. SerialPort.Write takes no CancellationToken, so a
+        // device that stops draining its receive buffer parks the write for that whole duration
+        // with nothing able to interrupt it. Both directions must end up bounded and short.
+        using var port = new SerialPort("COM1")
+        {
+            ReadTimeout = 30000,
+            WriteTimeout = 30000
+        };
+
+        SerialStreamTransport.ApplyOperationalTimeouts(port);
+
+        Assert.Equal(500, port.ReadTimeout);
+        Assert.Equal(2000, port.WriteTimeout);
+        Assert.NotEqual(SerialPort.InfiniteTimeout, port.WriteTimeout);
+    }
+
+    [Fact]
     public void SerialStreamTransport_SetSerialPortForTesting_TakesOwnershipAndDisposesPreviousPort()
     {
         // The seam documents that the transport takes ownership: a previously held port is

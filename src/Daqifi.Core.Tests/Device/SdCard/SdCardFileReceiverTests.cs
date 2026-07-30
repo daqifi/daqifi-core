@@ -168,6 +168,27 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
+    public async Task ReceiveAsync_WhenCancelledAndStreamIgnoresTheToken_ReportsCancellationNotTimeout()
+    {
+        // #399: System.IO.Ports' SerialStream ignores the token once a read is in flight, and on a
+        // device that is sending nothing it just returns 0 bytes when its (500 ms) ReadTimeout
+        // elapses. The loop translated that into "transport stream closed" — a timeout — even when
+        // the caller had already cancelled, which is precisely the case where a consumer's stall
+        // watchdog wants to see its own cancellation come back. Cancellation has to win.
+        using var sourceStream = new TokenIgnoringSilentStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => receiver.ReceiveAsync(
+                destinationStream, "test.bin",
+                timeout: TimeSpan.FromMinutes(5),
+                cancellationToken: cts.Token));
+    }
+
+    [Fact]
     public async Task ReceiveAsync_ProgressReporting_BytesReceivedIncreases()
     {
         // Arrange
@@ -553,6 +574,37 @@ public class SdCardFileReceiverTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(Read(buffer, offset, count));
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A silent device: every read returns 0 bytes (a serial read timeout) and the cancellation
+    /// token is accepted and then ignored, exactly as System.IO.Ports' SerialStream behaves for a
+    /// read already in flight.
+    /// </summary>
+    private sealed class TokenIgnoringSilentStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => 0;
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            // Deliberately no ThrowIfCancellationRequested: the token is accepted, never acted on.
+            return Task.FromResult(0);
         }
 
         public override void Flush() { }
