@@ -3,6 +3,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.SdCard;
+using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Mcp;
 
@@ -24,11 +25,16 @@ namespace Daqifi.Mcp;
 public sealed class DaqifiAgent
 {
     private readonly ServerOptions _options;
+    private readonly ILogger<DaqifiAgent> _logger;
     private readonly ConcurrentDictionary<string, IDeviceInfo> _discovered = new(StringComparer.Ordinal);
     private readonly DaqifiDeviceRegistry _registry = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public DaqifiAgent(ServerOptions options) => _options = options;
+    public DaqifiAgent(ServerOptions options, ILogger<DaqifiAgent>? logger = null)
+    {
+        _options = options;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<DaqifiAgent>.Instance;
+    }
 
     // ---------------------------------------------------------------- discovery
 
@@ -168,7 +174,7 @@ public sealed class DaqifiAgent
             // The device's authoritative rate cap (CapabilityStreaming.CurrentMaximumRateHz) is
             // scoped to the channel set enabled when the document was read — refresh it now so
             // set_sample_rate validates against the configuration that is actually live.
-            await RefreshCapabilityDocumentAsync(device).ConfigureAwait(false);
+            await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
 
             return new ConfigureResult(deviceId, EnabledAnalog(device), streaming.StreamingFrequency);
         }
@@ -215,7 +221,7 @@ public sealed class DaqifiAgent
 
             // See ConfigureAnalogChannelsAsync: keeps CurrentMaximumRateHz current for
             // set_sample_rate even though the rate model itself ignores digital channels.
-            await RefreshCapabilityDocumentAsync(device).ConfigureAwait(false);
+            await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
 
             return new ConfigureDigitalResult(deviceId, EnabledDigital(device));
         }
@@ -360,7 +366,14 @@ public sealed class DaqifiAgent
             // reported CurrentMaximumRateHz of 0 is a real answer ("no channels enabled") and is
             // deliberately not floored the same way.
             var hardwareMax = Math.Max(1, device.Metadata.Capabilities.MaxSamplingRate);
-            var deviceCap = device.Metadata.CapabilityDocument?.Streaming?.CurrentMaximumRateHz ?? hardwareMax;
+
+            // Bound to hardwareMax defensively: CurrentMaximumRateHz and MaxSamplingRate come from
+            // two independently-parsed fields, so a self-inconsistent document (or a channel-set
+            // read that raced a board-table update) could otherwise report a "current" cap above
+            // the absolute ceiling StreamingFrequency itself enforces — which would let this check
+            // pass and then fail one line down with the wrong exception type.
+            var currentMax = device.Metadata.CapabilityDocument?.Streaming?.CurrentMaximumRateHz;
+            var deviceCap = currentMax.HasValue ? Math.Min(currentMax.Value, hardwareMax) : hardwareMax;
             var cap = _options.MaxSampleRateHz is { } max ? Math.Min(max, deviceCap) : deviceCap;
 
             if (rateHz > cap)
@@ -488,9 +501,17 @@ public sealed class DaqifiAgent
     // Best-effort: a device that doesn't support the capability document (or a query that
     // fails/times out) just leaves CurrentMaximumRateHz stale or absent, and SetSampleRateAsync
     // falls back to the board-derived ceiling. Not fatal to the channel-configuration call that
-    // triggered the refresh.
-    private static async Task RefreshCapabilityDocumentAsync(DaqifiDevice device)
+    // triggered the refresh. Skipped outright while streaming/logging: ReadCapabilityDocumentAsync
+    // runs a text-mode exchange that pauses the protobuf consumer, which Core documents as unsafe
+    // to call while streaming (SD logging sets IsStreaming too) — leaving the cap stale here is
+    // preferable to disrupting an active session.
+    private async Task RefreshCapabilityDocumentAsync(DaqifiDevice device, IStreamingDevice streaming)
     {
+        if (streaming.IsStreaming)
+        {
+            return;
+        }
+
         try
         {
             await device.ReadCapabilityDocumentAsync().ConfigureAwait(false);
@@ -499,8 +520,9 @@ public sealed class DaqifiAgent
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Capability-document refresh failed for '{DeviceId}'; set_sample_rate will keep using the last-known cap.", device.Metadata.SerialNumber);
         }
     }
 
