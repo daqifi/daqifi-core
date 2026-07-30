@@ -271,6 +271,35 @@ namespace Daqifi.Core.Device
         protected IReadOnlyList<IChannel> SnapshotChannels() => GetChannelsSnapshot();
 
         /// <summary>
+        /// Runs <paramref name="action"/> under the same lock that guards structural access to
+        /// <see cref="_channels"/> and the status-driven <c>IsEnabled</c> resync in
+        /// <see cref="PopulateChannelsFromStatus"/>. A subclass's channel-management API (e.g.
+        /// enable/disable) should mutate <see cref="IChannel.IsEnabled"/> and compute any derived
+        /// outbound state (an ADC/DIO enable mask) inside this critical section, so a concurrent
+        /// status frame on the consumer thread cannot interleave between the mutation and the
+        /// read that derives the mask — which would send a mask computed from a value the status
+        /// frame is about to overwrite (#409). Callers must perform blocking I/O (e.g. <c>Send</c>)
+        /// outside this method; the lock is reentrant, so calling <see cref="SnapshotChannels"/>
+        /// from within <paramref name="action"/> is safe.
+        /// </summary>
+        protected T WithChannelsLock<T>(Func<T> action)
+        {
+            lock (_channelsLock)
+            {
+                return action();
+            }
+        }
+
+        /// <inheritdoc cref="WithChannelsLock{T}"/>
+        protected void WithChannelsLock(Action action)
+        {
+            lock (_channelsLock)
+            {
+                action();
+            }
+        }
+
+        /// <summary>
         /// Gets the device's timestamp clock frequency in Hz.
         /// Populated from the <c>TimestampFreq</c> field of the status message.
         /// Used as the fallback frequency for SD card log file parsing when no

@@ -7,6 +7,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device
@@ -235,6 +237,58 @@ namespace Daqifi.Core.Tests.Device
 
             var sent = Assert.Single(device.SentMessages);
             Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
+        }
+
+        #endregion
+
+        #region Concurrent status resync (#409)
+
+        [Fact]
+        public async Task EnableChannel_ConcurrentWithStatusResync_AlwaysSendsMaskIncludingJustEnabledChannel()
+        {
+            // Regression test for #409: PopulateChannelsFromStatus now resyncs analog IsEnabled
+            // from the device's reported mask on the consumer thread. Without a shared critical
+            // section, a status frame could interleave between EnableChannel's IsEnabled mutation
+            // and the ADC mask it computes and sends, silently dropping the just-enabled channel
+            // from the outbound mask. Hammer a concurrent status resync (reporting everything
+            // disabled) against repeated EnableChannel calls and assert the sent mask always
+            // reflects what was just requested.
+            var device = CreateConnectedDevice(analogChannels: 2, digitalChannels: 0);
+            var channel0 = AnalogChannelAt(device, 0);
+            var allDisabledStatus = new DaqifiOutMessage
+            {
+                AnalogInPortNum = 2,
+                AnalogInRes = 65535,
+                AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0000)
+            };
+
+            using var stop = new CancellationTokenSource();
+            var resyncTask = Task.Run(() =>
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    device.PopulateChannelsFromStatus(allDisabledStatus);
+                }
+            });
+
+            try
+            {
+                for (var i = 0; i < 500; i++)
+                {
+                    device.DisableAllChannels();
+                    device.SentMessages.Clear();
+
+                    device.EnableChannel(channel0);
+
+                    var sent = Assert.Single(device.SentMessages);
+                    Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
+                }
+            }
+            finally
+            {
+                stop.Cancel();
+                await resyncTask;
+            }
         }
 
         #endregion
