@@ -54,7 +54,7 @@ public sealed class ServerOptions
 
         Options:
           --read-only               Expose discovery/introspection only; block configuration and logging.
-          --max-sample-rate-hz <n>  Clamp set_sample_rate requests to at most <n> Hz.
+          --max-sample-rate-hz <n>  Reject set_sample_rate requests above <n> Hz.
           -h, --help                Show this help and exit.
         """;
 }
