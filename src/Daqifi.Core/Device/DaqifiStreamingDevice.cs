@@ -148,6 +148,30 @@ namespace Daqifi.Core.Device
         private int _suppressedWarmupFrameCount;
 
         /// <summary>
+        /// Backing counter for <see cref="DecodeFailureCount"/>.
+        /// </summary>
+        private long _decodeFailureCount;
+
+        /// <summary>
+        /// Gets the number of streaming frames whose decode threw and was discarded since the
+        /// current streaming session began.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Per-frame decoding is deliberately best-effort — a single malformed frame must never tear
+        /// down the stream — but that isolation used to be completely silent (issue #378): a decode
+        /// that failed on every frame produced zero samples and zero diagnostics, indistinguishable
+        /// from a device sending nothing. This counter is the cheap always-on version of that
+        /// signal; <see cref="DaqifiDevice.ErrorOccurred"/> carries the exception behind it.
+        /// </para>
+        /// <para>
+        /// Reset by <see cref="StartStreaming"/>, so it describes the current session. A healthy
+        /// stream leaves it at zero.
+        /// </para>
+        /// </remarks>
+        public long DecodeFailureCount => Interlocked.Read(ref _decodeFailureCount);
+
+        /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
         /// </summary>
         public bool IsStreaming { get; private set; }
@@ -358,6 +382,7 @@ namespace Daqifi.Core.Device
             // observed warmup frame).
             _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
             _suppressedWarmupFrameCount = 0;
+            Interlocked.Exchange(ref _decodeFailureCount, 0);
 
             IsStreaming = true;
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
@@ -484,10 +509,17 @@ namespace Daqifi.Core.Device
             {
                 DecodeStreamFrame(message);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // A single malformed frame must never tear down the stream or starve other
-                // consumers; decoding is best-effort per frame.
+                // consumers; decoding is best-effort per frame. That isolation stays exactly as it
+                // was — the frame is dropped and the loop continues — but it is no longer silent
+                // (issue #378): a decode that throws on every frame yields no samples, which used
+                // to be indistinguishable from a device sending nothing at all. Both the counter
+                // and the (throttled) event are observation only; neither changes what happens to
+                // this frame or the next one.
+                Interlocked.Increment(ref _decodeFailureCount);
+                RaiseDeviceError(DeviceErrorSource.StreamDecode, ex);
             }
         }
 

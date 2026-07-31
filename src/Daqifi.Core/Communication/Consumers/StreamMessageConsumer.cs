@@ -331,10 +331,18 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     PerformClear();
                 }
 
-                // Check if data is available to avoid blocking
+                // A stream that reports itself unreadable never becomes readable again — that is a
+                // closed or disposed stream, not a momentary lull. Report it instead of spinning
+                // here forever producing no data, no error and no status change, which is the
+                // failure mode issue #377 was filed for. Backed off at the same cadence as a
+                // failing read so the escalation timing matches.
                 if (!_stream.CanRead)
                 {
-                    Thread.Sleep(10);
+                    var unreadable = new IOException(
+                        "The stream is no longer readable; the underlying connection has been closed.");
+                    _healthSink?.ReportIoFault(unreadable);
+                    OnErrorOccurred(unreadable);
+                    Thread.Sleep(100);
                     continue;
                 }
 
