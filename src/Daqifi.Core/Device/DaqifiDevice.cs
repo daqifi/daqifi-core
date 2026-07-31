@@ -552,11 +552,85 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Serializes <see cref="ConnectCore"/> against <see cref="DisconnectCore"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Automatic reconnection (issue #379) introduced a second thread that opens and closes the
+        /// transport, and cancellation is not synchronization: <see cref="SupersedeReconnect"/>
+        /// asks the loop to stop and returns immediately, but a loop already inside a blocking
+        /// <c>Connect()</c> cannot be interrupted and will run to completion. Without this, a
+        /// caller's <see cref="Disconnect"/> could be opening and closing the same serial port
+        /// concurrently, and both threads could build and start a message consumer — leaving two
+        /// readers on one stream, the framing corruption this class refuses to risk anywhere else.
+        /// </para>
+        /// <para>
+        /// Narrow on purpose. This is an internal lifecycle invariant — the device never drives its
+        /// own transport from two threads at once — and deliberately <b>not</b> the general
+        /// per-device operation serialization of issue #342, which has to decide ordering across
+        /// the whole public API and interacts with <c>_textExchangeLock</c>. Nothing here changes
+        /// what any public method does when uncontended.
+        /// </para>
+        /// <para>
+        /// A <see cref="Monitor"/> rather than a semaphore because it is reentrant: both methods
+        /// raise <see cref="StatusChanged"/> from inside their critical section, and a consumer
+        /// handler calling <see cref="Disconnect"/> from there is re-entry on the same thread. That
+        /// runs nested today with no lock at all, and must keep working rather than deadlocking.
+        /// </para>
+        /// </remarks>
+        private readonly object _lifecycleLock = new();
+
+        /// <summary>
+        /// How long a lifecycle operation waits for one already in flight. Matches the budget
+        /// <see cref="Disconnect"/> already allows itself on <c>_textExchangeLock</c>.
+        /// </summary>
+        private static readonly TimeSpan LifecycleLockTimeout = TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, proceeding anyway if the
+        /// lock cannot be taken in time.
+        /// </summary>
+        /// <remarks>
+        /// Timing out and continuing is the same bargain <see cref="Disconnect"/> already strikes
+        /// with <c>_textExchangeLock</c>: a teardown must never be blocked forever by something
+        /// wedged. The unsynchronized fallback is exactly the behaviour that shipped before this
+        /// lock existed, so a timeout is never worse than the status quo — and a reconnect that
+        /// slips through it is still caught afterwards by <see cref="AbandonIfSuperseded"/>.
+        /// </remarks>
+        private void RunLifecycleExclusive(Action operation)
+        {
+            var acquired = false;
+            try
+            {
+                acquired = Monitor.TryEnter(_lifecycleLock, LifecycleLockTimeout);
+                if (!acquired)
+                {
+                    SafeLog(() => _logger.LogWarning(
+                        "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock within "
+                        + "{TimeoutSeconds}s; proceeding without it.",
+                        Name,
+                        LifecycleLockTimeout.TotalSeconds));
+                }
+
+                operation();
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    Monitor.Exit(_lifecycleLock);
+                }
+            }
+        }
+
+        /// <summary>
         /// Connects to the device.
         /// </summary>
         /// <remarks>
         /// A caller-issued connect supersedes any automatic reconnect in progress: the loop is
-        /// cancelled and unwinds without touching the session this call establishes.
+        /// cancelled and unwinds without touching the session this call establishes. If an attempt
+        /// is already inside a blocking transport connect, this waits for it to finish rather than
+        /// running alongside it — see <see cref="_lifecycleLock"/>.
         /// </remarks>
         public void Connect()
         {
@@ -567,9 +641,12 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// The body of <see cref="Connect"/>, without the reconnect-supersede step — the reconnect
-        /// loop calls this so it does not cancel itself.
+        /// loop calls this so it does not cancel itself. Serialized against
+        /// <see cref="DisconnectCore"/> so the two can never drive the transport at once.
         /// </summary>
-        private void ConnectCore()
+        private void ConnectCore() => RunLifecycleExclusive(ConnectCoreUnsynchronized);
+
+        private void ConnectCoreUnsynchronized()
         {
             Status = ConnectionStatus.Connecting;
             State = DeviceState.Connecting;
@@ -668,7 +745,10 @@ namespace Daqifi.Core.Device
         /// the reconnect loop performs between attempts, which must not look to consumers like the
         /// session ended on purpose.
         /// </param>
-        private void DisconnectCore(ConnectionStatus finalStatus)
+        private void DisconnectCore(ConnectionStatus finalStatus) =>
+            RunLifecycleExclusive(() => DisconnectCoreUnsynchronized(finalStatus));
+
+        private void DisconnectCoreUnsynchronized(ConnectionStatus finalStatus)
         {
             _isDisconnecting = true;
             // Best-effort coordination with ExecuteTextCommandAsync —

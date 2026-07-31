@@ -23,6 +23,16 @@ public class DeviceReconnectTests
 {
     private static readonly TimeSpan EventTimeout = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// Safety valve on the gates that park a scripted connect or initialization mid-flight. A test
+    /// that is going to pass releases its gate within milliseconds, so this only ever fires on a
+    /// test that has already failed — which is exactly why it has to stay well under
+    /// <see cref="EventTimeout"/>. A gate outliving the assertion that gave up on it leaves a
+    /// background thread parked inside the transport long after the test finished, where it can
+    /// interleave with whatever runs next.
+    /// </summary>
+    private static readonly TimeSpan GateTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>A policy that reconnects promptly, so tests do not spend their time waiting.</summary>
     private static ReconnectOptions FastPolicy(int maxAttempts = 4) => new()
     {
@@ -435,12 +445,15 @@ public class DeviceReconnectTests
             transport.ConnectEntered.Wait(EventTimeout),
             "the reconnect never reached the transport's connect");
 
-        // The caller shuts the device down while that connect is parked in flight.
+        // Release the parked attempt from another thread. The caller's Disconnect now waits for an
+        // in-flight connect rather than running alongside it, so releasing after it returns would
+        // wait on a call that is itself waiting on the gate.
+        ReleaseAfter(connectGate, TimeSpan.FromMilliseconds(100));
+
+        // The caller shuts the device down while that connect is in flight. The attempt still
+        // finishes and re-opens the transport.
         device.Disconnect();
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
-
-        // Now let the attempt finish. It will succeed and re-open the transport.
-        connectGate.Set();
 
         WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
 
@@ -448,6 +461,58 @@ public class DeviceReconnectTests
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.False(device.IsConnected);
         Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
+    public void ACallerDisconnect_NeverDrivesTheTransportAlongsideAnInFlightReconnect()
+    {
+        // Cancelling is not synchronizing. SupersedeReconnect asks the loop to stop and returns
+        // immediately, but a loop already inside a blocking transport connect cannot be
+        // interrupted — so without a lifecycle lock the caller's Disconnect closes the port while
+        // the reconnect is still opening it, and both threads race to build a message consumer.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Contended Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        var connectGate = transport.BlockConnects();
+        transport.ConnectEntered.Reset();
+
+        transport.SimulateDrop();
+
+        Assert.True(
+            transport.ConnectEntered.Wait(EventTimeout),
+            "the reconnect never reached the transport's connect");
+
+        ReleaseAfter(connectGate, TimeSpan.FromMilliseconds(100));
+
+        device.Disconnect();
+
+        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+
+        Assert.False(
+            transport.SawConcurrentLifecycleCalls,
+            "a caller's Disconnect was inside the transport at the same time as the reconnect's connect");
+
+        // The round-one guarantee still holds on top of the new one.
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(device.IsConnected);
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
+    public void ANormalConnectDisconnectCycle_ReportsNoLifecycleContention()
+    {
+        // The uncontended path is unchanged by the lock: nothing waits, nothing overlaps.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Ordinary Device", transport);
+
+        ConnectAndInitialize(device);
+        device.Disconnect();
+
+        Assert.False(transport.SawConcurrentLifecycleCalls);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
     }
 
     [Fact]
@@ -632,6 +697,19 @@ public class DeviceReconnectTests
         WaitUntil(
             () => device.Status == ConnectionStatus.Retrying,
             "the reconnect loop never reached its backoff wait");
+
+    /// <summary>
+    /// Releases a gate from another thread after a short delay, for tests where the call that would
+    /// otherwise release it is itself waiting on that gate.
+    /// </summary>
+    private static void ReleaseAfter(ManualResetEventSlim gate, TimeSpan delay)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(delay).ConfigureAwait(false);
+            gate.Set();
+        });
+    }
 
     private static void WaitUntil(Func<bool> condition, string because)
     {
@@ -820,7 +898,7 @@ public class DeviceReconnectTests
             // Entry checks are done; everything past here is the seconds of SCPI round-trips a real
             // initialization spends, which is the window a caller's Disconnect lands in.
             InitializeEntered.Set();
-            InitializeGate?.Wait(TimeSpan.FromSeconds(30));
+            InitializeGate?.Wait(GateTimeout);
 
             return Task.CompletedTask;
         }
@@ -934,16 +1012,50 @@ public class DeviceReconnectTests
             return gate;
         }
 
+        private int _lifecycleDepth;
+        private volatile bool _sawConcurrentLifecycleCalls;
+
+        /// <summary>
+        /// True if a connect and a disconnect were ever inside this transport at the same time.
+        /// A real transport is a serial port or a socket: opening one while closing it is
+        /// undefined, so the device must never do it.
+        /// </summary>
+        public bool SawConcurrentLifecycleCalls => _sawConcurrentLifecycleCalls;
+
+        private void EnterLifecycle()
+        {
+            if (Interlocked.Increment(ref _lifecycleDepth) > 1)
+            {
+                _sawConcurrentLifecycleCalls = true;
+            }
+        }
+
+        private void ExitLifecycle() => Interlocked.Decrement(ref _lifecycleDepth);
+
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
         {
             Interlocked.Increment(ref _connectCount);
+            EnterLifecycle();
+            try
+            {
+                ConnectCore(retryOptions);
+            }
+            finally
+            {
+                ExitLifecycle();
+            }
 
+            return Task.CompletedTask;
+        }
+
+        private void ConnectCore(ConnectionRetryOptions? retryOptions)
+        {
             // Outside the lock: a test holding the gate must still be able to inspect the
             // transport and drive the device while the connect is parked here.
             ConnectEntered.Set();
-            _connectGate?.Wait(TimeSpan.FromSeconds(30));
+            _connectGate?.Wait(GateTimeout);
 
             lock (_gate)
             {
@@ -964,21 +1076,29 @@ public class DeviceReconnectTests
 
             _watchdog?.Arm();
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
-            return Task.CompletedTask;
         }
 
         public Task DisconnectAsync()
         {
-            // Disarm first: closing the handle is what makes in-flight reads fail, and none of that
-            // is a lost connection.
-            _watchdog?.Disarm();
-
-            lock (_gate)
+            EnterLifecycle();
+            try
             {
-                _isConnected = false;
+                // Disarm first: closing the handle is what makes in-flight reads fail, and none of
+                // that is a lost connection.
+                _watchdog?.Disarm();
+
+                lock (_gate)
+                {
+                    _isConnected = false;
+                }
+
+                StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            }
+            finally
+            {
+                ExitLifecycle();
             }
 
-            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
             return Task.CompletedTask;
         }
 
