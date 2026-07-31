@@ -251,6 +251,30 @@ public class ConnectRetryExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CanceledWhileAnAttemptFailedNormally_DoesNotDialAgain()
+    {
+        // Zero backoff means there is no Task.Delay to notice the cancellation, so the per-iteration
+        // check is the only thing standing between a cancelled caller and another connection attempt.
+        var attempts = 0;
+        using var cts = new CancellationTokenSource();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ConnectRetryExecutor.ExecuteAsync(
+                FastRetry(5),
+                connectAttempt: (_, _) =>
+                {
+                    attempts++;
+                    cts.Cancel();
+                    throw new InvalidOperationException("boom");
+                },
+                onAttemptFailed: () => { },
+                onStatusChanged: (_, _) => { },
+                cancellationToken: cts.Token));
+
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CanceledDuringBackoffDelay_StopsWaiting()
     {
         var options = new ConnectionRetryOptions

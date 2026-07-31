@@ -55,6 +55,11 @@ internal static class ConnectRetryExecutor
         {
             try
             {
+                // Checked every iteration, not just before the delay: a retry policy configured
+                // with no backoff skips the delay entirely, and without this a cancellation that
+                // arrived during the previous attempt would be answered with another dial.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 // Calculate delay for this attempt
                 if (attempt > 1)
                 {

@@ -219,6 +219,18 @@ public class DaqifiDeviceAsyncLifecycleTests
     }
 
     [Fact]
+    public async Task DisposeAsync_OnANeverConnectedDevice_StillDisposesTheTransport()
+    {
+        var transport = new GatedMockTransport();
+        var device = new DaqifiDevice("Mock Device", transport);
+
+        await device.DisposeAsync();
+
+        Assert.True(transport.IsDisposed);
+        Assert.Equal(0, transport.DisconnectCount);
+    }
+
+    [Fact]
     public async Task DisposeAsync_AfterSyncDispose_IsANoOp()
     {
         var transport = new GatedMockTransport();

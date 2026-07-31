@@ -551,7 +551,10 @@ namespace Daqifi.Core.Device
         /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
         /// <returns>A task representing the asynchronous connect operation.</returns>
         /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
-        public virtual async Task ConnectAsync(CancellationToken cancellationToken = default)
+        // Deliberately not virtual, matching Connect(). A virtual async twin of a non-virtual sync
+        // method is a trap: a subclass would override this one, leave Connect() unintercepted, and
+        // get different behavior depending on which entry point the caller reached for.
+        public async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -735,7 +738,8 @@ namespace Daqifi.Core.Device
         /// </remarks>
         /// <param name="cancellationToken">A cancellation token to observe while disconnecting.</param>
         /// <returns>A task representing the asynchronous disconnect operation.</returns>
-        public virtual async Task DisconnectAsync(CancellationToken cancellationToken = default)
+        // Not virtual, for the same reason as ConnectAsync.
+        public async Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
             _isDisconnecting = true;
             var lockAcquired = await AcquireTextExchangeLockForTeardownAsync(cancellationToken)
