@@ -454,6 +454,55 @@ namespace Daqifi.Core.Device
         public event EventHandler<MessageSendFailedEventArgs<string>>? SendFailed;
 
         /// <summary>
+        /// Occurs when something fails on one of the device's background threads: a read from the
+        /// transport stream, a parse, a dispatch to a subscriber, or the decode of a streaming frame.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Silence used to be the only symptom of these failures (issue #378) — a stream that cannot
+        /// be read and a stream that cannot be decoded both looked exactly like a device sending
+        /// nothing. This is the one place to answer "why am I getting no samples".
+        /// </para>
+        /// <para>
+        /// <b>Observational only.</b> Raising this never changes device behaviour: no tear-down, no
+        /// retry, no <see cref="Status"/> change, and a single bad frame is still isolated so the
+        /// stream survives it. Deciding that a link is actually dead is separate, and arrives as
+        /// <see cref="ConnectionStatus.Lost"/> on <see cref="StatusChanged"/> (issue #377). Every
+        /// error raised here is also written to the device's <c>ILogger</c>, so it stays visible with
+        /// no subscriber attached.
+        /// </para>
+        /// <para>
+        /// <b>Throttle policy.</b> A systematic failure repeats at the frame rate, so raises are
+        /// collapsed per bucket, where a bucket is
+        /// (<see cref="DeviceErrorEventArgs.Source"/>, exception type):
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>The first occurrence in a bucket is always raised, immediately.</description></item>
+        /// <item><description>
+        /// After that, a bucket raises at most once every five seconds. Occurrences in between are
+        /// counted and reported as <see cref="DeviceErrorEventArgs.SuppressedCount"/> on the next
+        /// raise, so a storm is visible as a number rather than as thousands of events.
+        /// </description></item>
+        /// <item><description>
+        /// Buckets are independent: a new kind of failure is raised at once even while another kind
+        /// is being collapsed.
+        /// </description></item>
+        /// </list>
+        /// <para>
+        /// Raised on a background thread (the reader loop, or whichever thread decoded the frame), so
+        /// handlers should do the minimum and push real work elsewhere. A handler that throws is
+        /// caught and ignored — it can never disturb reading or streaming.
+        /// </para>
+        /// </remarks>
+        public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred;
+
+        /// <summary>
+        /// Collapses repeated background failures so a systematic fault stays visible without
+        /// storming <see cref="ErrorOccurred"/>. See that event for the documented policy.
+        /// </summary>
+        private readonly DeviceErrorThrottle _errorThrottle = new();
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiDevice"/> class.
         /// </summary>
         /// <param name="name">The name of the device.</param>
@@ -510,6 +559,10 @@ namespace Daqifi.Core.Device
             Status = ConnectionStatus.Connecting;
             State = DeviceState.Connecting;
 
+            // A reconnect is a new session: its first background failure should be reported
+            // immediately rather than collapsed into a throttle window the previous session opened.
+            _errorThrottle.Reset();
+
             try
             {
                 // Connect transport if available
@@ -535,6 +588,14 @@ namespace Daqifi.Core.Device
                             new ProtobufMessageParser(),
                             healthSink: healthSink);
                     }
+
+                    // Read/parse/dispatch failures used to be raised into an event with no
+                    // subscribers (issue #378). Subscribe here rather than alongside
+                    // MessageReceived: that one is attached and detached around every consumer
+                    // swap, and error visibility must not have holes in it. '-=' first keeps a
+                    // reconnect on the same consumer instance from double-subscribing.
+                    _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
+                    _messageConsumer.ErrorOccurred += OnConsumerErrorOccurred;
                 }
 
                 // Start message producer and consumer if available
@@ -597,6 +658,7 @@ namespace Daqifi.Core.Device
                 if (_messageConsumer != null)
                 {
                     _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                    _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
                 }
 
                 if (_messageProducer != null)
@@ -1025,6 +1087,20 @@ namespace Daqifi.Core.Device
                         collectedLines.Add(e.Message.Data);
                     };
 
+                    // The protobuf consumer is stopped for the duration of this exchange, so
+                    // without this a read failure during a text command (an unplug mid-SD-listing,
+                    // say) would be the one background failure with nowhere to go (issue #378).
+                    //
+                    // Scoped rather than a bare '+=' because this consumer can outlive the block:
+                    // its stop and dispose are both time-bounded and may return with the reader
+                    // thread still parked in an un-returning read. A live thread roots the consumer,
+                    // which would root this device through the handler — retaining the whole object
+                    // graph and, worse, letting a zombie reader keep raising errors on a device that
+                    // has since been disconnected. 'using' disposes in reverse declaration order, so
+                    // this detaches before textConsumer itself is disposed, on every exit path
+                    // including a cancellation or a throwing setup action.
+                    using var textConsumerErrors = new ConsumerErrorSubscription(this, textConsumer);
+
                     textConsumer.Start();
                     // ConfigureAwait(false): the lock is held, so resuming on a captured
                     // sync context (e.g. UI thread) would deadlock if that thread calls Disconnect().
@@ -1429,6 +1505,94 @@ namespace Daqifi.Core.Device
             // A throwing subscriber must not be allowed to take down the producer's
             // background thread, so this goes through the same SafeLog guard as the logger above.
             SafeLog(() => SendFailed?.Invoke(this, e));
+        }
+
+        /// <summary>
+        /// Forwards a message-consumer failure (a failed read, a parse error, or a subscriber that
+        /// threw) to <see cref="ErrorOccurred"/>.
+        /// </summary>
+        /// <remarks>
+        /// Nothing in Core subscribed to <see cref="IMessageConsumer{T}.ErrorOccurred"/> before
+        /// issue #378, so these failures were raised into an empty event and lost. Forwarding them
+        /// is purely additive — the consumer's own back-off and the transport's drop escalation are
+        /// unchanged by whether anyone is listening here.
+        /// </remarks>
+        private void OnConsumerErrorOccurred(object? sender, MessageConsumerErrorEventArgs e)
+        {
+            RaiseDeviceError(DeviceErrorSource.MessageConsumer, e.Error, e.RawData);
+        }
+
+        /// <summary>
+        /// Attaches a device's consumer-error forwarding to a short-lived
+        /// <see cref="IMessageConsumer{T}"/> for the duration of a scope, and detaches it again on
+        /// dispose.
+        /// </summary>
+        /// <remarks>
+        /// Exists so a temporary consumer can never end up permanently subscribed. Stopping and
+        /// disposing a consumer are both time-bounded and may return while its reader thread is
+        /// still alive; that thread roots the consumer, and a still-attached handler would root this
+        /// device through it. Detaching in a <c>finally</c> (which is what <c>using</c> compiles to)
+        /// makes the subscription's lifetime exactly the scope's, whatever way control leaves it.
+        /// </remarks>
+        private sealed class ConsumerErrorSubscription : IDisposable
+        {
+            private readonly DaqifiDevice _device;
+            private readonly IMessageConsumer<string> _consumer;
+
+            public ConsumerErrorSubscription(DaqifiDevice device, IMessageConsumer<string> consumer)
+            {
+                _device = device;
+                _consumer = consumer;
+                _consumer.ErrorOccurred += _device.OnConsumerErrorOccurred;
+            }
+
+            public void Dispose()
+            {
+                _consumer.ErrorOccurred -= _device.OnConsumerErrorOccurred;
+            }
+        }
+
+        /// <summary>
+        /// Logs a background failure and raises <see cref="ErrorOccurred"/> for it, subject to the
+        /// throttle policy documented on that event.
+        /// </summary>
+        /// <param name="source">The pipeline stage that failed.</param>
+        /// <param name="error">The exception that was caught.</param>
+        /// <param name="rawData">The bytes being processed at the time, if the stage had any.</param>
+        /// <remarks>
+        /// Never throws. It runs on background threads inside catch blocks whose entire purpose is
+        /// to keep reading and decoding alive, so neither a throwing logger nor a throwing
+        /// subscriber may escape — the same isolation <c>SendFailed</c> and the classified-event
+        /// raisers use.
+        /// </remarks>
+        protected void RaiseDeviceError(DeviceErrorSource source, Exception error, byte[]? rawData = null)
+        {
+            if (error == null)
+            {
+                return;
+            }
+
+            if (!_errorThrottle.ShouldRaise(source, error, out var suppressedCount))
+            {
+                return;
+            }
+
+            SafeLog(() => _logger.LogWarning(
+                error,
+                "[{Source}] Device '{DeviceName}' background failure ({SuppressedCount} like failure(s) suppressed since the last report).",
+                source,
+                Name,
+                suppressedCount));
+
+            var handler = ErrorOccurred;
+            if (handler == null)
+            {
+                return;
+            }
+
+            // Same guard as the logger above: a subscriber that throws must not take down the
+            // reader loop or the decode path this was raised from.
+            SafeLog(() => handler(this, new DeviceErrorEventArgs(source, error, suppressedCount, rawData)));
         }
 
         /// <summary>
