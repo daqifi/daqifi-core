@@ -38,6 +38,34 @@ public class DeviceConnectionOptions
     public TimeSpan ChannelPopulationTimeout { get; set; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
+    /// Gets or sets a value indicating whether initialization must leave a stream that is already
+    /// running on the device untouched. Default is <c>false</c>, which preserves the historical
+    /// behavior: connecting takes control of the device and stops whatever it was streaming.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Streaming is a single global device state — one acquisition, one destination interface — so
+    /// the default initialization sequence deliberately clears it, which is right for the usual
+    /// single-session case (it also clears a stream orphaned by a crashed session). When a second
+    /// session connects to a device another session is already streaming, that same sequence
+    /// silently ends the first session's acquisition.
+    /// </para>
+    /// <para>
+    /// Set this to <c>true</c> for a secondary "observe" connection. Initialization then omits every
+    /// command that halts or re-routes the device's stream, and only queries the device for its
+    /// identity and channel configuration. See
+    /// <see cref="DaqifiDevice.PreserveActiveStream"/> for exactly which commands are skipped and
+    /// what the resulting session can and cannot do.
+    /// </para>
+    /// <para>
+    /// This only protects against <em>this</em> library's connect sequence. Two processes can still
+    /// fight over one device; within a process, route connections through
+    /// <see cref="DaqifiDeviceRegistry"/> so the same physical unit is not opened twice at all.
+    /// </para>
+    /// </remarks>
+    public bool PreserveActiveStream { get; set; }
+
+    /// <summary>
     /// Optional logger the constructed device routes its diagnostics through (bad calibration/
     /// resolution warnings, SCPI text-exchange timing). When null, the device uses a no-op logger.
     /// </summary>
@@ -64,5 +92,14 @@ public class DeviceConnectionOptions
     public static DeviceConnectionOptions Resilient => new()
     {
         ConnectionRetry = ConnectionRetryOptions.Resilient
+    };
+
+    /// <summary>
+    /// Creates a configuration for a secondary session that must not disturb a stream another
+    /// session may already be running on the device. Sets <see cref="PreserveActiveStream"/>.
+    /// </summary>
+    public static DeviceConnectionOptions Observing => new()
+    {
+        PreserveActiveStream = true
     };
 }

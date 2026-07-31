@@ -280,6 +280,11 @@ namespace Daqifi.Core.Device
         /// This runs inside the base <see cref="DaqifiDevice.InitializeAsync"/> exception handling
         /// (before the device is marked initialized/ready), so a cancellation or SCPI error here
         /// leaves the device in a consistent state and re-initializable, rather than falsely Ready.
+        ///
+        /// The routing command is global device state: it takes the stream away from whatever
+        /// interface it was going to, so a second session running it steals another session's data
+        /// (#385). It is therefore skipped entirely when
+        /// <see cref="DaqifiDevice.PreserveActiveStream"/> is set.
         /// </remarks>
         /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
         /// <returns>A task representing the asynchronous initialization operation.</returns>
@@ -292,6 +297,14 @@ namespace Daqifi.Core.Device
         protected override async Task OnDeviceInitializingAsync(CancellationToken cancellationToken)
         {
             if (!IsUsbConnection)
+            {
+                return;
+            }
+
+            // An observe-only session must not re-route the device's single global stream: doing so
+            // would take the data away from the session that is already receiving it (#385). The
+            // interface is left exactly as the owning session configured it.
+            if (InitializationPreservesActiveStream)
             {
                 return;
             }

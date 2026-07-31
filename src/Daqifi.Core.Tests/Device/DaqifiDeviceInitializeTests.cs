@@ -32,6 +32,69 @@ namespace Daqifi.Core.Tests.Device
             Assert.Contains(sentData, d => d.Contains("SYSTem:POWer:STATe 1"));
             Assert.Contains(sentData, d => d.Contains("SYSTem:STReam:FORmat 0"));
             Assert.Contains(sentData, d => d.Contains("SYSTem:SYSInfoPB?"));
+
+            // The stream-disruptive commands are the default because this session is assumed to
+            // own the device; the opt-out below must not change that (#385).
+            Assert.False(device.PreserveActiveStream);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WithPreserveActiveStream_OmitsStreamDisruptiveCommands()
+        {
+            // Arrange — a secondary session attaching to a device another session may already be
+            // streaming from.
+            var device = new TestableDaqifiDevice("TestDevice") { PreserveActiveStream = true };
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert — nothing that halts, powers, or reconfigures the device's single global
+            // stream is sent.
+            var sentData = device.DirectSentMessages.Select(m => m.Data).ToList();
+
+            Assert.DoesNotContain(sentData, d => d.Contains("SYSTem:StopStreamData"));
+            Assert.DoesNotContain(sentData, d => d.Contains("SYSTem:POWer:STATe"));
+            Assert.DoesNotContain(sentData, d => d.Contains("SYSTem:STReam:FORmat"));
+
+            // ...but the session is still fully set up: echo off so its own replies parse, and the
+            // identity query that populates channels.
+            Assert.Contains(sentData, d => d.Contains("SYSTem:ECHO -1"));
+            Assert.Contains(sentData, d => d.Contains("SYSTem:SYSInfoPB?"));
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WithPreserveActiveStream_StillProducesReadyPopulatedDevice()
+        {
+            // Arrange
+            var device = new TestableDaqifiDevice("TestDevice") { PreserveActiveStream = true };
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert — skipping the disruptive commands must not cost the caller a usable session
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(4, device.Channels.Count); // 2 analog + 2 digital
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WithPreserveActiveStream_StreamingUsb_DoesNotRouteStreamToUsb()
+        {
+            // Arrange — over USB the streaming device normally claims the stream with
+            // SYSTem:STReam:INTerface 0, which would take data away from a session already
+            // receiving it over WiFi.
+            var device = new TestableStreamingDevice("TestDevice") { PreserveActiveStream = true };
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert
+            Assert.DoesNotContain(device.SentData, d => d.Contains("SYSTem:STReam:INTerface"));
+            Assert.Equal(0, device.UsbStepAttemptCount);
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(4, device.Channels.Count);
         }
 
         [Fact]
