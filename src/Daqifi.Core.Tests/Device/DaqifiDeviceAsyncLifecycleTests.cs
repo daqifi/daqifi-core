@@ -292,6 +292,125 @@ public class DaqifiDeviceAsyncLifecycleTests
         Assert.Equal(1, transport.DisconnectCount);
     }
 
+    // ---- The async connect path must carry everything the sync one does ----
+    //
+    // #415 added the background-error surface and its per-session throttle reset to Connect().
+    // Every test it shipped drives Connect(), because ConnectAsync() did not exist yet — so
+    // nothing else in the suite would notice if the async path lost either one when the two
+    // were folded into a shared step set. These two tests are that guard.
+
+    [Fact]
+    public async Task ConnectAsync_WiresUpTheBackgroundErrorSurface()
+    {
+        using var transport = new ScriptedErrorTransport();
+        using var device = new DaqifiDevice("Erroring Device", transport);
+
+        var raised = new ManualResetEventSlim(false);
+        DeviceErrorEventArgs? captured = null;
+        device.ErrorOccurred += (_, e) =>
+        {
+            captured = e;
+            raised.Set();
+        };
+
+        await device.ConnectAsync();
+        transport.ScriptedStream.FailReads = true;
+
+        Assert.True(raised.Wait(TimeSpan.FromSeconds(10)),
+            "a read failure after ConnectAsync never reached an ErrorOccurred subscriber.");
+        Assert.Equal(DeviceErrorSource.MessageConsumer, captured!.Source);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_OpensAFreshErrorThrottleSessionOnReconnect()
+    {
+        // The throttle collapses repeats of the same (source, exception type) for five seconds.
+        // A reconnect is a new session and must report its first failure at once — so the second
+        // session's error has to arrive well inside that five-second window to prove the reset ran.
+        using var transport = new ScriptedErrorTransport();
+        using var device = new DaqifiDevice("Erroring Device", transport);
+
+        var raises = 0;
+        var raised = new ManualResetEventSlim(false);
+        device.ErrorOccurred += (_, _) =>
+        {
+            Interlocked.Increment(ref raises);
+            raised.Set();
+        };
+
+        await device.ConnectAsync();
+        transport.ScriptedStream.FailReads = true;
+        Assert.True(raised.Wait(TimeSpan.FromSeconds(10)), "the first session never reported an error.");
+
+        transport.ScriptedStream.FailReads = false;
+        await device.DisconnectAsync();
+
+        raised.Reset();
+        var raisesAfterFirstSession = Volatile.Read(ref raises);
+
+        await device.ConnectAsync();
+        transport.ScriptedStream.FailReads = true;
+
+        Assert.True(raised.Wait(TimeSpan.FromSeconds(3)),
+            "the reconnected session's first failure was collapsed into the previous session's "
+            + "throttle window — ConnectAsync did not reset the error throttle.");
+        Assert.True(Volatile.Read(ref raises) > raisesAfterFirstSession);
+    }
+
+    /// <summary>
+    /// Wraps #415's <see cref="DeviceErrorSurfaceTests.ScriptedStream"/> in a transport, so the
+    /// async connect path can be pointed at a stream whose reads fail on demand.
+    /// </summary>
+    private sealed class ScriptedErrorTransport : IStreamTransport
+    {
+        private bool _isConnected;
+        private bool _disposed;
+
+        public DeviceErrorSurfaceTests.ScriptedStream ScriptedStream { get; } = new();
+
+        public Stream Stream => _disposed
+            ? throw new ObjectDisposedException(nameof(ScriptedErrorTransport))
+            : ScriptedStream;
+
+        public bool IsConnected => _isConnected && !_disposed;
+
+        public string ConnectionInfo => _isConnected ? "Scripted: Connected" : "Scripted: Disconnected";
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
+
+        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _isConnected = false;
+            _disposed = true;
+            ScriptedStream.Dispose();
+        }
+    }
+
     // ---- Synchronous parity: the pre-#341 entry points must behave identically ----
 
     [Fact]

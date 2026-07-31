@@ -148,6 +148,30 @@ namespace Daqifi.Core.Device
         private int _suppressedWarmupFrameCount;
 
         /// <summary>
+        /// Backing counter for <see cref="DecodeFailureCount"/>.
+        /// </summary>
+        private long _decodeFailureCount;
+
+        /// <summary>
+        /// Gets the number of streaming frames whose decode threw and was discarded since the
+        /// current streaming session began.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Per-frame decoding is deliberately best-effort — a single malformed frame must never tear
+        /// down the stream — but that isolation used to be completely silent (issue #378): a decode
+        /// that failed on every frame produced zero samples and zero diagnostics, indistinguishable
+        /// from a device sending nothing. This counter is the cheap always-on version of that
+        /// signal; <see cref="DaqifiDevice.ErrorOccurred"/> carries the exception behind it.
+        /// </para>
+        /// <para>
+        /// Reset by <see cref="StartStreaming"/>, so it describes the current session. A healthy
+        /// stream leaves it at zero.
+        /// </para>
+        /// </remarks>
+        public long DecodeFailureCount => Interlocked.Read(ref _decodeFailureCount);
+
+        /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
         /// </summary>
         public bool IsStreaming { get; private set; }
@@ -358,6 +382,7 @@ namespace Daqifi.Core.Device
             // observed warmup frame).
             _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
             _suppressedWarmupFrameCount = 0;
+            Interlocked.Exchange(ref _decodeFailureCount, 0);
 
             IsStreaming = true;
             Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
@@ -484,10 +509,17 @@ namespace Daqifi.Core.Device
             {
                 DecodeStreamFrame(message);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // A single malformed frame must never tear down the stream or starve other
-                // consumers; decoding is best-effort per frame.
+                // consumers; decoding is best-effort per frame. That isolation stays exactly as it
+                // was — the frame is dropped and the loop continues — but it is no longer silent
+                // (issue #378): a decode that throws on every frame yields no samples, which used
+                // to be indistinguishable from a device sending nothing at all. Both the counter
+                // and the (throttled) event are observation only; neither changes what happens to
+                // this frame or the next one.
+                Interlocked.Increment(ref _decodeFailureCount);
+                RaiseDeviceError(DeviceErrorSource.StreamDecode, ex);
             }
         }
 
@@ -1698,9 +1730,9 @@ namespace Daqifi.Core.Device
         /// <para>
         /// The terminator is only meaningful if it cannot be confused with a late reply to an
         /// earlier command, so two things guard that boundary: the text exchange discards whatever
-        /// was already in flight when it opened, and this method does its SPI-bus switch and settle
-        /// delay before the exchange rather than inside it, leaving the exchange with no internal
-        /// gap for a stale reply to slip into.
+        /// was already in flight when it opened, and this method's SPI-bus switch and settle delay
+        /// run as the exchange's prepare phase, ahead of that boundary, leaving the exchange with no
+        /// internal gap for a stale reply to slip into.
         /// </para>
         /// <para>
         /// The terminator's error code is used only as a liveness marker, never for classification:
@@ -1730,55 +1762,51 @@ namespace Daqifi.Core.Device
             IReadOnlyList<string> lines = Array.Empty<string>();
             IReadOnlyList<string> listing = Array.Empty<string>();
             var isComplete = false;
-            try
+
+            // Attempt 0 plus SD_LIST_MAX_RETRIES retries. A SCPI error here is often a transient
+            // timing issue, and an unterminated response can be a one-off stall, so both are
+            // retried once after an additional settle delay before being surfaced.
+            for (var attempt = 0; attempt <= SD_LIST_MAX_RETRIES; attempt++)
             {
-                // Attempt 0 plus SD_LIST_MAX_RETRIES retries. A SCPI error here is often a transient
-                // timing issue, and an unterminated response can be a one-off stall, so both are
-                // retried once after an additional settle delay before being surfaced.
-                for (var attempt = 0; attempt <= SD_LIST_MAX_RETRIES; attempt++)
+                if (attempt > 0)
                 {
-                    if (attempt > 0)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    // The SPI bus switch and its settle wait run as the exchange's prepare phase:
-                    // inside the exchange lock, so a competing text exchange cannot restore the LAN
-                    // interface between the switch and the LIST, and ahead of the stale-line
-                    // boundary, so the settle wait does not become a window in which a late reply to
-                    // an earlier command could pass for this listing's terminator. Querying the card
-                    // too soon after the switch makes the device answer -200 (Execution error), so
-                    // the wait itself is not optional.
-                    lines = await ExecuteTextCommandAsync(
-                        () =>
-                        {
-                            Send(ScpiMessageProducer.GetSdFileList);
-
-                            // End-of-listing terminator — see this method's remarks. Sent inside
-                            // the same text exchange so the ordering guarantee holds.
-                            Send(ScpiMessageProducer.GetSystemError);
-                        },
-                        responseTimeoutMs: 3000,
-                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
-                        cancellationToken: cancellationToken,
-                        prepareAsync: PrepareSdInterfaceAndSettleAsync);
-
-                    isComplete = TrySplitAtSdListTerminator(lines, out listing);
-
-                    if (isComplete && !ContainsScpiError(listing))
-                    {
-                        break;
-                    }
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
                 }
-            }
-            finally
-            {
-                // Restore LAN interface regardless of outcome
-                if (IsConnected)
+
+                // The SPI bus switch and its settle wait run as the exchange's prepare phase, and
+                // the restore as its finalize phase: both inside the exchange lock, so a competing
+                // text exchange can neither restore the LAN interface between the switch and the
+                // LIST nor slip in between the LIST and the restore. The prepare also sits ahead of
+                // the stale-line boundary, so its settle wait does not become a window in which a
+                // late reply to an earlier command could pass for this listing's terminator.
+                // Querying the card too soon after the switch makes the device answer -200
+                // (Execution error), so the wait itself is not optional.
+                //
+                // Each attempt therefore leaves the bus back on LAN, including across the retry
+                // delay above — the pairing is per exchange rather than per call so that gap, which
+                // is outside the lock, is not one in which the device sits switched to the card.
+                lines = await ExecuteTextCommandAsync(
+                    () =>
+                    {
+                        Send(ScpiMessageProducer.GetSdFileList);
+
+                        // End-of-listing terminator — see this method's remarks. Sent inside
+                        // the same text exchange so the ordering guarantee holds.
+                        Send(ScpiMessageProducer.GetSystemError);
+                    },
+                    responseTimeoutMs: 3000,
+                    completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                    cancellationToken: cancellationToken,
+                    prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                    finalizeAsync: RestoreLanInterfaceAsync);
+
+                isComplete = TrySplitAtSdListTerminator(lines, out listing);
+
+                if (isComplete && !ContainsScpiError(listing))
                 {
-                    PrepareLanInterface();
+                    break;
                 }
             }
 
@@ -1800,7 +1828,7 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// Passed as the <c>prepareAsync</c> phase of
-        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
         /// rather than run
         /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
         /// LAN interface between the switch and the commands that depend on it would leave them
@@ -1814,6 +1842,33 @@ namespace Daqifi.Core.Device
             // Querying the card too soon after the switch makes the device answer -200
             // (Execution error), so this wait is not optional.
             await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Finalize phase shared by the SD card text exchanges: hands the shared SPI bus back to the
+        /// LAN interface. The mirror of <see cref="PrepareSdInterfaceAndSettleAsync"/>.
+        /// </summary>
+        /// <remarks>
+        /// Passed as the <c>finalizeAsync</c> phase of
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// rather than run from the caller's own <c>finally</c>, so it holds the same lock
+        /// acquisition the matching prepare phase does. Restoring from outside the lock leaves a
+        /// window in which a competing exchange runs between this operation's commands and its
+        /// restore — the switch serialized, the restore not (#407).
+        /// <para>
+        /// The connection check keeps a restore off a device that dropped mid-operation, where the
+        /// sends would only throw <see cref="DeviceNotConnectedException"/> over the top of whatever
+        /// actually failed. Nothing to restore in that case: the link is gone.
+        /// </para>
+        /// </remarks>
+        private Task RestoreLanInterfaceAsync()
+        {
+            if (IsConnected)
+            {
+                PrepareLanInterface();
+            }
+
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -1913,51 +1968,40 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.StopStreaming);
             IsStreaming = false;
 
-            IReadOnlyList<string> lines;
-            try
+            // Same prepare/finalize pairing as GetSdCardFilesAsync: the SPI bus switch and its
+            // settle wait are the exchange's prepare phase and the LAN restore is its finalize
+            // phase, so both halves are held by the one lock acquisition rather than only the
+            // switch (#407). The settle wait also moves ahead of the exchange's stale-line
+            // boundary instead of blocking a thread inside it.
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(ScpiMessageProducer.GetSdSpace),
+                responseTimeoutMs: 3000,
+                cancellationToken: cancellationToken,
+                prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                finalizeAsync: RestoreLanInterfaceAsync);
+
+            // Only retry transient SCPI errors. A "No SD Card Detected" line
+            // is non-transient — retrying just delays the typed exception and
+            // risks misclassification if the marker isn't repeated on retry.
+            if (ContainsScpiError(lines) && !ContainsNoSdCardMarker(lines))
             {
-                lines = await ExecuteTextCommandAsync(() =>
+                for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
                 {
-                    PrepareSdInterface();
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                    // Allow the device firmware to complete the SPI bus switch
-                    // before querying the SD card. Without this delay, the device
-                    // can return SCPI error -200 (Execution error).
-                    Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
 
-                    Send(ScpiMessageProducer.GetSdSpace);
-                }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
+                    lines = await ExecuteTextCommandAsync(
+                        () => Send(ScpiMessageProducer.GetSdSpace),
+                        responseTimeoutMs: 3000,
+                        cancellationToken: cancellationToken,
+                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                        finalizeAsync: RestoreLanInterfaceAsync);
 
-                // Only retry transient SCPI errors. A "No SD Card Detected" line
-                // is non-transient — retrying just delays the typed exception and
-                // risks misclassification if the marker isn't repeated on retry.
-                if (ContainsScpiError(lines) && !ContainsNoSdCardMarker(lines))
-                {
-                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                    if (!ContainsScpiError(lines) || ContainsNoSdCardMarker(lines))
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken);
-
-                        lines = await ExecuteTextCommandAsync(() =>
-                        {
-                            PrepareSdInterface();
-                            Thread.Sleep(SD_INTERFACE_SETTLE_DELAY_MS);
-                            Send(ScpiMessageProducer.GetSdSpace);
-                        }, responseTimeoutMs: 3000, cancellationToken: cancellationToken);
-
-                        if (!ContainsScpiError(lines) || ContainsNoSdCardMarker(lines))
-                        {
-                            break;
-                        }
+                        break;
                     }
-                }
-            }
-            finally
-            {
-                if (IsConnected)
-                {
-                    PrepareLanInterface();
                 }
             }
 
@@ -2221,54 +2265,47 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.StopStreaming);
             IsStreaming = false;
 
-            IReadOnlyList<string> lines;
-            try
-            {
-                // Same prepare-phase treatment as GetSdCardFilesAsync, for the same two reasons —
-                // the SPI switch stays serialized against competing text exchanges, and its settle
-                // wait stays outside the stale-line boundary. The consequence of a stale line is
-                // milder here (delete keys off ContainsScpiError, so it would mean a pointless
-                // delete-and-relist retry rather than a bad listing) but it is the same defect.
-                lines = await ExecuteTextCommandAsync(
-                    () =>
-                    {
-                        Send(ScpiMessageProducer.DeleteSdFile(fileName));
-                        Send(ScpiMessageProducer.GetSdFileList);
-                    },
-                    responseTimeoutMs: 3000,
-                    cancellationToken: cancellationToken,
-                    prepareAsync: PrepareSdInterfaceAndSettleAsync);
-
-                if (ContainsScpiError(lines))
+            // Same prepare/finalize treatment as GetSdCardFilesAsync, for the same reasons — the
+            // SPI switch stays serialized against competing text exchanges, its settle wait stays
+            // outside the stale-line boundary, and the restore stays under the same lock as the
+            // switch instead of running from a finally after the lock has been dropped. The
+            // consequence of a stale line is milder here (delete keys off ContainsScpiError, so it
+            // would mean a pointless delete-and-relist retry rather than a bad listing) but it is
+            // the same defect.
+            var lines = await ExecuteTextCommandAsync(
+                () =>
                 {
-                    for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
+                    Send(ScpiMessageProducer.DeleteSdFile(fileName));
+                    Send(ScpiMessageProducer.GetSdFileList);
+                },
+                responseTimeoutMs: 3000,
+                cancellationToken: cancellationToken,
+                prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                finalizeAsync: RestoreLanInterfaceAsync);
 
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+            if (ContainsScpiError(lines))
+            {
+                for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                        lines = await ExecuteTextCommandAsync(
-                            () =>
-                            {
-                                Send(ScpiMessageProducer.DeleteSdFile(fileName));
-                                Send(ScpiMessageProducer.GetSdFileList);
-                            },
-                            responseTimeoutMs: 3000,
-                            cancellationToken: cancellationToken,
-                            prepareAsync: PrepareSdInterfaceAndSettleAsync);
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
 
-                        if (!ContainsScpiError(lines))
+                    lines = await ExecuteTextCommandAsync(
+                        () =>
                         {
-                            break;
-                        }
+                            Send(ScpiMessageProducer.DeleteSdFile(fileName));
+                            Send(ScpiMessageProducer.GetSdFileList);
+                        },
+                        responseTimeoutMs: 3000,
+                        cancellationToken: cancellationToken,
+                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                        finalizeAsync: RestoreLanInterfaceAsync);
+
+                    if (!ContainsScpiError(lines))
+                    {
+                        break;
                     }
-                }
-            }
-            finally
-            {
-                if (IsConnected)
-                {
-                    PrepareLanInterface();
                 }
             }
 
@@ -2345,6 +2382,13 @@ namespace Daqifi.Core.Device
         /// protobuf consumer stopped, so reconnecting (or power-cycling, if its SD subsystem is
         /// genuinely wedged) is the reliable way to resume normal operation.
         /// <para>
+        /// The LAN interface is deliberately <b>not</b> restored in that case: the abandoned
+        /// transfer still owns the transport, and putting the restore commands onto a link it is
+        /// still reading would only add traffic to a device that has already stopped answering. The
+        /// reconnect the caller needs anyway re-establishes the interface. On every other outcome —
+        /// success, a stall, a cancellation the transfer did observe — the restore runs as before.
+        /// </para>
+        /// <para>
         /// Until an abandoned transfer unwinds it still owns the transport, so a further download
         /// on the same device fails fast with <see cref="InvalidOperationException"/> rather than
         /// putting a second reader on the same stream. A caller looping over many files against a
@@ -2390,6 +2434,10 @@ namespace Daqifi.Core.Device
             var stopwatch = Stopwatch.StartNew();
             long fileSize = 0;
             var budget = SdCardDownloadTimeout;
+
+            // Set when the transfer was given up on and left running (#399/#401). Read only by the
+            // restore below, on this same async flow.
+            var workerAbandoned = false;
 
             try
             {
@@ -2443,12 +2491,21 @@ namespace Daqifi.Core.Device
 
                         fileSize = bytesReceived;
                     }, token).ConfigureAwait(false);
-                }, budget, fileName, cancellationToken).ConfigureAwait(false);
+                },
+                budget,
+                fileName,
+                cancellationToken,
+                onWorkerAbandoned: () => workerAbandoned = true).ConfigureAwait(false);
             }
             finally
             {
-                // Restore LAN interface
-                if (IsConnected)
+                // Restore the LAN interface — but NOT when the transfer was abandoned. An abandoned
+                // worker is still alive and still owns the transport (that is why the download gate
+                // is not released until it finally unwinds), so sending the restore now would put
+                // SCPI commands onto a link a transfer is still reading, on top of a device that has
+                // already stopped answering. There is nothing to gain: the caller is told to
+                // reconnect or power-cycle, and both re-establish the interface anyway (#399/#401).
+                if (!workerAbandoned && IsConnected)
                 {
                     try
                     {
@@ -2584,6 +2641,11 @@ namespace Daqifi.Core.Device
         /// <param name="budget">The cooperative budget; the hard deadline is <see cref="HardDeadlineFor"/> of it.</param>
         /// <param name="fileName">Used only in the <see cref="TimeoutException"/> message.</param>
         /// <param name="cancellationToken">The caller's token, observed by the race itself and not only by the worker.</param>
+        /// <param name="onWorkerAbandoned">
+        /// Invoked, before this method throws, when the worker is given up on while still running.
+        /// Lets the caller skip any cleanup that would touch the transport the abandoned worker
+        /// still owns.
+        /// </param>
         /// <exception cref="InvalidOperationException">
         /// Thrown when a previous download still owns <see cref="_sdDownloadGate"/> — it is either
         /// genuinely in flight or was abandoned and is still parked on the transport.
@@ -2592,7 +2654,8 @@ namespace Daqifi.Core.Device
             Func<CancellationToken, Task> operation,
             TimeSpan budget,
             string fileName,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action? onWorkerAbandoned = null)
         {
             // Checked before taking the gate so a cancelled caller neither acquires it nor gets an
             // answer about some other transfer.
@@ -2672,6 +2735,10 @@ namespace Daqifi.Core.Device
                 // it below honors that result instead of discarding it.
                 if (winner != workerTask && !workerTask.IsCompleted)
                 {
+                    // Tell the caller before unwinding: the worker keeps running and keeps the
+                    // transport, so any cleanup that would write to it has to be skipped.
+                    onWorkerAbandoned?.Invoke();
+
                     // Cancel explicitly instead of relying on the deadline timer having fired: the
                     // delay above and hardDeadlineCts are two separate timers of the same duration,
                     // so the delay can win by a hair and leave a late-returning worker running one
