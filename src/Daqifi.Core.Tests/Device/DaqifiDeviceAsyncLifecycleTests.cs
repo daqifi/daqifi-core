@@ -1,0 +1,443 @@
+using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device;
+using System.Diagnostics;
+
+namespace Daqifi.Core.Tests.Device;
+
+/// <summary>
+/// Covers the cancellable async connect/disconnect surface and <see cref="IAsyncDisposable"/>
+/// added in issue #341, together with the guarantee that the pre-existing synchronous entry
+/// points still behave exactly as they did.
+/// </summary>
+public class DaqifiDeviceAsyncLifecycleTests
+{
+    [Fact]
+    public async Task ConnectAsync_Succeeds_ReportsConnectedAndStartsSending()
+    {
+        using var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        await using var device = new DaqifiDevice("Mock Device", transport);
+
+        var statusChanges = new List<ConnectionStatus>();
+        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+
+        await device.ConnectAsync();
+
+        Assert.True(device.IsConnected);
+        Assert.Equal(ConnectionStatus.Connected, device.Status);
+        Assert.Equal(DeviceState.Connected, device.State);
+        Assert.Equal(new[] { ConnectionStatus.Connecting, ConnectionStatus.Connected }, statusChanges);
+
+        // The producer really is running over the transport's stream, not just flagged as such.
+        device.Send(ScpiMessageProducer.GetDeviceInfo);
+        Assert.True(await transport.WaitForWrittenTextAsync("SYSTem:SYSInfoPB?"));
+    }
+
+    [Fact]
+    public async Task ConnectAsync_TokenAlreadyCanceled_NeverTouchesTheTransport()
+    {
+        using var transport = new GatedMockTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => device.ConnectAsync(cts.Token));
+
+        Assert.Equal(0, transport.ConnectAttempts);
+        Assert.False(device.IsConnected);
+        // The device never even claimed to be connecting, so no consumer sees a spurious transition.
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_CanceledMidAttempt_AbandonsItAndReportsDisconnected()
+    {
+        // The transport blocks inside ConnectAsync until its gate opens — the stand-in for a real
+        // dial that has not answered yet. Cancelling must break that wait rather than wait it out.
+        using var transport = new GatedMockTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+        using var cts = new CancellationTokenSource();
+
+        var statusChanges = new List<ConnectionStatus>();
+        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+
+        var connect = device.ConnectAsync(cts.Token);
+        Assert.True(await transport.WaitForConnectEnteredAsync());
+        Assert.False(connect.IsCompleted);
+
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+        Assert.False(device.IsConnected);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
+        Assert.Equal(new[] { ConnectionStatus.Connecting, ConnectionStatus.Disconnected }, statusChanges);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_CanceledAfterTheTransportOpened_ClosesItAgain()
+    {
+        // A cancel that lands in the window between "transport up" and "pumps started" must not
+        // leak a live connection owned by a device that reports itself disconnected.
+        using var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        using var cts = new CancellationTokenSource();
+        transport.OnConnected = () => cts.Cancel();
+
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => device.ConnectAsync(cts.Token));
+
+        Assert.Equal(1, transport.ConnectAttempts);
+        Assert.Equal(1, transport.DisconnectCount);
+        Assert.False(transport.IsConnected);
+        Assert.False(device.IsConnected);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_TransportThrows_ReportsDisconnectedAndRethrows()
+    {
+        using var transport = new GatedMockTransport { ConnectFailure = new InvalidOperationException("no route") };
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => device.ConnectAsync());
+
+        Assert.Equal("no route", thrown.Message);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
+    }
+
+    [Fact]
+    public async Task DisconnectAsync_TearsDownTheTransportAndAllowsReconnect()
+    {
+        using var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        await device.ConnectAsync();
+        await device.DisconnectAsync();
+
+        Assert.Equal(1, transport.DisconnectCount);
+        Assert.False(transport.IsConnected);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
+
+        // Still reusable afterwards — teardown must not have poisoned anything.
+        await device.ConnectAsync();
+        Assert.True(device.IsConnected);
+    }
+
+    [Fact]
+    public async Task DisconnectAsync_NeverReportsLost()
+    {
+        using var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        using var device = new DaqifiDevice("Mock Device", transport);
+        await device.ConnectAsync();
+
+        var statusChanges = new List<ConnectionStatus>();
+        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+
+        await device.DisconnectAsync();
+
+        Assert.DoesNotContain(ConnectionStatus.Lost, statusChanges);
+        Assert.Contains(ConnectionStatus.Disconnected, statusChanges);
+    }
+
+    [Fact]
+    public async Task DisconnectAsync_WhileATextExchangeHoldsTheLock_CancelingSkipsTheWait()
+    {
+        // The acceptance criterion behind #341: the sync Disconnect() can sit on the text-exchange
+        // lock for its full budget, which on a UI thread is a multi-second freeze. Cancelling the
+        // async one gives up that courtesy wait immediately and tears down anyway.
+        using var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        using var device = new TextExchangeProbeDevice("Mock Device", transport);
+        await device.ConnectAsync();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heldExchange = device.HoldTextExchangeAsync(entered, responseTimeoutMs: 3000);
+        Assert.Same(entered.Task, await Task.WhenAny(entered.Task, Task.Delay(TimeSpan.FromSeconds(10))));
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var sw = Stopwatch.StartNew();
+        var disconnect = device.DisconnectAsync(cts.Token);
+        var finishedFirst = await Task.WhenAny(disconnect, heldExchange);
+        sw.Stop();
+
+        Assert.Same(disconnect, finishedFirst);
+        await disconnect;
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2),
+            $"DisconnectAsync waited {sw.ElapsedMilliseconds}ms despite a cancelled token.");
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+
+        // Let the abandoned exchange unwind; it is expected to fail now that the device is gone.
+        try
+        {
+            await heldExchange;
+        }
+        catch (Exception)
+        {
+            // Losing the race with teardown is the documented outcome, not a test failure.
+        }
+    }
+
+    [Fact]
+    public async Task AwaitUsing_DisconnectsAndDisposesTheTransport()
+    {
+        var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+
+        await using (var device = new DaqifiDevice("Mock Device", transport))
+        {
+            await device.ConnectAsync();
+            Assert.True(device.IsConnected);
+        }
+
+        Assert.True(transport.IsDisposed);
+        Assert.Equal(1, transport.DisconnectCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_IsIdempotentAndInterchangeableWithDispose()
+    {
+        var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        var device = new DaqifiDevice("Mock Device", transport);
+        await device.ConnectAsync();
+
+        await device.DisposeAsync();
+        await device.DisposeAsync();
+        device.Dispose();
+
+        // Exactly one teardown, no matter how many times (or which way) it is disposed.
+        Assert.Equal(1, transport.DisconnectCount);
+        Assert.True(transport.IsDisposed);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_AfterSyncDispose_IsANoOp()
+    {
+        var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        var device = new DaqifiDevice("Mock Device", transport);
+        await device.ConnectAsync();
+
+        device.Dispose();
+        await device.DisposeAsync();
+
+        Assert.Equal(1, transport.DisconnectCount);
+    }
+
+    // ---- Synchronous parity: the pre-#341 entry points must behave identically ----
+
+    [Fact]
+    public void Connect_Disconnect_StillDriveTheTransportSynchronously()
+    {
+        using var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        var statusChanges = new List<ConnectionStatus>();
+        device.StatusChanged += (_, args) => statusChanges.Add(args.Status);
+
+        device.Connect();
+
+        Assert.True(device.IsConnected);
+        Assert.Equal(DeviceState.Connected, device.State);
+        Assert.Equal(1, transport.SyncConnectCalls);
+
+        device.Disconnect();
+
+        Assert.False(device.IsConnected);
+        Assert.Equal(DeviceState.Disconnected, device.State);
+        Assert.Equal(1, transport.SyncDisconnectCalls);
+        Assert.Equal(
+            new[] { ConnectionStatus.Connecting, ConnectionStatus.Connected, ConnectionStatus.Disconnected },
+            statusChanges);
+    }
+
+    [Fact]
+    public void Connect_WhenTheTransportThrows_PropagatesTheOriginalExceptionUnwrapped()
+    {
+        using var transport = new GatedMockTransport { ConnectFailure = new InvalidOperationException("no route") };
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => device.Connect());
+
+        Assert.Equal("no route", thrown.Message);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(DeviceState.Disconnected, device.State);
+    }
+
+    [Fact]
+    public void Dispose_StillDisconnectsAndDisposesTheTransport()
+    {
+        var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        var device = new DaqifiDevice("Mock Device", transport);
+        device.Connect();
+
+        device.Dispose();
+
+        Assert.Equal(1, transport.SyncDisconnectCalls);
+        Assert.True(transport.IsDisposed);
+    }
+
+    /// <summary>
+    /// Exposes the protected text-exchange seam so a test can hold the device-wide text exchange
+    /// lock while a disconnect is attempted.
+    /// </summary>
+    private sealed class TextExchangeProbeDevice(string name, IStreamTransport transport)
+        : DaqifiDevice(name, transport)
+    {
+        /// <summary>
+        /// Runs a text exchange that holds the lock for roughly <paramref name="responseTimeoutMs"/>
+        /// (nothing ever replies on the mock stream), signalling <paramref name="entered"/> from
+        /// inside the lock.
+        /// </summary>
+        public Task HoldTextExchangeAsync(TaskCompletionSource entered, int responseTimeoutMs) =>
+            ExecuteTextCommandAsync(
+                () => entered.TrySetResult(),
+                responseTimeoutMs: responseTimeoutMs,
+                completionTimeoutMs: 50);
+    }
+
+    /// <summary>
+    /// Mock transport whose connect can be held open, made to fail, or observed — everything the
+    /// cancellation paths need without a real socket or serial port.
+    /// </summary>
+    private sealed class GatedMockTransport : IStreamTransport
+    {
+        private readonly MemoryStream _stream = new();
+        private readonly TaskCompletionSource _connectGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _connectEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private volatile bool _isConnected;
+        private volatile bool _disposed;
+        private int _connectAttempts;
+        private int _disconnectCount;
+        private int _syncConnectCalls;
+        private int _syncDisconnectCalls;
+
+        /// <summary>When set, every connect attempt throws this instead of succeeding.</summary>
+        public Exception? ConnectFailure { get; init; }
+
+        /// <summary>Invoked after the transport reports itself connected, before ConnectAsync returns.</summary>
+        public Action? OnConnected { get; set; }
+
+        public int ConnectAttempts => Volatile.Read(ref _connectAttempts);
+        public int DisconnectCount => Volatile.Read(ref _disconnectCount);
+        public int SyncConnectCalls => Volatile.Read(ref _syncConnectCalls);
+        public int SyncDisconnectCalls => Volatile.Read(ref _syncDisconnectCalls);
+        public bool IsDisposed => _disposed;
+
+        public Stream Stream => _disposed
+            ? throw new ObjectDisposedException(nameof(GatedMockTransport))
+            : _stream;
+
+        public bool IsConnected => _isConnected && !_disposed;
+
+        public string ConnectionInfo => _isConnected ? "Gated: Connected" : "Gated: Disconnected";
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public void OpenConnectGate() => _connectGate.TrySetResult();
+
+        public Task<bool> WaitForConnectEnteredAsync() => WaitAsync(_connectEntered.Task);
+
+        public async Task<bool> WaitForWrittenTextAsync(string expected)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    if (System.Text.Encoding.UTF8.GetString(_stream.ToArray()).Contains(expected))
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Snapshotting a MemoryStream the producer thread is writing to can tear;
+                    // just look again on the next poll.
+                }
+
+                await Task.Delay(25);
+            }
+
+            return false;
+        }
+
+        public Task ConnectAsync() => ConnectAsync(null, CancellationToken.None);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions) =>
+            ConnectAsync(retryOptions, CancellationToken.None);
+
+        public Task ConnectAsync(CancellationToken cancellationToken) =>
+            ConnectAsync(null, cancellationToken);
+
+        public async Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            Interlocked.Increment(ref _connectAttempts);
+            _connectEntered.TrySetResult();
+
+            if (ConnectFailure != null)
+            {
+                throw ConnectFailure;
+            }
+
+            await _connectGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            OnConnected?.Invoke();
+        }
+
+        public Task DisconnectAsync()
+        {
+            if (_isConnected)
+            {
+                Interlocked.Increment(ref _disconnectCount);
+                _isConnected = false;
+                StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public void Connect()
+        {
+            Interlocked.Increment(ref _syncConnectCalls);
+            ConnectAsync().GetAwaiter().GetResult();
+        }
+
+        public void Disconnect()
+        {
+            Interlocked.Increment(ref _syncDisconnectCalls);
+            DisconnectAsync().GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _isConnected = false;
+            _disposed = true;
+            _stream.Dispose();
+        }
+
+        private static async Task<bool> WaitAsync(Task task)
+        {
+            return ReferenceEquals(task, await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5))));
+        }
+    }
+}

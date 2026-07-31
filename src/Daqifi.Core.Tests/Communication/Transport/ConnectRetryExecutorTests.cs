@@ -30,7 +30,7 @@ public class ConnectRetryExecutorTests
 
         await ConnectRetryExecutor.ExecuteAsync(
             FastRetry(3),
-            connectAttempt: _ => { attempts++; return Task.CompletedTask; },
+            connectAttempt: (_, _) => { attempts++; return Task.CompletedTask; },
             onAttemptFailed: () => failedCleanups++,
             onStatusChanged: (c, e) => statuses.Add((c, e)));
 
@@ -49,7 +49,7 @@ public class ConnectRetryExecutorTests
 
         await ConnectRetryExecutor.ExecuteAsync(
             options,
-            connectAttempt: o => { seen = o; return Task.CompletedTask; },
+            connectAttempt: (o, _) => { seen = o; return Task.CompletedTask; },
             onAttemptFailed: () => { },
             onStatusChanged: (_, _) => { });
 
@@ -66,7 +66,7 @@ public class ConnectRetryExecutorTests
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ConnectRetryExecutor.ExecuteAsync(
                 retryOptions: null,
-                connectAttempt: _ => { attempts++; throw boom; },
+                connectAttempt: (_, _) => { attempts++; throw boom; },
                 onAttemptFailed: () => failedCleanups++,
                 onStatusChanged: (_, _) => { }));
 
@@ -84,7 +84,7 @@ public class ConnectRetryExecutorTests
 
         await ConnectRetryExecutor.ExecuteAsync(
             FastRetry(3),
-            connectAttempt: _ =>
+            connectAttempt: (_, _) =>
             {
                 attempts++;
                 if (attempts < 3)
@@ -120,7 +120,7 @@ public class ConnectRetryExecutorTests
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ConnectRetryExecutor.ExecuteAsync(
                 FastRetry(3),
-                connectAttempt: _ =>
+                connectAttempt: (_, _) =>
                 {
                     attempts++;
                     throw attempts < 3 ? new InvalidOperationException($"fail {attempts}") : lastBoom;
@@ -155,7 +155,7 @@ public class ConnectRetryExecutorTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ConnectRetryExecutor.ExecuteAsync(
                 options,
-                connectAttempt: _ => { attempts++; throw new InvalidOperationException("boom"); },
+                connectAttempt: (_, _) => { attempts++; throw new InvalidOperationException("boom"); },
                 onAttemptFailed: () => { },
                 onStatusChanged: (_, _) => { }));
 
@@ -179,7 +179,7 @@ public class ConnectRetryExecutorTests
 
         await ConnectRetryExecutor.ExecuteAsync(
             options,
-            connectAttempt: _ =>
+            connectAttempt: (_, _) =>
             {
                 attempts++;
                 if (attempts == 1)
@@ -197,5 +197,92 @@ public class ConnectRetryExecutorTests
         // lower bound (well under the ~150ms configured delay) to avoid flakiness.
         Assert.True(sw.ElapsedMilliseconds >= 80,
             $"Expected a backoff delay before retry, but only {sw.ElapsedMilliseconds}ms elapsed.");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_TokenAlreadyCanceled_NeverAttempts()
+    {
+        var attempts = 0;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ConnectRetryExecutor.ExecuteAsync(
+                FastRetry(3),
+                connectAttempt: (_, _) => { attempts++; return Task.CompletedTask; },
+                onAttemptFailed: () => { },
+                onStatusChanged: (_, _) => { },
+                cancellationToken: cts.Token));
+
+        Assert.Equal(0, attempts);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanceledAttempt_IsNotRetried()
+    {
+        // A cancelled attempt is the caller walking away, not a transient failure — the loop must
+        // stop rather than burn through the remaining attempts. This is what lets an auto-reconnect
+        // loop (issue #379) be torn down promptly.
+        var attempts = 0;
+        var failedCleanups = 0;
+        var statuses = new List<(bool Connected, Exception? Error)>();
+        using var cts = new CancellationTokenSource();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ConnectRetryExecutor.ExecuteAsync(
+                FastRetry(5),
+                connectAttempt: (_, token) =>
+                {
+                    attempts++;
+                    cts.Cancel();
+                    token.ThrowIfCancellationRequested();
+                    return Task.CompletedTask;
+                },
+                onAttemptFailed: () => failedCleanups++,
+                onStatusChanged: (c, e) => statuses.Add((c, e)),
+                cancellationToken: cts.Token));
+
+        Assert.Equal(1, attempts);
+        // The half-built handle is still cleaned up, and the transport is reported disconnected.
+        Assert.Equal(1, failedCleanups);
+        var status = Assert.Single(statuses);
+        Assert.False(status.Connected);
+        Assert.IsAssignableFrom<OperationCanceledException>(status.Error);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanceledDuringBackoffDelay_StopsWaiting()
+    {
+        var options = new ConnectionRetryOptions
+        {
+            Enabled = true,
+            MaxAttempts = 3,
+            InitialDelay = TimeSpan.FromSeconds(30),
+            MaxDelay = TimeSpan.FromSeconds(30),
+            BackoffMultiplier = 1.0
+        };
+
+        var attempts = 0;
+        using var cts = new CancellationTokenSource();
+        var sw = Stopwatch.StartNew();
+
+        var run = ConnectRetryExecutor.ExecuteAsync(
+            options,
+            connectAttempt: (_, _) =>
+            {
+                attempts++;
+                throw new InvalidOperationException("boom");
+            },
+            onAttemptFailed: () => { },
+            onStatusChanged: (_, _) => { },
+            cancellationToken: cts.Token);
+
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        sw.Stop();
+
+        Assert.Equal(1, attempts);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10),
+            $"The 30s backoff delay was not cancellable ({sw.ElapsedMilliseconds}ms elapsed).");
     }
 }

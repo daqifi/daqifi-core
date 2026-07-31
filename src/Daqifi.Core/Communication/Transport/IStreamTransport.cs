@@ -45,6 +45,34 @@ public interface IStreamTransport : IDisposable
     Task ConnectAsync(ConnectionRetryOptions? retryOptions);
 
     /// <summary>
+    /// Establishes the transport connection, abandoning the attempt if
+    /// <paramref name="cancellationToken"/> is signalled.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
+    /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
+    Task ConnectAsync(CancellationToken cancellationToken) => ConnectAsync(null, cancellationToken);
+
+    /// <summary>
+    /// Establishes the transport connection with retry support, abandoning the attempt if
+    /// <paramref name="cancellationToken"/> is signalled — including while waiting out the
+    /// backoff delay between retries.
+    /// </summary>
+    /// <remarks>
+    /// This is the cancellable form of <see cref="ConnectAsync(ConnectionRetryOptions?)"/>. It has a
+    /// default implementation that simply forwards to the uncancellable overload, so an existing
+    /// <see cref="IStreamTransport"/> implementation keeps compiling and working unchanged — it just
+    /// cannot honor the token. Implementations that can abandon an in-flight attempt should override
+    /// this member; the transports shipped in daqifi-core do.
+    /// </remarks>
+    /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
+    /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
+    /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
+    Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken) =>
+        ConnectAsync(retryOptions);
+
+    /// <summary>
     /// Closes the transport connection.
     /// </summary>
     /// <returns>A task representing the asynchronous disconnect operation.</returns>
