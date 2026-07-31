@@ -115,6 +115,9 @@ public class ConnectionLossEscalationTests
             }
         };
 
+        var errors = 0;
+        device.ErrorOccurred += (_, _) => Interlocked.Increment(ref errors);
+
         // Closing the handle is what makes the in-flight reads fail, exactly as a real transport
         // teardown does. None of that may be reported as a loss.
         device.Disconnect();
@@ -128,6 +131,10 @@ public class ConnectionLossEscalationTests
         }
 
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+
+        // Teardown is also silent: an intentional disconnect is not a diagnostic event, and the
+        // failures its own handle-closing provokes must not be reported as device problems.
+        Assert.Equal(0, Volatile.Read(ref errors));
     }
 
     [Fact]

@@ -146,6 +146,66 @@ public class StreamMessageConsumerBackoffTests
         Assert.Equal(0, Volatile.Read(ref errors));
     }
 
+    [Fact]
+    public void AStopThatLandsDuringTheReadabilityProbe_ReportsNothing()
+    {
+        // Closing a handle is *supposed* to make the reader fail, and the stream going unreadable is
+        // exactly what a deliberate Disconnect looks like from inside the loop. Reporting that would
+        // put a phantom "the connection died" into the transport's health sink and into consumer
+        // diagnostics on every intentional teardown.
+        using var stream = new GatedUnreadableStream();
+        var sink = new RecordingHealthSink();
+        var errors = 0;
+
+        using var consumer = new StreamMessageConsumer<string>(
+            stream, new LineBasedMessageParser(), healthSink: sink);
+        consumer.ErrorOccurred += (_, _) => Interlocked.Increment(ref errors);
+
+        consumer.Start();
+
+        Assert.True(stream.ProbeEntered.Wait(TimeSpan.FromSeconds(10)), "the probe was never reached");
+
+        // Clear the running flag while the reader is parked inside the probe, then let the stream
+        // report itself unreadable — the shape of a handle closed underneath an in-flight read.
+        var stopper = new Thread(() => consumer.StopSafely(timeoutMs: 5000)) { IsBackground = true };
+        stopper.Start();
+        Assert.True(WaitUntil(() => !consumer.IsRunning, TimeSpan.FromSeconds(10)));
+        stream.ReleaseProbe.Set();
+
+        Assert.True(stopper.Join(TimeSpan.FromSeconds(10)), "the consumer never stopped");
+
+        Assert.Equal(0, sink.FaultCount);
+        Assert.Equal(0, Volatile.Read(ref errors));
+    }
+
+    [Fact]
+    public void AStopThatLandsDuringAReadFailure_ReportsNothing()
+    {
+        // Same rule for the read itself, which is the path a real teardown almost always takes:
+        // the handle is closed, and the in-flight Read throws because of it.
+        using var stream = new GatedThrowingReadStream();
+        var sink = new RecordingHealthSink();
+        var errors = 0;
+
+        using var consumer = new StreamMessageConsumer<string>(
+            stream, new LineBasedMessageParser(), healthSink: sink);
+        consumer.ErrorOccurred += (_, _) => Interlocked.Increment(ref errors);
+
+        consumer.Start();
+
+        Assert.True(stream.ReadEntered.Wait(TimeSpan.FromSeconds(10)), "the read was never reached");
+
+        var stopper = new Thread(() => consumer.StopSafely(timeoutMs: 5000)) { IsBackground = true };
+        stopper.Start();
+        Assert.True(WaitUntil(() => !consumer.IsRunning, TimeSpan.FromSeconds(10)));
+        stream.ReleaseRead.Set();
+
+        Assert.True(stopper.Join(TimeSpan.FromSeconds(10)), "the consumer never stopped");
+
+        Assert.Equal(0, sink.FaultCount);
+        Assert.Equal(0, Volatile.Read(ref errors));
+    }
+
     private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -217,6 +277,96 @@ public class StreamMessageConsumerBackoffTests
         {
             buffer[offset] = (byte)'x';
             return 1;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A stream whose readability probe parks until released and then reports the stream
+    /// unreadable, so a stop can be made to land precisely while the reader is inside the probe.
+    /// </summary>
+    private sealed class GatedUnreadableStream : Stream
+    {
+        private int _probeCount;
+
+        public ManualResetEventSlim ProbeEntered { get; } = new(false);
+
+        public ManualResetEventSlim ReleaseProbe { get; } = new(false);
+
+        public override bool CanRead
+        {
+            get
+            {
+                // Only gate the first probe; later ones (e.g. from PerformClear) answer at once.
+                if (Interlocked.Increment(ref _probeCount) != 1)
+                {
+                    return false;
+                }
+
+                ProbeEntered.Set();
+                ReleaseProbe.Wait(TimeSpan.FromSeconds(30));
+                return false;
+            }
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => 0;
+
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A stream whose read parks until released and then fails, reproducing the in-flight read that
+    /// a closing handle breaks.
+    /// </summary>
+    private sealed class GatedThrowingReadStream : Stream
+    {
+        public ManualResetEventSlim ReadEntered { get; } = new(false);
+
+        public ManualResetEventSlim ReleaseRead { get; } = new(false);
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ReadEntered.Set();
+            ReleaseRead.Wait(TimeSpan.FromSeconds(30));
+            throw new IOException("the handle was closed underneath this read");
         }
 
         public override bool CanRead => true;

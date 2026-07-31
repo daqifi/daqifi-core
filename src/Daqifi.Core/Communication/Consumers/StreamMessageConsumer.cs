@@ -342,9 +342,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 }
                 catch (Exception ex)
                 {
-                    _healthSink?.ReportIoFault(ex);
-                    OnErrorOccurred(ex);
-                    Thread.Sleep(100);
+                    if (!ReportStreamFault(ex))
+                    {
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -357,9 +359,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 {
                     var unreadable = new IOException(
                         "The stream is no longer readable; the underlying connection has been closed.");
-                    _healthSink?.ReportIoFault(unreadable);
-                    OnErrorOccurred(unreadable);
-                    Thread.Sleep(100);
+                    if (!ReportStreamFault(unreadable))
+                    {
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -388,9 +392,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     // throwing is how a physically disconnected device announces itself, and the
                     // transport is the only thing that can turn a run of them into a lost
                     // connection (issue #382). One failure escalates nothing.
-                    _healthSink?.ReportIoFault(ex);
-                    OnErrorOccurred(ex);
-                    Thread.Sleep(100); // Back off on error
+                    if (!ReportStreamFault(ex))
+                    {
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -402,11 +408,21 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     // legitimately return 0 for "nothing right now" and must not be escalated.
                     if (_stream is NetworkStream)
                     {
-                        _healthSink?.ReportIoFault(new EndOfStreamException(
-                            "The remote endpoint closed the connection (a socket read returned 0 bytes)."));
+                        // Same teardown rule as every other fault path, and the short back-off this
+                        // path has always used — an orderly peer shutdown is detected in tens of
+                        // milliseconds rather than half a second (issue #382).
+                        if (!ReportStreamFault(
+                                new EndOfStreamException(
+                                    "The remote endpoint closed the connection (a socket read returned 0 bytes)."),
+                                backoffMs: NoDataBackoffMs))
+                        {
+                            break;
+                        }
+
+                        continue;
                     }
 
-                    Thread.Sleep(10); // No data available, wait briefly
+                    Thread.Sleep(NoDataBackoffMs); // No data available, wait briefly
                     continue;
                 }
 
@@ -454,10 +470,70 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 //
                 // Deliberately NOT reported to the health sink: a parse or dispatch failure is not
                 // evidence that the link is gone, and escalating it would disconnect a perfectly
-                // healthy device over malformed data. Only I/O against the stream does that.
-                Thread.Sleep(100);
+                // healthy device over malformed data. Only I/O against the stream does that — which
+                // is why this path does not go through ReportStreamFault.
+                Thread.Sleep(ErrorBackoffMs);
             }
         }
+    }
+
+    /// <summary>
+    /// Back-off applied after a reported failure, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// Whatever failed will almost certainly fail again immediately — a closed handle stays closed,
+    /// and a parser that rejects the bytes it holds rejects the same bytes next time — so retrying
+    /// at full speed makes no progress and burns a core. Also sets the escalation cadence: with the
+    /// transport's five-consecutive-failure threshold, a persistently failing stream is declared
+    /// lost after roughly half a second.
+    /// </remarks>
+    private const int ErrorBackoffMs = 100;
+
+    /// <summary>
+    /// Pause applied when a read returns no data, in milliseconds. Shorter than
+    /// <see cref="ErrorBackoffMs"/> because it is the idle path on most stream types.
+    /// </summary>
+    private const int NoDataBackoffMs = 10;
+
+    /// <summary>
+    /// Reports a stream-level failure to the transport and to subscribers, then backs off.
+    /// </summary>
+    /// <param name="error">The failure that was observed.</param>
+    /// <param name="backoffMs">How long to pause before the next iteration.</param>
+    /// <returns>
+    /// <c>true</c> to keep reading; <c>false</c> when a stop has already been requested, in which
+    /// case nothing was reported and the caller must leave the loop immediately.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Every fault path routes through here so the teardown rule is stated once. A failure observed
+    /// after <see cref="_isRunning"/> has been cleared is teardown, not a device problem: closing a
+    /// handle is <em>supposed</em> to make the in-flight read fail, and the stream going unreadable
+    /// is what a deliberate <c>Disconnect</c> looks like from in here. Reporting it would put a
+    /// phantom "the connection died" into a consumer's diagnostics and into the transport's health
+    /// sink on every intentional disconnect, and the back-off would delay this thread's exit —
+    /// making the stop's bounded join more likely to time out, which has its own knock-on effects.
+    /// </para>
+    /// <para>
+    /// This is the same rule the loop's outer catch follows; keeping the two consistent is the
+    /// point. Note it was never enough on its own to let a deliberate disconnect be reported as a
+    /// lost connection: a <c>continue</c> re-tests the loop condition, so at most one failure can
+    /// ever be reported after a stop, against an escalation threshold of five consecutive — and the
+    /// transports disarm their watchdog before they touch the handle. This closes the diagnostic
+    /// noise, not a hole in that guarantee.
+    /// </para>
+    /// </remarks>
+    private bool ReportStreamFault(Exception error, int backoffMs = ErrorBackoffMs)
+    {
+        if (!_isRunning)
+        {
+            return false;
+        }
+
+        _healthSink?.ReportIoFault(error);
+        OnErrorOccurred(error);
+        Thread.Sleep(backoffMs);
+        return true;
     }
 
     /// <summary>
