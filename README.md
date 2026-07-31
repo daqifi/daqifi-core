@@ -135,6 +135,13 @@ var options = new DeviceConnectionOptions
 using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, options);
 ```
 
+> **Connecting takes control of the device.** A DAQiFi unit has a single global acquisition, and the
+> default connect sequence stops it — so connecting to a device another session is already streaming
+> silently ends that session's data. Use `DeviceConnectionOptions.Observing` for a secondary session
+> that only needs to look, and `DaqifiDeviceRegistry` to avoid opening the same unit twice in one
+> process. See
+> [Connecting stops any stream already running](docs/DEVICE_INTERFACES.md#connecting-stops-any-stream-already-running).
+
 ### Device discovery
 
 ```csharp

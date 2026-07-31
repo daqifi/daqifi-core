@@ -313,6 +313,45 @@ namespace Daqifi.Core.Device
         /// </summary>
         public DeviceState State { get; private set; } = DeviceState.Disconnected;
 
+        /// <summary>
+        /// When <c>true</c>, <see cref="InitializeAsync"/> omits the initialization commands that
+        /// would halt or re-route a stream the device is already running, so connecting does not
+        /// disturb a session started elsewhere. Default is <c>false</c> — the historical behavior,
+        /// where connecting takes control of the device.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Streaming is a single global device state: one acquisition at one rate, delivered to one
+        /// interface. The default initialization sequence stops that stream, sets the device's power
+        /// state, fixes the stream format, and (over USB) routes the stream to this connection. That
+        /// is correct when this session owns the device — it also clears a stream orphaned by a
+        /// previously crashed session — but a <em>second</em> session running it silently ends the
+        /// first session's acquisition, with no error surfaced to either side.
+        /// </para>
+        /// <para>
+        /// With this set, initialization sends only <c>SYSTem:ECHO -1</c> (so replies to this
+        /// connection can be parsed) followed by the read-only identity and capability queries.
+        /// Skipped are <c>SYSTem:StopStreamData</c>, <c>SYSTem:POWer:STATe 1</c>,
+        /// <c>SYSTem:STReam:FORmat 0</c>, and the USB <c>SYSTem:STReam:INTerface</c> routing step.
+        /// </para>
+        /// <para>
+        /// The resulting session is fully usable for status, metadata, channel inspection, and any
+        /// command the caller chooses to send. It is <em>not</em> configured to stream: the device's
+        /// stream format and destination interface are left exactly as the other session left them,
+        /// and stream frames continue to go wherever they were already going. A session that later
+        /// wants to stream itself must take control of the device, which necessarily stops whatever
+        /// the other session was doing.
+        /// </para>
+        /// <para>
+        /// Read once, when <see cref="InitializeAsync"/> runs; changing it afterwards has no effect.
+        /// This guards only against this library's own connect sequence — it is not device-side
+        /// arbitration, and two processes can still fight over one unit. Within a single process,
+        /// prefer <see cref="DaqifiDeviceRegistry"/>, which refuses to open the same physical unit
+        /// twice.
+        /// </para>
+        /// </remarks>
+        public bool PreserveActiveStream { get; set; }
+
         private ConnectionStatus _status;
 
         /// <summary>
@@ -1714,6 +1753,13 @@ namespace Daqifi.Core.Device
         /// 4. Set protobuf message format
         /// 5. Query device info and block until the device reports its channel configuration
         ///
+        /// <b>Steps 2-4 write global device state.</b> Streaming is a single global state on a DAQiFi
+        /// device, so step 2 stops a stream <em>any</em> session started, not just this one:
+        /// connecting to a device another session is already streaming silently ends that session's
+        /// acquisition. That is the right default when this session owns the device (it also clears a
+        /// stream orphaned by a crashed session). Set <see cref="PreserveActiveStream"/> before
+        /// calling this to skip steps 2-4 and connect as a non-disruptive observer instead.
+        ///
         /// Rather than returning after a fixed delay, the method awaits the first
         /// <see cref="ChannelsPopulated"/> event so callers receive a fully populated device.
         /// Serial/CDC devices can take noticeably longer than the previous fixed wait to send
@@ -1774,6 +1820,14 @@ namespace Daqifi.Core.Device
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
 
+                // Snapshot into a local, once. Every retry attempt and the derived-class hook
+                // further down are then handed the same decision explicitly, so it cannot be
+                // changed out from under an initialization already in flight — neither by a caller
+                // mutating the property nor by a second concurrent InitializeAsync on this same
+                // instance. The decision belongs to this operation, so it lives on the stack rather
+                // than in a field.
+                var preserveActiveStream = PreserveActiveStream;
+
                 // Send the text-mode SCPI setup commands via ExecuteTextCommandAsync so that
                 // any -200 execution error response is captured rather than silently discarded
                 // by the protobuf consumer.  The protobuf consumer is stopped for the duration
@@ -1795,7 +1849,20 @@ namespace Daqifi.Core.Device
 
                     initLines = await ExecuteTextCommandAsync(() =>
                     {
+                        // Echo is a per-device text-mode setting, not stream state: this session
+                        // needs it off to parse its own replies, and the value is the same one any
+                        // other Core session already set. Safe to send either way.
                         Send(ScpiMessageProducer.DisableDeviceEcho);
+
+                        // Everything below writes global stream state. A secondary "observe"
+                        // session must not touch it — StopStreamData ends another session's
+                        // acquisition outright (#385), and the power-state and stream-format
+                        // commands reconfigure the same single acquisition it is running.
+                        if (preserveActiveStream)
+                        {
+                            return;
+                        }
+
                         Thread.Sleep(100);
 
                         Send(ScpiMessageProducer.StopStreaming);
@@ -1852,7 +1919,16 @@ namespace Daqifi.Core.Device
                 // this try/catch so a failure there leaves the device in a consistent terminal state
                 // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
                 // so a failed init can be safely retried.
-                await OnDeviceInitializingAsync(cancellationToken).ConfigureAwait(false);
+                await OnDeviceInitializingAsync(preserveActiveStream, cancellationToken).ConfigureAwait(false);
+
+                // A cancelled initialization must never report Ready. Nothing above is guaranteed
+                // to observe the token: the capability read returns early on firmware that does not
+                // advertise the document, channel population can short-circuit when the status
+                // arrives synchronously, and a derived hook may legitimately have no awaitable work
+                // (the observing path and the non-USB path both return immediately). So the
+                // invariant is enforced here, at the one transition that matters, rather than relying
+                // on every path and every override to check for itself.
+                cancellationToken.ThrowIfCancellationRequested();
 
                 _isInitialized = true;
                 State = DeviceState.Ready;
@@ -1883,9 +1959,18 @@ namespace Daqifi.Core.Device
         /// state and other faults set <see cref="DeviceState.Error"/> — rather than a falsely-ready
         /// device, and the failed initialization can be retried. The base implementation does nothing.
         /// </remarks>
+        /// <param name="preserveActiveStream">
+        /// The <see cref="PreserveActiveStream"/> decision for <em>this</em> initialization, passed
+        /// explicitly rather than read from the device so it cannot change while initialization is in
+        /// flight. When <c>true</c>, an override must not send any command that writes global stream
+        /// state — stopping, reconfiguring, or re-routing the stream would disturb a session that is
+        /// already using the device.
+        /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task OnDeviceInitializingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        protected virtual Task OnDeviceInitializingAsync(
+            bool preserveActiveStream,
+            CancellationToken cancellationToken) => Task.CompletedTask;
 
         /// <summary>
         /// Runs the capability-document read during initialization, absorbing any failure.
