@@ -202,7 +202,9 @@ namespace Daqifi.Core.Device.SdCard
         /// Thrown when the transfer does not finish within the implementation's download deadline.
         /// The deadline is enforced by the download itself, so it holds even when the transfer is
         /// parked in a call that cannot observe a cancellation token; the in-flight transfer is
-        /// then abandoned rather than awaited (#399).
+        /// then abandoned rather than awaited (#399). An abandoned transfer still owns the
+        /// transport, so the interface it switched is left as-is rather than restored over the top
+        /// of it — reconnect before using the device again.
         /// </exception>
         Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,

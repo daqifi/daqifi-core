@@ -244,20 +244,33 @@ public class DaqifiDeviceCapabilityDocumentTests
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
-            Func<CancellationToken, Task>? prepareAsync = null)
+            Func<CancellationToken, Task>? prepareAsync = null,
+            Func<Task>? finalizeAsync = null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Honor the exchange's prepare phase the way the real device does: it runs first,
-            // before anything this exchange sends (#396).
-            if (prepareAsync != null)
+            try
             {
-                await prepareAsync(cancellationToken).ConfigureAwait(false);
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            var before = SentCommands.Count;
-            setupAction();
-            return ResponsesSince(before);
+                // Honor the exchange's prepare phase the way the real device does: it runs first,
+                // before anything this exchange sends (#396).
+                if (prepareAsync != null)
+                {
+                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                var before = SentCommands.Count;
+                setupAction();
+                return ResponsesSince(before);
+            }
+            finally
+            {
+                // Honor the exchange's finalize phase the way the real device does: it runs
+                // however the exchange ended, still inside the exchange (#407).
+                if (finalizeAsync != null)
+                {
+                    await finalizeAsync().ConfigureAwait(false);
+                }
+            }
         }
 
         protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(

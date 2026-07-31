@@ -14,6 +14,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -619,7 +620,7 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
         /// tearing down the consumer / producer / transport. This prevents
-        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
@@ -869,6 +870,28 @@ namespace Daqifi.Core.Device
         /// it did before this exchange began.
         /// </para>
         /// </param>
+        /// <param name="finalizeAsync">
+        /// Optional phase that undoes what <paramref name="prepareAsync"/> established — the SD card
+        /// operations use it to hand the shared SPI bus back to the LAN interface.
+        /// <para>
+        /// It is the mirror of the prepare phase and runs under the <b>same</b> lock acquisition, so
+        /// nothing can interleave between this exchange's commands and the state it restores (#407).
+        /// It runs after the protobuf consumer has been restarted, mirroring the prepare phase
+        /// running before the consumer was swapped out.
+        /// </para>
+        /// <para>
+        /// It runs whether the exchange succeeds or fails, so the device is never left in the
+        /// prepared state. It takes no cancellation token on purpose: it is cleanup, and a cancelled
+        /// or timed-out exchange still has to put the device back. Keep it short and non-blocking —
+        /// it holds the lock while it runs.
+        /// </para>
+        /// <para>
+        /// If the exchange failed and the finalize phase then fails too, the finalize failure is
+        /// logged and dropped and the exchange's original failure is what the caller sees — a
+        /// cleanup failure must never hide the failure that caused the cleanup. If the exchange
+        /// succeeded, a finalize failure is the only failure there is, and it propagates.
+        /// </para>
+        /// </param>
         /// <returns>
         /// A list of text lines received from the device. Lines that were already in flight when the
         /// exchange opened — late replies to earlier commands — are excluded: only what arrived once
@@ -882,10 +905,10 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        // prepareAsync is added AFTER cancellationToken (technically violating CA1068
-        // "CancellationToken should be last") to keep existing positional callers working, matching
-        // the convention established in IFirmwareUpdateService for the same reason. It is a
-        // parameter on this seam rather than a second virtual method deliberately: a parallel
+        // prepareAsync and finalizeAsync are added AFTER cancellationToken (technically violating
+        // CA1068 "CancellationToken should be last") to keep existing positional callers working,
+        // matching the convention established in IFirmwareUpdateService for the same reason. They
+        // are parameters on this seam rather than separate virtual methods deliberately: a parallel
         // method would be bypassed silently by any subclass that overrides only this one, which for
         // an instrumented device or a test double means the override quietly stops intercepting SD
         // operations with nothing to indicate it. Overriders must widen their signature — a compile
@@ -896,10 +919,12 @@ namespace Daqifi.Core.Device
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
-            Func<CancellationToken, Task>? prepareAsync = null)
+            Func<CancellationToken, Task>? prepareAsync = null,
+            Func<Task>? finalizeAsync = null)
         {
             return ExecuteTextCommandCoreAsync(
                 prepareAsync,
+                finalizeAsync,
                 _ => { setupAction(); return Task.CompletedTask; },
                 responseTimeoutMs,
                 completionTimeoutMs,
@@ -908,7 +933,7 @@ namespace Daqifi.Core.Device
 #pragma warning restore CA1068
 
         /// <summary>
-        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
+        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
         /// that accepts an async setup action so callers can <c>await</c> cancellable operations
         /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
         /// blocking the thread-pool thread.
@@ -934,6 +959,7 @@ namespace Daqifi.Core.Device
         {
             return ExecuteTextCommandCoreAsync(
                 prepareAsync: null,
+                finalizeAsync: null,
                 setupActionAsync,
                 responseTimeoutMs,
                 completionTimeoutMs,
@@ -942,6 +968,7 @@ namespace Daqifi.Core.Device
 
         private async Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
             Func<CancellationToken, Task>? prepareAsync,
+            Func<Task>? finalizeAsync,
             Func<CancellationToken, Task> setupActionAsync,
             int responseTimeoutMs,
             int completionTimeoutMs,
@@ -986,6 +1013,12 @@ namespace Daqifi.Core.Device
             }
 
             _isInsideTextExchange.Value = true;
+
+            // Whether the exchange got past validation and so owes its finalize phase, and whether
+            // it is on its way out normally rather than with an exception unwinding. Both are read
+            // only by the finalize block in the outer finally below.
+            var exchangeStarted = false;
+            var completedNormally = false;
             try
             {
                 // All validation runs INSIDE the lock so a competing thread
@@ -1022,6 +1055,11 @@ namespace Daqifi.Core.Device
                     throw new TransportNotConnectedException(
                         "Device transport is no longer connected.");
                 }
+
+                // Past validation: from here on the exchange acts on the device, so its finalize
+                // phase (if any) is owed however this ends — including a prepare phase that failed
+                // part-way and left the device half-way into the state it was establishing.
+                exchangeStarted = true;
 
                 var sw = Stopwatch.StartNew();
 
@@ -1200,12 +1238,36 @@ namespace Daqifi.Core.Device
 
                 // The text consumer is stopped by this point, so the list is no longer being
                 // appended to concurrently and can be re-projected safely.
-                return staleLineCount > 0
+                var result = staleLineCount > 0
                     ? collectedLines.Skip(staleLineCount).ToList()
                     : collectedLines;
+
+                completedNormally = true;
+                return result;
             }
             finally
             {
+                // Finalize phase, if any — the mirror of the prepare phase above, and deliberately
+                // still inside the lock: an exchange that switches shared device state on the way in
+                // has to switch it back before anything else can run, or the pairing is only half
+                // serialized (#407). It runs after the protobuf consumer has been restarted, just as
+                // the prepare phase ran before the consumer was swapped out.
+                // A failure here is never thrown from this point: doing so would abandon the rest of
+                // the finally, leaking the lock this exchange holds. It is held until after the
+                // release below and dealt with there.
+                Exception? finalizeFailure = null;
+                if (exchangeStarted && finalizeAsync != null)
+                {
+                    try
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        finalizeFailure = ex;
+                    }
+                }
+
                 _isInsideTextExchange.Value = false;
                 // Release can race with Dispose() — Dispose acquires the lock
                 // before disposing it, but if that acquisition timed out and
@@ -1219,6 +1281,29 @@ namespace Daqifi.Core.Device
                 }
                 catch (ObjectDisposedException)
                 {
+                }
+
+                if (finalizeFailure != null)
+                {
+                    if (completedNormally)
+                    {
+                        // Nothing else is unwinding, so a failed restore is the only failure there
+                        // is. Surface it rather than report a success the device never got back
+                        // from — the caller's next command would run against the wrong state.
+                        // Rethrown only now, with the lock already released, so a failed restore
+                        // cannot also wedge the device.
+                        ExceptionDispatchInfo.Capture(finalizeFailure).Throw();
+                    }
+
+                    // Otherwise an exception is already on its way to the caller, and it is the one
+                    // that explains what went wrong. Replacing it with this one would lose the
+                    // diagnosis, so the cleanup failure is logged instead: cleanup never hides the
+                    // failure that caused the cleanup.
+                    SafeLog(() => _logger.LogError(
+                        finalizeFailure,
+                        "The text exchange's finalize phase failed while another failure was already "
+                        + "unwinding. The original failure is being surfaced to the caller; the device "
+                        + "may be left in the state the prepare phase established."));
                 }
             }
         }
@@ -1242,7 +1327,7 @@ namespace Daqifi.Core.Device
         /// on hardware faults, or discard them if known-stale.
         /// </para>
         /// <para>
-        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>, which
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>, which
         /// pauses the protobuf consumer for the duration of the text exchange.
         /// Avoid calling this during active streaming or concurrently with
         /// other text commands.
