@@ -757,8 +757,39 @@ namespace Daqifi.Core.Device
         /// loop calls this so it does not cancel itself. Serialized against
         /// <see cref="DisconnectCore"/> so the two can never drive the transport at once.
         /// </summary>
-        private void ConnectCore() =>
+        /// <remarks>
+        /// Ends by honouring a teardown that landed while the connect was in flight. That matters
+        /// most in the one case where the caller's <see cref="Disconnect"/> could not do it itself:
+        /// a connect wedged in uncancellable native I/O holds the lifecycle lock long enough for
+        /// the teardown to abandon its wait, so the teardown returns having deliberately left the
+        /// transport alone — and whatever this connect goes on to build would otherwise be live,
+        /// with a reader running, after the caller was told the device was disconnected.
+        /// <para>
+        /// The check lives here rather than in <see cref="Connect"/> because both entry points need
+        /// it. <see cref="AbandonIfSuperseded"/> covers the same ground for the reconnect loop, but
+        /// it is part of the loop and never runs for a caller's own connect.
+        /// </para>
+        /// <para>
+        /// The ordering is not a race: <see cref="Disconnect"/> sets the flag <i>before</i> it
+        /// contends for the lock, and this reads it <i>after</i> releasing it. A teardown that
+        /// abandoned must therefore have been waiting while this still held the lock, so its write
+        /// always happens-before this read.
+        /// </para>
+        /// </remarks>
+        private void ConnectCore()
+        {
             RunLifecycleExclusive(ConnectCoreUnsynchronized, LifecycleContention.Fail);
+
+            if (_callerWantsDisconnected || _disposed)
+            {
+                SafeLog(() => _logger.LogWarning(
+                    "[Lifecycle] Device '{DeviceName}' was disconnected while this connect was in flight; "
+                    + "closing the connection it established.",
+                    Name));
+
+                DisconnectCore(ConnectionStatus.Disconnected);
+            }
+        }
 
         private void ConnectCoreUnsynchronized()
         {
@@ -845,8 +876,11 @@ namespace Daqifi.Core.Device
         /// it without a bound would make this method — and therefore <see cref="Dispose"/> — hang
         /// forever. If the wait is abandoned, the device still reports
         /// <see cref="ConnectionStatus.Disconnected"/>, but the transport is deliberately left to
-        /// the stuck operation, which releases it when it finally returns. A warning-level log
-        /// records that nothing was torn down. This never throws on contention.
+        /// the stuck operation, which releases it when it finally returns. That outcome is logged
+        /// at <b>error</b> level: it is a rare safety fallback rather than routine, it means a port
+        /// is wedged and the transport was not released on the caller's schedule, and it is exactly
+        /// the line an operator needs to still be there after log filtering. This never throws on
+        /// contention.
         /// </para>
         /// </remarks>
         public void Disconnect()
@@ -882,9 +916,12 @@ namespace Daqifi.Core.Device
             // The wait was abandoned: a lifecycle operation is stuck, most likely a
             // SerialPort.Open wedged in uncancellable native I/O. Racing it would be the
             // stream corruption this lock exists to prevent, so the transport is left to the
-            // holder — which is guaranteed to release it, because _callerWantsDisconnected was
-            // set before this and AbandonIfSuperseded tears down whatever the stuck connect
-            // eventually builds.
+            // holder — which releases it once it unwedges, because _callerWantsDisconnected was
+            // set before this wait began and every connect path re-reads it after dropping the
+            // lock: ConnectCore for a caller's own connect, AbandonIfSuperseded for a reconnect
+            // attempt. Both are needed — AbandonIfSuperseded belongs to the reconnect loop and
+            // never runs for a caller's connect, which is how a wedged caller connect could
+            // previously come back to life after Disconnect had already returned.
             //
             // What can still be done safely is record the caller's intent at the device level.
             // These are this class's own fields, not the transport, so setting them cannot

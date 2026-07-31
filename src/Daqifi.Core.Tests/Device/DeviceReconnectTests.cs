@@ -619,6 +619,47 @@ public class DeviceReconnectTests
     }
 
     [Fact]
+    public async Task ACallerConnectOutlivingAnAbandonedTeardown_DoesNotBringTheDeviceBackToLife()
+    {
+        // Reconnect is deliberately left OFF here: the lifecycle lock and its abandon path apply to
+        // every device, so this failure needs no reconnect loop at all. A caller's connect wedges
+        // holding the lock, the caller's own Disconnect abandons its wait and returns reporting
+        // Disconnected, and then the wedged connect finishes — setting Connected and starting a
+        // reader behind a caller who was already told the device was down. AbandonIfSuperseded does
+        // not help here: it belongs to the reconnect loop and never runs on a caller's connect.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Overruled Device", transport)
+        {
+            TeardownLockTimeoutOverride = TimeSpan.FromMilliseconds(300)
+        };
+
+        var connectGate = transport.BlockConnects();
+        transport.ConnectEntered.Reset();
+
+        var connecting = Task.Run(() => device.Connect());
+
+        Assert.True(
+            transport.ConnectEntered.Wait(EventTimeout),
+            "the caller's connect never reached the transport");
+
+        // Released well after the teardown gives up, so Disconnect abandons and returns first.
+        ReleaseAfter(connectGate, TimeSpan.FromMilliseconds(800));
+
+        device.Disconnect();
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+
+        await connecting;
+
+        // The caller asked for teardown; it has to stand whoever was holding the lock.
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(device.IsConnected);
+        Assert.False(transport.IsConnected);
+
+        // And it was put back down sequentially, never raced.
+        Assert.False(transport.SawConcurrentLifecycleCalls);
+    }
+
+    [Fact]
     public void ANormalConnectDisconnectCycle_ReportsNoLifecycleContention()
     {
         // The uncontended path is unchanged by the lock: nothing waits, nothing overlaps.
