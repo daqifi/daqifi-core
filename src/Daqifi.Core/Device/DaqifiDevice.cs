@@ -351,13 +351,6 @@ namespace Daqifi.Core.Device
         /// </remarks>
         public bool PreserveActiveStream { get; set; }
 
-        /// <summary>
-        /// The <see cref="PreserveActiveStream"/> value captured for the initialization currently in
-        /// progress. Derived classes read this from <see cref="OnDeviceInitializingAsync"/> to decide
-        /// whether their own initialization may write global stream state.
-        /// </summary>
-        protected bool InitializationPreservesActiveStream { get; private set; }
-
         private ConnectionStatus _status;
 
         /// <summary>
@@ -1578,10 +1571,13 @@ namespace Daqifi.Core.Device
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
 
-                // Snapshot once so every retry attempt — and the derived-class hook further down —
-                // sees the same decision even if a caller mutates the property mid-initialization.
+                // Snapshot into a local, once. Every retry attempt and the derived-class hook
+                // further down are then handed the same decision explicitly, so it cannot be
+                // changed out from under an initialization already in flight — neither by a caller
+                // mutating the property nor by a second concurrent InitializeAsync on this same
+                // instance. The decision belongs to this operation, so it lives on the stack rather
+                // than in a field.
                 var preserveActiveStream = PreserveActiveStream;
-                InitializationPreservesActiveStream = preserveActiveStream;
 
                 // Send the text-mode SCPI setup commands via ExecuteTextCommandAsync so that
                 // any -200 execution error response is captured rather than silently discarded
@@ -1674,7 +1670,7 @@ namespace Daqifi.Core.Device
                 // this try/catch so a failure there leaves the device in a consistent terminal state
                 // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
                 // so a failed init can be safely retried.
-                await OnDeviceInitializingAsync(cancellationToken).ConfigureAwait(false);
+                await OnDeviceInitializingAsync(preserveActiveStream, cancellationToken).ConfigureAwait(false);
 
                 _isInitialized = true;
                 State = DeviceState.Ready;
@@ -1705,9 +1701,18 @@ namespace Daqifi.Core.Device
         /// state and other faults set <see cref="DeviceState.Error"/> — rather than a falsely-ready
         /// device, and the failed initialization can be retried. The base implementation does nothing.
         /// </remarks>
+        /// <param name="preserveActiveStream">
+        /// The <see cref="PreserveActiveStream"/> decision for <em>this</em> initialization, passed
+        /// explicitly rather than read from the device so it cannot change while initialization is in
+        /// flight. When <c>true</c>, an override must not send any command that writes global stream
+        /// state — stopping, reconfiguring, or re-routing the stream would disturb a session that is
+        /// already using the device.
+        /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task OnDeviceInitializingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        protected virtual Task OnDeviceInitializingAsync(
+            bool preserveActiveStream,
+            CancellationToken cancellationToken) => Task.CompletedTask;
 
         /// <summary>
         /// Runs the capability-document read during initialization, absorbing any failure.
