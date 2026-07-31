@@ -213,6 +213,22 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// </exception>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
     {
+        await ConnectAsync(retryOptions, CancellationToken.None);
+    }
+
+    /// <inheritdoc />
+    public async Task ConnectAsync(CancellationToken cancellationToken)
+    {
+        await ConnectAsync(null, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    /// <exception cref="TimeoutException">
+    /// Thrown when the final connection attempt does not complete within
+    /// <see cref="ConnectionRetryOptions.ConnectionTimeout"/>.
+    /// </exception>
+    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
+    {
         ThrowIfDisposed();
 
         if (IsConnected)
@@ -220,7 +236,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
 
         await ConnectRetryExecutor.ExecuteAsync(
             retryOptions,
-            connectAttempt: async options =>
+            connectAttempt: async (options, attemptToken) =>
             {
                 _tcpClient = _localInterface != null
                     ? new TcpClient(new IPEndPoint(_localInterface, 0))
@@ -231,8 +247,13 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 _tcpClient.ReceiveTimeout = timeout;
                 _tcpClient.SendTimeout = timeout;
 
-                // Add connection timeout to prevent long waits
-                using var cts = new CancellationTokenSource(options.ConnectionTimeout);
+                // Two independent reasons to stop waiting — the connect timeout and the caller's
+                // token — are linked into one source so a caller can abandon a dial that would
+                // otherwise sit here for the full timeout. Which one fired is disambiguated below,
+                // because the two mean very different things to the caller.
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(attemptToken);
+                cts.CancelAfter(options.ConnectionTimeout);
+
                 var connectTask = ConnectTaskFactory != null
                     ? ConnectTaskFactory(_tcpClient)
                     : Hostname != null
@@ -243,11 +264,14 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 {
                     await connectTask.WaitAsync(cts.Token);
                 }
-                catch (OperationCanceledException oce) when (cts.IsCancellationRequested)
+                catch (OperationCanceledException oce)
+                    when (cts.IsCancellationRequested && !attemptToken.IsCancellationRequested)
                 {
-                    // The only cancellation source here is the timeout token, so surface the
-                    // failure as what it actually is — a connect timeout — rather than a
-                    // misleading TaskCanceledException (daqifi-desktop#517).
+                    // The timeout — not the caller — ended the wait, so surface the failure as what
+                    // it actually is rather than a misleading TaskCanceledException
+                    // (daqifi-desktop#517). A caller-driven cancel falls through this filter and
+                    // propagates as OperationCanceledException, which is what callers expect from a
+                    // token they signalled themselves.
                     throw new TimeoutException(
                         $"TCP connect to {Hostname ?? _endPoint.Address.ToString()}:{_endPoint.Port} " +
                         $"timed out after {options.ConnectionTimeout.TotalSeconds:0.###}s.", oce);
@@ -270,7 +294,8 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 _tcpClient = null;
                 _networkStream = null;
             },
-            onStatusChanged: OnStatusChanged);
+            onStatusChanged: OnStatusChanged,
+            cancellationToken: cancellationToken);
 
         _watchdog.Arm();
     }

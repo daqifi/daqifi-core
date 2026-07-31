@@ -37,7 +37,7 @@ using Daqifi.Core.Channel;
 
 // Connect — transport and device initialization handled for you. The factory returns the base
 // DaqifiDevice type, but the constructed instance is always a DaqifiStreamingDevice.
-using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // Subscribe to decoded, per-channel samples
 var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
@@ -97,7 +97,7 @@ Pick whichever transport fits your setup — each snippet is a standalone, copy-
 **TCP with a resilient retry preset** (5 retries, longer timeouts):
 
 ```csharp
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
     "192.168.1.100", 9760, DeviceConnectionOptions.Resilient);
 ```
 
@@ -106,7 +106,7 @@ using var device = await DaqifiDeviceFactory.ConnectTcpAsync(
 ```csharp
 // Replace with your OS-specific port:
 //   Windows: "COM3"   •   macOS: "/dev/cu.usbmodem1"   •   Linux: "/dev/ttyACM0"
-using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");
+await using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");
 ```
 
 **From a discovered device:**
@@ -114,7 +114,7 @@ using var device = await DaqifiDeviceFactory.ConnectSerialAsync("COM3");
 ```csharp
 using var finder = new WiFiDeviceFinder();
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
-using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
+await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
 ```
 
 ### Custom retry options
@@ -132,7 +132,7 @@ var options = new DeviceConnectionOptions
     },
     InitializeDevice = true
 };
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, options);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, options);
 ```
 
 > **Connecting takes control of the device.** A DAQiFi unit has a single global acquisition, and the

@@ -15,7 +15,7 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Communication.Producers;
 
 // Connect to a device (handles transport, connection, and initialization)
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // Subscribe to incoming data
 device.MessageReceived += (sender, e) =>
@@ -150,7 +150,7 @@ foreach (var deviceInfo in devices)
 // Connect to the first discovered device
 if (devices.Any())
 {
-    using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
+    await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
     // Device is ready to use
 }
 ```
@@ -396,29 +396,51 @@ For cases where you need more control over the connection process:
 using Daqifi.Core.Device;
 using Daqifi.Core.Communication.Transport;
 
-// Create and connect transport manually
+// Create and connect transport manually. Every step takes a CancellationToken, so a user who
+// cancels stops the attempt where it stands instead of waiting out the retries.
 var transport = new TcpStreamTransport("192.168.1.100", 9760);
-await transport.ConnectAsync(new ConnectionRetryOptions { MaxAttempts = 3 });
+await transport.ConnectAsync(new ConnectionRetryOptions { MaxAttempts = 3 }, cancellationToken);
 
 // Create device with transport
-using var device = new DaqifiDevice("My Device", transport);
-device.Connect();
+await using var device = new DaqifiDevice("My Device", transport);
+await device.ConnectAsync(cancellationToken);
 
 // InitializeAsync takes control of the device and stops any stream it was already running.
 // Set device.PreserveActiveStream = true first if another session may be streaming — see
 // "Connecting stops any stream already running" above.
-await device.InitializeAsync();
+await device.InitializeAsync(cancellationToken: cancellationToken);
 
 // Now ready to send commands
 device.Send(ScpiMessageProducer.GetDeviceInfo);
 ```
+
+### Connecting and disconnecting without blocking
+
+`ConnectAsync`, `DisconnectAsync` and `DisposeAsync` are the non-blocking forms of `Connect`,
+`Disconnect` and `Dispose`. Prefer them on a UI thread: the synchronous disconnect waits (up to ten
+seconds) for any command exchange still in flight, which on a UI thread is a visible freeze.
+
+```csharp
+// Disposal never blocks the caller — this is the recommended pattern.
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+```
+
+A cancelled `ConnectAsync` throws `OperationCanceledException` and leaves nothing half-open — if the
+transport had already come up when the cancel landed, it is closed again.
+
+`DisconnectAsync` treats its token differently, and deliberately: cancelling it skips the wait for an
+in-flight command exchange and proceeds straight to teardown. It never aborts the disconnect and
+never throws `OperationCanceledException`, because a teardown abandoned part-way would leave the
+device in an indeterminate state. On return the device is always disconnected.
+
+The synchronous `Connect`, `Disconnect` and `Dispose` remain, unchanged, for existing callers.
 
 ### Error Handling
 
 ```csharp
 try
 {
-    using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+    await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
     device.Send(ScpiMessageProducer.StartStreaming(100));
 }
 catch (ArgumentOutOfRangeException ex) when (ex.ParamName == "port")
@@ -485,7 +507,7 @@ Notes:
 ### Connection Status Monitoring
 
 ```csharp
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 device.StatusChanged += (sender, args) =>
 {
@@ -565,7 +587,7 @@ The failures that feed this escalation are also reported individually, as they h
 After initialization, device metadata is populated:
 
 ```csharp
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // Access device information
 Console.WriteLine($"Part Number: {device.Metadata.PartNumber}");
@@ -600,7 +622,7 @@ using Daqifi.Core.Device;
 
 // DaqifiDeviceFactory methods return the base DaqifiDevice type, but the constructed instance is
 // always a DaqifiStreamingDevice — cast (or pattern-match with `is`) to reach its streaming API.
-using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
 ai0.SampleReceived += (sender, e) =>
@@ -632,7 +654,7 @@ cancellation and backpressure instead of hand-building an event/queue bridge. Ea
 the decoded `IDataSample` with the `IChannel` that produced it.
 
 ```csharp
-using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 device.EnableChannels(device.GetChannelsSnapshot().Where(c => c.Type == ChannelType.Analog));
 device.StreamingFrequency = 100; // Hz
@@ -655,7 +677,7 @@ call `StopStreaming()` for that. This is additive: `SampleReceived` and `Message
 #### Raw protobuf frames
 
 ```csharp
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 var sampleCount = 0;
 device.MessageReceived += (sender, e) =>
@@ -767,7 +789,7 @@ to reach these members — the same way as `INetworkConfigurable` below.
 ```csharp
 using Daqifi.Core.Device.Diagnostics;
 
-using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 if (device is IDeviceDiagnostics diagnostics)
 {

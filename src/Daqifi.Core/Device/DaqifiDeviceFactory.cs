@@ -465,8 +465,9 @@ public static class DaqifiDeviceFactory
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Step 1: Connect the transport
-            await transport.ConnectAsync(options.ConnectionRetry).ConfigureAwait(false);
+            // Step 1: Connect the transport. The token goes all the way down now, so a caller who
+            // gives up mid-dial stops the attempt instead of waiting out the retry loop (#341).
+            await transport.ConnectAsync(options.ConnectionRetry, cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -480,7 +481,7 @@ public static class DaqifiDeviceFactory
             };
 
             // Step 3: Connect the device (starts message producers/consumers)
-            device.Connect();
+            await device.ConnectAsync(cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -499,7 +500,7 @@ public static class DaqifiDeviceFactory
             // If device was created, it owns the transport and will dispose it
             if (device != null)
             {
-                device.Dispose();
+                await device.DisposeAsync().ConfigureAwait(false);
             }
             else
             {
