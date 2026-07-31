@@ -569,7 +569,14 @@ connect. Failing over from one transport to another (USB to WiFi, say) is out of
 **Stopping it.** `CancelReconnect()` stops the loop at its next checkpoint and leaves the device on
 `Lost`; `Disconnect()` and `Dispose()` do the same and then tear down. A caller-issued `Connect()`
 or `Disconnect()` always wins — the loop unwinds without touching the session the caller
-established.
+established, and a `Disconnect()` issued from inside a `Lost` handler stops the reconnect before it
+even starts.
+
+Which is the other half of the rule: with reconnect enabled, **stop tearing down on `Lost`
+yourself**. The teardown shown under [Detecting a dropped
+connection](#detecting-a-dropped-connection) is for devices without a reconnect policy. Here the
+device does it for you, between attempts, and doing it as well just cancels the recovery you asked
+for.
 
 ```csharp
 device.ReconnectOptions = new ReconnectOptions

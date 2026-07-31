@@ -104,6 +104,8 @@ public class ReconnectOptions
         get => _backoffMultiplier;
         set
         {
+            // Negated rather than `value < 1.0` so NaN — which compares false against everything —
+            // is rejected too, instead of turning every backoff into NaN milliseconds.
             if (!(value >= 1.0))
             {
                 throw new ArgumentOutOfRangeException(

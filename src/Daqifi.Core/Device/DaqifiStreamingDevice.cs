@@ -481,6 +481,12 @@ namespace Daqifi.Core.Device
         {
             ArgumentNullException.ThrowIfNull(options);
 
+            // A reconnected device is never streaming: re-initialization has just sent it
+            // StopStreamData. The flag, though, is still set from before the drop — nothing stopped
+            // the stream, the connection simply ended — and leaving it that way would report a
+            // device as streaming while it sits idle, and make StartStreaming() a silent no-op.
+            IsStreaming = false;
+
             var snapshot = _sessionSnapshot;
             if (snapshot == null)
             {
@@ -512,10 +518,6 @@ namespace Daqifi.Core.Device
             var resumeStreaming = snapshot.WasStreaming && options.ResumeStreaming;
             if (resumeStreaming)
             {
-                // The drop left IsStreaming set — nothing stopped the stream, the connection just
-                // ended — and StartStreaming is a no-op while it is. Clear it so the restart is a
-                // real one, complete with its per-session timestamp re-anchoring.
-                IsStreaming = false;
                 StartStreaming();
             }
 

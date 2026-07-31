@@ -1503,6 +1503,11 @@ namespace Daqifi.Core.Device
                 // not during an intentional Disconnect() call
                 if (Status == ConnectionStatus.Connected && !_isDisconnecting)
                 {
+                    // Read before raising Lost: a handler is free to call Connect or Disconnect
+                    // synchronously from inside it, and if it does, this drop must not start a
+                    // reconnect for a session the caller has already moved on from.
+                    var epochAtDrop = Volatile.Read(ref _sessionEpoch);
+
                     // Snapshot the session BEFORE anything observes the drop. Raising Lost runs
                     // consumer handlers synchronously on this thread, and a handler is entirely
                     // entitled to start tearing the device down — by which point what the session
@@ -1527,7 +1532,7 @@ namespace Daqifi.Core.Device
 
                     Status = ConnectionStatus.Lost;
 
-                    BeginReconnectIfEnabled();
+                    BeginReconnectIfEnabled(epochAtDrop);
                 }
             }
         }
@@ -1607,7 +1612,11 @@ namespace Daqifi.Core.Device
         // the Lost that a failing attempt's own teardown can produce.
         private int _reconnectRunning;
 
-        private CancellationTokenSource? _reconnectCts;
+        // Volatile: written by the thread that starts a loop and by the loop's own cleanup, read by
+        // CancelReconnect from any thread. A stale read only ever delays a cancellation, never
+        // corrupts one — the epoch check is what actually stops the loop — but there is no reason
+        // to leave even that on the table.
+        private volatile CancellationTokenSource? _reconnectCts;
 
         // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
         // when it starts and re-checks before each step that touches device state; a change means
@@ -1663,9 +1672,21 @@ namespace Daqifi.Core.Device
         /// Called from the transport's status callback, which runs on the reader loop or the
         /// liveness timer — so the work is handed to the thread pool rather than done inline.
         /// </remarks>
-        private void BeginReconnectIfEnabled()
+        /// <param name="expectedEpoch">
+        /// The session epoch observed before the drop was announced. A mismatch means a caller
+        /// connected or disconnected in the meantime — including from inside their own
+        /// <see cref="StatusChanged"/> handler — and this drop is no longer theirs to recover from.
+        /// </param>
+        private void BeginReconnectIfEnabled(int expectedEpoch)
         {
             if (!ReconnectOptions.Enabled || _transport == null || _disposed || _isDisconnecting)
+            {
+                return;
+            }
+
+            // Only ever start from a device that is actually sitting on a lost connection with the
+            // session it was lost from still current.
+            if (Status != ConnectionStatus.Lost || Volatile.Read(ref _sessionEpoch) != expectedEpoch)
             {
                 return;
             }
@@ -1711,11 +1732,11 @@ namespace Daqifi.Core.Device
                 // A drop that landed in the moments between this loop finishing its work and
                 // releasing the running flag would have been skipped by the single-flight guard,
                 // stranding the device on Lost with nothing trying to bring it back. Pick it up.
-                // Exhausting the attempts settles on Failed, and cancellation is excluded above, so
-                // neither can retrigger here.
-                if (!wasCanceled && Status == ConnectionStatus.Lost)
+                // Exhausting the attempts settles on Failed, and cancellation is excluded here, so
+                // neither can retrigger.
+                if (!wasCanceled)
                 {
-                    BeginReconnectIfEnabled();
+                    BeginReconnectIfEnabled(Volatile.Read(ref _sessionEpoch));
                 }
             });
         }
@@ -1724,8 +1745,10 @@ namespace Daqifi.Core.Device
         /// Attempts, with backoff, to rebuild the session that was just lost.
         /// </summary>
         /// <param name="options">
-        /// The policy snapshotted when the drop was detected, so a mid-flight change to
-        /// <see cref="ReconnectOptions"/> cannot alter the loop's terms underneath it.
+        /// The policy as it stood when the drop was detected. Assigning a new
+        /// <see cref="ReconnectOptions"/> mid-flight therefore leaves this loop on the terms it
+        /// started under and applies from the next drop; mutating the instance already assigned
+        /// does reach it, since the loop holds that same object.
         /// </param>
         /// <param name="epoch">The session epoch at the time of the drop.</param>
         /// <param name="cancellationToken">Cancelled by <see cref="CancelReconnect"/>.</param>

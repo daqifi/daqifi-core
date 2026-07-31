@@ -189,6 +189,13 @@ public class DeviceReconnectTests
         Assert.False(result.StreamingResumed);
         Assert.Contains("ENAble:VOLTage:DC 1", device.SentCommands);
         Assert.DoesNotContain(device.SentCommands, c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
+
+        // The device is genuinely idle, and says so. Reporting a stale IsStreaming here would both
+        // lie and make the caller's own StartStreaming() a silent no-op.
+        Assert.False(device.IsStreaming);
+        device.StartStreaming();
+        Assert.True(device.IsStreaming);
+        Assert.Contains(device.SentCommands, c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -474,6 +481,41 @@ public class DeviceReconnectTests
         Assert.True(result.StreamingResumed);
         Assert.Equal(3, device.InitializeCount);
         Assert.Contains("ENAble:VOLTage:DC 1", device.SentCommands);
+    }
+
+    [Fact]
+    public void AHandlerThatDisconnectsOnLost_IsNotOverruledByAReconnect()
+    {
+        // The teardown-on-Lost pattern the docs show for devices without reconnect. If a consumer
+        // still does it, their decision has to stand — a reconnect starting behind it would reopen
+        // a device they just closed.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Torn Down Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        device.StatusChanged += (_, e) =>
+        {
+            if (e.Status == ConnectionStatus.Lost)
+            {
+                device.Disconnect();
+            }
+        };
+
+        var reconnectEvents = 0;
+        device.ReconnectAttempt += (_, _) => Interlocked.Increment(ref reconnectEvents);
+
+        var connectsBeforeDrop = transport.ConnectCount;
+        transport.SimulateDrop();
+
+        Thread.Sleep(500);
+
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.Equal(0, Volatile.Read(ref reconnectEvents));
+        Assert.Equal(connectsBeforeDrop, transport.ConnectCount);
+        Assert.False(transport.IsConnected);
+        Assert.False(device.IsReconnecting);
     }
 
     [Fact]
