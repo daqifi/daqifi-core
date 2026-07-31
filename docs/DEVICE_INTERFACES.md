@@ -113,7 +113,8 @@ var options = new DeviceConnectionOptions
         MaxAttempts = 3,
         ConnectionTimeout = TimeSpan.FromSeconds(10)
     },
-    InitializeDevice = true              // Run init sequence after connect
+    InitializeDevice = true,             // Run init sequence after connect
+    PreserveActiveStream = false         // Take control of the device (see the warning below)
 };
 ```
 
@@ -121,6 +122,13 @@ Pre-configured presets:
 - `DeviceConnectionOptions.Default` - Standard settings
 - `DeviceConnectionOptions.Fast` - Quick connection, fewer retries
 - `DeviceConnectionOptions.Resilient` - More retries, longer timeouts
+- `DeviceConnectionOptions.Observing` - Connect without disturbing a stream already running
+  (see [Connecting stops any stream already running](#connecting-stops-any-stream-already-running))
+
+> **Connecting stops whatever the device was streaming.** With the default options, initialization
+> takes control of the device. If another session — another app, another process, another machine —
+> was already streaming from that unit, its data stops, silently.
+> See [Connecting stops any stream already running](#connecting-stops-any-stream-already-running).
 
 ## Usage Examples
 
@@ -327,6 +335,59 @@ blocks other threads. Two concurrent `ConnectAsync` calls for the *same* physica
 open a connection — the loser is detected after connecting and disposed — so serialize your own
 calls if a single connect attempt matters.
 
+### Connecting stops any stream already running
+
+A DAQiFi device has **one** acquisition: one ADC, one sample rate, one destination interface. There
+is no per-connection stream. So the connect-time initialization sequence, which stops streaming,
+sets the power state, fixes the stream format, and (over USB) routes the stream to this connection,
+acts on the device as a whole — not on your connection.
+
+That is the right default when your session owns the device: it also clears a stream orphaned by a
+previously crashed session, so a stale acquisition never leaks into a fresh one. But when a
+**second** session connects to a device that is already streaming, the same sequence ends the first
+session's acquisition. Neither side is told. The first app's data simply stops.
+
+Realistic ways to hit this, all silent to the victim:
+
+- A desktop app on USB while a script or second app talks to the same unit over WiFi
+- Two instances of the same application
+- A second viewer attaching to a unit a logger is already streaming
+
+**If you only need to look, connect as an observer.** `PreserveActiveStream` skips every
+initialization command that writes global stream state:
+
+```csharp
+// A secondary session that must not disturb whoever is already streaming.
+var device = await DaqifiDeviceFactory.ConnectTcpAsync(
+    ip, DaqifiDeviceFactory.DefaultTcpDataPort, DeviceConnectionOptions.Observing);
+
+// Connecting manually? Set it before InitializeAsync.
+device.PreserveActiveStream = true;
+await device.InitializeAsync();
+```
+
+| Initialization step | Default | `PreserveActiveStream` |
+|---|---|---|
+| `SYSTem:ECHO -1` | sent | sent — text-mode only, no stream state |
+| `SYSTem:StopStreamData` | sent | **skipped** — this is what kills the other session |
+| `SYSTem:POWer:STATe 1` | sent | **skipped** |
+| `SYSTem:STReam:FORmat 0` | sent | **skipped** |
+| `SYSTem:STReam:INTerface` (USB routing) | sent | **skipped** — would steal the stream |
+| `SYSTem:SYSInfoPB?` + capability query | sent | sent — read-only |
+
+The observing session is fully usable for status, metadata, and channel inspection, and reaches
+`DeviceState.Ready` exactly as a normal connection does. What it is **not** is configured to stream:
+the format and destination interface are left as the other session set them, and frames keep going
+wherever they were already going. A session that later wants to stream itself has to take control,
+which necessarily stops the other one — reconnect with the default options for that.
+
+**Limits.** This is a courtesy, not arbitration. It stops *this* library from clobbering a stream;
+it cannot stop anything else from doing so, and the firmware does not currently reject or announce
+a second controlling session. Within one process, prefer
+[`DaqifiDeviceRegistry`](#managing-multiple-devices-daqifideviceregistry) — it refuses to open the
+same physical unit twice at all, so the conflict never arises. Across processes there is no
+protection beyond both sides opting in to `PreserveActiveStream`.
+
 ### Manual Device Connection (Advanced)
 
 For cases where you need more control over the connection process:
@@ -343,6 +404,10 @@ await transport.ConnectAsync(new ConnectionRetryOptions { MaxAttempts = 3 }, can
 // Create device with transport
 await using var device = new DaqifiDevice("My Device", transport);
 await device.ConnectAsync(cancellationToken);
+
+// InitializeAsync takes control of the device and stops any stream it was already running.
+// Set device.PreserveActiveStream = true first if another session may be streaming — see
+// "Connecting stops any stream already running" above.
 await device.InitializeAsync(cancellationToken: cancellationToken);
 
 // Now ready to send commands

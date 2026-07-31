@@ -384,6 +384,7 @@ public static class DaqifiDeviceFactory
             ConnectionRetry = effectiveOptions.ConnectionRetry,
             InitializeDevice = effectiveOptions.InitializeDevice,
             ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout,
+            PreserveActiveStream = effectiveOptions.PreserveActiveStream,
             Logger = effectiveOptions.Logger
         };
 
@@ -427,6 +428,7 @@ public static class DaqifiDeviceFactory
             ConnectionRetry = effectiveOptions.ConnectionRetry,
             InitializeDevice = effectiveOptions.InitializeDevice,
             ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout,
+            PreserveActiveStream = effectiveOptions.PreserveActiveStream,
             Logger = effectiveOptions.Logger
         };
 
@@ -471,7 +473,12 @@ public static class DaqifiDeviceFactory
 
             // Step 2: Create the device with the transport
             // Note: Once created, the device owns the transport and will dispose it
-            device = new DaqifiStreamingDevice(options.DeviceName, transport, options.Logger);
+            device = new DaqifiStreamingDevice(options.DeviceName, transport, options.Logger)
+            {
+                // Read by InitializeAsync below; set before Connect so it is never observed
+                // half-applied.
+                PreserveActiveStream = options.PreserveActiveStream
+            };
 
             // Step 3: Connect the device (starts message producers/consumers)
             await device.ConnectAsync(cancellationToken).ConfigureAwait(false);

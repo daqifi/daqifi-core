@@ -304,7 +304,16 @@ namespace Daqifi.Core.Device
         /// This runs inside the base <see cref="DaqifiDevice.InitializeAsync"/> exception handling
         /// (before the device is marked initialized/ready), so a cancellation or SCPI error here
         /// leaves the device in a consistent state and re-initializable, rather than falsely Ready.
+        ///
+        /// The routing command is global device state: it takes the stream away from whatever
+        /// interface it was going to, so a second session running it steals another session's data
+        /// (#385). It is therefore skipped entirely when <paramref name="preserveActiveStream"/>
+        /// is set.
         /// </remarks>
+        /// <param name="preserveActiveStream">
+        /// When <c>true</c>, this initialization must leave a stream another session is already
+        /// running untouched, so the routing command is not sent at all.
+        /// </param>
         /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
         /// <returns>A task representing the asynchronous initialization operation.</returns>
         /// <exception cref="ScpiInitializationErrorException">
@@ -313,9 +322,23 @@ namespace Daqifi.Core.Device
         /// command because it still has the interface set from a prior WiFi-streaming session,
         /// within the tight response window right after connect.
         /// </exception>
-        protected override async Task OnDeviceInitializingAsync(CancellationToken cancellationToken)
+        protected override async Task OnDeviceInitializingAsync(
+            bool preserveActiveStream,
+            CancellationToken cancellationToken)
         {
             if (!IsUsbConnection)
+            {
+                return;
+            }
+
+            // An observe-only session must not re-route the device's single global stream: doing so
+            // would take the data away from the session that is already receiving it (#385). The
+            // interface is left exactly as the owning session configured it.
+            //
+            // Returning without observing the token is deliberate: there is no work to abandon, and
+            // InitializeAsync re-checks cancellation before it marks the device Ready, so a token
+            // cancelled during this hook is still honored.
+            if (preserveActiveStream)
             {
                 return;
             }
