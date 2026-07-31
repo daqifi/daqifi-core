@@ -50,6 +50,7 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 - `Send<T>(IOutboundMessage<T>)` - Send commands to device
 - `StatusChanged` event - Connection status notifications
 - `MessageReceived` event - Incoming data notifications
+- `ErrorOccurred` event - Background read/parse/decode failures (see [Error Surface](#error-surface))
 
 ### IStreamingDevice
 
@@ -555,6 +556,10 @@ device.StatusChanged += (_, e) =>
 Custom transports can opt into the same escalation by implementing `ITransportHealthSink`; the
 reader and writer loops report every read/write outcome to a transport that does.
 
+The failures that feed this escalation are also reported individually, as they happen, on
+`IDevice.ErrorOccurred` — see [Error Surface](#error-surface). That event is diagnostics only;
+`ConnectionStatus.Lost` remains the single signal that means "the connection is over".
+
 ### Working with Device Metadata
 
 After initialization, device metadata is populated:
@@ -835,6 +840,77 @@ device.SendFailed += (_, e) =>
 A single failed write does not stop the queue: the producer keeps draining the remaining
 messages regardless of whether anything observes the failure.
 
+## Error Surface
+
+Reading from the device and decoding its frames both happen on background threads, where an
+exception has nobody to throw to. Those failures used to be invisible: a stream that could not be
+read and a stream that could not be decoded both looked exactly like a device sending nothing.
+`IDevice.ErrorOccurred` is the one place to answer *"why am I getting no samples"*.
+
+```csharp
+device.ErrorOccurred += (_, e) =>
+{
+    Console.WriteLine($"[{e.Source}] {e.Error.Message}");
+    if (e.SuppressedCount > 0)
+    {
+        Console.WriteLine($"  ...and {e.SuppressedCount} more like it since the last report");
+    }
+};
+```
+
+`DeviceErrorEventArgs.Source` says which stage failed:
+
+| Source | What it means |
+|---|---|
+| `MessageConsumer` | A read from the transport stream failed, a frame could not be parsed, or a `MessageReceived` subscriber threw |
+| `StreamDecode` | A streaming frame could not be decoded into channel samples. That frame is dropped; the stream continues |
+
+### Observational, never escalating
+
+Raising this event changes nothing about what the device does. There is no tear-down, no retry, no
+`Status` change, and per-frame isolation is unchanged — a single malformed frame is still dropped on
+its own without disturbing the stream. Deciding that a link is genuinely dead is a separate
+mechanism with its own signal: `ConnectionStatus.Lost` on `StatusChanged` (see
+[Detecting a dropped connection](#detecting-a-dropped-connection)). The two often fire together on a
+real drop — the same failing reads feed both — but neither implies the other, and an `ErrorOccurred`
+on its own is not a reason to reconnect.
+
+Every error is also written to the device's `ILogger` at warning level, so it stays visible with no
+subscriber attached.
+
+### Throttle policy
+
+A systematic failure repeats at the frame rate, so raises are collapsed per **bucket**, where a
+bucket is (`Source`, exception type):
+
+- The **first** occurrence in a bucket is always raised, immediately.
+- After that, a bucket raises **at most once every five seconds**. Occurrences in between are
+  counted and reported as `SuppressedCount` on the next raise — so a storm shows up as a number
+  rather than as thousands of events.
+- Buckets are independent: a *new* kind of failure is raised at once even while another kind is
+  being collapsed.
+- Connecting resets the throttle, so a reconnect reports its first failure immediately.
+
+### Decode failure counter
+
+`DaqifiStreamingDevice.DecodeFailureCount` is the always-on companion to the event: the number of
+frames whose decode threw and was discarded during the current streaming session. It is reset by
+`StartStreaming()`, and a healthy stream leaves it at zero — so a non-zero value while samples are
+missing is the fastest confirmation that frames are arriving but not decoding.
+
+```csharp
+device.StartStreaming();
+// ...
+if (device.DecodeFailureCount > 0)
+{
+    Console.WriteLine($"{device.DecodeFailureCount} frame(s) failed to decode this session");
+}
+```
+
+`ErrorOccurred` is raised on a background thread, so handlers should do the minimum and push real
+work elsewhere. A handler that throws is caught and ignored — it can never disturb reading or
+streaming.
+
 ## Features
 
 - **Simple Factory API**: Single-call connection with `DaqifiDeviceFactory`
@@ -842,6 +918,8 @@ messages regardless of whether anything observes the failure.
   unit connected over two transports
 - **Clean Abstraction**: Hardware details hidden behind well-defined interfaces
 - **Event-Driven**: Status changes and messages handled via events
+- **Observable Failures**: Background read and decode errors surface on `ErrorOccurred` instead of
+  failing silently
 - **Type Safety**: Generic message types provide compile-time safety
 - **Retry Support**: Built-in connection retry with exponential backoff
 - **Thread-Safe Sending**: Background message queue for thread-safe command sending

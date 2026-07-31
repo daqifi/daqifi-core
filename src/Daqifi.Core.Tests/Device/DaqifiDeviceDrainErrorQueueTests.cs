@@ -208,20 +208,33 @@ namespace Daqifi.Core.Tests.Device
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-                }
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
 
-                cancellationToken.ThrowIfCancellationRequested();
-                setupAction();
-                ExecuteTextCommandCallCount++;
-                var reply = Replies.Count > 0 ? Replies.Dequeue() : Array.Empty<string>();
-                return reply;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    setupAction();
+                    ExecuteTextCommandCallCount++;
+                    var reply = Replies.Count > 0 ? Replies.Dequeue() : Array.Empty<string>();
+                    return reply;
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
             }
         }
     }

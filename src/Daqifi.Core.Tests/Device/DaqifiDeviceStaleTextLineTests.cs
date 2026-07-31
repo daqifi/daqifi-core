@@ -122,6 +122,230 @@ public class DaqifiDeviceStaleTextLineTests
         device.Disconnect();
     }
 
+    // ── Finalize phase (#407) — the mirror of the prepare phase above. An exchange that
+    // switches shared device state on the way in has to switch it back before anything else
+    // runs, or only half the pairing is serialized. ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_RunsFinalizeAfterTheSetupAction()
+    {
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Finalized Device", transport);
+
+        device.Connect();
+
+        var order = new List<string>();
+        await device.CallWithFinalizeAsync(
+            () => order.Add("setup"),
+            () => { order.Add("finalize"); return Task.CompletedTask; },
+            prepareAsync: _ => { order.Add("prepare"); return Task.CompletedTask; });
+
+        Assert.Equal(new[] { "prepare", "setup", "finalize" }, order);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_RunsFinalizeInsideTheExchange()
+    {
+        // The property #407 is about: the finalize phase holds the same lock acquisition the
+        // prepare phase does, so nothing can run between this exchange's commands and the state
+        // it restores. Asserted through the exchange's own re-entrancy guard rather than by
+        // racing threads — a nested exchange started from the finalize must be refused, and if
+        // the restore were back outside the lock this would quietly succeed instead.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Nested Finalize Device", transport);
+
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => device.CallWithFinalizeAsync(
+                () => { },
+                async () => await device.CallExecuteTextCommandAsync(() => { })));
+
+        Assert.Contains("not re-entrant", ex.Message);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_RunsFinalizeWhenTheExchangeThrows()
+    {
+        // The reason the finalize is a phase the exchange owns rather than "another prepare at
+        // the end": a failed exchange is exactly when the device most needs putting back.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Failing Device", transport);
+
+        device.Connect();
+
+        var finalized = false;
+
+        var ex = await Assert.ThrowsAsync<InvalidTimeZoneException>(
+            () => device.CallWithFinalizeAsync(
+                () => throw new InvalidTimeZoneException("the exchange failed"),
+                () => { finalized = true; return Task.CompletedTask; }));
+
+        Assert.Equal("the exchange failed", ex.Message);
+        Assert.True(finalized, "The finalize phase did not run for a failed exchange.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_WhenBothFail_SurfacesTheExchangeFailure()
+    {
+        // A cleanup failure must never hide the failure that caused the cleanup: the caller
+        // needs the original to diagnose anything at all.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Doubly Failing Device", transport);
+
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<InvalidTimeZoneException>(
+            () => device.CallWithFinalizeAsync(
+                () => throw new InvalidTimeZoneException("the exchange failed"),
+                () => throw new NotSupportedException("the restore failed too")));
+
+        Assert.Equal("the exchange failed", ex.Message);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_WhenOnlyTheFinalizeFails_SurfacesThatFailure()
+    {
+        // The complement, so "never throw from the finalize" isn't the rule: with nothing else
+        // unwinding, a failed restore is the only failure there is, and reporting success would
+        // hand the caller a device left in the prepared state.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Failing Restore Device", transport);
+
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(
+            () => device.CallWithFinalizeAsync(
+                () => { },
+                () => throw new NotSupportedException("the restore failed")));
+
+        Assert.Equal("the restore failed", ex.Message);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_WhenTheFinalizeFails_TheExchangeLockIsStillReleased()
+    {
+        // The finalize runs from the exchange's own finally, so a failure raised straight out of
+        // it would abandon the rest of that finally — the lock included — and every later exchange
+        // on the device would hang forever. Both outcomes are checked because they take different
+        // routes out: the restore failing alone, and the restore failing on top of a failed
+        // exchange.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Leaky Restore Device", transport);
+
+        device.Connect();
+
+        var restoreFailed = device.CallWithFinalizeAsync(
+            () => { },
+            () => throw new NotSupportedException("the restore failed"));
+        await AssertCompletesAsync(restoreFailed);
+        await Assert.ThrowsAsync<NotSupportedException>(() => restoreFailed);
+
+        var bothFailed = device.CallWithFinalizeAsync(
+            () => throw new InvalidTimeZoneException("the exchange failed"),
+            () => throw new NotSupportedException("the restore failed too"));
+        await AssertCompletesAsync(bothFailed);
+        await Assert.ThrowsAsync<InvalidTimeZoneException>(() => bothFailed);
+
+        var next = device.CallExecuteTextCommandAsync(() => { });
+        await AssertCompletesAsync(next);
+        await next;
+
+        device.Disconnect();
+    }
+
+    /// <summary>
+    /// Waits for a call with a bound, so a leaked exchange lock fails the test that is looking for
+    /// it instead of hanging the whole run.
+    /// </summary>
+    private static async Task AssertCompletesAsync(Task call)
+    {
+        var winner = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(15)));
+        Assert.Same(call, winner);
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_NoOtherExchangeRunsBeforeTheFinalize()
+    {
+        // The race from #407 stated directly: a competing exchange must not be able to run
+        // between one exchange's commands and its restore. The second call is launched as soon
+        // as the first has sent, and the first's finalize then dawdles — plenty of room for the
+        // second to slip in if the restore were outside the lock.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Serialized Device", transport);
+
+        device.Connect();
+
+        var order = new List<string>();
+        var gate = new object();
+        void Record(string step)
+        {
+            lock (gate)
+            {
+                order.Add(step);
+            }
+        }
+
+        using var firstHasSent = new ManualResetEventSlim(false);
+
+        // The finalize dawdles on purpose. Recording a start and an end around the wait is what
+        // makes this a regression detector rather than a coincidence: with the restore outside
+        // the lock, the second exchange acquires it the moment the first exchange returns and its
+        // setup lands INSIDE that window.
+        var first = device.CallWithFinalizeAsync(
+            () => { Record("first.setup"); firstHasSent.Set(); },
+            async () =>
+            {
+                Record("first.finalize.start");
+                await Task.Delay(300);
+                Record("first.finalize.end");
+            });
+
+        Assert.True(firstHasSent.Wait(TimeSpan.FromSeconds(10)), "The first exchange never sent.");
+
+        var second = Task.Run(() => device.CallExecuteTextCommandAsync(() => Record("second.setup")));
+
+        await Task.WhenAll(first, second);
+
+        lock (gate)
+        {
+            Assert.Equal(
+                new[] { "first.setup", "first.finalize.start", "first.finalize.end", "second.setup" },
+                order);
+        }
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommandWithFinalize_WhenValidationRefusesTheExchange_DoesNotRunFinalize()
+    {
+        // The one case the finalize is skipped: the exchange never got past validation, so it
+        // never touched the device and there is nothing to put back. Running it here would only
+        // add a second failure on a device that is already gone.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Unconnected Device", transport);
+
+        var finalized = false;
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => device.CallWithFinalizeAsync(
+                () => { },
+                () => { finalized = true; return Task.CompletedTask; }));
+
+        Assert.False(finalized, "The finalize phase ran for an exchange that never started.");
+    }
+
     /// <summary>
     /// Stands in for a downstream subclass or test double that intercepts the text exchange —
     /// the case the single-seam design protects.
@@ -140,17 +364,30 @@ public class DaqifiDeviceStaleTextLineTests
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
-            Func<CancellationToken, Task>? prepareAsync = null)
+            Func<CancellationToken, Task>? prepareAsync = null,
+            Func<Task>? finalizeAsync = null)
         {
-            Intercepted = true;
-
-            if (prepareAsync != null)
+            try
             {
-                await prepareAsync(cancellationToken).ConfigureAwait(false);
-            }
+                Intercepted = true;
 
-            setupAction();
-            return new List<string> { "from the override" };
+                if (prepareAsync != null)
+                {
+                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                setupAction();
+                return new List<string> { "from the override" };
+            }
+            finally
+            {
+                // Honor the exchange's finalize phase the way the real device does: it runs
+                // however the exchange ended, still inside the exchange (#407).
+                if (finalizeAsync != null)
+                {
+                    await finalizeAsync().ConfigureAwait(false);
+                }
+            }
         }
     }
 
@@ -176,6 +413,19 @@ public class DaqifiDeviceStaleTextLineTests
                 responseTimeoutMs: 500,
                 completionTimeoutMs: 150,
                 prepareAsync: prepareAsync);
+        }
+
+        public Task<IReadOnlyList<string>> CallWithFinalizeAsync(
+            Action setupAction,
+            Func<Task> finalizeAsync,
+            Func<CancellationToken, Task>? prepareAsync = null)
+        {
+            return ExecuteTextCommandAsync(
+                setupAction,
+                responseTimeoutMs: 500,
+                completionTimeoutMs: 150,
+                prepareAsync: prepareAsync,
+                finalizeAsync: finalizeAsync);
         }
     }
 

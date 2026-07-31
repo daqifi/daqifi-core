@@ -42,6 +42,17 @@ namespace Daqifi.Core.Device
         event EventHandler<MessageReceivedEventArgs> MessageReceived;
 
         /// <summary>
+        /// Occurs when something fails on one of the device's background threads — a read from the
+        /// transport stream, a parse, a dispatch to a subscriber, or the decode of a streaming frame.
+        /// </summary>
+        /// <remarks>
+        /// Observational only: it reports what went wrong and changes nothing about what the device
+        /// does (issue #378). Raises are throttled per source and exception type — see
+        /// <see cref="DaqifiDevice.ErrorOccurred"/> for the policy and the guarantees.
+        /// </remarks>
+        event EventHandler<DeviceErrorEventArgs> ErrorOccurred;
+
+        /// <summary>
         /// Connects to the device.
         /// </summary>
         void Connect();

@@ -538,25 +538,38 @@ namespace Daqifi.Core.Tests.Device
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    // Run the setup action so that Send() calls inside it are captured
+                    setupAction();
+                    TextCommandAttemptCount++;
+
+                    if (_failFirstAttempt && TextCommandAttemptCount == 1)
+                    {
+                        return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
+                    }
+
+                    return _textCommandResponse;
                 }
-
-                // Run the setup action so that Send() calls inside it are captured
-                setupAction();
-                TextCommandAttemptCount++;
-
-                if (_failFirstAttempt && TextCommandAttemptCount == 1)
+                finally
                 {
-                    return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
                 }
-
-                return _textCommandResponse;
             }
         }
 
@@ -635,15 +648,33 @@ namespace Daqifi.Core.Tests.Device
                 return Task.FromResult<Daqifi.Core.Device.Capabilities.CapabilityDocument?>(null);
             }
 
-            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                setupAction();
-                return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+                try
+                {
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    setupAction();
+                    return Array.Empty<string>();
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
             }
         }
 
@@ -731,24 +762,37 @@ namespace Daqifi.Core.Tests.Device
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    setupAction();
+
+                    // Park only the very first exchange — the one belonging to the initialization
+                    // the test starts first.
+                    if (Interlocked.Increment(ref _exchangeCount) == 1)
+                    {
+                        FirstExchangeEntered.TrySetResult();
+                        await _release.Task.ConfigureAwait(false);
+                    }
+
+                    return Array.Empty<string>();
                 }
-
-                setupAction();
-
-                // Park only the very first exchange — the one belonging to the initialization the
-                // test starts first.
-                if (Interlocked.Increment(ref _exchangeCount) == 1)
+                finally
                 {
-                    FirstExchangeEntered.TrySetResult();
-                    await _release.Task.ConfigureAwait(false);
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
                 }
-
-                return Array.Empty<string>();
             }
         }
 
@@ -807,46 +851,59 @@ namespace Daqifi.Core.Tests.Device
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-                }
-
-                if (!_mutationApplied && MutateDuringInitialization != null)
-                {
-                    _mutationApplied = true;
-                    MutateDuringInitialization();
-                }
-
-                var before = _sent.Count;
-                setupAction();
-                var sentThisCall = _sent.Skip(before).ToList();
-                var isUsbStep = sentThisCall.Any(d => d.Contains("STReam:INTerface"));
-
-                if (isUsbStep)
-                {
-                    UsbStepAttemptCount++;
-
-                    switch (_usbStepBehavior)
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
                     {
-                        case UsbStepBehavior.ScpiError:
-                            return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
-                        case UsbStepBehavior.ScpiErrorThenSucceed:
-                            if (UsbStepAttemptCount == 1)
-                            {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (!_mutationApplied && MutateDuringInitialization != null)
+                    {
+                        _mutationApplied = true;
+                        MutateDuringInitialization();
+                    }
+
+                    var before = _sent.Count;
+                    setupAction();
+                    var sentThisCall = _sent.Skip(before).ToList();
+                    var isUsbStep = sentThisCall.Any(d => d.Contains("STReam:INTerface"));
+
+                    if (isUsbStep)
+                    {
+                        UsbStepAttemptCount++;
+
+                        switch (_usbStepBehavior)
+                        {
+                            case UsbStepBehavior.ScpiError:
                                 return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
-                            }
-                            break;
-                        case UsbStepBehavior.Cancel:
-                            throw new OperationCanceledException();
+                            case UsbStepBehavior.ScpiErrorThenSucceed:
+                                if (UsbStepAttemptCount == 1)
+                                {
+                                    return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
+                                }
+                                break;
+                            case UsbStepBehavior.Cancel:
+                                throw new OperationCanceledException();
+                        }
+                    }
+
+                    return Array.Empty<string>();
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
                     }
                 }
-
-                return Array.Empty<string>();
             }
         }
     }

@@ -2915,6 +2915,7 @@ public class FirmwareUpdateServiceTests
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
+        public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
         public void Connect() => IsConnected = true;
         public void Disconnect() => IsConnected = false;
 
@@ -3019,6 +3020,7 @@ public class FirmwareUpdateServiceTests
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
+        public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
         public void Connect() => IsConnected = true;
         public void Disconnect() => IsConnected = false;
         public void Send<T>(IOutboundMessage<T> message) { }
@@ -3755,6 +3757,12 @@ public class FirmwareUpdateServiceTests
             remove { }
         }
 
+        public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred
+        {
+            add { }
+            remove { }
+        }
+
         public void Connect()
         {
             ConnectAttempts++;
@@ -3867,6 +3875,12 @@ public class FirmwareUpdateServiceTests
 
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred
         {
             add { }
             remove { }
