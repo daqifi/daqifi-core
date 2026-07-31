@@ -257,6 +257,28 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_WhenCancelledDuringTheSettleDelay_StillRestoresTheLanInterface()
+        {
+            // By the time the settle wait is cancelled the prepare phase has already switched the
+            // bus, so the exchange unwinds with the device sitting on the SD card. The restore has
+            // to happen anyway — which is why it is a phase the exchange owns and runs from its own
+            // try/finally, rather than a step tacked on to the end of a successful exchange (#407).
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
+            device.Connect();
+
+            using var cts = new CancellationTokenSource();
+            var opTask = device.GetSdCardFilesAsync(cts.Token);
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => opTask);
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands);       // DisableStorageSd
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_HonorsCancellationDuringSettleDelay()
         {
             // Regression for #221 — symmetric with GetSdCardFilesAsync above.
@@ -1649,6 +1671,41 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan (restore)
         }
 
+        [Fact]
+        public async Task SdCardTextOperations_HandTheLanRestoreToTheExchangeAsItsFinalizePhase()
+        {
+            // #407: the restore has to travel through the exchange's finalize phase, because that
+            // is what puts it under the same lock acquisition as the matching switch. This device
+            // drops the finalize phase on the floor — so if any restore still reaches the wire, it
+            // came from a caller-side finally running after the lock was already released, which is
+            // the defect. Every SD text operation is checked, since they share the pairing.
+            var device = new FinalizeDroppingSdCardDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
+            device.Connect();
+
+            await device.GetSdCardFilesAsync();
+            await device.DeleteSdCardFileAsync("log.bin");
+
+            device.CannedTextResponse = new List<string> { "1024,4096" };
+            await device.GetSdCardStorageAsync();
+
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+
+            // The switch still happened — this is not a device that simply sent nothing.
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sent); // DisableNetworkLan
+            Assert.Contains("SYSTem:STORage:SD:ENAble 1", sent);       // EnableStorageSd
+
+            // And the restore did not, because the only route to it was the phase this device
+            // discarded.
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
+            Assert.DoesNotContain("SYSTem:STORage:SD:ENAble 0", sent);       // DisableStorageSd
+
+            // Three operations, each of which offered the exchange a finalize phase (the listing
+            // and the delete send one exchange apiece here; storage the same).
+            Assert.Equal(3, device.ExchangesOfferedAFinalizePhase);
+            Assert.Equal(0, device.ExchangesWithoutAFinalizePhase);
+        }
+
         [Theory]
         [InlineData("3.6.3")]
         [InlineData("3.5.0")]
@@ -2168,6 +2225,54 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DownloadSdCardFileAsync_WhenTheTransferIsAbandoned_DoesNotRestoreTheLanInterface()
+        {
+            // #407 / #399: an abandoned transfer is still running and still owns the transport —
+            // that is why the download gate stays held until it unwinds. Sending the LAN restore
+            // now would put commands onto a link that transfer is still reading from, on a device
+            // that has already stopped answering. The caller is told to reconnect or power-cycle,
+            // and both re-establish the interface anyway.
+            var device = new ParkedDownloadDevice(ParkMode.Asynchronous, TimeSpan.FromMilliseconds(300));
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            try
+            {
+                var opTask = device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+                var winner = await Task.WhenAny(opTask, Task.Delay(TimeSpan.FromSeconds(30)));
+                Assert.Same((Task)opTask, winner);
+                await Assert.ThrowsAsync<TimeoutException>(() => opTask);
+
+                var sent = device.SentCommandsSnapshot();
+                Assert.Contains("SYSTem:StopStreamData", sent); // the pre-flight stop did happen
+                Assert.DoesNotContain("SYSTem:STORage:SD:ENAble 0", sent);       // DisableStorageSd
+                Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
+            }
+            finally
+            {
+                device.Release();
+            }
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_WhenTheTransferCompletes_StillRestoresTheLanInterface()
+        {
+            // The complement, so skipping the restore for an abandoned transfer cannot quietly
+            // become "the download never restores the interface".
+            var device = new TestableDownloadDevice("TestDevice");
+            device.CannedFileData = Encoding.ASCII.GetBytes("hello sd card");
+            device.Connect();
+            using var destinationStream = new MemoryStream();
+
+            await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Contains("SYSTem:STORage:SD:ENAble 0", sent);       // DisableStorageSd
+            Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sent); // EnableNetworkLan
+        }
+
+        [Fact]
         public async Task DownloadSdCardFileAsync_WhenTransferParksIgnoringItsToken_CallerCancellationStillEndsTheCall()
         {
             // The consumer-side stall watchdog described in #399: it cancels its token at 90s and
@@ -2366,23 +2471,36 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-                }
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
 
-                var sentBefore = SentMessages.Count;
-                setupAction();
-                ExecuteTextCommandCallCount++;
-                var response = ResponseSequence.Count > 0
-                    ? ResponseSequence.Dequeue()
-                    : new List<string>();
-                return SdCardTestResponses.AnswerErrorQuery(
-                    response, SentMessages, sentBefore, ExecuteTextCommandCallCount, UnterminatedAttempts);
+                    var sentBefore = SentMessages.Count;
+                    setupAction();
+                    ExecuteTextCommandCallCount++;
+                    var response = ResponseSequence.Count > 0
+                        ? ResponseSequence.Dequeue()
+                        : new List<string>();
+                    return SdCardTestResponses.AnswerErrorQuery(
+                        response, SentMessages, sentBefore, ExecuteTextCommandCallCount, UnterminatedAttempts);
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
             }
 
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
@@ -2494,22 +2612,35 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    var sentBefore = SentMessages.Count;
+
+                    // Execute the setup action so we can capture the SCPI commands
+                    setupAction();
+                    _executeTextCommandCallCount++;
+                    return SdCardTestResponses.AnswerErrorQuery(
+                        CannedTextResponse, SentMessages, sentBefore, _executeTextCommandCallCount, UnterminatedAttempts);
                 }
-
-                var sentBefore = SentMessages.Count;
-
-                // Execute the setup action so we can capture the SCPI commands
-                setupAction();
-                _executeTextCommandCallCount++;
-                return SdCardTestResponses.AnswerErrorQuery(
-                    CannedTextResponse, SentMessages, sentBefore, _executeTextCommandCallCount, UnterminatedAttempts);
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
             }
 
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
@@ -2523,6 +2654,49 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 _executeTextCommandCallCount++;
                 return SdCardTestResponses.AnswerErrorQuery(
                     CannedTextResponse, SentMessages, sentBefore, _executeTextCommandCallCount, UnterminatedAttempts);
+            }
+        }
+
+        /// <summary>
+        /// Records how many exchanges were handed a finalize phase and then discards it, so a test
+        /// can tell a restore that arrived through the exchange seam (#407) from one that arrived
+        /// from a caller's own <c>finally</c> after the lock was released.
+        /// </summary>
+        private sealed class FinalizeDroppingSdCardDevice : TestableSdCardStreamingDevice
+        {
+            public FinalizeDroppingSdCardDevice(string name, IPAddress? ipAddress = null)
+                : base(name, ipAddress)
+            {
+            }
+
+            public int ExchangesOfferedAFinalizePhase { get; private set; }
+
+            public int ExchangesWithoutAFinalizePhase { get; private set; }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default,
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
+            {
+                if (finalizeAsync != null)
+                {
+                    ExchangesOfferedAFinalizePhase++;
+                }
+                else
+                {
+                    ExchangesWithoutAFinalizePhase++;
+                }
+
+                return base.ExecuteTextCommandAsync(
+                    setupAction,
+                    responseTimeoutMs,
+                    completionTimeoutMs,
+                    cancellationToken,
+                    prepareAsync,
+                    finalizeAsync: null);
             }
         }
 
@@ -2558,17 +2732,30 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-                }
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
 
-                setupAction();
-                return CannedTextResponse;
+                    setupAction();
+                    return CannedTextResponse;
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
             }
 
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
@@ -2721,26 +2908,39 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    var sentBefore = SentMessages.Count;
+
+                    setupAction();
+                    _executeTextCommandCallCount++;
+
+                    // GetSdCardFilesAsync drives the listing through THIS overload (the SPI switch is
+                    // the exchange's prepareAsync phase, #406), and terminates it with SYSTem:ERRor?
+                    // (#396) — so the listing has to be served here and terminated the same way
+                    // TestableSdCardStreamingDevice does, or Core reads it as incomplete.
+                    return SdCardTestResponses.AnswerErrorQuery(
+                        ListingLines, SentMessages, sentBefore, _executeTextCommandCallCount, UnterminatedAttempts);
                 }
-
-                var sentBefore = SentMessages.Count;
-
-                setupAction();
-                _executeTextCommandCallCount++;
-
-                // GetSdCardFilesAsync drives the listing through THIS overload (the SPI switch is
-                // the exchange's prepareAsync phase, #406), and terminates it with SYSTem:ERRor?
-                // (#396) — so the listing has to be served here and terminated the same way
-                // TestableSdCardStreamingDevice does, or Core reads it as incomplete.
-                return SdCardTestResponses.AnswerErrorQuery(
-                    ListingLines, SentMessages, sentBefore, _executeTextCommandCallCount, UnterminatedAttempts);
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
             }
 
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
@@ -2810,12 +3010,32 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             internal override TimeSpan SdCardDownloadTimeout => _budget;
 
+            /// <summary>Commands this device was asked to send, in order.</summary>
+            public List<string> SentCommands { get; } = new();
+
             public override void Send<T>(IOutboundMessage<T> message)
             {
+                if (message is IOutboundMessage<string> stringMessage)
+                {
+                    lock (SentCommands)
+                    {
+                        SentCommands.Add(stringMessage.Data);
+                    }
+                }
+
                 // Otherwise swallowed: this device never gets as far as exchanging commands.
                 var cancelSource = CancelOnNextSend;
                 CancelOnNextSend = null;
                 cancelSource?.Cancel();
+            }
+
+            /// <summary>Snapshot of <see cref="SentCommands"/>, safe to read while the abandoned worker runs.</summary>
+            public IReadOnlyList<string> SentCommandsSnapshot()
+            {
+                lock (SentCommands)
+                {
+                    return SentCommands.ToList();
+                }
             }
 
             protected override async Task ExecuteRawCaptureAsync(
@@ -2990,19 +3210,32 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-                }
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
 
-                var sentBefore = SentMessages.Count;
-                setupAction();
-                return SdCardTestResponses.AnswerErrorQuery(
-                    CannedTextResponse, SentMessages, sentBefore, attemptNumber: 1, unterminatedAttempts: 0);
+                    var sentBefore = SentMessages.Count;
+                    setupAction();
+                    return SdCardTestResponses.AnswerErrorQuery(
+                        CannedTextResponse, SentMessages, sentBefore, attemptNumber: 1, unterminatedAttempts: 0);
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
             }
 
             protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
