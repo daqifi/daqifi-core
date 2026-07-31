@@ -168,19 +168,34 @@ public class ReconnectOptions
     /// <param name="attemptNumber">The 1-based attempt number.</param>
     /// <returns>
     /// <see cref="InitialDelay"/> multiplied by <see cref="BackoffMultiplier"/> once per attempt
-    /// already made, capped at <see cref="MaxDelay"/>.
+    /// already made, capped at <see cref="MaxDelay"/>. Always <see cref="TimeSpan.Zero"/> when
+    /// <see cref="InitialDelay"/> is zero, however many attempts have been made.
     /// </returns>
     public TimeSpan CalculateDelay(int attemptNumber)
     {
+        // Zero in, zero out. A caller who asked for immediate retries must get them at every
+        // attempt number: multiplying zero by the growing backoff factor is still zero, right up
+        // until that factor overflows Math.Pow to infinity, where 0 × ∞ is NaN and the arithmetic
+        // below would hand back MaxDelay — the exact opposite of the configured policy.
+        if (InitialDelay == TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        // MaxDelay is a ceiling on every wait, including the first: a policy whose MaxDelay is
+        // below its InitialDelay means what it says rather than exempting attempt 1.
         if (attemptNumber <= 1)
         {
-            return InitialDelay;
+            return InitialDelay < MaxDelay ? InitialDelay : MaxDelay;
         }
 
         var delayMs = InitialDelay.TotalMilliseconds * Math.Pow(BackoffMultiplier, attemptNumber - 1);
 
-        // Math.Pow overflows to +Infinity for a large enough attempt count; Math.Min then yields
-        // MaxDelay, which is the intended cap, but guard NaN (0 * Infinity) explicitly.
+        // Math.Pow overflows to +Infinity for a large enough attempt count. With a positive
+        // InitialDelay the product is then +Infinity too, and Math.Min yields MaxDelay — the
+        // intended cap. NaN is unreachable from here now that a zero InitialDelay returns above
+        // and BackoffMultiplier rejects NaN, so this is a backstop against a future relaxation of
+        // either, not a live path.
         if (double.IsNaN(delayMs))
         {
             return MaxDelay;

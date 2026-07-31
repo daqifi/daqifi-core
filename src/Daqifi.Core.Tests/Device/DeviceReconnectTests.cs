@@ -413,6 +413,81 @@ public class DeviceReconnectTests
     }
 
     [Fact]
+    public void Disconnect_WhileAConnectAttemptIsInFlight_DoesNotLeaveTheDeviceQuietlyAlive()
+    {
+        // Opening a port blocks for as long as it takes, so a caller pulling the plug on the device
+        // lands *inside* an attempt rather than tidily between two. The attempt still finishes and
+        // brings the transport back up; if the loop merely bails out at that point, the caller is
+        // left holding a device they closed that is silently open again, reporting Connected, with
+        // a reader thread running on it.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Resurrected Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        var connectGate = transport.BlockConnects();
+        transport.ConnectEntered.Reset();
+
+        transport.SimulateDrop();
+
+        Assert.True(
+            transport.ConnectEntered.Wait(EventTimeout),
+            "the reconnect never reached the transport's connect");
+
+        // The caller shuts the device down while that connect is parked in flight.
+        device.Disconnect();
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+
+        // Now let the attempt finish. It will succeed and re-open the transport.
+        connectGate.Set();
+
+        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+
+        // The caller's decision has to survive it.
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(device.IsConnected);
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
+    public async Task Disconnect_WhileInitializationIsInFlight_IsNotReportedAsASuccessfulReconnect()
+    {
+        // The same race one step later: the transport came back and initialization was most of the
+        // way through when the caller disconnected. Announcing a recovered session at that point
+        // would hand them a device they had just closed.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedBaseDevice("Late Abandoned Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        device.Connect();
+        await device.InitializeAsync();
+
+        var initGate = new ManualResetEventSlim(false);
+        device.InitializeEntered.Reset();
+        device.InitializeGate = initGate;
+
+        var reconnectedCount = 0;
+        device.Reconnected += (_, _) => Interlocked.Increment(ref reconnectedCount);
+
+        transport.SimulateDrop();
+
+        Assert.True(
+            device.InitializeEntered.Wait(EventTimeout),
+            "the reconnect never reached initialization");
+
+        device.Disconnect();
+        initGate.Set();
+
+        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+
+        Assert.Equal(0, Volatile.Read(ref reconnectedCount));
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(device.IsConnected);
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
     public void DisposingDuringAReconnect_DoesNotThrow()
     {
         var transport = new ScriptedReconnectTransport();
@@ -703,6 +778,55 @@ public class DeviceReconnectTests
     }
 
     /// <summary>
+    /// A plain (non-streaming) device on a scripted transport, whose initialization can be parked
+    /// mid-flight. Deriving from <see cref="DaqifiDevice"/> rather than the streaming subclass is
+    /// the point: its session restore is the base no-op, so nothing in it re-checks the connection
+    /// on the loop's behalf, and the loop's own final guard is what has to catch a caller who
+    /// disconnected while initialization was running.
+    /// </summary>
+    private sealed class ScriptedBaseDevice : DaqifiDevice
+    {
+        private int _initializeCount;
+
+        public ScriptedBaseDevice(string name, IStreamTransport transport)
+            : base(name, transport)
+        {
+        }
+
+        /// <summary>Signalled once initialization is past its entry checks.</summary>
+        public ManualResetEventSlim InitializeEntered { get; } = new(false);
+
+        /// <summary>Parks initialization after its entry checks until set.</summary>
+        public ManualResetEventSlim? InitializeGate { get; set; }
+
+        public int InitializeCount => Volatile.Read(ref _initializeCount);
+
+        public override void Send<T>(IOutboundMessage<T> message)
+        {
+        }
+
+        public override Task InitializeAsync(
+            TimeSpan? channelPopulationTimeout = null,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _initializeCount);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsConnected)
+            {
+                return Task.FromException(new DeviceNotConnectedException());
+            }
+
+            // Entry checks are done; everything past here is the seconds of SCPI round-trips a real
+            // initialization spends, which is the window a caller's Disconnect lands in.
+            InitializeEntered.Set();
+            InitializeGate?.Wait(TimeSpan.FromSeconds(30));
+
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
     /// A transport that can be dropped on command and told to refuse the next N reconnects, so the
     /// whole reconnect loop is reachable without hardware. Each connect hands out a <em>fresh</em>
     /// stream, matching the real serial transport, whose <c>BaseStream</c> is a new instance after a
@@ -790,11 +914,36 @@ public class DeviceReconnectTests
                 new TransportStatusEventArgs(false, ConnectionInfo, new IOException("the device went away")));
         }
 
+        /// <summary>
+        /// Signalled as soon as a connect attempt begins, before it does any work.
+        /// </summary>
+        public ManualResetEventSlim ConnectEntered { get; } = new(false);
+
+        private volatile ManualResetEventSlim? _connectGate;
+
+        /// <summary>
+        /// Parks every subsequent connect attempt until the returned gate is set, so a test can
+        /// act — pull the device out from under the loop, say — while one is genuinely in flight.
+        /// Real connects block for as long as opening a port takes; this makes that window
+        /// controllable instead of a race to lose.
+        /// </summary>
+        public ManualResetEventSlim BlockConnects()
+        {
+            var gate = new ManualResetEventSlim(false);
+            _connectGate = gate;
+            return gate;
+        }
+
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
         {
             Interlocked.Increment(ref _connectCount);
+
+            // Outside the lock: a test holding the gate must still be able to inspect the
+            // transport and drive the device while the connect is parked here.
+            ConnectEntered.Set();
+            _connectGate?.Wait(TimeSpan.FromSeconds(30));
 
             lock (_gate)
             {

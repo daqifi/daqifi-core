@@ -560,6 +560,7 @@ namespace Daqifi.Core.Device
         /// </remarks>
         public void Connect()
         {
+            _callerWantsDisconnected = false;
             SupersedeReconnect();
             ConnectCore();
         }
@@ -648,8 +649,12 @@ namespace Daqifi.Core.Device
         /// </remarks>
         public void Disconnect()
         {
-            // A user-issued teardown always beats an automatic reconnect: stop the loop before
-            // tearing anything down, so it cannot re-open the transport behind the caller's back.
+            // A user-issued teardown always beats an automatic reconnect: record the intent and
+            // stop the loop before tearing anything down. Setting the flag first matters — a
+            // reconnect already inside a blocking Connect() will finish it regardless, and this is
+            // what tells it to put the session straight back down instead of leaving the device
+            // quietly alive behind the caller's back.
+            _callerWantsDisconnected = true;
             SupersedeReconnect();
             DisconnectCore(ConnectionStatus.Disconnected);
         }
@@ -1620,10 +1625,19 @@ namespace Daqifi.Core.Device
 
         // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
         // when it starts and re-checks before each step that touches device state; a change means
-        // the caller has moved on and the loop must unwind without touching anything. This is what
-        // keeps the loop from re-opening a transport the caller just closed, without Disconnect()
-        // having to block on a loop that may be calling back into it.
+        // the caller has moved on and the loop must unwind. This is what keeps the loop from
+        // re-opening a transport the caller just closed, without Disconnect() having to block on a
+        // loop that may be calling back into it.
         private int _sessionEpoch;
+
+        // Which way the caller last pointed the device. The epoch says *that* a caller superseded
+        // the loop; this says *what they wanted*, which is what decides how the loop unwinds.
+        // Connect() is a blocking, multi-second operation, so a caller can always land in the
+        // middle of one — no amount of checking beforehand avoids that, and by the time the loop
+        // looks again it may be holding a session it has just brought up. If the caller wants the
+        // device down, that session is the loop's own doing and has to go back down with it;
+        // if the caller wants it up, it is theirs and must be left strictly alone.
+        private volatile bool _callerWantsDisconnected;
 
         /// <summary>
         /// Gets a value indicating whether an automatic reconnect is currently in progress.
@@ -1803,12 +1817,13 @@ namespace Daqifi.Core.Device
 
                     ConnectCore();
 
-                    // The caller took the session over while the connect was in flight. Whatever
-                    // they did next owns the device now, so stop here without touching status or
-                    // tearing anything down — either could undo the session they just established.
-                    if (IsSessionStale(epoch))
+                    // Connect() blocks for as long as opening the port takes, so a caller can — and
+                    // on a slow serial open, will — land squarely in the middle of it. There is now
+                    // a live transport and a running reader that this loop built, so bailing out
+                    // here is not enough on its own: if the caller wants the device down, the
+                    // session has to be taken back down with it.
+                    if (AbandonIfSuperseded(epoch, attempt, lastError))
                     {
-                        ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
                         return;
                     }
 
@@ -1816,6 +1831,14 @@ namespace Daqifi.Core.Device
 
                     var streamingResumed = await RestoreSessionSnapshotAsync(
                         options, cancellationToken).ConfigureAwait(false);
+
+                    // Same again before declaring victory: initialization and restore are several
+                    // seconds of SCPI round-trips, and a session the caller has since disowned must
+                    // not be handed to them as a successful reconnect.
+                    if (AbandonIfSuperseded(epoch, attempt, lastError))
+                    {
+                        return;
+                    }
 
                     SafeLog(() => _logger.LogInformation(
                         "[Reconnect] Device '{DeviceName}' reconnected on attempt {Attempt}.", Name, attempt));
@@ -1842,6 +1865,66 @@ namespace Daqifi.Core.Device
             }
 
             ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: false);
+        }
+
+        /// <summary>
+        /// Checks whether a caller has superseded the session this loop is rebuilding and, if so,
+        /// unwinds whatever the loop has already brought up before reporting that it stopped.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Called at the points where the loop is holding a live session of its own making — after
+        /// <see cref="ConnectCore"/>, and again once initialization and restore are done. Both are
+        /// preceded by long blocking work, which is exactly when a caller's
+        /// <see cref="Disconnect"/> lands, so a check beforehand cannot substitute for this one.
+        /// </para>
+        /// <para>
+        /// What "unwind" means depends on what the caller wanted, which is why the epoch alone is
+        /// not enough to decide it. After a <see cref="Disconnect"/> or a disposal the live session
+        /// is the loop's own doing and is torn straight back down — leaving it up is a device the
+        /// caller closed quietly coming back to life. After a caller's own <see cref="Connect"/>
+        /// the session belongs to them, and tearing it down would be the same bug in reverse, so it
+        /// is left alone and only logged.
+        /// </para>
+        /// </remarks>
+        /// <returns><c>true</c> if the loop must stop.</returns>
+        private bool AbandonIfSuperseded(int epoch, int attempt, Exception? lastError)
+        {
+            if (!IsSessionStale(epoch))
+            {
+                return false;
+            }
+
+            if (_callerWantsDisconnected || _disposed)
+            {
+                SafeLog(() => _logger.LogInformation(
+                    "[Reconnect] Device '{DeviceName}' was disconnected while a reconnect attempt was in flight; "
+                    + "closing the connection the attempt had established.",
+                    Name));
+
+                try
+                {
+                    DisconnectCore(ConnectionStatus.Disconnected);
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort unwind of an abandoned attempt. A transport already disposed out
+                    // from under us can throw here, and there is nothing left to salvage by
+                    // letting that escape into the loop's retry logic.
+                    SafeLog(() => _logger.LogDebug(
+                        ex, "[Reconnect] Closing the abandoned reconnect attempt's connection failed."));
+                }
+            }
+            else
+            {
+                SafeLog(() => _logger.LogWarning(
+                    "[Reconnect] Device '{DeviceName}' was reconnected by its caller while an automatic "
+                    + "reconnect attempt was in flight; leaving the caller's connection alone.",
+                    Name));
+            }
+
+            ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
+            return true;
         }
 
         /// <summary>

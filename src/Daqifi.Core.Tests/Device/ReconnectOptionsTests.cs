@@ -85,6 +85,58 @@ public class ReconnectOptionsTests
     }
 
     [Theory]
+    [InlineData(64)]
+    [InlineData(1024)]
+    [InlineData(1075)]
+    [InlineData(4096)]
+    [InlineData(int.MaxValue)]
+    public void AZeroInitialDelayStaysZero_EvenWhereTheBackoffFactorOverflows(int attemptNumber)
+    {
+        // Regression: the exponential factor overflows to +Infinity past roughly attempt 1075 at a
+        // multiplier of 2, and 0 x Infinity is NaN. That NaN used to be answered with MaxDelay, so a
+        // policy configured for immediate retries silently became a 30-second wait — the opposite of
+        // what it asked for.
+        var options = new ReconnectOptions
+        {
+            InitialDelay = TimeSpan.Zero,
+            BackoffMultiplier = 2.0,
+            MaxDelay = TimeSpan.FromSeconds(30)
+        };
+
+        Assert.Equal(TimeSpan.Zero, options.CalculateDelay(attemptNumber));
+    }
+
+    [Fact]
+    public void AnOverflowingBackoffOnARealDelay_SettlesAtTheCap()
+    {
+        // The other side of the same overflow: with a positive InitialDelay the product is
+        // +Infinity rather than NaN, and the cap is the right answer.
+        var options = new ReconnectOptions
+        {
+            InitialDelay = TimeSpan.FromSeconds(1),
+            BackoffMultiplier = 2.0,
+            MaxDelay = TimeSpan.FromSeconds(30)
+        };
+
+        Assert.Equal(TimeSpan.FromSeconds(30), options.CalculateDelay(2000));
+        Assert.Equal(TimeSpan.FromSeconds(30), options.CalculateDelay(int.MaxValue));
+    }
+
+    [Fact]
+    public void MaxDelayCapsTheFirstAttemptToo()
+    {
+        // A ceiling that exempted the very first wait would not be a ceiling.
+        var options = new ReconnectOptions
+        {
+            InitialDelay = TimeSpan.FromSeconds(10),
+            MaxDelay = TimeSpan.FromSeconds(2)
+        };
+
+        Assert.Equal(TimeSpan.FromSeconds(2), options.CalculateDelay(1));
+        Assert.Equal(TimeSpan.FromSeconds(2), options.CalculateDelay(5));
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     public void APolicyThatWouldNeverTry_IsRejected(int maxAttempts)
