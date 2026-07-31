@@ -572,6 +572,81 @@ namespace Daqifi.Core.Tests.Device
             Cancel
         }
 
+        [Theory]
+        [InlineData(true)]  // observing: the hook returns immediately, no awaitable work
+        [InlineData(false)] // take-control: the hook does send SCPI
+        public async Task InitializeAsync_WhenCancelledAfterChannelsPopulate_DoesNotReportReady(bool preserveActiveStream)
+        {
+            // Arrange — cancellation lands at the one seam nothing was guaranteed to observe:
+            // after channels populate, during the capability read. Firmware that does not
+            // advertise the capability document returns from that read without touching the
+            // token, and on the observing path the derived hook then returns immediately too, so
+            // a device whose caller had already cancelled still reached Ready.
+            using var cts = new CancellationTokenSource();
+            var device = new CancelDuringCapabilityReadDevice("TestDevice", cts)
+            {
+                PreserveActiveStream = preserveActiveStream
+            };
+            device.Connect();
+
+            // Act & Assert — a cancelled initialization reports cancellation, not success.
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => device.InitializeAsync(TimeSpan.FromSeconds(5), cts.Token));
+
+            Assert.NotEqual(DeviceState.Ready, device.State);
+            Assert.Equal(DeviceState.Connected, device.State);
+        }
+
+        /// <summary>
+        /// A testable USB streaming device that cancels the supplied token from inside the
+        /// capability read — i.e. after channels have populated and before the derived
+        /// initialization hook — and returns without observing the token itself, exactly as the
+        /// real read does on firmware that does not advertise a capability document.
+        /// </summary>
+        private class CancelDuringCapabilityReadDevice : DaqifiStreamingDevice
+        {
+            private readonly CancellationTokenSource _cts;
+
+            public override bool IsUsbConnection => true;
+
+            public CancelDuringCapabilityReadDevice(string name, CancellationTokenSource cts)
+                : base(name, (IPAddress?)null)
+            {
+                _cts = cts;
+            }
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage &&
+                    stringMessage.Data.Contains("SYSInfoPB"))
+                {
+                    PopulateChannelsFromStatus(new DaqifiOutMessage
+                    {
+                        AnalogInPortNum = 2,
+                        DigitalPortNum = 2
+                    });
+                }
+            }
+
+            public override Task<Daqifi.Core.Device.Capabilities.CapabilityDocument?> ReadCapabilityDocumentAsync(
+                CancellationToken cancellationToken = default)
+            {
+                _cts.Cancel();
+                return Task.FromResult<Daqifi.Core.Device.Capabilities.CapabilityDocument?>(null);
+            }
+
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default,
+                Func<CancellationToken, Task>? prepareAsync = null)
+            {
+                setupAction();
+                return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+            }
+        }
+
         [Fact]
         public async Task InitializeAsync_WhenTwoInitializationsOverlapOnOneDevice_EachKeepsItsOwnDecision()
         {

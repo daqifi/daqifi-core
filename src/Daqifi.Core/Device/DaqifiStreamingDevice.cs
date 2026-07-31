@@ -310,6 +310,10 @@ namespace Daqifi.Core.Device
             // An observe-only session must not re-route the device's single global stream: doing so
             // would take the data away from the session that is already receiving it (#385). The
             // interface is left exactly as the owning session configured it.
+            //
+            // Returning without observing the token is deliberate: there is no work to abandon, and
+            // InitializeAsync re-checks cancellation before it marks the device Ready, so a token
+            // cancelled during this hook is still honored.
             if (preserveActiveStream)
             {
                 return;

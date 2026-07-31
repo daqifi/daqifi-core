@@ -1672,6 +1672,15 @@ namespace Daqifi.Core.Device
                 // so a failed init can be safely retried.
                 await OnDeviceInitializingAsync(preserveActiveStream, cancellationToken).ConfigureAwait(false);
 
+                // A cancelled initialization must never report Ready. Nothing above is guaranteed
+                // to observe the token: the capability read returns early on firmware that does not
+                // advertise the document, channel population can short-circuit when the status
+                // arrives synchronously, and a derived hook may legitimately have no awaitable work
+                // (the observing path and the non-USB path both return immediately). So the
+                // invariant is enforced here, at the one transition that matters, rather than relying
+                // on every path and every override to check for itself.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 _isInitialized = true;
                 State = DeviceState.Ready;
             }
