@@ -366,6 +366,25 @@ namespace Daqifi.Core.Device
 
             if (IsStreaming) return;
 
+            BeginStreamingSession();
+
+            IsStreaming = true;
+            Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
+        }
+
+        /// <summary>
+        /// Resets everything that is scoped to one streaming session, so the frames that follow are
+        /// decoded against this session rather than the last one.
+        /// </summary>
+        /// <remarks>
+        /// Shared by <see cref="StartStreaming"/> and by the tracking of a start-streaming command
+        /// sent directly through <see cref="Send{T}"/>. It is one method precisely so the two cannot
+        /// drift: a raw-started stream that skipped this would reconstruct timestamps from the
+        /// previous session's anchor and re-use its gap detector, producing samples stamped with
+        /// times that never happened — silently.
+        /// </remarks>
+        private void BeginStreamingSession()
+        {
             // Re-anchor per-session timestamp reconstruction: the first frame of this session
             // anchors to the current host time, and subsequent frames advance by the device-tick
             // delta. Apply the device-reported tick frequency (falls back to the 50 MHz default
@@ -383,9 +402,6 @@ namespace Daqifi.Core.Device
             _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
             _suppressedWarmupFrameCount = 0;
             Interlocked.Exchange(ref _decodeFailureCount, 0);
-
-            IsStreaming = true;
-            Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
         }
 
         /// <summary>
@@ -440,9 +456,45 @@ namespace Daqifi.Core.Device
         /// </para>
         /// <para>
         /// Only these commands are interpreted, and only after the send itself has succeeded.
-        /// Everything else passes through untouched. The global DIO enable is deliberately not
-        /// tracked: it is one switch for the whole port rather than a per-channel mask, so it
-        /// carries no information about <i>which</i> digital channels a caller wanted.
+        /// Everything else passes through untouched.
+        /// </para>
+        /// <para>
+        /// <b>What equivalence with the typed API covers.</b> Each typed method was walked and every
+        /// effect beyond setting a flag accounted for, so this is a stated scope rather than a
+        /// hopeful one:
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>
+        /// <see cref="StartStreaming"/> — the whole per-session reset (timestamp anchor and tick
+        /// frequency, gap detector, warmup guard and its counter, decode-failure count) is shared
+        /// through <see cref="BeginStreamingSession"/> and runs here too. Skipping it was a real
+        /// defect: frames decoded against a previous session's anchor carry times that never
+        /// happened.
+        /// </description></item>
+        /// <item><description>
+        /// <see cref="StopStreaming"/> — does nothing beyond clearing the flag, so clearing it here
+        /// is complete.
+        /// </description></item>
+        /// <item><description>
+        /// <see cref="EnableChannels"/> — assigns <see cref="IChannel.IsEnabled"/> under the
+        /// channels lock and derives the outbound mask from it. The mask has already been sent by
+        /// the time this runs, so only the assignment is replayed, and it is applied to every
+        /// analog channel because the firmware treats the mask as a set-replace.
+        /// </description></item>
+        /// </list>
+        /// <para>
+        /// <b>Deliberately outside it.</b> The global DIO enable is one switch for the whole port
+        /// rather than a per-channel mask, so a raw <c>DIO:PORt:ENAble</c> carries no information
+        /// about <i>which</i> digital channels were wanted and none is inferred. Argument validation
+        /// is not replayed either: by the time a command is seen here it has already gone to the
+        /// device, and the device is the authority on whether it accepted it.
+        /// </para>
+        /// <para>
+        /// Running after the send is safe rather than merely convenient. A string command is handed
+        /// to the background producer, so it has not reached the wire when this runs, and the device
+        /// cannot answer a command it has not received; on the producer-less path that writes
+        /// synchronously there is no message consumer decoding frames at all. Either way no frame
+        /// can be decoded between the send and the state it should be decoded against.
         /// </para>
         /// </remarks>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
@@ -520,9 +572,17 @@ namespace Daqifi.Core.Device
         {
             var rate = argument.Trim();
 
+            // One read of the ceiling, used for both the check and the assignment below. The public
+            // StreamingFrequency setter re-reads it and throws when it does not like the value, and
+            // MaxSamplingRate is a mutable public property — so validating against one read and
+            // then assigning through a setter that takes another would let a concurrent
+            // capabilities update throw out of a Send whose command has already gone to the device.
+            // Tracking a command must never be able to fail the send that carried it.
+            var maxSamplingRate = Math.Max(1, Metadata.Capabilities.MaxSamplingRate);
+
             if (!int.TryParse(rate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency)
                 || frequency < 1
-                || frequency > Math.Max(1, Metadata.Capabilities.MaxSamplingRate))
+                || frequency > maxSamplingRate)
             {
                 Trace.WriteLine(
                     $"[{nameof(TrackStreamingStart)}] Ignoring a start-streaming command with an unusable rate "
@@ -531,8 +591,22 @@ namespace Daqifi.Core.Device
             }
 
             // Frequency first: anything observing IsStreaming must never catch it true next to a
-            // rate belonging to a previous session.
-            StreamingFrequency = frequency;
+            // rate belonging to a previous session. Assigned to the backing field, not through the
+            // validating setter, for the reason above — the value has just been validated against
+            // the same rule.
+            _streamingFrequency = frequency;
+
+            if (IsStreaming)
+            {
+                // A restart while already streaming. The typed API cannot even express this
+                // (StartStreaming returns early), so there is no session boundary to re-anchor at
+                // and no equivalence to preserve; recording the new rate is all that is warranted.
+                return;
+            }
+
+            // A session is beginning, so it gets exactly the preparation StartStreaming would have
+            // given it. Ordering matches too: the state is ready before the flag flips.
+            BeginStreamingSession();
             IsStreaming = true;
         }
 

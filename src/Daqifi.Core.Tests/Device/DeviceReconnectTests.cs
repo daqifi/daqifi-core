@@ -192,6 +192,176 @@ public class DeviceReconnectTests
         Assert.Contains("SYSTem:StartStreamData 250", sent);
     }
 
+    [Fact]
+    public void ARawStartedStream_ReAnchorsTimestampsInsteadOfContinuingTheLastSession()
+    {
+        // The silent-wrong-data one. Timestamp reconstruction advances a per-session anchor by the
+        // device-tick delta between frames, so a session that reuses the previous anchor stamps its
+        // samples with times that never happened. StartStreaming() resets it; a raw start used to
+        // skip that entirely.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Re-anchoring Device", transport);
+
+        ConnectAndInitialize(device);
+
+        var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
+        var samples = new List<IDataSample>();
+        channel.SampleReceived += (_, e) =>
+        {
+            lock (samples)
+            {
+                samples.Add(e.Sample);
+            }
+        };
+
+        device.EnableChannel(channel);
+
+        // A first session, ending with the device clock near zero.
+        device.StartStreaming();
+        device.InvokeStreamMessage(AnalogFrame(1_000, 1.0f));
+        device.StopStreaming();
+
+        // A second session started by raw command, with the device clock far ahead — a device that
+        // has been running a while, or has rebooted its counter. Continuing the old anchor would
+        // push the timestamp roughly a minute into the future at the 50 MHz default tick rate.
+        device.Send(ScpiMessageProducer.StartStreaming(100));
+        device.InvokeStreamMessage(AnalogFrame(3_000_000_000, 2.0f));
+
+        lock (samples)
+        {
+            Assert.Equal(2, samples.Count);
+            var elapsed = samples[1].Timestamp - samples[0].Timestamp;
+            Assert.True(
+                elapsed < TimeSpan.FromSeconds(10),
+                $"the second session's first sample landed {elapsed.TotalSeconds:0.#}s after the first "
+                + "session's, so it was anchored to the previous session rather than to now");
+        }
+    }
+
+    [Fact]
+    public void ARawStartedStream_StartsWithAFreshGapDetector()
+    {
+        // The gap detector compares device-clock deltas between consecutive frames. Carried across
+        // a session boundary it reports the boundary itself as a huge dropped-sample gap.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Fresh Gap Device", transport);
+
+        ConnectAndInitialize(device);
+        device.EnableChannel(device.Channels.First(c => c.Type == ChannelType.Analog));
+
+        var gaps = 0;
+        device.GapDetected += (_, _) => Interlocked.Increment(ref gaps);
+
+        device.StartStreaming();
+        device.InvokeStreamMessage(AnalogFrame(1_000, 1.0f));
+        device.InvokeStreamMessage(AnalogFrame(501_000, 1.0f));
+        device.StopStreaming();
+
+        var gapsBefore = Volatile.Read(ref gaps);
+
+        device.Send(ScpiMessageProducer.StartStreaming(100));
+        device.InvokeStreamMessage(AnalogFrame(3_000_000_000, 2.0f));
+
+        Assert.Equal(gapsBefore, Volatile.Read(ref gaps));
+    }
+
+    [Fact]
+    public void ARawStartedStream_StartsItsDecodeFailureCountAtZero()
+    {
+        // DecodeFailureCount is documented as describing the current session, and StartStreaming
+        // resets it. A raw start that inherited the previous session's tally would make a healthy
+        // stream look broken.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Fresh Count Device", transport);
+
+        ConnectAndInitialize(device);
+
+        var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
+        channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
+        device.EnableChannel(channel);
+
+        device.StartStreaming();
+        device.InvokeStreamMessage(AnalogFrame(1_000, 1.0f));
+        device.InvokeStreamMessage(AnalogFrame(2_000, 1.0f));
+        Assert.Equal(2, device.DecodeFailureCount);
+
+        device.StopStreaming();
+        device.Send(ScpiMessageProducer.StartStreaming(100));
+
+        Assert.Equal(0, device.DecodeFailureCount);
+    }
+
+    [Fact]
+    public void ARawStartWhileAlreadyStreaming_RecordsTheRateWithoutRestartingTheSession()
+    {
+        // The typed API cannot express a restart-in-place (StartStreaming returns early), so there
+        // is no session boundary here and nothing to re-anchor — but the new rate is still real and
+        // must be what a reconnect would replay.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Restarting Device", transport);
+
+        ConnectAndInitialize(device);
+
+        var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
+        channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
+        device.EnableChannel(channel);
+
+        device.StartStreaming();
+        device.InvokeStreamMessage(AnalogFrame(1_000, 1.0f));
+        Assert.Equal(1, device.DecodeFailureCount);
+
+        device.Send(ScpiMessageProducer.StartStreaming(400));
+
+        Assert.True(device.IsStreaming);
+        Assert.Equal(400, device.StreamingFrequency);
+
+        // Not a new session: the running tally is left alone.
+        Assert.Equal(1, device.DecodeFailureCount);
+    }
+
+    [Fact]
+    public async Task TrackingARate_NeverThrowsOutOfSend_WhileCapabilitiesChangeUnderneath()
+    {
+        // MaxSamplingRate is a mutable public property, and a status message can update it at any
+        // moment on the consumer thread. Validating a rate against one read and then assigning it
+        // through the public setter — which reads it again and throws on a value it dislikes —
+        // leaves a window where tracking turns a command that has ALREADY reached the device into
+        // an exception at the caller's Send(). This drives that window directly.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Shifting Ceiling Device", transport);
+
+        ConnectAndInitialize(device);
+
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        Exception? escaped = null;
+
+        var churn = Task.Run(() =>
+        {
+            // Flip the ceiling between "accepts 900" and "accepts almost nothing" as fast as
+            // possible, so it changes between the two reads.
+            while (!stop.IsCancellationRequested)
+            {
+                device.Metadata.Capabilities.MaxSamplingRate = 1000;
+                device.Metadata.Capabilities.MaxSamplingRate = 1;
+            }
+        });
+
+        try
+        {
+            for (var i = 0; i < 20_000 && escaped == null; i++)
+            {
+                escaped = Record.Exception(() => device.Send(ScpiMessageProducer.StartStreaming(900)));
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            await churn;
+        }
+
+        Assert.Null(escaped);
+    }
+
     [Theory]
     [InlineData("SYSTem:StartStreamData")]           // no argument at all
     [InlineData("SYSTem:StartStreamData ")]          // argument present but empty
@@ -999,6 +1169,14 @@ public class DeviceReconnectTests
         });
     }
 
+    /// <summary>Builds a single-channel analog frame carrying a device-clock timestamp.</summary>
+    private static DaqifiOutMessage AnalogFrame(uint deviceTimestamp, float value)
+    {
+        var frame = new DaqifiOutMessage { MsgTimeStamp = deviceTimestamp };
+        frame.AnalogInDataFloat.Add(value);
+        return frame;
+    }
+
     private static void WaitUntil(Func<bool> condition, string because)
     {
         var deadline = DateTime.UtcNow + EventTimeout;
@@ -1099,6 +1277,9 @@ public class DeviceReconnectTests
                 _sent.Clear();
             }
         }
+
+        /// <summary>Feeds a streaming frame straight into the decode path.</summary>
+        public void InvokeStreamMessage(DaqifiOutMessage message) => OnStreamMessageReceived(message);
 
         public override void Send<T>(IOutboundMessage<T> message)
         {
