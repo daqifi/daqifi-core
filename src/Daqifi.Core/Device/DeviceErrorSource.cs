@@ -32,4 +32,16 @@ public enum DeviceErrorSource
     /// (<see cref="DaqifiStreamingDevice"/>). The frame is dropped; the stream keeps running.
     /// </summary>
     StreamDecode = 2,
+
+    /// <summary>
+    /// Automatic reconnection after a dropped connection (issue #379): every allowed attempt
+    /// failed, so the session is gone for good.
+    /// </summary>
+    /// <remarks>
+    /// Unlike the other sources this one is terminal rather than incidental — it is raised exactly
+    /// once, when the device gives up, and it is the loud counterpart to
+    /// <see cref="DaqifiDevice.ReconnectFailed"/>. A reconnect that is cancelled does not raise it:
+    /// stopping on request is not a failure.
+    /// </remarks>
+    Reconnect = 3,
 }

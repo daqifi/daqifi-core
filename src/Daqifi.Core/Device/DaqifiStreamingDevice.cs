@@ -405,6 +405,125 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.StopStreaming);
         }
 
+        #region Session restore after an automatic reconnect (issue #379)
+
+        /// <summary>
+        /// What the streaming session looked like at the instant the connection dropped. Null until
+        /// a drop is detected with reconnect enabled.
+        /// </summary>
+        private volatile StreamingSessionSnapshot? _sessionSnapshot;
+
+        /// <summary>
+        /// The subset of a streaming session that Core owns and can therefore put back: which
+        /// channels were enabled, and whether data was flowing.
+        /// </summary>
+        private sealed class StreamingSessionSnapshot
+        {
+            public StreamingSessionSnapshot(HashSet<(ChannelType Type, int Number)> enabledChannels, bool wasStreaming)
+            {
+                EnabledChannels = enabledChannels;
+                WasStreaming = wasStreaming;
+            }
+
+            /// <summary>
+            /// The enabled channels, held by identity rather than by reference: a reconnect can
+            /// replace the channel objects, and a device that came back with a different channel
+            /// count should restore the intersection rather than fail.
+            /// </summary>
+            public HashSet<(ChannelType Type, int Number)> EnabledChannels { get; }
+
+            public bool WasStreaming { get; }
+        }
+
+        /// <inheritdoc />
+        protected override void CaptureSessionSnapshot()
+        {
+            var enabled = new HashSet<(ChannelType, int)>();
+            foreach (var channel in GetChannelsSnapshot())
+            {
+                if (channel.IsEnabled)
+                {
+                    enabled.Add((channel.Type, channel.ChannelNumber));
+                }
+            }
+
+            _sessionSnapshot = new StreamingSessionSnapshot(enabled, IsStreaming);
+        }
+
+        /// <summary>
+        /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
+        /// restarts a stream that was interrupted.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The enable set has to be replayed from the snapshot rather than read back off the
+        /// channel objects: <see cref="DaqifiDevice.PopulateChannelsFromStatus"/> resyncs analog
+        /// <c>IsEnabled</c> from the device's own enabled mask on every status message (#409), so by
+        /// the time re-initialization is done the in-memory view reflects the freshly reconnected
+        /// device, not the session that was lost.
+        /// </para>
+        /// <para>
+        /// The streaming frequency needs no replay — it is a host-side setting that the drop never
+        /// touched — but it does have to reach the device again, which is what the resumed
+        /// <see cref="StartStreaming"/> does.
+        /// </para>
+        /// <para>
+        /// A resumed stream is a genuinely new session: timestamp reconstruction re-anchors and the
+        /// gap detector resets, because the device's tick counter may well have restarted while it
+        /// was away, and carrying the old anchor across would manufacture a nonsense gap.
+        /// <see cref="DaqifiDevice.Reconnected"/> is the marker for the outage, and it carries its
+        /// duration.
+        /// </para>
+        /// </remarks>
+        protected override Task<bool> RestoreSessionSnapshotAsync(
+            ReconnectOptions options,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+
+            var snapshot = _sessionSnapshot;
+            if (snapshot == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Normalize to a known state before re-applying: whatever the device came back with is
+            // not necessarily what it had, and the enable commands are set-replace anyway.
+            DisableAllChannels();
+
+            var toEnable = new List<IChannel>();
+            foreach (var channel in GetChannelsSnapshot())
+            {
+                if (snapshot.EnabledChannels.Contains((channel.Type, channel.ChannelNumber)))
+                {
+                    toEnable.Add(channel);
+                }
+            }
+
+            if (toEnable.Count > 0)
+            {
+                EnableChannels(toEnable);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var resumeStreaming = snapshot.WasStreaming && options.ResumeStreaming;
+            if (resumeStreaming)
+            {
+                // The drop left IsStreaming set — nothing stopped the stream, the connection just
+                // ended — and StartStreaming is a no-op while it is. Clear it so the restart is a
+                // real one, complete with its per-session timestamp re-anchoring.
+                IsStreaming = false;
+                StartStreaming();
+            }
+
+            return Task.FromResult(resumeStreaming);
+        }
+
+        #endregion
+
         /// <summary>
         /// The default bounded-buffer capacity (in samples) used by <see cref="StreamSamplesAsync"/>.
         /// </summary>
