@@ -587,6 +587,14 @@ namespace Daqifi.Core.Device
         internal virtual TimeSpan LifecycleLockTimeout => TimeSpan.FromSeconds(10);
 
         /// <summary>
+        /// How long <see cref="Disconnect"/> waits for a lifecycle operation already in flight
+        /// before abandoning the wait. Far more generous than
+        /// <see cref="LifecycleLockTimeout"/> because a teardown that gives up early is a teardown
+        /// that did not happen. Overridable for tests, mirroring <c>SdCardDownloadTimeout</c>.
+        /// </summary>
+        internal virtual TimeSpan TeardownLockTimeout => TimeSpan.FromSeconds(30);
+
+        /// <summary>
         /// What a lifecycle operation does when it cannot have <see cref="_lifecycleLock"/> to
         /// itself. Running anyway is deliberately not an option: the whole point of the lock is
         /// that two threads must never drive the transport at once, and a guarantee with a
@@ -601,10 +609,11 @@ namespace Daqifi.Core.Device
             Fail,
 
             /// <summary>
-            /// Wait for the operation in flight, however long it takes. For <see cref="Disconnect"/>:
-            /// a teardown that failed, or that ran concurrently, would be worse than a slow one.
+            /// Give up and report it, leaving the operation in flight alone. For
+            /// <see cref="Disconnect"/>: the caller is told nothing was torn down rather than being
+            /// blocked forever behind a holder that may never return.
             /// </summary>
-            Wait
+            Abandon
         }
 
         /// <summary>
@@ -625,57 +634,86 @@ namespace Daqifi.Core.Device
         /// changed, and they can try again.
         /// </para>
         /// <para>
-        /// <b><see cref="Disconnect"/> waits.</b> Teardown is the resource-release path and is
-        /// reached from <c>Dispose</c>, so it may neither fail nor be skipped, which leaves waiting
-        /// as the only honest option. It is bounded in practice because every possible holder is
-        /// itself a bounded lifecycle operation, and it cannot deadlock: nothing that holds another
-        /// lock in this class ever waits on a lifecycle operation (<c>_textExchangeLock</c> is
-        /// taken <i>inside</i> this one, never the other way round), and
-        /// <see cref="Monitor"/> grants re-entry immediately to a thread that already holds the
-        /// lock — which is what keeps a handler calling <c>Disconnect</c> from inside a
-        /// <see cref="StatusChanged"/> raise working rather than deadlocking against itself.
+        /// <b><see cref="Disconnect"/> abandons.</b> It waits <see cref="TeardownLockTimeout"/> —
+        /// far longer, because a teardown that gives up early is a teardown that did not happen —
+        /// and then returns <c>false</c> without running, leaving the holder alone. It must not
+        /// throw (<c>Dispose</c> depends on it) and must not run alongside (that is the corruption
+        /// above), so reporting that nothing was torn down is what is left.
         /// </para>
         /// <para>
-        /// An earlier revision logged a warning and ran the operation anyway on timeout, copying
-        /// the bargain <c>_textExchangeLock</c> strikes. That was the wrong precedent to borrow:
-        /// a text-exchange timeout degrades a single command, whereas this one corrupts the stream
-        /// for the whole session, which is not something to log and continue into.
+        /// An earlier revision waited here <i>without</i> a bound, on the reasoning that every
+        /// possible holder is itself a bounded lifecycle operation. That reasoning was wrong:
+        /// <c>SerialPort.Open</c> is called synchronously with no timeout and can wedge in
+        /// uncancellable native I/O — a hazard this codebase already knows well enough to have
+        /// built a process-wide port quarantine around it in
+        /// <see cref="Discovery.SerialDeviceFinder"/>. An unbounded wait inherits that hang and
+        /// turns <c>Dispose</c> into a permanent block. The house answer to uncancellable native
+        /// I/O here is to abandon the stuck operation rather than wait on it, which is what this
+        /// now does; the abandoned holder still cleans up after itself, because
+        /// <see cref="_callerWantsDisconnected"/> is set before the wait begins and
+        /// <see cref="AbandonIfSuperseded"/> tears down whatever it eventually built.
+        /// </para>
+        /// <para>
+        /// Neither policy can deadlock: nothing that holds another lock in this class ever waits on
+        /// a lifecycle operation (<c>_textExchangeLock</c> is taken <i>inside</i> this one, never
+        /// the other way round), and <see cref="Monitor"/> grants re-entry immediately to a thread
+        /// that already holds the lock — which is what keeps a handler calling <c>Disconnect</c>
+        /// from inside a <see cref="StatusChanged"/> raise working rather than deadlocking against
+        /// itself.
+        /// </para>
+        /// <para>
+        /// An even earlier revision logged a warning and ran the operation anyway on timeout,
+        /// copying the bargain <c>_textExchangeLock</c> strikes. That was the wrong precedent to
+        /// borrow: a text-exchange timeout degrades a single command, whereas this one corrupts the
+        /// stream for the whole session, which is not something to log and continue into.
         /// </para>
         /// </remarks>
+        /// <returns><c>true</c> if the operation ran; <c>false</c> if the wait was abandoned.</returns>
         /// <exception cref="TimeoutException">
         /// Thrown when <paramref name="onContention"/> is <see cref="LifecycleContention.Fail"/> and
         /// another lifecycle operation held the lock for the whole timeout.
         /// </exception>
-        private void RunLifecycleExclusive(Action operation, LifecycleContention onContention)
+        private bool RunLifecycleExclusive(Action operation, LifecycleContention onContention)
         {
+            var isTeardown = onContention == LifecycleContention.Abandon;
+            var timeout = isTeardown ? TeardownLockTimeout : LifecycleLockTimeout;
             var acquired = false;
+
             try
             {
-                if (onContention == LifecycleContention.Wait)
+                // The ref overload is the documented-safe pattern: it sets the flag as part of
+                // taking the lock, so the finally below can never miss a release.
+                Monitor.TryEnter(_lifecycleLock, timeout, ref acquired);
+
+                if (!acquired)
                 {
-                    // The ref overloads are the documented-safe pattern: they set the flag as part
-                    // of taking the lock, so the finally below can never miss a release.
-                    Monitor.Enter(_lifecycleLock, ref acquired);
-                }
-                else
-                {
-                    Monitor.TryEnter(_lifecycleLock, LifecycleLockTimeout, ref acquired);
-                    if (!acquired)
+                    if (isTeardown)
                     {
                         SafeLog(() => _logger.LogError(
                             "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
-                            + "within {TimeoutSeconds}s; refusing to connect alongside the operation in flight.",
+                            + "within {TimeoutSeconds}s, so nothing was torn down. A connect is most likely "
+                            + "wedged in uncancellable native I/O; it will release its own session when it "
+                            + "returns.",
                             Name,
-                            LifecycleLockTimeout.TotalSeconds));
+                            timeout.TotalSeconds));
 
-                        throw new TimeoutException(
-                            $"Device '{Name}' could not start connecting within "
-                            + $"{LifecycleLockTimeout.TotalSeconds:0.#}s because another connect or disconnect "
-                            + "was still in progress. Nothing was opened; retry once it has finished.");
+                        return false;
                     }
+
+                    SafeLog(() => _logger.LogError(
+                        "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
+                        + "within {TimeoutSeconds}s; refusing to connect alongside the operation in flight.",
+                        Name,
+                        timeout.TotalSeconds));
+
+                    throw new TimeoutException(
+                        $"Device '{Name}' could not start connecting within "
+                        + $"{timeout.TotalSeconds:0.#}s because another connect or disconnect "
+                        + "was still in progress. Nothing was opened; retry once it has finished.");
                 }
 
                 operation();
+                return true;
             }
             finally
             {
@@ -802,10 +840,13 @@ namespace Daqifi.Core.Device
         /// <para>
         /// Also waits for any connect or disconnect already in flight — an automatic reconnect
         /// attempt parked inside a blocking transport connect, typically — rather than tearing down
-        /// alongside it. Unlike <see cref="Connect"/> this wait is not bounded, because a teardown
-        /// may neither fail nor be skipped: it is the resource-release path and <see cref="Dispose"/>
-        /// depends on it. It cannot deadlock, and every possible holder is itself a bounded
-        /// lifecycle operation — see <see cref="_lifecycleLock"/>. This never throws on contention.
+        /// alongside it. That wait is bounded by <see cref="TeardownLockTimeout"/>, generously,
+        /// because <c>SerialPort.Open</c> is uncancellable and can wedge indefinitely; waiting on
+        /// it without a bound would make this method — and therefore <see cref="Dispose"/> — hang
+        /// forever. If the wait is abandoned, the device still reports
+        /// <see cref="ConnectionStatus.Disconnected"/>, but the transport is deliberately left to
+        /// the stuck operation, which releases it when it finally returns. A warning-level log
+        /// records that nothing was torn down. This never throws on contention.
         /// </para>
         /// </remarks>
         public void Disconnect()
@@ -829,8 +870,30 @@ namespace Daqifi.Core.Device
         /// the reconnect loop performs between attempts, which must not look to consumers like the
         /// session ended on purpose.
         /// </param>
-        private void DisconnectCore(ConnectionStatus finalStatus) =>
-            RunLifecycleExclusive(() => DisconnectCoreUnsynchronized(finalStatus), LifecycleContention.Wait);
+        private void DisconnectCore(ConnectionStatus finalStatus)
+        {
+            if (RunLifecycleExclusive(
+                    () => DisconnectCoreUnsynchronized(finalStatus),
+                    LifecycleContention.Abandon))
+            {
+                return;
+            }
+
+            // The wait was abandoned: a lifecycle operation is stuck, most likely a
+            // SerialPort.Open wedged in uncancellable native I/O. Racing it would be the
+            // stream corruption this lock exists to prevent, so the transport is left to the
+            // holder — which is guaranteed to release it, because _callerWantsDisconnected was
+            // set before this and AbandonIfSuperseded tears down whatever the stuck connect
+            // eventually builds.
+            //
+            // What can still be done safely is record the caller's intent at the device level.
+            // These are this class's own fields, not the transport, so setting them cannot
+            // corrupt anything the stuck operation is doing — and without them the device would
+            // keep reporting itself connected after the caller had asked it not to.
+            State = DeviceState.Disconnected;
+            _isInitialized = false;
+            Status = finalStatus;
+        }
 
         private void DisconnectCoreUnsynchronized(ConnectionStatus finalStatus)
         {

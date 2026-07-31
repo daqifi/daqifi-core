@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Google.Protobuf;
+using System.Diagnostics;
 
 namespace Daqifi.Core.Tests.Device;
 
@@ -574,6 +575,50 @@ public class DeviceReconnectTests
     }
 
     [Fact]
+    public void ADisconnectBehindAWedgedConnect_GivesUpRatherThanHangingForever()
+    {
+        // SerialPort.Open is synchronous and uncancellable, and this repo already knows it can
+        // wedge — SerialDeviceFinder carries a process-wide port quarantine built for exactly that.
+        // So a holder is NOT guaranteed to be bounded, and a teardown that waits on one without a
+        // bound inherits the hang, turning Dispose into a permanent block.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Wedged Device", transport)
+        {
+            LifecycleLockTimeoutOverride = TimeSpan.FromMilliseconds(200),
+            TeardownLockTimeoutOverride = TimeSpan.FromMilliseconds(300)
+        };
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        // Never released: this connect is wedged, exactly as a hung port would be.
+        transport.BlockConnects();
+        transport.ConnectEntered.Reset();
+
+        transport.SimulateDrop();
+        Assert.True(
+            transport.ConnectEntered.Wait(EventTimeout),
+            "the reconnect never reached the transport's connect");
+
+        var stopwatch = Stopwatch.StartNew();
+        device.Disconnect();
+        stopwatch.Stop();
+
+        // It gave up on the stuck holder instead of waiting for a return that may never come.
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(3),
+            $"Disconnect blocked for {stopwatch.ElapsedMilliseconds}ms behind a wedged connect; "
+            + "it should have abandoned the wait");
+
+        // The caller's intent is still recorded, even though the transport could not be touched.
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(device.IsConnected);
+
+        // And it did not race the wedged connect to get there.
+        Assert.False(transport.SawConcurrentLifecycleCalls);
+    }
+
+    [Fact]
     public void ANormalConnectDisconnectCycle_ReportsNoLifecycleContention()
     {
         // The uncontended path is unchanged by the lock: nothing waits, nothing overlaps.
@@ -841,6 +886,15 @@ public class DeviceReconnectTests
 
         internal override TimeSpan LifecycleLockTimeout =>
             LifecycleLockTimeoutOverride ?? base.LifecycleLockTimeout;
+
+        /// <summary>
+        /// Shortens the teardown-side wait so the abandon path is reachable without a thirty-second
+        /// pause.
+        /// </summary>
+        public TimeSpan? TeardownLockTimeoutOverride { get; init; }
+
+        internal override TimeSpan TeardownLockTimeout =>
+            TeardownLockTimeoutOverride ?? base.TeardownLockTimeout;
 
         /// <summary>Number of analog channels the scripted device reports.</summary>
         public int AnalogChannelCount { get; init; } = 4;
