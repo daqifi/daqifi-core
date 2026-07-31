@@ -103,6 +103,43 @@ public class DeviceErrorSurfaceTests
         Assert.Equal(afterDisconnect, Volatile.Read(ref errors));
     }
 
+    [Fact]
+    public async Task AStuckTextConsumerThatOutlivesItsExchange_CanNoLongerRaiseOnTheDevice()
+    {
+        // The text exchange binds a temporary consumer to the device's error surface. Stopping and
+        // disposing that consumer are both time-bounded, so a reader parked in an un-returning read
+        // outlives the exchange — and a still-subscribed zombie would both retain the device and
+        // report failures against an exchange (and a connection) that ended long ago.
+        using var stream = new StallingStream();
+        using var transport = new StreamBackedTransport(stream);
+        using var device = new TextCommandTestableDevice("Stalling Device", transport);
+
+        var stuckReaderErrors = 0;
+        device.ErrorOccurred += (_, e) =>
+        {
+            if (e.Error is EndOfStreamException)
+            {
+                Interlocked.Increment(ref stuckReaderErrors);
+            }
+        };
+
+        device.Connect();
+
+        // The setup action runs once the text consumer is reading, so this is what parks its
+        // in-flight read past the exchange's stop and dispose windows.
+        await device.CallTextCommandAsync(() => stream.StallThenFail());
+
+        // Detach the protobuf consumer too, so the only thing that could still report is the
+        // abandoned text reader.
+        device.Disconnect();
+
+        // Outlast the stalled read, which fails when it finally returns.
+        Thread.Sleep(StallingStream.StallDuration);
+        Thread.Sleep(TimeSpan.FromMilliseconds(750));
+
+        Assert.Equal(0, Volatile.Read(ref stuckReaderErrors));
+    }
+
     #endregion
 
     #region Stream decode errors
@@ -295,6 +332,125 @@ public class DeviceErrorSurfaceTests
         public void InvokeStreamMessage(DaqifiOutMessage message) => OnStreamMessageReceived(message);
 
         public override void Send<T>(IOutboundMessage<T> message)
+        {
+        }
+    }
+
+    /// <summary>
+    /// A <see cref="DaqifiStreamingDevice"/> exposing the protected text exchange, so the temporary
+    /// text consumer's lifetime can be exercised.
+    /// </summary>
+    private sealed class TextCommandTestableDevice : DaqifiStreamingDevice
+    {
+        public TextCommandTestableDevice(string name, IStreamTransport transport) : base(name, transport)
+        {
+        }
+
+        public Task<IReadOnlyList<string>> CallTextCommandAsync(Action setupAction) =>
+            ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 200, completionTimeoutMs: 100);
+    }
+
+    /// <summary>
+    /// A transport that simply hands out a caller-supplied stream.
+    /// </summary>
+    private sealed class StreamBackedTransport : IStreamTransport
+    {
+        private readonly Stream _stream;
+        private bool _isConnected;
+        private bool _disposed;
+
+        public StreamBackedTransport(Stream stream)
+        {
+            _stream = stream;
+        }
+
+        public Stream Stream => _disposed
+            ? throw new ObjectDisposedException(nameof(StreamBackedTransport))
+            : _stream;
+
+        public bool IsConnected => _isConnected && !_disposed;
+
+        public string ConnectionInfo => _isConnected ? "Stream: Connected" : "Stream: Disconnected";
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
+
+        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
+
+        public void Dispose()
+        {
+            _isConnected = false;
+            _disposed = true;
+        }
+    }
+
+    /// <summary>
+    /// A stream that idles quietly until told to stall, after which a read parks for
+    /// <see cref="StallDuration"/> — long enough to outlast the exchange's bounded stop and dispose
+    /// joins — and then fails. This reproduces the reader that is still alive after its consumer has
+    /// been disposed.
+    /// </summary>
+    internal sealed class StallingStream : Stream
+    {
+        /// <summary>
+        /// Comfortably longer than the text exchange's <c>StopSafely</c> join plus the consumer's
+        /// dispose-time grace (1 s each), so the reader provably outlives both.
+        /// </summary>
+        public static readonly TimeSpan StallDuration = TimeSpan.FromSeconds(3);
+
+        private volatile bool _stalling;
+
+        public void StallThenFail() => _stalling = true;
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_stalling)
+            {
+                Thread.Sleep(StallDuration);
+                throw new EndOfStreamException("the stalled read finally gave up");
+            }
+
+            Thread.Sleep(5);
+            return 0;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
         {
         }
     }

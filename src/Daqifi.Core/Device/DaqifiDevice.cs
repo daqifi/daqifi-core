@@ -1090,7 +1090,16 @@ namespace Daqifi.Core.Device
                     // The protobuf consumer is stopped for the duration of this exchange, so
                     // without this a read failure during a text command (an unplug mid-SD-listing,
                     // say) would be the one background failure with nowhere to go (issue #378).
-                    textConsumer.ErrorOccurred += OnConsumerErrorOccurred;
+                    //
+                    // Scoped rather than a bare '+=' because this consumer can outlive the block:
+                    // its stop and dispose are both time-bounded and may return with the reader
+                    // thread still parked in an un-returning read. A live thread roots the consumer,
+                    // which would root this device through the handler — retaining the whole object
+                    // graph and, worse, letting a zombie reader keep raising errors on a device that
+                    // has since been disconnected. 'using' disposes in reverse declaration order, so
+                    // this detaches before textConsumer itself is disposed, on every exit path
+                    // including a cancellation or a throwing setup action.
+                    using var textConsumerErrors = new ConsumerErrorSubscription(this, textConsumer);
 
                     textConsumer.Start();
                     // ConfigureAwait(false): the lock is held, so resuming on a captured
@@ -1511,6 +1520,36 @@ namespace Daqifi.Core.Device
         private void OnConsumerErrorOccurred(object? sender, MessageConsumerErrorEventArgs e)
         {
             RaiseDeviceError(DeviceErrorSource.MessageConsumer, e.Error, e.RawData);
+        }
+
+        /// <summary>
+        /// Attaches a device's consumer-error forwarding to a short-lived
+        /// <see cref="IMessageConsumer{T}"/> for the duration of a scope, and detaches it again on
+        /// dispose.
+        /// </summary>
+        /// <remarks>
+        /// Exists so a temporary consumer can never end up permanently subscribed. Stopping and
+        /// disposing a consumer are both time-bounded and may return while its reader thread is
+        /// still alive; that thread roots the consumer, and a still-attached handler would root this
+        /// device through it. Detaching in a <c>finally</c> (which is what <c>using</c> compiles to)
+        /// makes the subscription's lifetime exactly the scope's, whatever way control leaves it.
+        /// </remarks>
+        private sealed class ConsumerErrorSubscription : IDisposable
+        {
+            private readonly DaqifiDevice _device;
+            private readonly IMessageConsumer<string> _consumer;
+
+            public ConsumerErrorSubscription(DaqifiDevice device, IMessageConsumer<string> consumer)
+            {
+                _device = device;
+                _consumer = consumer;
+                _consumer.ErrorOccurred += _device.OnConsumerErrorOccurred;
+            }
+
+            public void Dispose()
+            {
+                _consumer.ErrorOccurred -= _device.OnConsumerErrorOccurred;
+            }
         }
 
         /// <summary>

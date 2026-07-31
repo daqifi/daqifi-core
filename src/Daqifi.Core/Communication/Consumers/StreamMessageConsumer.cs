@@ -331,12 +331,29 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     PerformClear();
                 }
 
+                // Probing readability is itself I/O against a handle that may be coming apart, and
+                // a CanRead getter is under no obligation not to throw on one. A throwing probe is
+                // a stream fault and is handled exactly like a failing read; letting it reach the
+                // outer catch instead would neither tell the transport nor back off.
+                bool canRead;
+                try
+                {
+                    canRead = _stream.CanRead;
+                }
+                catch (Exception ex)
+                {
+                    _healthSink?.ReportIoFault(ex);
+                    OnErrorOccurred(ex);
+                    Thread.Sleep(100);
+                    continue;
+                }
+
                 // A stream that reports itself unreadable never becomes readable again — that is a
                 // closed or disposed stream, not a momentary lull. Report it instead of spinning
                 // here forever producing no data, no error and no status change, which is the
                 // failure mode issue #377 was filed for. Backed off at the same cadence as a
                 // failing read so the escalation timing matches.
-                if (!_stream.CanRead)
+                if (!canRead)
                 {
                     var unreadable = new IOException(
                         "The stream is no longer readable; the underlying connection has been closed.");
@@ -410,10 +427,35 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 // Try to parse complete messages from buffer
                 ProcessMessageBuffer();
             }
-            catch (Exception ex) when (_isRunning)
+            catch (Exception ex)
             {
-                // Only report errors if we're still supposed to be running
+                // Caught unconditionally, on purpose. This is the top of a background thread, so an
+                // exception that escapes here does not merely end the loop — it terminates the
+                // whole process. The previous `when (_isRunning)` filter left exactly that hole: a
+                // concurrent Stop() clears the flag while the try body is mid-flight, the filter
+                // then declines to match, and a parse failure that would have been a logged
+                // diagnostic during normal running takes the host down instead. Only *reporting*
+                // was ever meant to be conditional.
+                if (!_isRunning)
+                {
+                    // Teardown noise: a failure seen while stopping says nothing about the device,
+                    // and the loop is about to exit anyway.
+                    break;
+                }
+
                 OnErrorOccurred(ex);
+
+                // Back off before the next iteration. What reaches here is a failure in the
+                // parse/dispatch half of the loop, and that half is deterministic with respect to
+                // the current buffer: a parser that throws on the bytes it holds will throw on
+                // exactly the same bytes next time round. Retrying at full speed is a hot spin that
+                // burns a core and raises errors as fast as the thread can go, which is the same
+                // no-progress-and-no-signal shape this class is being fixed for.
+                //
+                // Deliberately NOT reported to the health sink: a parse or dispatch failure is not
+                // evidence that the link is gone, and escalating it would disconnect a perfectly
+                // healthy device over malformed data. Only I/O against the stream does that.
+                Thread.Sleep(100);
             }
         }
     }
