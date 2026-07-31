@@ -428,7 +428,7 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
 
                 // A successful read clears any run of failures the transport has accumulated, so
                 // a stream that glitches and recovers is never mistaken for a disconnected device.
-                _healthSink?.ReportIoSuccess();
+                SafeReportIoSuccess();
 
                 // Add received data to message buffer (guarded: a caller may be reading
                 // QueuedMessageCount and ClearBuffer's drain runs on this same thread).
@@ -459,7 +459,9 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     break;
                 }
 
-                OnErrorOccurred(ex);
+                // Isolated: this is the last catch above a background thread's entry point, so a
+                // throwing subscriber here has nothing left to stop it (see SafeRaiseError).
+                SafeRaiseError(ex);
 
                 // Back off before the next iteration. What reaches here is a failure in the
                 // parse/dispatch half of the loop, and that half is deterministic with respect to
@@ -530,10 +532,74 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
             return false;
         }
 
-        _healthSink?.ReportIoFault(error);
-        OnErrorOccurred(error);
+        SafeReportIoFault(error);
+        SafeRaiseError(error);
         Thread.Sleep(backoffMs);
         return true;
+    }
+
+    /// <summary>
+    /// Reports a failed transfer to the transport, absorbing anything the sink throws.
+    /// </summary>
+    private void SafeReportIoFault(Exception error)
+    {
+        try
+        {
+            _healthSink?.ReportIoFault(error);
+        }
+        catch
+        {
+            // See SafeRaiseError.
+        }
+    }
+
+    /// <summary>
+    /// Reports a successful transfer to the transport, absorbing anything the sink throws.
+    /// </summary>
+    /// <remarks>
+    /// Runs once per successful read, so this is deliberately a plain method rather than a lambda
+    /// helper — no closure is allocated on the hot path.
+    /// </remarks>
+    private void SafeReportIoSuccess()
+    {
+        try
+        {
+            _healthSink?.ReportIoSuccess();
+        }
+        catch
+        {
+            // See SafeRaiseError.
+        }
+    }
+
+    /// <summary>
+    /// Raises <see cref="ErrorOccurred"/>, absorbing anything a subscriber throws.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every callback out of the reader loop — subscriber or transport health sink — is isolated,
+    /// because this loop is the top of a background thread: an exception that escapes it does not
+    /// merely stop message consumption, it terminates the process. The route is short and real. A
+    /// throwing handler here propagates into the loop's outer catch, which reports the failure by
+    /// calling this same handler; it throws again, and that second throw is inside a <c>catch</c>
+    /// block with nothing above it. Isolating the callback closes both hops at once.
+    /// </para>
+    /// <para>
+    /// Swallowed rather than logged, per the convention this class already follows for a throwing
+    /// <see cref="MessageReceived"/> subscriber: a consumer that breaks its own diagnostics is not
+    /// permitted to affect anyone else's data.
+    /// </para>
+    /// </remarks>
+    private void SafeRaiseError(Exception error, byte[]? rawData = null)
+    {
+        try
+        {
+            OnErrorOccurred(error, rawData);
+        }
+        catch
+        {
+            // A misbehaving subscriber must not stop message consumption or take down the process.
+        }
     }
 
     /// <summary>
@@ -582,7 +648,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
             }
             catch (Exception ex)
             {
-                OnErrorOccurred(ex);
+                // A throwing MessageReceived subscriber is reported rather than propagated, so one
+                // bad handler cannot starve the others of this batch. The report itself is isolated
+                // too: raising it from inside a catch block leaves nowhere for a second throw to go
+                // (see SafeRaiseError).
+                SafeRaiseError(ex);
             }
         }
     }

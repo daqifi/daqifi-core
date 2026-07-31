@@ -206,6 +206,92 @@ public class StreamMessageConsumerBackoffTests
         Assert.Equal(0, Volatile.Read(ref errors));
     }
 
+    [Fact]
+    public void AThrowingErrorSubscriber_DoesNotStopMessageConsumption()
+    {
+        // The reader loop is the top of a background thread, so a callback that throws out of it
+        // does not merely stop consumption — it terminates the process. The route is two hops: the
+        // handler throws on the fault path, the outer catch reports the failure by calling that
+        // same handler, and the second throw is inside a catch block with nothing above it.
+        using var stream = new RecoveringStream();
+        var errors = 0;
+        var received = new List<string>();
+
+        using var consumer = new StreamMessageConsumer<string>(stream, new LineBasedMessageParser());
+        consumer.MessageReceived += (_, e) =>
+        {
+            lock (received)
+            {
+                received.Add(e.Message.Data);
+            }
+        };
+        consumer.ErrorOccurred += (_, _) =>
+        {
+            Interlocked.Increment(ref errors);
+            throw new InvalidOperationException("a subscriber that throws on every error");
+        };
+
+        consumer.Start();
+
+        // Let the failing phase drive the fault path through the throwing subscriber.
+        Assert.True(WaitUntil(() => Volatile.Read(ref errors) >= 2, TimeSpan.FromSeconds(10)),
+            "the fault path never ran");
+
+        // The link recovers. The reader must still be alive and still consuming — this is the
+        // assertion that matters, not merely that no exception surfaced in the test.
+        stream.Recover("$DAQiFi\r\n");
+
+        Assert.True(WaitUntil(() =>
+        {
+            lock (received)
+            {
+                return received.Count >= 1;
+            }
+        }, TimeSpan.FromSeconds(10)), "the reader stopped consuming after a subscriber threw");
+
+        Assert.True(consumer.IsRunning);
+        consumer.StopSafely(timeoutMs: 2000);
+    }
+
+    [Fact]
+    public void AThrowingHealthSink_DoesNotStopMessageConsumption()
+    {
+        // Same guarantee for the transport side: ITransportHealthSink is implemented by consumers
+        // of this library, so it is exactly as untrusted as an event subscriber.
+        using var stream = new RecoveringStream();
+        var sink = new ThrowingHealthSink();
+        var received = new List<string>();
+
+        using var consumer = new StreamMessageConsumer<string>(
+            stream, new LineBasedMessageParser(), healthSink: sink);
+        consumer.MessageReceived += (_, e) =>
+        {
+            lock (received)
+            {
+                received.Add(e.Message.Data);
+            }
+        };
+
+        consumer.Start();
+
+        Assert.True(WaitUntil(() => sink.FaultCalls >= 2, TimeSpan.FromSeconds(10)),
+            "the fault path never ran");
+
+        stream.Recover("$DAQiFi\r\n");
+
+        Assert.True(WaitUntil(() =>
+        {
+            lock (received)
+            {
+                return received.Count >= 1;
+            }
+        }, TimeSpan.FromSeconds(10)), "the reader stopped consuming after the health sink threw");
+
+        Assert.True(sink.SuccessCalls >= 1, "the success path must have been exercised too");
+        Assert.True(consumer.IsRunning);
+        consumer.StopSafely(timeoutMs: 2000);
+    }
+
     private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -220,6 +306,88 @@ public class StreamMessageConsumerBackoffTests
         }
 
         return condition();
+    }
+
+    /// <summary>
+    /// A health sink that fails every callback, standing in for a consumer-supplied transport with
+    /// a bug in it.
+    /// </summary>
+    private sealed class ThrowingHealthSink : ITransportHealthSink
+    {
+        private int _faultCalls;
+        private int _successCalls;
+
+        public int FaultCalls => Volatile.Read(ref _faultCalls);
+
+        public int SuccessCalls => Volatile.Read(ref _successCalls);
+
+        public void ReportIoFault(Exception error)
+        {
+            Interlocked.Increment(ref _faultCalls);
+            throw new InvalidOperationException("a health sink that throws");
+        }
+
+        public void ReportIoSuccess()
+        {
+            Interlocked.Increment(ref _successCalls);
+            throw new InvalidOperationException("a health sink that throws");
+        }
+    }
+
+    /// <summary>
+    /// A stream that fails its reads until told to recover, then delivers a line — so "the reader is
+    /// still consuming" can be asserted directly rather than inferred.
+    /// </summary>
+    private sealed class RecoveringStream : Stream
+    {
+        private readonly object _gate = new();
+        private byte[]? _pending;
+
+        public void Recover(string text)
+        {
+            lock (_gate)
+            {
+                _pending = System.Text.Encoding.UTF8.GetBytes(text);
+            }
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            lock (_gate)
+            {
+                if (_pending == null)
+                {
+                    Thread.Sleep(5);
+                    throw new IOException("the link is down");
+                }
+
+                var length = Math.Min(_pending.Length, count);
+                Array.Copy(_pending, 0, buffer, offset, length);
+                _pending = null;
+                return length;
+            }
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class RecordingHealthSink : ITransportHealthSink
