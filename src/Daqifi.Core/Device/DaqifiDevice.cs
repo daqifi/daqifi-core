@@ -335,7 +335,15 @@ namespace Daqifi.Core.Device
         protected IStreamTransport? Transport => _transport;
 
         private IProtocolHandler? _protocolHandler;
+
+        // "Teardown has finished" — read by ExecuteTextCommandCoreAsync to reject work on a dead
+        // device. Distinct from _disposeClaimed below, which marks teardown as *started*.
         private bool _disposed;
+
+        // Disposal gate, 0 until a caller claims teardown. Interlocked rather than a bool because
+        // Dispose() and DisposeAsync() are documented as interchangeable and DisposeAsync spends
+        // real awaited time inside the window a plain flag would leave open. See TryClaimDisposal.
+        private int _disposeClaimed;
         private bool _isDisconnecting;
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
@@ -1666,13 +1674,19 @@ namespace Daqifi.Core.Device
         /// </remarks>
         public void Dispose()
         {
-            if (_disposed)
+            if (!TryClaimDisposal())
             {
                 return;
             }
 
-            Disconnect();
-            ReleaseResources();
+            try
+            {
+                Disconnect();
+            }
+            finally
+            {
+                ReleaseResources();
+            }
         }
 
         /// <summary>
@@ -1687,14 +1701,43 @@ namespace Daqifi.Core.Device
         /// <returns>A task representing the asynchronous dispose operation.</returns>
         public async ValueTask DisposeAsync()
         {
-            if (_disposed)
+            if (!TryClaimDisposal())
             {
                 return;
             }
 
-            await DisconnectAsync().ConfigureAwait(false);
-            ReleaseResources();
+            try
+            {
+                await DisconnectAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                ReleaseResources();
+            }
         }
+
+        /// <summary>
+        /// Claims the right to tear this device down, atomically and exactly once.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The gate is taken at the <i>start</i> of disposal rather than published at the end,
+        /// because <see cref="DisposeAsync"/> spends real time awaiting
+        /// <see cref="DisconnectAsync"/>. A plain "have we finished disposing?" flag leaves that
+        /// entire window open, so a concurrent <see cref="Dispose"/> — an <c>await using</c> scope
+        /// unwinding while another shutdown path fires, say — would sail through the check and run
+        /// a second teardown, disposing the transport and the text-exchange semaphore twice.
+        /// </para>
+        /// <para>
+        /// The loser returns immediately rather than waiting for the winner to finish. That is the
+        /// normal contract for a redundant <see cref="IDisposable.Dispose"/> call, and the
+        /// alternative — having <see cref="Dispose"/> block on the in-flight
+        /// <see cref="DisposeAsync"/> — would reintroduce on the calling thread exactly the stall
+        /// this class now exists to avoid.
+        /// </para>
+        /// </remarks>
+        /// <returns><c>true</c> for the first caller only.</returns>
+        private bool TryClaimDisposal() => Interlocked.Exchange(ref _disposeClaimed, 1) == 0;
 
         /// <summary>
         /// Releases everything the device owns once it is already disconnected. Shared tail of
@@ -1702,7 +1745,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// The transport is already closed by the preceding disconnect, so
-        /// <see cref="IDisposable.Dispose"/> on it does not block here.
+        /// <see cref="IDisposable.Dispose"/> on it does not block here. Runs from a
+        /// <c>finally</c> so that a disconnect which throws — a serial close can — still releases
+        /// the handles rather than leaking them on a device that can never be disposed again.
         /// </remarks>
         private void ReleaseResources()
         {

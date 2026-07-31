@@ -59,18 +59,30 @@ public interface IStreamTransport : IDisposable
     /// backoff delay between retries.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This is the cancellable form of <see cref="ConnectAsync(ConnectionRetryOptions?)"/>. It has a
-    /// default implementation that simply forwards to the uncancellable overload, so an existing
-    /// <see cref="IStreamTransport"/> implementation keeps compiling and working unchanged — it just
-    /// cannot honor the token. Implementations that can abandon an in-flight attempt should override
-    /// this member; the transports shipped in daqifi-core do.
+    /// default implementation, so an existing <see cref="IStreamTransport"/> implementation keeps
+    /// compiling and working unchanged. That default honors the token only <i>before</i> the attempt
+    /// starts and then forwards to the uncancellable overload, which cannot be interrupted once it
+    /// is running.
+    /// </para>
+    /// <para>
+    /// The pre-check is not a formality: opening a connection the caller has already given up on has
+    /// real side effects — a serial open pulses DTR and resets the MCU — so refusing to start is the
+    /// one part of this contract every implementation can keep. Implementations that can also
+    /// abandon an attempt already in flight should override this member; the transports shipped in
+    /// daqifi-core do.
+    /// </para>
     /// </remarks>
     /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
     /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
     /// <returns>A task representing the asynchronous connect operation.</returns>
     /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
-    Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken) =>
-        ConnectAsync(retryOptions);
+    Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ConnectAsync(retryOptions);
+    }
 
     /// <summary>
     /// Closes the transport connection.

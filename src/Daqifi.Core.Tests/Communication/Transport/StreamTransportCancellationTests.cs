@@ -106,6 +106,28 @@ public class StreamTransportCancellationTests
         transport.Dispose();
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LegacyTransport_WithAnAlreadyCanceledToken_RefusesToOpenAnything(bool withRetryOptions)
+    {
+        // A transport that cannot abandon an in-flight dial can still decline to start one, and it
+        // must: opening a connection the caller has already given up on has real side effects — a
+        // serial open pulses DTR and resets the MCU. Both cancellable overloads share the default
+        // implementation, so both are checked.
+        using var transport = new LegacyStreamTransport();
+        IStreamTransport asInterface = transport;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => withRetryOptions
+            ? asInterface.ConnectAsync(null, cts.Token)
+            : asInterface.ConnectAsync(cts.Token));
+
+        Assert.Equal(0, transport.ConnectCalls);
+        Assert.False(transport.IsConnected);
+    }
+
     /// <summary>
     /// An <see cref="IStreamTransport"/> implementation frozen at the pre-#341 shape — it does not
     /// override either cancellable overload, so it exercises their default implementations.
@@ -114,6 +136,9 @@ public class StreamTransportCancellationTests
     {
         private readonly MemoryStream _stream = new();
         private bool _isConnected;
+
+        /// <summary>How many times the transport actually tried to open something.</summary>
+        public int ConnectCalls { get; private set; }
 
         public Stream Stream => _stream;
         public bool IsConnected => _isConnected;
@@ -125,6 +150,7 @@ public class StreamTransportCancellationTests
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
         {
+            ConnectCalls++;
             _isConnected = true;
             StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
             return Task.CompletedTask;

@@ -231,6 +231,54 @@ public class DaqifiDeviceAsyncLifecycleTests
     }
 
     [Fact]
+    public async Task Dispose_CalledWhileDisposeAsyncIsStillTearingDown_DoesNotStartASecondTeardown()
+    {
+        // Regression for the disposal overlap race. DisposeAsync spends real awaited time inside
+        // DisconnectAsync, and a flag published only at the end of teardown leaves that whole
+        // window open — a concurrent Dispose() would sail through and dispose the transport and the
+        // text-exchange semaphore a second time.
+        var transport = new GatedMockTransport();
+        transport.OpenConnectGate();
+        var device = new DaqifiDevice("Mock Device", transport);
+        await device.ConnectAsync();
+
+        transport.HoldFirstDisconnect();
+        var disposeAsync = device.DisposeAsync();
+        Assert.True(await transport.WaitForDisconnectEnteredAsync(),
+            "DisposeAsync never reached the transport disconnect.");
+
+        // The async teardown is parked mid-flight. A Dispose() arriving now must bounce off the
+        // gate immediately rather than run its own teardown.
+        var sw = Stopwatch.StartNew();
+        device.Dispose();
+        sw.Stop();
+
+        transport.ReleaseDisconnect();
+        await disposeAsync;
+
+        Assert.Equal(1, transport.DisconnectCount);
+        Assert.Equal(1, transport.DisposeCount);
+        Assert.Equal(0, transport.SyncDisconnectCalls);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1),
+            $"Dispose() spent {sw.ElapsedMilliseconds}ms; it should have returned at once as the loser.");
+    }
+
+    [Fact]
+    public async Task Dispose_WhenTheDisconnectThrows_StillReleasesTheResources()
+    {
+        // Claiming the gate up front means there is no second chance at disposal, so teardown has
+        // to release the handles even when the disconnect fails on the way out.
+        var transport = new ThrowOnDisconnectTransport();
+        var device = new DaqifiDevice("Mock Device", transport);
+        device.Connect();
+
+        Assert.Throws<IOException>(() => device.Dispose());
+
+        Assert.True(transport.IsDisposed);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
     public async Task DisposeAsync_AfterSyncDispose_IsANoOp()
     {
         var transport = new GatedMockTransport();
@@ -300,6 +348,45 @@ public class DaqifiDeviceAsyncLifecycleTests
     }
 
     /// <summary>
+    /// Transport whose close fails, standing in for a serial port that throws on the way out.
+    /// </summary>
+    private sealed class ThrowOnDisconnectTransport : IStreamTransport
+    {
+        private readonly MemoryStream _stream = new();
+        private bool _isConnected;
+
+        public bool IsDisposed { get; private set; }
+
+        public Stream Stream => _stream;
+        public bool IsConnected => _isConnected;
+        public string ConnectionInfo => "Throwing";
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync() => throw new IOException("the port went away");
+
+        public void Connect() => ConnectAsync().GetAwaiter().GetResult();
+
+        public void Disconnect() => DisconnectAsync().GetAwaiter().GetResult();
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+            _isConnected = false;
+            _stream.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Exposes the protected text-exchange seam so a test can hold the device-wide text exchange
     /// lock while a disconnect is attempted.
     /// </summary>
@@ -327,12 +414,16 @@ public class DaqifiDeviceAsyncLifecycleTests
         private readonly MemoryStream _stream = new();
         private readonly TaskCompletionSource _connectGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _connectEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _disconnectGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _disconnectEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private volatile bool _isConnected;
         private volatile bool _disposed;
         private int _connectAttempts;
         private int _disconnectCount;
         private int _syncConnectCalls;
         private int _syncDisconnectCalls;
+        private int _disposeCount;
+        private int _disconnectGateArmed;
 
         /// <summary>When set, every connect attempt throws this instead of succeeding.</summary>
         public Exception? ConnectFailure { get; init; }
@@ -344,7 +435,19 @@ public class DaqifiDeviceAsyncLifecycleTests
         public int DisconnectCount => Volatile.Read(ref _disconnectCount);
         public int SyncConnectCalls => Volatile.Read(ref _syncConnectCalls);
         public int SyncDisconnectCalls => Volatile.Read(ref _syncDisconnectCalls);
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
         public bool IsDisposed => _disposed;
+
+        /// <summary>
+        /// Parks the FIRST disconnect until <see cref="ReleaseDisconnect"/> is called. Only the
+        /// first, so a regression that starts a second teardown fails an assertion instead of
+        /// deadlocking the test run.
+        /// </summary>
+        public void HoldFirstDisconnect() => Interlocked.Exchange(ref _disconnectGateArmed, 1);
+
+        public void ReleaseDisconnect() => _disconnectGate.TrySetResult();
+
+        public Task<bool> WaitForDisconnectEnteredAsync() => WaitAsync(_disconnectEntered.Task);
 
         public Stream Stream => _disposed
             ? throw new ObjectDisposedException(nameof(GatedMockTransport))
@@ -411,16 +514,23 @@ public class DaqifiDeviceAsyncLifecycleTests
             OnConnected?.Invoke();
         }
 
-        public Task DisconnectAsync()
+        public async Task DisconnectAsync()
         {
-            if (_isConnected)
+            if (!_isConnected)
             {
-                Interlocked.Increment(ref _disconnectCount);
-                _isConnected = false;
-                StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+                return;
             }
 
-            return Task.CompletedTask;
+            _disconnectEntered.TrySetResult();
+
+            if (Interlocked.Exchange(ref _disconnectGateArmed, 0) == 1)
+            {
+                await _disconnectGate.Task.ConfigureAwait(false);
+            }
+
+            Interlocked.Increment(ref _disconnectCount);
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
         }
 
         public void Connect()
@@ -437,6 +547,8 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         public void Dispose()
         {
+            Interlocked.Increment(ref _disposeCount);
+
             if (_disposed)
             {
                 return;
