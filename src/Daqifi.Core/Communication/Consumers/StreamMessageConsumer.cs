@@ -331,18 +331,39 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     PerformClear();
                 }
 
+                // Probing readability is itself I/O against a handle that may be coming apart, and
+                // a CanRead getter is under no obligation not to throw on one. A throwing probe is
+                // a stream fault and is handled exactly like a failing read; letting it reach the
+                // outer catch instead would neither tell the transport nor back off.
+                bool canRead;
+                try
+                {
+                    canRead = _stream.CanRead;
+                }
+                catch (Exception ex)
+                {
+                    if (!ReportStreamFault(ex))
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
                 // A stream that reports itself unreadable never becomes readable again — that is a
                 // closed or disposed stream, not a momentary lull. Report it instead of spinning
                 // here forever producing no data, no error and no status change, which is the
                 // failure mode issue #377 was filed for. Backed off at the same cadence as a
                 // failing read so the escalation timing matches.
-                if (!_stream.CanRead)
+                if (!canRead)
                 {
                     var unreadable = new IOException(
                         "The stream is no longer readable; the underlying connection has been closed.");
-                    _healthSink?.ReportIoFault(unreadable);
-                    OnErrorOccurred(unreadable);
-                    Thread.Sleep(100);
+                    if (!ReportStreamFault(unreadable))
+                    {
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -371,9 +392,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     // throwing is how a physically disconnected device announces itself, and the
                     // transport is the only thing that can turn a run of them into a lost
                     // connection (issue #382). One failure escalates nothing.
-                    _healthSink?.ReportIoFault(ex);
-                    OnErrorOccurred(ex);
-                    Thread.Sleep(100); // Back off on error
+                    if (!ReportStreamFault(ex))
+                    {
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -385,17 +408,27 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                     // legitimately return 0 for "nothing right now" and must not be escalated.
                     if (_stream is NetworkStream)
                     {
-                        _healthSink?.ReportIoFault(new EndOfStreamException(
-                            "The remote endpoint closed the connection (a socket read returned 0 bytes)."));
+                        // Same teardown rule as every other fault path, and the short back-off this
+                        // path has always used — an orderly peer shutdown is detected in tens of
+                        // milliseconds rather than half a second (issue #382).
+                        if (!ReportStreamFault(
+                                new EndOfStreamException(
+                                    "The remote endpoint closed the connection (a socket read returned 0 bytes)."),
+                                backoffMs: NoDataBackoffMs))
+                        {
+                            break;
+                        }
+
+                        continue;
                     }
 
-                    Thread.Sleep(10); // No data available, wait briefly
+                    Thread.Sleep(NoDataBackoffMs); // No data available, wait briefly
                     continue;
                 }
 
                 // A successful read clears any run of failures the transport has accumulated, so
                 // a stream that glitches and recovers is never mistaken for a disconnected device.
-                _healthSink?.ReportIoSuccess();
+                SafeReportIoSuccess();
 
                 // Add received data to message buffer (guarded: a caller may be reading
                 // QueuedMessageCount and ClearBuffer's drain runs on this same thread).
@@ -410,11 +443,162 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
                 // Try to parse complete messages from buffer
                 ProcessMessageBuffer();
             }
-            catch (Exception ex) when (_isRunning)
+            catch (Exception ex)
             {
-                // Only report errors if we're still supposed to be running
-                OnErrorOccurred(ex);
+                // Caught unconditionally, on purpose. This is the top of a background thread, so an
+                // exception that escapes here does not merely end the loop — it terminates the
+                // whole process. The previous `when (_isRunning)` filter left exactly that hole: a
+                // concurrent Stop() clears the flag while the try body is mid-flight, the filter
+                // then declines to match, and a parse failure that would have been a logged
+                // diagnostic during normal running takes the host down instead. Only *reporting*
+                // was ever meant to be conditional.
+                if (!_isRunning)
+                {
+                    // Teardown noise: a failure seen while stopping says nothing about the device,
+                    // and the loop is about to exit anyway.
+                    break;
+                }
+
+                // Isolated: this is the last catch above a background thread's entry point, so a
+                // throwing subscriber here has nothing left to stop it (see SafeRaiseError).
+                SafeRaiseError(ex);
+
+                // Back off before the next iteration. What reaches here is a failure in the
+                // parse/dispatch half of the loop, and that half is deterministic with respect to
+                // the current buffer: a parser that throws on the bytes it holds will throw on
+                // exactly the same bytes next time round. Retrying at full speed is a hot spin that
+                // burns a core and raises errors as fast as the thread can go, which is the same
+                // no-progress-and-no-signal shape this class is being fixed for.
+                //
+                // Deliberately NOT reported to the health sink: a parse or dispatch failure is not
+                // evidence that the link is gone, and escalating it would disconnect a perfectly
+                // healthy device over malformed data. Only I/O against the stream does that — which
+                // is why this path does not go through ReportStreamFault.
+                Thread.Sleep(ErrorBackoffMs);
             }
+        }
+    }
+
+    /// <summary>
+    /// Back-off applied after a reported failure, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// Whatever failed will almost certainly fail again immediately — a closed handle stays closed,
+    /// and a parser that rejects the bytes it holds rejects the same bytes next time — so retrying
+    /// at full speed makes no progress and burns a core. Also sets the escalation cadence: with the
+    /// transport's five-consecutive-failure threshold, a persistently failing stream is declared
+    /// lost after roughly half a second.
+    /// </remarks>
+    private const int ErrorBackoffMs = 100;
+
+    /// <summary>
+    /// Pause applied when a read returns no data, in milliseconds. Shorter than
+    /// <see cref="ErrorBackoffMs"/> because it is the idle path on most stream types.
+    /// </summary>
+    private const int NoDataBackoffMs = 10;
+
+    /// <summary>
+    /// Reports a stream-level failure to the transport and to subscribers, then backs off.
+    /// </summary>
+    /// <param name="error">The failure that was observed.</param>
+    /// <param name="backoffMs">How long to pause before the next iteration.</param>
+    /// <returns>
+    /// <c>true</c> to keep reading; <c>false</c> when a stop has already been requested, in which
+    /// case nothing was reported and the caller must leave the loop immediately.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Every fault path routes through here so the teardown rule is stated once. A failure observed
+    /// after <see cref="_isRunning"/> has been cleared is teardown, not a device problem: closing a
+    /// handle is <em>supposed</em> to make the in-flight read fail, and the stream going unreadable
+    /// is what a deliberate <c>Disconnect</c> looks like from in here. Reporting it would put a
+    /// phantom "the connection died" into a consumer's diagnostics and into the transport's health
+    /// sink on every intentional disconnect, and the back-off would delay this thread's exit —
+    /// making the stop's bounded join more likely to time out, which has its own knock-on effects.
+    /// </para>
+    /// <para>
+    /// This is the same rule the loop's outer catch follows; keeping the two consistent is the
+    /// point. Note it was never enough on its own to let a deliberate disconnect be reported as a
+    /// lost connection: a <c>continue</c> re-tests the loop condition, so at most one failure can
+    /// ever be reported after a stop, against an escalation threshold of five consecutive — and the
+    /// transports disarm their watchdog before they touch the handle. This closes the diagnostic
+    /// noise, not a hole in that guarantee.
+    /// </para>
+    /// </remarks>
+    private bool ReportStreamFault(Exception error, int backoffMs = ErrorBackoffMs)
+    {
+        if (!_isRunning)
+        {
+            return false;
+        }
+
+        SafeReportIoFault(error);
+        SafeRaiseError(error);
+        Thread.Sleep(backoffMs);
+        return true;
+    }
+
+    /// <summary>
+    /// Reports a failed transfer to the transport, absorbing anything the sink throws.
+    /// </summary>
+    private void SafeReportIoFault(Exception error)
+    {
+        try
+        {
+            _healthSink?.ReportIoFault(error);
+        }
+        catch
+        {
+            // See SafeRaiseError.
+        }
+    }
+
+    /// <summary>
+    /// Reports a successful transfer to the transport, absorbing anything the sink throws.
+    /// </summary>
+    /// <remarks>
+    /// Runs once per successful read, so this is deliberately a plain method rather than a lambda
+    /// helper — no closure is allocated on the hot path.
+    /// </remarks>
+    private void SafeReportIoSuccess()
+    {
+        try
+        {
+            _healthSink?.ReportIoSuccess();
+        }
+        catch
+        {
+            // See SafeRaiseError.
+        }
+    }
+
+    /// <summary>
+    /// Raises <see cref="ErrorOccurred"/>, absorbing anything a subscriber throws.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every callback out of the reader loop — subscriber or transport health sink — is isolated,
+    /// because this loop is the top of a background thread: an exception that escapes it does not
+    /// merely stop message consumption, it terminates the process. The route is short and real. A
+    /// throwing handler here propagates into the loop's outer catch, which reports the failure by
+    /// calling this same handler; it throws again, and that second throw is inside a <c>catch</c>
+    /// block with nothing above it. Isolating the callback closes both hops at once.
+    /// </para>
+    /// <para>
+    /// Swallowed rather than logged, per the convention this class already follows for a throwing
+    /// <see cref="MessageReceived"/> subscriber: a consumer that breaks its own diagnostics is not
+    /// permitted to affect anyone else's data.
+    /// </para>
+    /// </remarks>
+    private void SafeRaiseError(Exception error, byte[]? rawData = null)
+    {
+        try
+        {
+            OnErrorOccurred(error, rawData);
+        }
+        catch
+        {
+            // A misbehaving subscriber must not stop message consumption or take down the process.
         }
     }
 
@@ -464,7 +648,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
             }
             catch (Exception ex)
             {
-                OnErrorOccurred(ex);
+                // A throwing MessageReceived subscriber is reported rather than propagated, so one
+                // bad handler cannot starve the others of this batch. The report itself is isolated
+                // too: raising it from inside a catch block leaves nowhere for a second throw to go
+                // (see SafeRaiseError).
+                SafeRaiseError(ex);
             }
         }
     }
