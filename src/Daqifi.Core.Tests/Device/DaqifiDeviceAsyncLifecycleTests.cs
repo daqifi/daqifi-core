@@ -324,37 +324,101 @@ public class DaqifiDeviceAsyncLifecycleTests
     [Fact]
     public async Task ConnectAsync_OpensAFreshErrorThrottleSessionOnReconnect()
     {
-        // The throttle collapses repeats of the same (source, exception type) for five seconds.
-        // A reconnect is a new session and must report its first failure at once — so the second
-        // session's error has to arrive well inside that five-second window to prove the reset ran.
+        // The throttle collapses repeats of the same (source, exception type) for five seconds, so
+        // a reconnect must clear it or the new session's first failure is swallowed.
+        //
+        // The load-bearing assertion here is SuppressedCount, not elapsed time. "The second error
+        // arrived quickly" only proves the reset ran if the two errors fell inside one throttle
+        // window, which a slow machine can break — and then the test passes for the wrong reason.
+        // SuppressedCount cannot: a reset clears the bucket, so a fresh session's first raise has
+        // nothing collapsed behind it, while a surviving bucket carries the previous session's
+        // count forward no matter when it finally fires. The window is still checked, but as a
+        // precondition that fails loudly rather than as the proof itself.
         using var transport = new ScriptedErrorTransport();
         using var device = new DaqifiDevice("Erroring Device", transport);
 
-        var raises = 0;
-        var raised = new ManualResetEventSlim(false);
-        device.ErrorOccurred += (_, _) =>
+        var gate = new object();
+        var firstSessionRaised = new ManualResetEventSlim(false);
+        var secondSessionRaised = new ManualResetEventSlim(false);
+        var inSecondSession = false;
+        long firstRaisedAt = 0;
+        long secondRaisedAt = 0;
+        DeviceErrorEventArgs? secondSessionFirstError = null;
+
+        device.ErrorOccurred += (_, e) =>
         {
-            Interlocked.Increment(ref raises);
-            raised.Set();
+            lock (gate)
+            {
+                if (inSecondSession)
+                {
+                    // Only the session's *first* raise carries the "nothing suppressed behind me"
+                    // claim; later ones legitimately report collapsed occurrences.
+                    if (secondSessionFirstError != null)
+                    {
+                        return;
+                    }
+
+                    secondSessionFirstError = e;
+                    secondRaisedAt = Stopwatch.GetTimestamp();
+                    secondSessionRaised.Set();
+                    return;
+                }
+
+                if (firstRaisedAt == 0)
+                {
+                    firstRaisedAt = Stopwatch.GetTimestamp();
+                    firstSessionRaised.Set();
+                }
+            }
         };
 
+        // Session one: fail reads until the throttle has opened a window and collapsed at least one
+        // repeat behind it, so a surviving bucket would have a non-zero count to carry forward.
         await device.ConnectAsync();
         transport.ScriptedStream.FailReads = true;
-        Assert.True(raised.Wait(TimeSpan.FromSeconds(10)), "the first session never reported an error.");
+        Assert.True(firstSessionRaised.Wait(TimeSpan.FromSeconds(10)),
+            "the first session never reported an error.");
 
+        // Quiesce and tear down. Disconnect stops the consumer, so no session-one raise can still
+        // be in flight when the flag flips below.
         transport.ScriptedStream.FailReads = false;
         await device.DisconnectAsync();
 
-        raised.Reset();
-        var raisesAfterFirstSession = Volatile.Read(ref raises);
-
+        // Session two: same failure, same bucket key.
         await device.ConnectAsync();
+        lock (gate)
+        {
+            inSecondSession = true;
+        }
+
         transport.ScriptedStream.FailReads = true;
 
-        Assert.True(raised.Wait(TimeSpan.FromSeconds(3)),
-            "the reconnected session's first failure was collapsed into the previous session's "
-            + "throttle window — ConnectAsync did not reset the error throttle.");
-        Assert.True(Volatile.Read(ref raises) > raisesAfterFirstSession);
+        Assert.True(secondSessionRaised.Wait(TimeSpan.FromSeconds(10)),
+            "the reconnected session never reported an error at all — its first failure was "
+            + "collapsed into the previous session's throttle window.");
+
+        // The guard itself, checked first because it holds however long the run took: a reset
+        // clears the bucket, so the new session's first raise has nothing collapsed behind it. A
+        // surviving bucket carries session one's suppressed occurrences across the reconnect and
+        // reports them here.
+        var gap = Stopwatch.GetElapsedTime(firstRaisedAt, secondRaisedAt);
+        Assert.True(
+            secondSessionFirstError!.SuppressedCount == 0,
+            $"The reconnected session's first error reported {secondSessionFirstError.SuppressedCount} "
+            + "suppressed occurrence(s), so the throttle bucket survived the reconnect — ConnectAsync "
+            + $"did not reset the error throttle. (The raise was also held back {gap.TotalSeconds:0.##}s, "
+            + "which is the window expiring rather than a fresh session reporting immediately.)");
+
+        // Only reachable with the count clean. If the two errors still fell outside one throttle
+        // window, the machine was slow enough that the second raise was due anyway — the run
+        // happens to agree with the guard without having exercised it. Fail loudly rather than
+        // bank a pass that proves nothing.
+        Assert.True(
+            gap < DeviceErrorThrottle.DefaultInterval,
+            $"Inconclusive run: {gap.TotalSeconds:0.##}s separated the two errors, but the throttle "
+            + $"window is {DeviceErrorThrottle.DefaultInterval.TotalSeconds:0.##}s. The second raise "
+            + "would have been due even without the reset, so this run cannot distinguish the two. "
+            + "Failing rather than reporting a pass that guards nothing.");
     }
 
     /// <summary>
