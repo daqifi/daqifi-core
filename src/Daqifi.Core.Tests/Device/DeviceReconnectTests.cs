@@ -502,6 +502,78 @@ public class DeviceReconnectTests
     }
 
     [Fact]
+    public void AConnectThatCannotTakeTheLifecycleLock_FailsRatherThanRunningAlongside()
+    {
+        // The escape hatch: an earlier revision logged a warning on timeout and ran the operation
+        // anyway, which is precisely the double-open it was added to prevent — two threads both
+        // finding no message consumer, both starting one, two readers on one stream. Contention
+        // now has to fail, not proceed.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Contended Connect Device", transport)
+        {
+            LifecycleLockTimeoutOverride = TimeSpan.FromMilliseconds(200)
+        };
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        var connectGate = transport.BlockConnects();
+        transport.ConnectEntered.Reset();
+
+        transport.SimulateDrop();
+        Assert.True(
+            transport.ConnectEntered.Wait(EventTimeout),
+            "the reconnect never reached the transport's connect");
+
+        // The reconnect is parked inside the transport holding the lifecycle lock, so a caller
+        // connect cannot have it. It must give up rather than open a second connection alongside.
+        var thrown = Assert.Throws<TimeoutException>(() => device.Connect());
+        Assert.Contains("Nothing was opened", thrown.Message, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(
+            transport.SawConcurrentLifecycleCalls,
+            "a caller's Connect ran inside the transport alongside the reconnect's connect");
+
+        connectGate.Set();
+        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+    }
+
+    [Fact]
+    public void ADisconnectThatCannotTakeTheLifecycleLock_WaitsRatherThanFailing()
+    {
+        // The other half of the policy. Teardown is the resource-release path and Dispose depends
+        // on it, so contention must not turn it into an exception — it waits instead, and the
+        // short connect-side timeout must not leak into it.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Patient Teardown Device", transport)
+        {
+            LifecycleLockTimeoutOverride = TimeSpan.FromMilliseconds(200)
+        };
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        var connectGate = transport.BlockConnects();
+        transport.ConnectEntered.Reset();
+
+        transport.SimulateDrop();
+        Assert.True(
+            transport.ConnectEntered.Wait(EventTimeout),
+            "the reconnect never reached the transport's connect");
+
+        // Held well past the connect-side timeout, so a shared budget would have expired.
+        ReleaseAfter(connectGate, TimeSpan.FromMilliseconds(600));
+
+        device.Disconnect();
+
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(transport.SawConcurrentLifecycleCalls);
+
+        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
     public void ANormalConnectDisconnectCycle_ReportsNoLifecycleContention()
     {
         // The uncontended path is unchanged by the lock: nothing waits, nothing overlaps.
@@ -760,6 +832,15 @@ public class DeviceReconnectTests
             : base(name, transport)
         {
         }
+
+        /// <summary>
+        /// Shortens the connect-side lifecycle wait so the contention path is reachable in a test
+        /// without a ten-second pause. Mirrors how <c>SdCardDownloadTimeout</c> is overridden.
+        /// </summary>
+        public TimeSpan? LifecycleLockTimeoutOverride { get; init; }
+
+        internal override TimeSpan LifecycleLockTimeout =>
+            LifecycleLockTimeoutOverride ?? base.LifecycleLockTimeout;
 
         /// <summary>Number of analog channels the scripted device reports.</summary>
         public int AnalogChannelCount { get; init; } = 4;

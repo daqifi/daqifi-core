@@ -581,35 +581,98 @@ namespace Daqifi.Core.Device
         private readonly object _lifecycleLock = new();
 
         /// <summary>
-        /// How long a lifecycle operation waits for one already in flight. Matches the budget
-        /// <see cref="Disconnect"/> already allows itself on <c>_textExchangeLock</c>.
+        /// How long <see cref="Connect"/> waits for a lifecycle operation already in flight before
+        /// giving up. Overridable for tests, mirroring <c>SdCardDownloadTimeout</c>.
         /// </summary>
-        private static readonly TimeSpan LifecycleLockTimeout = TimeSpan.FromSeconds(10);
+        internal virtual TimeSpan LifecycleLockTimeout => TimeSpan.FromSeconds(10);
 
         /// <summary>
-        /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, proceeding anyway if the
-        /// lock cannot be taken in time.
+        /// What a lifecycle operation does when it cannot have <see cref="_lifecycleLock"/> to
+        /// itself. Running anyway is deliberately not an option: the whole point of the lock is
+        /// that two threads must never drive the transport at once, and a guarantee with a
+        /// "proceed regardless" branch is not a guarantee.
+        /// </summary>
+        private enum LifecycleContention
+        {
+            /// <summary>
+            /// Give up and throw rather than run alongside. For <see cref="Connect"/>: nothing has
+            /// been opened, so failing costs the caller a retry and nothing else.
+            /// </summary>
+            Fail,
+
+            /// <summary>
+            /// Wait for the operation in flight, however long it takes. For <see cref="Disconnect"/>:
+            /// a teardown that failed, or that ran concurrently, would be worse than a slow one.
+            /// </summary>
+            Wait
+        }
+
+        /// <summary>
+        /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, never alongside another.
         /// </summary>
         /// <remarks>
-        /// Timing out and continuing is the same bargain <see cref="Disconnect"/> already strikes
-        /// with <c>_textExchangeLock</c>: a teardown must never be blocked forever by something
-        /// wedged. The unsynchronized fallback is exactly the behaviour that shipped before this
-        /// lock existed, so a timeout is never worse than the status quo — and a reconnect that
-        /// slips through it is still caught afterwards by <see cref="AbandonIfSuperseded"/>.
+        /// <para>
+        /// The two callers want opposite things from contention, so neither a shared timeout nor a
+        /// shared fallback would suit both.
+        /// </para>
+        /// <para>
+        /// <b><see cref="Connect"/> fails.</b> It waits <see cref="LifecycleLockTimeout"/> and then
+        /// throws. Opening a second connection alongside one already in flight is exactly what this
+        /// lock exists to prevent — both threads would find no message consumer, both would build
+        /// and start one, and the loser's reader would be left running on the same stream, silently
+        /// corrupting frame boundaries for the rest of the session. A caller who gets a
+        /// <see cref="TimeoutException"/> instead has lost nothing: no handle was opened, no state
+        /// changed, and they can try again.
+        /// </para>
+        /// <para>
+        /// <b><see cref="Disconnect"/> waits.</b> Teardown is the resource-release path and is
+        /// reached from <c>Dispose</c>, so it may neither fail nor be skipped, which leaves waiting
+        /// as the only honest option. It is bounded in practice because every possible holder is
+        /// itself a bounded lifecycle operation, and it cannot deadlock: nothing that holds another
+        /// lock in this class ever waits on a lifecycle operation (<c>_textExchangeLock</c> is
+        /// taken <i>inside</i> this one, never the other way round), and
+        /// <see cref="Monitor"/> grants re-entry immediately to a thread that already holds the
+        /// lock — which is what keeps a handler calling <c>Disconnect</c> from inside a
+        /// <see cref="StatusChanged"/> raise working rather than deadlocking against itself.
+        /// </para>
+        /// <para>
+        /// An earlier revision logged a warning and ran the operation anyway on timeout, copying
+        /// the bargain <c>_textExchangeLock</c> strikes. That was the wrong precedent to borrow:
+        /// a text-exchange timeout degrades a single command, whereas this one corrupts the stream
+        /// for the whole session, which is not something to log and continue into.
+        /// </para>
         /// </remarks>
-        private void RunLifecycleExclusive(Action operation)
+        /// <exception cref="TimeoutException">
+        /// Thrown when <paramref name="onContention"/> is <see cref="LifecycleContention.Fail"/> and
+        /// another lifecycle operation held the lock for the whole timeout.
+        /// </exception>
+        private void RunLifecycleExclusive(Action operation, LifecycleContention onContention)
         {
             var acquired = false;
             try
             {
-                acquired = Monitor.TryEnter(_lifecycleLock, LifecycleLockTimeout);
-                if (!acquired)
+                if (onContention == LifecycleContention.Wait)
                 {
-                    SafeLog(() => _logger.LogWarning(
-                        "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock within "
-                        + "{TimeoutSeconds}s; proceeding without it.",
-                        Name,
-                        LifecycleLockTimeout.TotalSeconds));
+                    // The ref overloads are the documented-safe pattern: they set the flag as part
+                    // of taking the lock, so the finally below can never miss a release.
+                    Monitor.Enter(_lifecycleLock, ref acquired);
+                }
+                else
+                {
+                    Monitor.TryEnter(_lifecycleLock, LifecycleLockTimeout, ref acquired);
+                    if (!acquired)
+                    {
+                        SafeLog(() => _logger.LogError(
+                            "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
+                            + "within {TimeoutSeconds}s; refusing to connect alongside the operation in flight.",
+                            Name,
+                            LifecycleLockTimeout.TotalSeconds));
+
+                        throw new TimeoutException(
+                            $"Device '{Name}' could not start connecting within "
+                            + $"{LifecycleLockTimeout.TotalSeconds:0.#}s because another connect or disconnect "
+                            + "was still in progress. Nothing was opened; retry once it has finished.");
+                    }
                 }
 
                 operation();
@@ -627,11 +690,23 @@ namespace Daqifi.Core.Device
         /// Connects to the device.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// A caller-issued connect supersedes any automatic reconnect in progress: the loop is
-        /// cancelled and unwinds without touching the session this call establishes. If an attempt
-        /// is already inside a blocking transport connect, this waits for it to finish rather than
-        /// running alongside it — see <see cref="_lifecycleLock"/>.
+        /// cancelled and unwinds without touching the session this call establishes.
+        /// </para>
+        /// <para>
+        /// Cancelling the loop does not stop it instantly — an attempt already inside a blocking
+        /// transport connect runs to completion — so this waits for any connect or disconnect in
+        /// flight rather than running alongside it. If one is still in flight after
+        /// <see cref="LifecycleLockTimeout"/>, this throws rather than opening a connection
+        /// alongside it: nothing has been opened and no state has changed, so the call is safe to
+        /// retry. See <see cref="_lifecycleLock"/> for why running anyway is not an option.
+        /// </para>
         /// </remarks>
+        /// <exception cref="TimeoutException">
+        /// Thrown when another connect or disconnect was still in progress after
+        /// <see cref="LifecycleLockTimeout"/>. Nothing was opened.
+        /// </exception>
         public void Connect()
         {
             _callerWantsDisconnected = false;
@@ -644,7 +719,8 @@ namespace Daqifi.Core.Device
         /// loop calls this so it does not cancel itself. Serialized against
         /// <see cref="DisconnectCore"/> so the two can never drive the transport at once.
         /// </summary>
-        private void ConnectCore() => RunLifecycleExclusive(ConnectCoreUnsynchronized);
+        private void ConnectCore() =>
+            RunLifecycleExclusive(ConnectCoreUnsynchronized, LifecycleContention.Fail);
 
         private void ConnectCoreUnsynchronized()
         {
@@ -723,6 +799,14 @@ namespace Daqifi.Core.Device
         /// sees <c>_isDisconnecting == true</c> via the post-acquisition
         /// validation and bails out cleanly. Callers wanting non-blocking
         /// disconnect should drive this off a Task.Run.
+        /// <para>
+        /// Also waits for any connect or disconnect already in flight — an automatic reconnect
+        /// attempt parked inside a blocking transport connect, typically — rather than tearing down
+        /// alongside it. Unlike <see cref="Connect"/> this wait is not bounded, because a teardown
+        /// may neither fail nor be skipped: it is the resource-release path and <see cref="Dispose"/>
+        /// depends on it. It cannot deadlock, and every possible holder is itself a bounded
+        /// lifecycle operation — see <see cref="_lifecycleLock"/>. This never throws on contention.
+        /// </para>
         /// </remarks>
         public void Disconnect()
         {
@@ -746,7 +830,7 @@ namespace Daqifi.Core.Device
         /// session ended on purpose.
         /// </param>
         private void DisconnectCore(ConnectionStatus finalStatus) =>
-            RunLifecycleExclusive(() => DisconnectCoreUnsynchronized(finalStatus));
+            RunLifecycleExclusive(() => DisconnectCoreUnsynchronized(finalStatus), LifecycleContention.Wait);
 
         private void DisconnectCoreUnsynchronized(ConnectionStatus finalStatus)
         {
