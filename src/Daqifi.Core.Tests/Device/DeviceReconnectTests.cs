@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Google.Protobuf;
@@ -152,6 +153,43 @@ public class DeviceReconnectTests
         Assert.True(device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 3).IsEnabled);
         Assert.False(device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0).IsEnabled);
         Assert.True(device.Channels.Single(c => c.Type == ChannelType.Digital && c.ChannelNumber == 0).IsEnabled);
+    }
+
+    [Fact]
+    public async Task ASessionDrivenEntirelyByRawCommands_IsStillRestored()
+    {
+        // The shape the example CLI actually uses, and the one that failed on a real cable pull:
+        // channels enabled and streaming started with Send(...) rather than EnableChannels() and
+        // StartStreaming(). Core had no idea a session existed, so a recovered link reported
+        // StreamingResumed:false — having just stopped, during re-initialization, the stream that
+        // was still running. Every other test here drives the device through its typed API, which
+        // is why the whole suite stayed green while the bench failed.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Raw Driven Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        device.Send(ScpiMessageProducer.EnableAdcChannels("1"));
+        device.Send(ScpiMessageProducer.StartStreaming(250));
+
+        // Core's view tracks the commands regardless of which API sent them.
+        Assert.True(device.IsStreaming);
+        Assert.Equal(250, device.StreamingFrequency);
+        Assert.True(device.Channels.Single(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0).IsEnabled);
+
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+        device.ClearSentCommands();
+
+        transport.SimulateDrop();
+        var result = await reconnected;
+
+        Assert.True(result.StreamingResumed);
+        Assert.True(device.IsStreaming);
+
+        var sent = device.SentCommands;
+        Assert.Contains("ENAble:VOLTage:DC 1", sent);
+        Assert.Contains("SYSTem:StartStreamData 250", sent);
     }
 
     [Fact]
@@ -979,6 +1017,13 @@ public class DeviceReconnectTests
                     _sent.Add(stringMessage.Data);
                 }
             }
+
+            // Still goes through the production Send. That is where a session driven by raw
+            // commands is tracked (#379), so a double that recorded the command and swallowed it
+            // would be testing a device that does not exist — which is exactly how a passing
+            // suite missed the bench failure. The transport's stream accepts writes and discards
+            // them, so nothing actually leaves.
+            base.Send(message);
         }
 
         public override Task InitializeAsync(

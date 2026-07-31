@@ -548,6 +548,14 @@ whatever ended the final attempt.
 - the streaming frequency, and
 - an active stream, unless `ResumeStreaming` is turned off.
 
+It does not matter whether you established that state through the typed API
+(`EnableChannels`, `StartStreaming`) or by sending the SCPI yourself with
+`Send(ScpiMessageProducer.StartStreaming(...))` — the device recognizes its own streaming and
+ADC-enable commands whichever way they were sent, so a session driven entirely by raw commands is
+restored just the same. The one exception is the global DIO enable: it is a single switch for the
+whole port rather than a per-channel mask, so sending it directly tells the device nothing about
+*which* digital channels you wanted. Use `EnableChannels` for those.
+
 **What does not.** Everything else is the device's own state, and Core does not presume to know
 what it should be after an outage of unknown length:
 

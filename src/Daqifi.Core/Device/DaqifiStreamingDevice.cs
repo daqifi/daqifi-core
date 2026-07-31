@@ -405,6 +405,143 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.StopStreaming);
         }
 
+        #region Session state tracking for commands sent directly (issue #379)
+
+        /// <summary>The command <see cref="ScpiMessageProducer.StartStreaming"/> emits.</summary>
+        private const string StartStreamingCommand = "SYSTem:StartStreamData";
+
+        /// <summary>The command <see cref="ScpiMessageProducer.StopStreaming"/> emits.</summary>
+        private const string StopStreamingCommand = "SYSTem:StopStreamData";
+
+        /// <summary>The command <see cref="ScpiMessageProducer.EnableAdcChannels"/> emits.</summary>
+        private const string EnableAdcChannelsCommand = "ENAble:VOLTage:DC";
+
+        /// <summary>
+        /// Sends a command, and keeps this device's view of the streaming session in step with it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="Send{T}"/> is public and is a perfectly ordinary way to drive a device — the
+        /// example CLI does the whole job that way — but a session driven through it used to be
+        /// completely invisible to this class: <see cref="IsStreaming"/> stayed <c>false</c> while
+        /// data poured in, and the enabled-channel set stayed empty. That mattered once reconnect
+        /// arrived (issue #379). A physical cable pull on the bench recovered the link and then
+        /// reported <c>StreamingResumed: false</c>, because as far as Core was concerned nothing had
+        /// ever been streaming — while re-initialization had in fact just stopped the stream that
+        /// was running. The session looked restored and was not.
+        /// </para>
+        /// <para>
+        /// So the two commands that define a streaming session are recognized here regardless of
+        /// which API produced them, and the same state is updated that
+        /// <see cref="StartStreaming"/> / <see cref="StopStreaming"/> and
+        /// <see cref="EnableChannel"/> would have set. This is the same principle as #409, where
+        /// analog <c>IsEnabled</c> is resynced from the device's own reported mask: what Core
+        /// believes about a session has to track what is actually true of it.
+        /// </para>
+        /// <para>
+        /// Only these commands are interpreted, and only after the send itself has succeeded.
+        /// Everything else passes through untouched. The global DIO enable is deliberately not
+        /// tracked: it is one switch for the whole port rather than a per-channel mask, so it
+        /// carries no information about <i>which</i> digital channels a caller wanted.
+        /// </para>
+        /// </remarks>
+        /// <typeparam name="T">The type of the message data payload.</typeparam>
+        /// <param name="message">The message to send.</param>
+        public override void Send<T>(IOutboundMessage<T> message)
+        {
+            base.Send(message);
+
+            // Only after the send has actually gone through: a command that threw never reached
+            // the device and must not move this device's idea of the session.
+            if (message is IOutboundMessage<string> textCommand)
+            {
+                TrackSessionCommand(textCommand.Data);
+            }
+        }
+
+        /// <summary>
+        /// Updates the streaming-session view from a command that has just been sent.
+        /// </summary>
+        private void TrackSessionCommand(string? command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                return;
+            }
+
+            var trimmed = command.Trim();
+
+            if (trimmed.StartsWith(StopStreamingCommand, StringComparison.OrdinalIgnoreCase))
+            {
+                IsStreaming = false;
+                return;
+            }
+
+            if (trimmed.StartsWith(StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
+            {
+                IsStreaming = true;
+                TrackStreamingFrequency(trimmed.AsSpan(StartStreamingCommand.Length));
+                return;
+            }
+
+            if (trimmed.StartsWith(EnableAdcChannelsCommand, StringComparison.OrdinalIgnoreCase))
+            {
+                TrackAdcEnableMask(trimmed.AsSpan(EnableAdcChannelsCommand.Length));
+            }
+        }
+
+        /// <summary>
+        /// Records the rate carried by a start-streaming command, ignoring one this device would
+        /// refuse — the device is the authority on whether it accepted it, and a rate Core would
+        /// reject must not be replayed by a later reconnect.
+        /// </summary>
+        private void TrackStreamingFrequency(ReadOnlySpan<char> argument)
+        {
+            if (!int.TryParse(argument.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency))
+            {
+                return;
+            }
+
+            if (frequency >= 1 && frequency <= Math.Max(1, Metadata.Capabilities.MaxSamplingRate))
+            {
+                StreamingFrequency = frequency;
+            }
+        }
+
+        /// <summary>
+        /// Applies a sent ADC enable bitmask to this device's analog channels, so a caller who
+        /// enabled channels with a raw command has the same restorable session as one who used
+        /// <see cref="EnableChannels"/>.
+        /// </summary>
+        /// <remarks>
+        /// The mask is a set-replace, exactly as the firmware treats it, so every analog channel is
+        /// assigned from it rather than only the set bits. A device-reported mask still wins on the
+        /// next status frame (#409) — that is the device's own view, and it outranks what was asked
+        /// for.
+        /// </remarks>
+        private void TrackAdcEnableMask(ReadOnlySpan<char> argument)
+        {
+            if (!uint.TryParse(argument.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var mask))
+            {
+                return;
+            }
+
+            WithChannelsLock(() =>
+            {
+                foreach (var channel in SnapshotChannels())
+                {
+                    if (channel.Type != ChannelType.Analog || channel.ChannelNumber > MaxAdcBitmaskChannel)
+                    {
+                        continue;
+                    }
+
+                    channel.IsEnabled = (mask & (1u << channel.ChannelNumber)) != 0;
+                }
+            });
+        }
+
+        #endregion
+
         #region Session restore after an automatic reconnect (issue #379)
 
         /// <summary>
