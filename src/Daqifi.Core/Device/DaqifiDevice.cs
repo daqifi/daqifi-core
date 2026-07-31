@@ -556,7 +556,25 @@ namespace Daqifi.Core.Device
         /// Collapses repeated background failures so a systematic fault stays visible without
         /// storming <see cref="ErrorOccurred"/>. See that event for the documented policy.
         /// </summary>
-        private readonly DeviceErrorThrottle _errorThrottle = new();
+        private DeviceErrorThrottle _errorThrottle = new();
+
+        /// <summary>
+        /// Test seam: replaces the background-error throttle, so a test can widen the collapsing
+        /// window far beyond the default instead of racing it. Never called in production.
+        /// </summary>
+        /// <remarks>
+        /// A test that wants to prove a reconnect clears the throttle otherwise has to observe two
+        /// errors inside the default five-second window — which makes the result depend on how
+        /// quickly the machine happened to run, in both directions: too slow and the second error
+        /// is due anyway (the test passes without proving anything), tighten the bound and a loaded
+        /// CI box fails a correct implementation. Widening the window removes the clock from the
+        /// question entirely. Call before connecting; the field is read from background threads.
+        /// </remarks>
+        /// <param name="throttle">The throttle to use.</param>
+        internal void SetErrorThrottleForTesting(DeviceErrorThrottle throttle)
+        {
+            _errorThrottle = throttle ?? throw new ArgumentNullException(nameof(throttle));
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiDevice"/> class.

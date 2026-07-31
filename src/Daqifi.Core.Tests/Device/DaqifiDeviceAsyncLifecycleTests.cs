@@ -324,18 +324,20 @@ public class DaqifiDeviceAsyncLifecycleTests
     [Fact]
     public async Task ConnectAsync_OpensAFreshErrorThrottleSessionOnReconnect()
     {
-        // The throttle collapses repeats of the same (source, exception type) for five seconds, so
-        // a reconnect must clear it or the new session's first failure is swallowed.
+        // The throttle collapses repeats of the same (source, exception type), so a reconnect must
+        // clear it or the new session's first failure is swallowed.
         //
-        // The load-bearing assertion here is SuppressedCount, not elapsed time. "The second error
-        // arrived quickly" only proves the reset ran if the two errors fell inside one throttle
-        // window, which a slow machine can break — and then the test passes for the wrong reason.
-        // SuppressedCount cannot: a reset clears the bucket, so a fresh session's first raise has
-        // nothing collapsed behind it, while a surviving bucket carries the previous session's
-        // count forward no matter when it finally fires. The window is still checked, but as a
-        // precondition that fails loudly rather than as the proof itself.
+        // Nothing here depends on how fast the machine is. Against the default five-second window
+        // it would: the test has to observe two errors inside one window, so a slow run makes the
+        // second error due anyway (passing while proving nothing), and a tight bound fails a
+        // correct implementation on a loaded runner. Widening the window to ten minutes takes the
+        // clock out of it — a fresh session raises immediately, and a surviving bucket stays shut
+        // for far longer than any run of this test.
         using var transport = new ScriptedErrorTransport();
         using var device = new DaqifiDevice("Erroring Device", transport);
+
+        var throttle = new DeviceErrorThrottle(TimeSpan.FromMinutes(10));
+        device.SetErrorThrottleForTesting(throttle);
 
         var gate = new object();
         var firstSessionRaised = new ManualResetEventSlim(false);
@@ -393,32 +395,33 @@ public class DaqifiDeviceAsyncLifecycleTests
 
         transport.ScriptedStream.FailReads = true;
 
+        // Primary guard. Without the reset the bucket is still shut — for another ten minutes — so
+        // this failure never arrives and the wait is what trips.
         Assert.True(secondSessionRaised.Wait(TimeSpan.FromSeconds(10)),
-            "the reconnected session never reported an error at all — its first failure was "
-            + "collapsed into the previous session's throttle window.");
+            "the reconnected session never reported an error at all: its first failure was "
+            + "collapsed into the throttle window the previous session opened, so ConnectAsync "
+            + "did not reset the error throttle.");
 
-        // The guard itself, checked first because it holds however long the run took: a reset
-        // clears the bucket, so the new session's first raise has nothing collapsed behind it. A
-        // surviving bucket carries session one's suppressed occurrences across the reconnect and
-        // reports them here.
-        var gap = Stopwatch.GetElapsedTime(firstRaisedAt, secondRaisedAt);
+        // Corroborating guard, independent of the clock in a different way: a reset clears the
+        // bucket, so a fresh session's first raise has nothing collapsed behind it. A bucket that
+        // survived would report the previous session's count here whenever it eventually fired.
         Assert.True(
             secondSessionFirstError!.SuppressedCount == 0,
             $"The reconnected session's first error reported {secondSessionFirstError.SuppressedCount} "
-            + "suppressed occurrence(s), so the throttle bucket survived the reconnect — ConnectAsync "
-            + $"did not reset the error throttle. (The raise was also held back {gap.TotalSeconds:0.##}s, "
-            + "which is the window expiring rather than a fresh session reporting immediately.)");
+            + "suppressed occurrence(s), so the throttle bucket survived the reconnect.");
 
-        // Only reachable with the count clean. If the two errors still fell outside one throttle
-        // window, the machine was slow enough that the second raise was due anyway — the run
-        // happens to agree with the guard without having exercised it. Fail loudly rather than
-        // bank a pass that proves nothing.
+        // Backstop for the test's own premise rather than for the code: if the two errors somehow
+        // landed a whole throttle window apart, the second raise was due regardless and the run
+        // proved nothing. Ten minutes makes that unreachable in practice — a run that slow has
+        // failed on the waits above long before — but assert it rather than assume it, so the test
+        // can never report a pass it did not earn.
+        var gap = Stopwatch.GetElapsedTime(firstRaisedAt, secondRaisedAt);
         Assert.True(
-            gap < DeviceErrorThrottle.DefaultInterval,
-            $"Inconclusive run: {gap.TotalSeconds:0.##}s separated the two errors, but the throttle "
-            + $"window is {DeviceErrorThrottle.DefaultInterval.TotalSeconds:0.##}s. The second raise "
-            + "would have been due even without the reset, so this run cannot distinguish the two. "
-            + "Failing rather than reporting a pass that guards nothing.");
+            gap < throttle.Interval,
+            $"Inconclusive run: {gap.TotalSeconds:0.##}s separated the two errors, which is beyond "
+            + $"the {throttle.Interval.TotalMinutes:0.##}-minute throttle window this test installs. "
+            + "The second raise would have been due even without the reset, so this run cannot "
+            + "distinguish the two cases. Failing rather than reporting a pass that guards nothing.");
     }
 
     /// <summary>
