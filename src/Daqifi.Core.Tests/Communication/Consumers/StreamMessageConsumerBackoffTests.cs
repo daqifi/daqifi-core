@@ -292,6 +292,45 @@ public class StreamMessageConsumerBackoffTests
         consumer.StopSafely(timeoutMs: 2000);
     }
 
+    [Fact]
+    public void TheRecoveringStreamHelper_DeliversAWholePayloadAcrossPartialReads()
+    {
+        // Guards the harness the two tests above depend on. Driven with a one-byte read buffer, so
+        // the payload can only arrive if the helper retains what a read did not take — a helper
+        // that dropped the unread suffix would deliver "$" and never complete the line, and those
+        // tests would then be asserting nothing.
+        using var stream = new RecoveringStream();
+        var received = new List<string>();
+
+        using var consumer = new StreamMessageConsumer<string>(
+            stream, new LineBasedMessageParser(), bufferSize: 1);
+        consumer.MessageReceived += (_, e) =>
+        {
+            lock (received)
+            {
+                received.Add(e.Message.Data);
+            }
+        };
+
+        consumer.Start();
+        stream.Recover("$DAQiFi\r\n");
+
+        Assert.True(WaitUntil(() =>
+        {
+            lock (received)
+            {
+                return received.Count >= 1;
+            }
+        }, TimeSpan.FromSeconds(10)), "the payload never arrived in full");
+
+        lock (received)
+        {
+            Assert.Equal("$DAQiFi", received[0]);
+        }
+
+        consumer.StopSafely(timeoutMs: 2000);
+    }
+
     private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -342,12 +381,14 @@ public class StreamMessageConsumerBackoffTests
     {
         private readonly object _gate = new();
         private byte[]? _pending;
+        private int _pendingOffset;
 
         public void Recover(string text)
         {
             lock (_gate)
             {
                 _pending = System.Text.Encoding.UTF8.GetBytes(text);
+                _pendingOffset = 0;
             }
         }
 
@@ -361,9 +402,21 @@ public class StreamMessageConsumerBackoffTests
                     throw new IOException("the link is down");
                 }
 
-                var length = Math.Min(_pending.Length, count);
-                Array.Copy(_pending, 0, buffer, offset, length);
-                _pending = null;
+                // Honor Stream.Read's contract: hand back at most count bytes and keep the
+                // remainder for the next call. Copying min(payload, count) and then dropping the
+                // rest would silently couple these tests to the consumer's read buffer being larger
+                // than the payload — the test would keep passing for a reason unrelated to the code
+                // under test, and would start failing on an unrelated bufferSize change.
+                var length = Math.Min(_pending.Length - _pendingOffset, count);
+                Array.Copy(_pending, _pendingOffset, buffer, offset, length);
+                _pendingOffset += length;
+
+                if (_pendingOffset == _pending.Length)
+                {
+                    _pending = null;
+                    _pendingOffset = 0;
+                }
+
                 return length;
             }
         }

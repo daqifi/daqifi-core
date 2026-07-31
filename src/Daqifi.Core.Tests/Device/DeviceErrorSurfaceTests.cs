@@ -515,8 +515,6 @@ public class DeviceErrorSurfaceTests
     /// </summary>
     internal sealed class ScriptedStream : Stream
     {
-        private readonly Queue<byte[]> _pending = new();
-        private readonly object _gate = new();
         private int _readCount;
 
         public volatile bool FailReads;
@@ -540,19 +538,10 @@ public class DeviceErrorSurfaceTests
                 throw new IOException("the device is gone");
             }
 
-            lock (_gate)
-            {
-                if (_pending.Count == 0)
-                {
-                    Thread.Sleep(5);
-                    return 0;
-                }
-
-                var chunk = _pending.Dequeue();
-                var length = Math.Min(chunk.Length, count);
-                Array.Copy(chunk, 0, buffer, offset, length);
-                return length;
-            }
+            // Idle. These tests drive the failure paths only, so this stream never delivers data —
+            // it deliberately has no payload queue to get the partial-read contract wrong with.
+            Thread.Sleep(5);
+            return 0;
         }
 
         public override void Write(byte[] buffer, int offset, int count)
