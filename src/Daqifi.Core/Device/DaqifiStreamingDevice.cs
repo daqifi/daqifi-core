@@ -479,8 +479,7 @@ namespace Daqifi.Core.Device
 
             if (trimmed.StartsWith(StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
             {
-                IsStreaming = true;
-                TrackStreamingFrequency(trimmed.AsSpan(StartStreamingCommand.Length));
+                TrackStreamingStart(trimmed.AsSpan(StartStreamingCommand.Length));
                 return;
             }
 
@@ -491,21 +490,50 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Records the rate carried by a start-streaming command, ignoring one this device would
-        /// refuse — the device is the authority on whether it accepted it, and a rate Core would
-        /// reject must not be replayed by a later reconnect.
+        /// Records a start-streaming command, but only one carrying a rate this device can model.
         /// </summary>
-        private void TrackStreamingFrequency(ReadOnlySpan<char> argument)
+        /// <remarks>
+        /// <para>
+        /// A command whose argument is missing, unparseable, or outside the device's sampling range
+        /// is <b>not</b> treated as the start of a session. Marking one as streaming anyway would be
+        /// wrong three times over: the firmware rejects such a command and does not start streaming,
+        /// so the flag would not describe the device; <see cref="StreamingFrequency"/> would be left
+        /// holding a rate from some earlier session, which a reconnect would then faithfully restore
+        /// — resuming at a rate nobody asked for is the silent-wrong-data failure this whole feature
+        /// exists to prevent; and a stale <see cref="IsStreaming"/> makes the next legitimate
+        /// <see cref="StartStreaming"/> a silent no-op, which is the same stale-flag trap that
+        /// issue #118 and the defensive stops scattered through the SD paths already guard against.
+        /// </para>
+        /// <para>
+        /// The existing state is left alone rather than cleared. A device already streaming at a
+        /// good rate goes on doing exactly that when the firmware rejects a malformed start, so
+        /// <see cref="IsStreaming"/> and <see cref="StreamingFrequency"/> both remain true of it;
+        /// forcing them off would swap one inaccuracy for another.
+        /// </para>
+        /// <para>
+        /// Because of this, <see cref="IsStreaming"/> is never <c>true</c> alongside a rate that was
+        /// not validated — so session restore has no "streaming at an unknown rate" case to decide
+        /// what to do about. The state it replays is always one that was really commanded.
+        /// </para>
+        /// </remarks>
+        private void TrackStreamingStart(ReadOnlySpan<char> argument)
         {
-            if (!int.TryParse(argument.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency))
+            var rate = argument.Trim();
+
+            if (!int.TryParse(rate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency)
+                || frequency < 1
+                || frequency > Math.Max(1, Metadata.Capabilities.MaxSamplingRate))
             {
+                Trace.WriteLine(
+                    $"[{nameof(TrackStreamingStart)}] Ignoring a start-streaming command with an unusable rate "
+                    + $"('{rate.ToString()}'); the session state is unchanged.");
                 return;
             }
 
-            if (frequency >= 1 && frequency <= Math.Max(1, Metadata.Capabilities.MaxSamplingRate))
-            {
-                StreamingFrequency = frequency;
-            }
+            // Frequency first: anything observing IsStreaming must never catch it true next to a
+            // rate belonging to a previous session.
+            StreamingFrequency = frequency;
+            IsStreaming = true;
         }
 
         /// <summary>

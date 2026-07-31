@@ -192,6 +192,98 @@ public class DeviceReconnectTests
         Assert.Contains("SYSTem:StartStreamData 250", sent);
     }
 
+    [Theory]
+    [InlineData("SYSTem:StartStreamData")]           // no argument at all
+    [InlineData("SYSTem:StartStreamData ")]          // argument present but empty
+    [InlineData("SYSTem:StartStreamData abc")]       // not a number
+    [InlineData("SYSTem:StartStreamData 100 extra")] // trailing junk
+    [InlineData("SYSTem:StartStreamData 0")]         // below the usable range
+    [InlineData("SYSTem:StartStreamData -5")]        // negative
+    [InlineData("SYSTem:StartStreamData 99999999")]  // beyond the device's sampling rate
+    public void AStartStreamingCommandWithAnUnusableRate_DoesNotMarkTheDeviceStreaming(string command)
+    {
+        // The bench proved the happy path; a valid rate never reaches this branch. Marking the
+        // device as streaming here would leave StreamingFrequency holding a rate from some earlier
+        // session, and a reconnect would then restore that rate — resuming at a number nobody asked
+        // for, which is precisely the silent-wrong-data mode this feature exists to prevent.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Malformed Command Device", transport);
+
+        ConnectAndInitialize(device);
+
+        var frequencyBefore = device.StreamingFrequency;
+
+        device.Send(new ScpiMessage(command));
+
+        Assert.False(device.IsStreaming);
+        Assert.Equal(frequencyBefore, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public void AnUnusableStartCommand_LeavesARunningSessionExactlyAsItWas()
+    {
+        // The firmware rejects the malformed command and keeps streaming at the rate it already
+        // had, so clearing the flags would swap one inaccuracy for another.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Still Streaming Device", transport);
+
+        ConnectAndInitialize(device);
+
+        device.Send(ScpiMessageProducer.StartStreaming(250));
+        Assert.True(device.IsStreaming);
+        Assert.Equal(250, device.StreamingFrequency);
+
+        device.Send(new ScpiMessage("SYSTem:StartStreamData wat"));
+
+        Assert.True(device.IsStreaming);
+        Assert.Equal(250, device.StreamingFrequency);
+    }
+
+    [Fact]
+    public void AfterAnUnusableStartCommand_AGenuineStartStreamingStillWorks()
+    {
+        // The stale-flag trap from issue #118: StartStreaming() returns early while IsStreaming is
+        // set, so a spuriously-true flag would silently swallow the caller's real request.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Recoverable Device", transport);
+
+        ConnectAndInitialize(device);
+
+        device.Send(new ScpiMessage("SYSTem:StartStreamData not-a-rate"));
+        device.ClearSentCommands();
+
+        device.StreamingFrequency = 200;
+        device.StartStreaming();
+
+        Assert.True(device.IsStreaming);
+        Assert.Contains("SYSTem:StartStreamData 200", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task AnUnusableStartCommand_LeavesNothingForAReconnectToResume()
+    {
+        // The end-to-end consequence: no session was established, so a reconnect must not invent
+        // one at whatever rate happened to be left in StreamingFrequency.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Nothing To Resume Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+        device.Send(new ScpiMessage("SYSTem:StartStreamData oops"));
+
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+        device.ClearSentCommands();
+
+        transport.SimulateDrop();
+        var result = await reconnected;
+
+        Assert.False(result.StreamingResumed);
+        Assert.False(device.IsStreaming);
+        Assert.DoesNotContain(
+            device.SentCommands,
+            c => c.StartsWith("SYSTem:StartStreamData", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task ADeviceThatWasNotStreaming_ComesBackIdle()
     {
