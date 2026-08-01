@@ -45,6 +45,12 @@ public sealed class WincModuleInspector
     private readonly TimeSpan _responseTimeout;
     private readonly TimeSpan _openTimeout;
 
+    // Test seam. The abandonment path is fire-and-forget by construction, so without a way to
+    // observe it from outside, a test can only infer that it ran from GC/finalizer timing - which
+    // is nondeterministic and makes a flaky CI gate. This makes "the fault was observed" directly
+    // assertable. Null in production, where the Debug log is the only output.
+    private readonly Action<Exception>? _abandonedOpenFaultObserver;
+
     /// <summary>
     /// Creates an inspector that opens real serial ports.
     /// </summary>
@@ -61,13 +67,15 @@ public sealed class WincModuleInspector
         ILogger? logger = null,
         TimeSpan? baudSettleDelay = null,
         TimeSpan? responseTimeout = null,
-        TimeSpan? openTimeout = null)
+        TimeSpan? openTimeout = null,
+        Action<Exception>? abandonedOpenFaultObserver = null)
     {
         _portFactory = portFactory ?? throw new ArgumentNullException(nameof(portFactory));
         _logger = logger ?? NullLogger.Instance;
         _baudSettleDelay = baudSettleDelay ?? TimeSpan.FromMilliseconds(100);
         _responseTimeout = responseTimeout ?? TimeSpan.FromSeconds(2);
         _openTimeout = openTimeout ?? TimeSpan.FromSeconds(5);
+        _abandonedOpenFaultObserver = abandonedOpenFaultObserver;
     }
 
     /// <summary>
@@ -217,6 +225,7 @@ public sealed class WincModuleInspector
                             fault,
                             "Abandoned open of {PortName} faulted after it was given up on.",
                             portName);
+                        _abandonedOpenFaultObserver?.Invoke(fault);
                     }
 
                     try

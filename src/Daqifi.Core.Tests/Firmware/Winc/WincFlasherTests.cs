@@ -248,42 +248,33 @@ public class WincFlasherTests
     public async Task Inspector_ObservesTheFaultOfAnAbandonedOpen()
     {
         // The abandoned open is no longer awaited by anyone, so if it later faults nothing would
-        // observe the exception - a silently swallowed background failure (#377/#394). The
-        // continuation must read it. Verified via the unobserved-exception hook: after forcing a
-        // GC, no unobserved fault should have been raised for our exception.
-        var unobserved = new List<Exception>();
-        void Handler(object? _, UnobservedTaskExceptionEventArgs e)
-        {
-            if (e.Exception?.InnerException is InvalidOperationException { Message: "abandoned-open-fault" })
-            {
-                unobserved.Add(e.Exception);
-            }
-        }
+        // observe the exception - a silently swallowed background failure (#377/#394).
+        //
+        // Asserted at the seam rather than through TaskScheduler.UnobservedTaskException plus a
+        // forced GC. That route depends on collector and finalizer timing, which is exactly the
+        // kind of nondeterminism that produces a flaky CI gate, and the event is process-global so
+        // it couples this test to every other task in a parallel run. Reading Task.Exception is
+        // what marks a fault observed, so a hook receiving that exception proves the read happened
+        // - the same property, decided by the code under test instead of by the runtime.
+        var faultObserved = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        TaskScheduler.UnobservedTaskException += Handler;
-        try
-        {
-            var port = new FaultingAfterDelayPort(TimeSpan.FromMilliseconds(300));
-            var inspector = new WincModuleInspector(
-                (_, _) => port,
-                baudSettleDelay: TimeSpan.Zero,
-                openTimeout: TimeSpan.FromMilliseconds(50));
+        var port = new FaultingAfterDelayPort(TimeSpan.FromMilliseconds(150));
+        var inspector = new WincModuleInspector(
+            (_, _) => port,
+            baudSettleDelay: TimeSpan.Zero,
+            openTimeout: TimeSpan.FromMilliseconds(50),
+            abandonedOpenFaultObserver: ex => faultObserved.TrySetResult(ex));
 
-            await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
+        await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
 
-            // Let the abandoned open run to its fault, then force finalization.
-            await Task.Delay(TimeSpan.FromMilliseconds(600));
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+        var observed = await faultObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-            Assert.Empty(unobserved);
-            Assert.True(port.WasDisposedByContinuation);
-        }
-        finally
-        {
-            TaskScheduler.UnobservedTaskException -= Handler;
-        }
+        Assert.IsType<InvalidOperationException>(
+            Assert.IsType<AggregateException>(observed).InnerException);
+
+        // The continuation still owns disposal of the port it took over.
+        await port.Disposed.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
     [Fact]
@@ -488,7 +479,11 @@ public class WincFlasherTests
     /// </summary>
     private sealed class FaultingAfterDelayPort(TimeSpan delay) : IWincSerialPort
     {
-        internal bool WasDisposedByContinuation { get; private set; }
+        private readonly TaskCompletionSource _disposed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when the port is disposed, so tests can await it deterministically.</summary>
+        internal Task Disposed => _disposed.Task;
 
         public bool IsOpen => false;
         public int BaudRate { get; set; } = 115200;
@@ -506,7 +501,7 @@ public class WincFlasherTests
         public void ReadExactly(byte[] buffer, int offset, int count, TimeSpan timeout)
             => throw new TimeoutException("Port never opened.");
 
-        public void Dispose() => WasDisposedByContinuation = true;
+        public void Dispose() => _disposed.TrySetResult();
     }
 
     [Fact]
