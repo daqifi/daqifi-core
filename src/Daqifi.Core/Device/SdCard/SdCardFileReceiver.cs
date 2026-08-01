@@ -43,10 +43,36 @@ public sealed class SdCardFileReceiver
     private readonly TimeSpan? _idleTimeout;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SdCardFileReceiver"/> class.
+    /// Default read buffer size, in bytes.
+    /// </summary>
+    private const int DefaultBufferSize = 16384;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SdCardFileReceiver"/> class for a transport
+    /// that reports silence with a zero-length read — USB serial, where the port's own read
+    /// timeout provides that signal.
     /// </summary>
     /// <param name="sourceStream">The transport stream to read raw bytes from.</param>
     /// <param name="bufferSize">Read buffer size in bytes. Defaults to 16384 (16 KB).</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="bufferSize"/> is not positive.
+    /// </exception>
+    /// <remarks>
+    /// Kept with its original signature rather than folded into the overload below as optional
+    /// parameters: optional arguments are a compile-time convenience, so adding parameters here
+    /// would change the CLR signature and leave already-compiled consumers of the
+    /// <c>Daqifi.Core</c> package calling a constructor that no longer exists.
+    /// </remarks>
+    public SdCardFileReceiver(Stream sourceStream, int bufferSize = DefaultBufferSize)
+        : this(sourceStream, zeroLengthReadMeansClosed: false, idleTimeout: null, bufferSize: bufferSize)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SdCardFileReceiver"/> class, stating what the
+    /// transport's silence means.
+    /// </summary>
+    /// <param name="sourceStream">The transport stream to read raw bytes from.</param>
     /// <param name="zeroLengthReadMeansClosed">
     /// Whether a zero-length read means the peer closed the connection. True for a stream-oriented
     /// network transport, where that is the only thing zero bytes can mean; false for USB serial,
@@ -60,6 +86,7 @@ public sealed class SdCardFileReceiver
     /// to <see cref="DefaultIdleTimeout"/>; pass <see cref="Timeout.InfiniteTimeSpan"/>
     /// to disable the window and rely solely on the overall transfer deadline.
     /// </param>
+    /// <param name="bufferSize">Read buffer size in bytes. Defaults to 16384 (16 KB).</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="bufferSize"/> is not positive, or when
     /// <paramref name="idleTimeout"/> is neither positive nor
@@ -67,9 +94,9 @@ public sealed class SdCardFileReceiver
     /// </exception>
     public SdCardFileReceiver(
         Stream sourceStream,
-        int bufferSize = 16384,
-        bool zeroLengthReadMeansClosed = false,
-        TimeSpan? idleTimeout = null)
+        bool zeroLengthReadMeansClosed,
+        TimeSpan? idleTimeout = null,
+        int bufferSize = DefaultBufferSize)
     {
         _sourceStream = sourceStream ?? throw new ArgumentNullException(nameof(sourceStream));
 

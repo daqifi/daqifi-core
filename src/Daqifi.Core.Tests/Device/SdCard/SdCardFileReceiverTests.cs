@@ -642,6 +642,19 @@ public class SdCardFileReceiverTests
         Assert.Null(ex.Timeout);
     }
 
+    [Fact]
+    public void Ctor_OriginalTwoParameterSignature_StillExistsForCompiledCallers()
+    {
+        // Optional arguments are compile-time only: adding parameters to the (Stream, int)
+        // constructor would have kept every source caller compiling while leaving already-built
+        // consumers of the Daqifi.Core package calling a CLR signature that no longer exists.
+        // Assert on the metadata, not on a call, because a source-level call would bind happily
+        // to a widened constructor and prove nothing.
+        var ctor = typeof(SdCardFileReceiver).GetConstructor(new[] { typeof(Stream), typeof(int) });
+
+        Assert.NotNull(ctor);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -650,7 +663,8 @@ public class SdCardFileReceiverTests
         using var sourceStream = new MemoryStream();
 
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => new SdCardFileReceiver(sourceStream, idleTimeout: TimeSpan.FromSeconds(seconds)));
+            () => new SdCardFileReceiver(
+                sourceStream, zeroLengthReadMeansClosed: false, idleTimeout: TimeSpan.FromSeconds(seconds)));
     }
 
     #endregion
