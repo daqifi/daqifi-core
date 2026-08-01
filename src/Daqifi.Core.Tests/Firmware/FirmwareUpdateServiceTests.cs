@@ -97,6 +97,54 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateFirmwareAsync_RaisesStateChangedWithTheServiceAsSender()
+    {
+        // The state machine lives in an internal collaborator, so the event's
+        // sender is forwarded rather than being an implicit `this`. Subscribers
+        // that key off sender (e.g. a UI tracking several services) must keep
+        // seeing the public service instance.
+        var device = new FakeStreamingDevice("COM3");
+        var hidTransport = new FakeHidTransport();
+        hidTransport.EnqueueRead([0x01, 0x10]); // version
+        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 1
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack 2
+        hidTransport.EnqueueRead([0xCD, 0xAB]); // READ_CRC response → decodes to 0xABCD (match)
+
+        var enumerator = new FakeHidDeviceEnumerator([
+            Array.Empty<HidDeviceInfo>(),
+            [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]
+        ]);
+
+        var service = new FirmwareUpdateService(
+            hidTransport,
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol(
+                [[0xA1, 0x01], [0xA1, 0x02]],
+                crcRegions: [new FlashCrcRegion(0x9D000000, 256, 0xABCD)]),
+            enumerator,
+            CreateFastOptions());
+
+        var senders = new List<object?>();
+        service.StateChanged += (sender, _) => senders.Add(sender);
+
+        var hexPath = CreateTempFile();
+        try
+        {
+            await service.UpdateFirmwareAsync(device, hexPath);
+        }
+        finally
+        {
+            File.Delete(hexPath);
+        }
+
+        Assert.NotEmpty(senders);
+        Assert.All(senders, sender => Assert.Same(service, sender));
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_WhenFlashCrcMatches_VerifiesViaReadCrcAndCompletes()
     {
         // Closes #213: the Verifying state issues READ_CRC per region and
@@ -1785,7 +1833,7 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public void WifiFlashProgressParser_IgnoresImageBuildPercentAndAdvancesAcrossDeviceFlashPhases()
     {
-        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+        var parser = new WifiFlashProgressParser();
 
         // The local image-build phase reaches 100% per region; those must NOT move the bar,
         // otherwise the monotonic max latches before the on-device flash even starts.
@@ -1818,7 +1866,7 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public void WifiFlashProgressParser_MeasuresFromRangeBase_ForNonZeroVerifyRange()
     {
-        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+        var parser = new WifiFlashProgressParser();
 
         // Range base 0x40000 (span 0x40000). Absolute block addresses must be measured relative to
         // the base; otherwise the first block saturates the fraction to ~100% immediately.
@@ -1840,7 +1888,7 @@ public class FirmwareUpdateServiceTests
     [Fact]
     public void WifiFlashProgressParser_NeverMovesBackward_WhenAddressesResetBetweenPhases()
     {
-        var parser = new FirmwareUpdateService.WifiFlashProgressParser();
+        var parser = new WifiFlashProgressParser();
 
         parser.Observe("begin write operation");
         var writeEnd = parser.Observe(" 0x060000:[wwwwwwww] 0x068000:[wwwwwwww] 0x070000:[wwwwwwww] 0x078000:[wwwwwwww]");
