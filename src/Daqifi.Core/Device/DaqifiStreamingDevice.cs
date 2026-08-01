@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Diagnostics;
+using Daqifi.Core.Device.Internal;
 using Microsoft.Extensions.Logging;
 using Daqifi.Core.Device.Network;
 using Daqifi.Core.Device.SdCard;
@@ -28,7 +29,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
     {
         /// <summary>
         /// The delay in milliseconds to wait for the WiFi module to restart after applying configuration.
@@ -81,9 +82,6 @@ namespace Daqifi.Core.Device
         /// backstop (ADR 0001, docs/adr/0001-firmware-feature-gating.md).
         /// </summary>
         private const int ScpiErrorCodeUndefinedHeader = -113;
-
-        private bool _isLoggingToSdCard;
-        private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
 
         /// <summary>
         /// Admits one SD download at a time. A download that hits its deadline is ABANDONED, not
@@ -212,7 +210,7 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Gets a value indicating whether the device is currently logging data to the SD card.
         /// </summary>
-        public bool IsLoggingToSdCard => _isLoggingToSdCard;
+        public bool IsLoggingToSdCard => _sdCardOperations.IsLoggingToSdCard;
 
         /// <summary>
         /// Gets a value indicating whether the device is connected over USB (serial transport).
@@ -225,7 +223,7 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Gets the most recently retrieved list of files on the SD card.
         /// </summary>
-        public IReadOnlyList<SdCardFileInfo> SdCardFiles => _sdCardFiles;
+        public IReadOnlyList<SdCardFileInfo> SdCardFiles => _sdCardOperations.SdCardFiles;
 
         /// <inheritdoc />
         public event EventHandler<LowSdSpaceWarningEventArgs>? LowSdSpaceWarning;
@@ -237,17 +235,6 @@ namespace Daqifi.Core.Device
         /// duration and the timestamp of the first frame after the gap. See <see cref="TimestampGapDetector"/>.
         /// </summary>
         public event EventHandler<TimestampGapEventArgs>? GapDetected;
-
-        private readonly NetworkConfiguration _networkConfiguration = new NetworkConfiguration();
-
-        /// <summary>
-        /// Gets a copy of the current network configuration.
-        /// </summary>
-        /// <remarks>
-        /// Returns a clone to prevent external modification. Use <see cref="UpdateNetworkConfigurationAsync"/>
-        /// to change the device's network configuration.
-        /// </remarks>
-        public NetworkConfiguration NetworkConfiguration => _networkConfiguration.Clone();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiStreamingDevice"/> class.
@@ -275,6 +262,14 @@ namespace Daqifi.Core.Device
 
         private void InitializeStreamingDevice()
         {
+            // Built here rather than in field initializers because each needs `this` as its host,
+            // which a field initializer cannot reference. Every constructor routes through this
+            // method, so they are always in place before the device is handed to a caller.
+            _networkOperations = new NetworkConfigurationOperations(this);
+            _sdCardOperations = new SdCardOperations(this);
+            _lanChipInfoOperations = new LanChipInfoOperations(this);
+            _diagnosticsOperations = new DeviceDiagnosticsOperations(this);
+
             StreamingFrequency = 100;
 
             // Clear the "already-sent" PWM frequency cache on any transition away from Connected —
@@ -365,13 +360,13 @@ namespace Daqifi.Core.Device
                     responseTimeoutMs: 500,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
-                if (!ContainsScpiError(lines))
+                if (!ScpiResponseClassifier.ContainsScpiError(lines))
                 {
                     return;
                 }
             }
 
-            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
+            var lastScpiError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
             throw new ScpiInitializationErrorException(
                 "Device returned a SCPI error while setting stream interface to USB.",
                 lines,
@@ -1797,1217 +1792,121 @@ namespace Daqifi.Core.Device
             }
         }
 
-        /// <summary>
-        /// Updates the device network configuration with the specified settings.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// Supported over any transport, including WiFi/TCP. The settings are staged, persisted to
-        /// NVM, and only then applied, so the configuration is durable before the applying restart
-        /// can disturb the control connection (#352).
-        /// </para>
-        /// <para>
-        /// <b>Over a WiFi/TCP control connection this method is expected to drop the connection.</b>
-        /// Applying the settings restarts the WiFi module, and when the new configuration points at
-        /// a different network the device necessarily leaves the one carrying the control link.
-        /// That is normal: the configuration has already been saved at that point. Callers should
-        /// treat the device as disconnected once this method returns over WiFi and rediscover or
-        /// reconnect on the new network — typically at a new address.
-        /// </para>
-        /// </remarks>
-        /// <param name="configuration">The new network configuration to apply.</param>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
-        /// <exception cref="ArgumentOutOfRangeException">Thrown when an unsupported WiFi mode or security type is specified.</exception>
-        /// <exception cref="OperationCanceledException">
-        /// Thrown when the operation is canceled <b>before</b> the configuration is committed to the
-        /// device. Once the save and apply have been dispatched the operation always completes
-        /// successfully: cancelling during the restart wait ends the wait early instead of failing,
-        /// because the device has already persisted and applied the new settings.
-        /// </exception>
-        public async Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
-        {
-            if (configuration == null)
-            {
-                throw new ArgumentNullException(nameof(configuration));
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            // Stop streaming if active
-            if (IsStreaming)
-            {
-                StopStreaming();
-            }
-
-            // Set WiFi mode
-            switch (configuration.Mode)
-            {
-                case WifiMode.ExistingNetwork:
-                    Send(ScpiMessageProducer.SetNetworkWifiModeExisting);
-                    break;
-                case WifiMode.SelfHosted:
-                    Send(ScpiMessageProducer.SetNetworkWifiModeSelfHosted);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(configuration), configuration.Mode, "Unsupported WiFi mode.");
-            }
-
-            // Set SSID
-            Send(ScpiMessageProducer.SetNetworkWifiSsid(configuration.Ssid));
-
-            // Set security type and password
-            switch (configuration.SecurityType)
-            {
-                case WifiSecurityType.None:
-                    Send(ScpiMessageProducer.SetNetworkWifiSecurityOpen);
-                    break;
-                case WifiSecurityType.WpaPskPhrase:
-                    Send(ScpiMessageProducer.SetNetworkWifiSecurityWpa);
-                    Send(ScpiMessageProducer.SetNetworkWifiPassword(configuration.Password));
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(configuration), configuration.SecurityType, "Unsupported WiFi security type.");
-            }
-
-            // Stage static IP fields (firmware writes these into the runtime
-            // WiFi settings that ApplyNetworkLan consumes). Skip any field the
-            // caller left null so DHCP-only callers see no behavior change.
-            if (configuration.StaticIP != null)
-            {
-                Send(ScpiMessageProducer.SetLanAddress(configuration.StaticIP));
-            }
-            if (configuration.SubnetMask != null)
-            {
-                Send(ScpiMessageProducer.SetLanMask(configuration.SubnetMask));
-            }
-            if (configuration.Gateway != null)
-            {
-                Send(ScpiMessageProducer.SetLanGateway(configuration.Gateway));
-            }
-
-            // Stage the LAN interface state alongside the credentials above. LAN:ENAbled writes
-            // isEnabled into the same runtime settings struct the SET commands populate and does
-            // not restart anything itself, so it belongs before the save (to be persisted) and
-            // before the apply (the firmware only fires a module REINIT when isEnabled is set).
-            // This deliberately does NOT call PrepareLanInterface() — that is the transport-aware
-            // SD-operation restore, which leaves the LAN alone over WiFi (where #598/#599 keep it
-            // up). Here the LAN enable is unconditional: reconfiguration owns the LAN state.
-            Send(ScpiMessageProducer.DisableStorageSd);
-            Send(ScpiMessageProducer.EnableNetworkLan);
-
-            // Cancellation boundary. This is the last point where abandoning still avoids the two
-            // things that matter: nothing has been persisted (no LAN:SAVE) and no module restart
-            // has been triggered (no LAN:APPLY), so the device keeps serving the network
-            // configuration it already had. Past the save below it has committed, and cancellation
-            // stops being a way out.
-            //
-            // This is deliberately NOT a side-effect-free point. The staged credentials, the LAN
-            // enable flag and the SD disable above have all reached the device's runtime state, and
-            // a later LAN:APPLY from any caller would pick up those staged values. No side-effect-
-            // free abort exists once the sequence has begun — only the check at the top of this
-            // method precedes every Send.
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Persist BEFORE applying (#352). LAN:SAVE copies the staged runtime settings straight
-            // to NVM; it does NOT require them to have been applied first. Sending it here — while
-            // the control link is still guaranteed alive — is what makes the reconfiguration
-            // durable regardless of what the apply below does to the connection.
-            Send(ScpiMessageProducer.SaveNetworkLan);
-
-            // Apply last: this restarts the WiFi module. Over a WiFi/TCP control connection that
-            // restart necessarily tears down the link — inherent to moving the device onto a
-            // different network, not a fault to be avoided. Because the save above already
-            // committed the configuration to NVM, losing the link here costs nothing: the device
-            // comes back on the new network with the settings intact. Nothing is sent after this
-            // command, so there is no tail left to drop.
-            Send(ScpiMessageProducer.ApplyNetworkLan);
-
-            // Hold for the module restart window before returning, so the apply is flushed to the
-            // transport rather than left buffered in a connection that is about to go away.
-            // Cancelling here ends the wait but does NOT fail the operation: the device has already
-            // persisted and applied the new configuration, so reporting "canceled" — and skipping
-            // the local-state update below — would leave the caller believing nothing happened
-            // while the device is sitting on a different network.
-            try
-            {
-                await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                // Already committed on the device; stop waiting early and complete normally.
-            }
-
-            // Update local configuration. Static IP fields use null = "leave
-            // unchanged" semantics, so only overwrite when the caller provided
-            // a value — otherwise we'd clobber the previously known static IP.
-            _networkConfiguration.Mode = configuration.Mode;
-            _networkConfiguration.SecurityType = configuration.SecurityType;
-            _networkConfiguration.Ssid = configuration.Ssid;
-            _networkConfiguration.Password = configuration.Password;
-            if (configuration.StaticIP != null)
-            {
-                _networkConfiguration.StaticIP = configuration.StaticIP;
-            }
-            if (configuration.SubnetMask != null)
-            {
-                _networkConfiguration.SubnetMask = configuration.SubnetMask;
-            }
-            if (configuration.Gateway != null)
-            {
-                _networkConfiguration.Gateway = configuration.Gateway;
-            }
-        }
-
-        /// <summary>
-        /// Loads the persisted LAN configuration from the device's NVM back into its runtime settings.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            // Re-check right before the state-changing send so a cancellation requested after the
-            // entry guard still short-circuits the command (matches the pattern accepted in #324).
-            cancellationToken.ThrowIfCancellationRequested();
-            Send(ScpiMessageProducer.LoadNetworkLan);
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Resets the device's LAN configuration to firmware factory defaults.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            // Re-check right before the state-changing send so a cancellation requested after the
-            // entry guard still short-circuits the command (matches the pattern accepted in #324).
-            cancellationToken.ThrowIfCancellationRequested();
-            Send(ScpiMessageProducer.FactoryResetNetworkLan);
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Prepares the SD-card interface for a file operation. Over USB the LAN interface is
-        /// disabled first to free the shared SPI bus for the SD card. Over WiFi/TCP (firmware
-        /// &gt;= v3.7.0, #598/#599) the LAN interface MUST stay enabled — the Harmony SPI driver
-        /// arbitrates SD/WiFi transactions on the shared bus, and the SD reply routes back over the
-        /// very TCP channel that requested it, so disabling LAN would drop the control channel
-        /// mid-operation. Only the SD subsystem is enabled in that case.
-        /// </summary>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        public void PrepareSdInterface()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            if (IsUsbConnection)
-            {
-                Send(ScpiMessageProducer.DisableNetworkLan);
-            }
-
-            Send(ScpiMessageProducer.EnableStorageSd);
-        }
-
-        /// <summary>
-        /// Restores the interface after an SD-card file operation. The SD subsystem is disabled in
-        /// both cases. Over USB the LAN interface is re-enabled (it was disabled by
-        /// <see cref="PrepareSdInterface"/>). Over WiFi/TCP the LAN was never disabled, so it is
-        /// left alone — re-enabling it would re-initialize the WiFi module and drop the connection.
-        /// </summary>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        public void PrepareLanInterface()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.DisableStorageSd);
-
-            if (IsUsbConnection)
-            {
-                Send(ScpiMessageProducer.EnableNetworkLan);
-            }
-        }
-
-        /// <summary>
-        /// Applies the transport predicate for an SD-card operation that drives the card while the
-        /// link is active (LIST / GET / DELETE and the storage-space query). Over USB (serial) these
-        /// are available on all SD-capable firmware and are not gated. Over WiFi/TCP they are gated
-        /// on <see cref="DeviceFeature.SdFileTransferOverWifi"/>, which
-        /// <see cref="DaqifiDevice.EnsureSupported"/> resolves against the requirement table
-        /// (ADR 0001) — pre-empting a command the firmware cannot service over WiFi, which would
-        /// otherwise stall on the shared SPI bus.
-        /// </summary>
-        /// <remarks>
-        /// This is only the transport half of the gate: which feature applies depends on the active
-        /// transport, but whether the device has that feature is the seam's answer, not this
-        /// method's.
-        /// </remarks>
-        /// <exception cref="FeatureNotSupportedException">
-        /// Thrown when the active transport is not USB and the device does not support
-        /// <see cref="DeviceFeature.SdFileTransferOverWifi"/>.
-        /// </exception>
-        private void EnsureSdFileTransferSupportedOnTransport()
-        {
-            if (IsUsbConnection)
-            {
-                return;
-            }
-
-            EnsureSupported(DeviceFeature.SdFileTransferOverWifi);
-        }
-
-        /// <summary>
-        /// Retrieves the list of files stored on the device's SD card.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
-        /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (corrupt card, unreadable directory).</exception>
-        /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. Empty directories return an empty list rather than throwing.</exception>
-        /// <exception cref="SdCardListIncompleteException">
-        /// Thrown when the listing did not arrive in full — the device never answered, or stopped
-        /// answering part-way through. Distinguishing this from a genuinely empty card is the whole
-        /// point of the terminator probe described in the remarks (closes #396).
-        /// </exception>
-        /// <remarks>
-        /// <para>
-        /// The firmware emits no end-of-listing marker, and for an empty directory it writes nothing
-        /// at all, so a lost or truncated reply is byte-for-byte indistinguishable from a healthy
-        /// empty card. Core closes that gap by appending a <c>SYSTem:ERRor?</c> query to the same
-        /// text exchange: the transport delivers in order and the firmware does not process the
-        /// next command until the listing has been handed to the output, so receiving the reply
-        /// proves both that the device is answering and that the listing ahead of it is complete.
-        /// Its absence means the response is incomplete, and the caller gets an exception instead of
-        /// a plausible-looking empty list.
-        /// </para>
-        /// <para>
-        /// The terminator is only meaningful if it cannot be confused with a late reply to an
-        /// earlier command, so two things guard that boundary: the text exchange discards whatever
-        /// was already in flight when it opened, and this method's SPI-bus switch and settle delay
-        /// run as the exchange's prepare phase, ahead of that boundary, leaving the exchange with no
-        /// internal gap for a stale reply to slip into.
-        /// </para>
-        /// <para>
-        /// The terminator's error code is used only as a liveness marker, never for classification:
-        /// the queue it pops can hold entries left by earlier commands, so attributing the code to
-        /// this listing would misreport stale failures. SD errors continue to be classified from the
-        /// listing lines themselves. Note the side effect this implies — each listing consumes one
-        /// entry from the device's SCPI error queue, so a
-        /// <see cref="DaqifiDevice.DrainErrorQueueAsync"/> run afterwards will not see the entry
-        /// this listing generated.
-        /// </para>
-        /// </remarks>
-        public async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            EnsureSdFileTransferSupportedOnTransport();
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            Send(ScpiMessageProducer.StopStreaming);
-            IsStreaming = false;
-
-            IReadOnlyList<string> lines = Array.Empty<string>();
-            IReadOnlyList<string> listing = Array.Empty<string>();
-            var isComplete = false;
-
-            // Attempt 0 plus SD_LIST_MAX_RETRIES retries. A SCPI error here is often a transient
-            // timing issue, and an unterminated response can be a one-off stall, so both are
-            // retried once after an additional settle delay before being surfaced.
-            for (var attempt = 0; attempt <= SD_LIST_MAX_RETRIES; attempt++)
-            {
-                if (attempt > 0)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-                }
-
-                // The SPI bus switch and its settle wait run as the exchange's prepare phase, and
-                // the restore as its finalize phase: both inside the exchange lock, so a competing
-                // text exchange can neither restore the LAN interface between the switch and the
-                // LIST nor slip in between the LIST and the restore. The prepare also sits ahead of
-                // the stale-line boundary, so its settle wait does not become a window in which a
-                // late reply to an earlier command could pass for this listing's terminator.
-                // Querying the card too soon after the switch makes the device answer -200
-                // (Execution error), so the wait itself is not optional.
-                //
-                // Each attempt therefore leaves the bus back on LAN, including across the retry
-                // delay above — the pairing is per exchange rather than per call so that gap, which
-                // is outside the lock, is not one in which the device sits switched to the card.
-                lines = await ExecuteTextCommandAsync(
-                    () =>
-                    {
-                        Send(ScpiMessageProducer.GetSdFileList);
-
-                        // End-of-listing terminator — see this method's remarks. Sent inside
-                        // the same text exchange so the ordering guarantee holds.
-                        Send(ScpiMessageProducer.GetSystemError);
-                    },
-                    responseTimeoutMs: 3000,
-                    completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
-                    cancellationToken: cancellationToken,
-                    prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                    finalizeAsync: RestoreLanInterfaceAsync);
-
-                isComplete = TrySplitAtSdListTerminator(lines, out listing);
-
-                if (isComplete && !ContainsScpiError(listing))
-                {
-                    break;
-                }
-            }
-
-            if (!isComplete)
-            {
-                throw new SdCardListIncompleteException(lines);
-            }
-
-            ThrowIfSdCardListError(listing);
-
-            var files = SdCardFileListParser.ParseFileList(listing);
-            _sdCardFiles = files;
-            return files;
-        }
-
-        /// <summary>
-        /// Prepare phase shared by the SD card text exchanges: switches the shared SPI bus over to
-        /// the card and waits for the firmware to complete the switch.
-        /// </summary>
-        /// <remarks>
-        /// Passed as the <c>prepareAsync</c> phase of
-        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
-        /// rather than run
-        /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
-        /// LAN interface between the switch and the commands that depend on it would leave them
-        /// running against the wrong interface — and ahead of the exchange's stale-line boundary, so
-        /// the settle wait cannot be mistaken for a window in which the device was answering.
-        /// </remarks>
-        private async Task PrepareSdInterfaceAndSettleAsync(CancellationToken cancellationToken)
-        {
-            PrepareSdInterface();
-
-            // Querying the card too soon after the switch makes the device answer -200
-            // (Execution error), so this wait is not optional.
-            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// Finalize phase shared by the SD card text exchanges: hands the shared SPI bus back to the
-        /// LAN interface. The mirror of <see cref="PrepareSdInterfaceAndSettleAsync"/>.
-        /// </summary>
-        /// <remarks>
-        /// Passed as the <c>finalizeAsync</c> phase of
-        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
-        /// rather than run from the caller's own <c>finally</c>, so it holds the same lock
-        /// acquisition the matching prepare phase does. Restoring from outside the lock leaves a
-        /// window in which a competing exchange runs between this operation's commands and its
-        /// restore — the switch serialized, the restore not (#407).
-        /// <para>
-        /// The connection check keeps a restore off a device that dropped mid-operation, where the
-        /// sends would only throw <see cref="DeviceNotConnectedException"/> over the top of whatever
-        /// actually failed. Nothing to restore in that case: the link is gone.
-        /// </para>
-        /// </remarks>
-        private Task RestoreLanInterfaceAsync()
-        {
-            if (IsConnected)
-            {
-                PrepareLanInterface();
-            }
-
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Splits a raw SD listing response at the <c>SYSTem:ERRor?</c> terminator reply that
-        /// <see cref="GetSdCardFilesAsync"/> appends to the exchange.
-        /// </summary>
-        /// <param name="lines">The raw response lines captured from the device.</param>
-        /// <param name="listingLines">
-        /// The lines that precede the terminator — the directory listing proper — when the method
-        /// returns <c>true</c>; otherwise the unmodified input.
-        /// </param>
-        /// <returns>
-        /// <c>true</c> when the terminator was present, meaning the response is complete;
-        /// <c>false</c> when it never arrived, meaning the response is missing or truncated.
-        /// </returns>
-        private static bool TrySplitAtSdListTerminator(
-            IReadOnlyList<string> lines,
-            out IReadOnlyList<string> listingLines)
-        {
-            // Scan from the end. A terminator reply from a PREVIOUS, timed-out exchange can still
-            // be sitting in the transport buffer and lead this response; splitting at the first
-            // match would then discard the listing that follows it and report an empty card —
-            // exactly the failure this terminator exists to prevent.
-            var terminatorIndex = -1;
-            for (var i = lines.Count - 1; i >= 0; i--)
-            {
-                if (ScpiResponseClassifier.IsSystemErrorReplyLine(lines[i]))
-                {
-                    terminatorIndex = i;
-                    break;
-                }
-            }
-
-            if (terminatorIndex < 0)
-            {
-                listingLines = lines;
-                return false;
-            }
-
-            var listing = new List<string>(terminatorIndex);
-            for (var j = 0; j < terminatorIndex; j++)
-            {
-                // Any other terminator-shaped line is a stale reply of the same kind, not
-                // directory content — no firmware listing entry can match that shape, since
-                // entries are always "<path> <size>".
-                if (ScpiResponseClassifier.IsSystemErrorReplyLine(lines[j]))
-                {
-                    continue;
-                }
-
-                listing.Add(lines[j]);
-            }
-
-            listingLines = listing;
-            return true;
-        }
-
-        /// <summary>
-        /// Retrieves the free and total byte counts of the device's SD card.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
-        /// <exception cref="FeatureNotSupportedException">
-        /// Thrown when the device's firmware does not recognize the storage query (SCPI -113
-        /// "Undefined header"), typically because it predates <see cref="DaqifiDevice.MinSupportedFirmware"/>;
-        /// or, over a WiFi/TCP transport, when the firmware predates SD-over-WiFi support
-        /// (<see cref="DeviceFeature.SdFileTransferOverWifi"/>) — the storage query drives the SD
-        /// card through the same transport gate as the file operations.
-        /// </exception>
-        /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
-        public async Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            if (_isLoggingToSdCard)
-            {
-                throw new InvalidOperationException("Cannot query SD card storage while logging to SD card.");
-            }
-
-            // The storage-space query drives the SD card through the same transport-aware
-            // PrepareSdInterface() as LIST/GET/DELETE, so it carries the identical SD-over-WiFi
-            // requirement: over WiFi it needs firmware >= v3.7.0 (#598/#599 SPI arbitration) — else
-            // it would access the SD card with the LAN still enabled on firmware that never learned
-            // to arbitrate the shared bus. Gate it up front for the same reason as its siblings.
-            EnsureSdFileTransferSupportedOnTransport();
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            Send(ScpiMessageProducer.StopStreaming);
-            IsStreaming = false;
-
-            // Same prepare/finalize pairing as GetSdCardFilesAsync: the SPI bus switch and its
-            // settle wait are the exchange's prepare phase and the LAN restore is its finalize
-            // phase, so both halves are held by the one lock acquisition rather than only the
-            // switch (#407). The settle wait also moves ahead of the exchange's stale-line
-            // boundary instead of blocking a thread inside it.
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetSdSpace),
-                responseTimeoutMs: 3000,
-                cancellationToken: cancellationToken,
-                prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                finalizeAsync: RestoreLanInterfaceAsync);
-
-            // Only retry transient SCPI errors. A "No SD Card Detected" line
-            // is non-transient — retrying just delays the typed exception and
-            // risks misclassification if the marker isn't repeated on retry.
-            if (ContainsScpiError(lines) && !ContainsNoSdCardMarker(lines))
-            {
-                for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
-                    lines = await ExecuteTextCommandAsync(
-                        () => Send(ScpiMessageProducer.GetSdSpace),
-                        responseTimeoutMs: 3000,
-                        cancellationToken: cancellationToken,
-                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                        finalizeAsync: RestoreLanInterfaceAsync);
-
-                    if (!ContainsScpiError(lines) || ContainsNoSdCardMarker(lines))
-                    {
-                        break;
-                    }
-                }
-            }
-
-            if (SdCardSpaceParser.TryParseLines(lines, out var storage))
-            {
-                return storage;
-            }
-
-            // Parser failed — translate the firmware response into a typed exception.
-            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
-
-            if (ContainsNoSdCardMarker(lines))
-            {
-                throw new SdCardNotPresentException(lines, lastScpiError);
-            }
-
-            // A -113 "Undefined header" reply means the firmware doesn't recognize the storage
-            // query at all — typically because it predates the version that introduced it — so
-            // it gets the typed feature-gating exception instead of a generic operation error.
-            // The device's answer is authoritative here, so this throws on the wire response
-            // rather than on Supports(); the seam only supplies the required version and board.
-            if (lastScpiError != null
-                && ScpiResponseClassifier.TryExtractErrorCode(lastScpiError, out var scpiErrorCode)
-                && scpiErrorCode == ScpiErrorCodeUndefinedHeader)
-            {
-                throw CreateFeatureNotSupportedException(DeviceFeature.SdStorageQuery);
-            }
-
-            throw new SdCardOperationException(
-                lastScpiError != null
-                    ? "The SD card storage query failed: " + lastScpiError
-                    : "The SD card storage query returned an unparseable response.",
-                lines,
-                lastScpiError);
-        }
-
-        private static bool ContainsNoSdCardMarker(IReadOnlyList<string> lines)
-        {
-            return lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0);
-        }
+        // -----------------------------------------------------------------
+        // Delegation to the operation collaborators.
+        //
+        // Each block below was lifted out of this class wholesale (#344); what
+        // remains is the public surface, unchanged, forwarding to the object
+        // that now owns the implementation. The collaborators reach back
+        // through IDeviceOperationHost, implemented explicitly at the bottom of
+        // this file, so every call still passes through this device's own
+        // virtual members and any subclass override of them.
+        // -----------------------------------------------------------------
+
+        /// <summary>WiFi/LAN configuration (<see cref="INetworkConfigurable"/>).</summary>
+        private NetworkConfigurationOperations _networkOperations = null!;
+
+        /// <summary>SD card operations (<see cref="ISdCardOperations"/>) and the shared-SPI handover.</summary>
+        private SdCardOperations _sdCardOperations = null!;
+
+        /// <summary>WiFi module chip info (<see cref="ILanChipInfoProvider"/>).</summary>
+        private LanChipInfoOperations _lanChipInfoOperations = null!;
+
+        /// <summary>Device diagnostics (<see cref="IDeviceDiagnostics"/>).</summary>
+        private DeviceDiagnosticsOperations _diagnosticsOperations = null!;
+
+        #region INetworkConfigurable
 
         /// <inheritdoc />
-        public async Task<SdCardSpaceCheckResult> CheckSdCardSpaceAsync(
+        public NetworkConfiguration NetworkConfiguration => _networkOperations.NetworkConfiguration;
+
+        /// <inheritdoc />
+        public Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default)
+            => _networkOperations.UpdateNetworkConfigurationAsync(configuration, cancellationToken);
+
+        /// <inheritdoc />
+        public Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default)
+            => _networkOperations.LoadNetworkConfigurationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default)
+            => _networkOperations.FactoryResetNetworkAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public void PrepareSdInterface() => _sdCardOperations.PrepareSdInterface();
+
+        /// <inheritdoc />
+        public void PrepareLanInterface() => _sdCardOperations.PrepareLanInterface();
+
+        #endregion
+
+        #region ISdCardOperations
+
+        /// <inheritdoc />
+        public Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
+            => _sdCardOperations.GetSdCardFilesAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
+            => _sdCardOperations.GetSdCardStorageAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task<SdCardSpaceCheckResult> CheckSdCardSpaceAsync(
             SdCardCaptureEstimate? plannedCapture = null,
             long minimumFreeBytes = SdCardSpaceCheck.DefaultMinimumFreeBytes,
             CancellationToken cancellationToken = default)
-        {
-            // Delegates connection / logging-state validation and the typed SD exceptions
-            // (no card, old firmware, unparseable response) to GetSdCardStorageAsync.
-            var storage = await GetSdCardStorageAsync(cancellationToken).ConfigureAwait(false);
+            => _sdCardOperations.CheckSdCardSpaceAsync(plannedCapture, minimumFreeBytes, cancellationToken);
 
-            var result = SdCardSpaceCheck.Evaluate(storage, plannedCapture, minimumFreeBytes);
+        /// <inheritdoc />
+        public void SetSdCardMinimumFreeSpace(long bytes) => _sdCardOperations.SetSdCardMinimumFreeSpace(bytes);
 
-            // Advisory only — raise the warning but never block the caller from starting logging.
-            if (result.ShouldWarn)
-            {
-                OnLowSdSpaceWarning(new LowSdSpaceWarningEventArgs(result));
-            }
+        /// <inheritdoc />
+        public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+            => _sdCardOperations.StartSdCardLoggingAsync(fileName, channelMask, format, cancellationToken);
 
-            return result;
-        }
+        /// <inheritdoc />
+        public Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
+            => _sdCardOperations.StartSdCardLoggingSessionAsync(fileName, channelMask, format, cancellationToken);
+
+        /// <inheritdoc />
+        public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
+            => _sdCardOperations.StopSdCardLoggingAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
+            => _sdCardOperations.DeleteSdCardFileAsync(fileName, cancellationToken);
+
+        /// <inheritdoc />
+        public Task FormatSdCardAsync(CancellationToken cancellationToken = default)
+            => _sdCardOperations.FormatSdCardAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task<SdCardDownloadResult> DownloadSdCardFileAsync(
+            string fileName,
+            Stream destinationStream,
+            IProgress<SdCardTransferProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+            => _sdCardOperations.DownloadSdCardFileAsync(fileName, destinationStream, progress, cancellationToken);
+
+        /// <inheritdoc />
+        public Task<SdCardDownloadResult> DownloadSdCardFileAsync(
+            string fileName,
+            IProgress<SdCardTransferProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+            => _sdCardOperations.DownloadSdCardFileAsync(fileName, progress, cancellationToken);
 
         /// <summary>
         /// Raises the <see cref="LowSdSpaceWarning"/> event.
         /// </summary>
         /// <param name="e">The warning event arguments.</param>
+        /// <remarks>
+        /// Stays on the device rather than moving with the space check that triggers it: the event
+        /// is part of this device's public surface, so subscribers must keep seeing this device as
+        /// the <c>sender</c>, and a subclass override must keep intercepting it.
+        /// </remarks>
         protected virtual void OnLowSdSpaceWarning(LowSdSpaceWarningEventArgs e)
         {
             LowSdSpaceWarning?.Invoke(this, e);
-        }
-
-        /// <inheritdoc />
-        public void SetSdCardMinimumFreeSpace(long bytes)
-        {
-            // Argument validation precedes the connection (state) check so misuse surfaces the same
-            // exception type regardless of connection state (matches SetAnalogOutput / SetDioDirection).
-            if (bytes < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Minimum free space cannot be negative.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
-        }
-
-        /// <summary>
-        /// Starts logging data to the SD card. Compatibility overload preserving the original
-        /// <see cref="Task"/> return; use <see cref="StartSdCardLoggingSessionAsync"/> to also learn
-        /// the effective on-card file name.
-        /// </summary>
-        /// <param name="fileName">The log file name, or null/empty to auto-generate a timestamped name.</param>
-        /// <param name="channelMask">Optional decimal channel bitmask; null/empty uses the current config.</param>
-        /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task StartSdCardLoggingAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
-            => StartSdCardLoggingSessionAsync(fileName, channelMask, format, cancellationToken);
-
-        /// <summary>
-        /// Starts logging data to the SD card and returns the effective session details.
-        /// </summary>
-        /// <param name="fileName">
-        /// The name of the log file. If null or empty, a timestamped name is generated automatically
-        /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
-        /// (.bin for Protobuf, .json for JSON, .csv for CSV).
-        /// </param>
-        /// <param name="channelMask">
-        /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).
-        /// The firmware parses this as a decimal integer where each bit enables a channel.
-        /// If null or empty, the current device channel configuration is used.
-        /// </param>
-        /// <param name="format">The logging format to use. Defaults to <see cref="SdCardLogFormat.Protobuf"/>.</param>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>
-        /// A task that resolves to an <see cref="SdCardLoggingSession"/> carrying the effective on-card
-        /// file name (supplied or auto-generated) and the logging format.
-        /// </returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public async Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            if (!IsUsbConnection)
-            {
-                throw new InvalidOperationException(
-                    "SD card logging requires a USB/serial connection. Starting a logging session " +
-                    "disables the LAN interface to give the SD card the shared SPI bus, which over " +
-                    "a network connection would drop the very link the command arrived on. " +
-                    "Listing, downloading and deleting SD files do work over WiFi on firmware " +
-                    "v3.7.0 and later.");
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var extension = format switch
-            {
-                SdCardLogFormat.Json => ".json",
-                SdCardLogFormat.Csv => ".csv",
-                _ => ".bin",
-            };
-
-            var logFileName = !string.IsNullOrWhiteSpace(fileName)
-                ? fileName!
-                : $"log_{DateTime.Now:yyyyMMdd_HHmmss}{extension}";
-
-            ValidateSdCardFileName(logFileName);
-
-            // SdCardLogFormat integer values map 1:1 to SYSTem:STReam:FORmat SCPI arguments
-            var formatCommand = new ScpiMessage($"SYSTem:STReam:FORmat {(int)format}");
-
-            // SD card and LAN share the SPI bus on the hardware, so LAN must be
-            // disabled before the SD card can be used.
-            Send(ScpiMessageProducer.DisableNetworkLan);
-            await Task.Delay(100, cancellationToken);
-
-            Send(ScpiMessageProducer.EnableStorageSd);
-            await Task.Delay(100, cancellationToken);
-
-            // Route the data stream to the SD card interface.
-            Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
-            await Task.Delay(100, cancellationToken);
-
-            Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
-            await Task.Delay(100, cancellationToken);
-
-            Send(formatCommand);
-            await Task.Delay(100, cancellationToken);
-
-            if (!string.IsNullOrWhiteSpace(channelMask))
-            {
-                Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
-                await Task.Delay(100, cancellationToken);
-            }
-
-            Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
-
-            _isLoggingToSdCard = true;
-            IsStreaming = true;
-
-            return new SdCardLoggingSession(logFileName, format);
-        }
-
-        /// <summary>
-        /// Stops logging data to the SD card.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            Send(ScpiMessageProducer.StopStreaming);
-            IsStreaming = false;
-
-            Send(ScpiMessageProducer.DisableStorageSd);
-
-            // Restore stream interface to USB so subsequent non-SD operations work.
-            if (IsUsbConnection)
-            {
-                Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb));
-
-                // Re-enable LAN interface. StartSdCardLoggingAsync disables LAN because
-                // the SD card and WiFi/LAN share the SPI bus on the hardware.
-                //
-                // Only over USB, and for the same reason PrepareLanInterface() is transport-aware:
-                // over WiFi/TCP the LAN was never disabled (nothing can disable it from the other
-                // end of the connection it carries), and LAN:ENAbled 1 re-initializes the WiFi
-                // module — which would drop the very link this command arrived on. A session that
-                // logged over USB, disconnected, and came back over WiFi could otherwise call this
-                // and cut itself off (#327).
-                Send(ScpiMessageProducer.EnableNetworkLan);
-            }
-
-            _isLoggingToSdCard = false;
-
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Deletes a file from the SD card.
-        /// </summary>
-        /// <param name="fileName">The name of the file to delete.</param>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
-        /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public async Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            if (_isLoggingToSdCard)
-            {
-                throw new InvalidOperationException("Cannot delete files while logging to SD card.");
-            }
-
-            EnsureSdFileTransferSupportedOnTransport();
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
-            }
-
-            ValidateSdCardFileName(fileName);
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            Send(ScpiMessageProducer.StopStreaming);
-            IsStreaming = false;
-
-            // Same prepare/finalize treatment as GetSdCardFilesAsync, for the same reasons — the
-            // SPI switch stays serialized against competing text exchanges, its settle wait stays
-            // outside the stale-line boundary, and the restore stays under the same lock as the
-            // switch instead of running from a finally after the lock has been dropped. The
-            // consequence of a stale line is milder here (delete keys off ContainsScpiError, so it
-            // would mean a pointless delete-and-relist retry rather than a bad listing) but it is
-            // the same defect.
-            var lines = await ExecuteTextCommandAsync(
-                () =>
-                {
-                    Send(ScpiMessageProducer.DeleteSdFile(fileName));
-                    Send(ScpiMessageProducer.GetSdFileList);
-                },
-                responseTimeoutMs: 3000,
-                cancellationToken: cancellationToken,
-                prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                finalizeAsync: RestoreLanInterfaceAsync);
-
-            if (ContainsScpiError(lines))
-            {
-                for (var retry = 0; retry < SD_LIST_MAX_RETRIES; retry++)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
-
-                    lines = await ExecuteTextCommandAsync(
-                        () =>
-                        {
-                            Send(ScpiMessageProducer.DeleteSdFile(fileName));
-                            Send(ScpiMessageProducer.GetSdFileList);
-                        },
-                        responseTimeoutMs: 3000,
-                        cancellationToken: cancellationToken,
-                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                        finalizeAsync: RestoreLanInterfaceAsync);
-
-                    if (!ContainsScpiError(lines))
-                    {
-                        break;
-                    }
-                }
-            }
-
-            _sdCardFiles = SdCardFileListParser.ParseFileList(lines);
-        }
-
-        /// <summary>
-        /// Formats the entire SD card, erasing all data.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
-        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        public Task FormatSdCardAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            if (_isLoggingToSdCard)
-            {
-                throw new InvalidOperationException("Cannot format SD card while logging.");
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            Send(ScpiMessageProducer.StopStreaming);
-            IsStreaming = false;
-
-            Send(ScpiMessageProducer.EnableStorageSd);
-            Send(ScpiMessageProducer.FormatSdCard);
-
-            return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// Downloads a file from the device's SD card, over USB or over WiFi/TCP.
-        /// </summary>
-        /// <param name="fileName">The name of the file to download.</param>
-        /// <param name="destinationStream">The stream to write file contents to.</param>
-        /// <param name="progress">Optional progress reporting.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Metadata about the downloaded file.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
-        /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
-        /// <exception cref="SdCardEmptyTransferException">
-        /// Thrown when the device serves a marker-only (0-byte) transfer across all retry attempts
-        /// for a file the last <see cref="GetSdCardFilesAsync"/> listing reported as non-empty (or
-        /// whose listed size is unknown), indicating its SD subsystem is not ready. A file the
-        /// listing reports as 0 bytes downloads successfully as a legitimate empty file.
-        /// </exception>
-        /// <exception cref="SdCardTransferStalledException">
-        /// Thrown when the transfer stops making progress before the end-of-file marker arrives:
-        /// the transport returned an empty read, closed, or — the only signal a socket gives —
-        /// went quiet for longer than <see cref="SdCardTransferIdleTimeout"/>.
-        /// </exception>
-        /// <exception cref="TimeoutException">
-        /// Thrown when the download does not finish within <see cref="SdCardDownloadTimeout"/>.
-        /// The deadline is enforced by this method itself, so it still applies when the transfer
-        /// is parked in a call that cannot observe a cancellation token (#399).
-        /// </exception>
-        /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
-        /// <remarks>
-        /// On a timeout — or a cancellation the parked transfer cannot itself observe — the
-        /// in-flight transfer is <b>abandoned</b> rather than awaited: it may be blocked in native
-        /// serial I/O that no token can interrupt, and waiting for it is the hang this method
-        /// exists to bound. The abandoned transfer's token is cancelled first, so it unwinds at
-        /// its next token check — but that check is only reached once whatever it is blocked in
-        /// returns, which may be never. Two consequences for callers: it can still write to
-        /// <paramref name="destinationStream"/> after this method has thrown, so the stream must
-        /// not be reused for anything else; and the device is left mid-<c>SD:GET</c> with the
-        /// protobuf consumer stopped, so reconnecting (or power-cycling, if its SD subsystem is
-        /// genuinely wedged) is the reliable way to resume normal operation.
-        /// <para>
-        /// The LAN interface is deliberately <b>not</b> restored in that case: the abandoned
-        /// transfer still owns the transport, and putting the restore commands onto a link it is
-        /// still reading would only add traffic to a device that has already stopped answering. The
-        /// reconnect the caller needs anyway re-establishes the interface. On every other outcome —
-        /// success, a stall, a cancellation the transfer did observe — the restore runs as before.
-        /// </para>
-        /// <para>
-        /// Until an abandoned transfer unwinds it still owns the transport, so a further download
-        /// on the same device fails fast with <see cref="InvalidOperationException"/> rather than
-        /// putting a second reader on the same stream. A caller looping over many files against a
-        /// wedged card therefore gets one timeout and then immediate, cheap failures — not a
-        /// growing pile of blocked threads.
-        /// </para>
-        /// </remarks>
-        public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
-            string fileName,
-            Stream destinationStream,
-            IProgress<SdCardTransferProgress>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            // Over WiFi/TCP this requires firmware >= v3.7.0 (#598/#599); over USB it is always
-            // available on SD-capable firmware. Older firmware over WiFi gets a typed
-            // FeatureNotSupportedException instead of the old blanket USB-only rejection (ADR 0001).
-            EnsureSdFileTransferSupportedOnTransport();
-
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
-            }
-
-            ValidateSdCardFileName(fileName);
-            ArgumentNullException.ThrowIfNull(destinationStream);
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (_isLoggingToSdCard)
-            {
-                throw new InvalidOperationException("Cannot download files while logging to SD card.");
-            }
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            Send(ScpiMessageProducer.StopStreaming);
-            IsStreaming = false;
-
-            var stopwatch = Stopwatch.StartNew();
-            long fileSize = 0;
-            var budget = SdCardDownloadTimeout;
-
-            // Set when the transfer was given up on and left running (#399/#401). Read only by the
-            // restore below, on this same async flow.
-            var workerAbandoned = false;
-
-            try
-            {
-                await RunWithHardDeadlineAsync(async token =>
-                {
-                    await ExecuteRawCaptureAsync(async (stream, ct) =>
-                    {
-                        // Prepare SD card interface. Transport-aware: over USB it hands the shared
-                        // SPI bus to the card, over WiFi/TCP it leaves the LAN up because the reply
-                        // comes back over that very connection (#598/#599).
-                        PrepareSdInterface();
-
-                        // Let the interface switch settle before the card is asked for anything —
-                        // the same wait the LIST/DELETE/space exchanges take for the same reason.
-                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
-
-                        // Send the SCPI command to request the file
-                        Send(ScpiMessageProducer.GetSdFile(fileName));
-
-                        // Receive the file data. A marker-only (0-byte) transfer for a file the
-                        // listing reports as non-empty means the device's SD subsystem wasn't ready
-                        // when it opened the file - the same kind of transient condition
-                        // GetSdCardFilesAsync's LIST retry already absorbs - so retry the GET a
-                        // bounded number of times before giving up (see #264). Passing the listed
-                        // size keeps that retry off a genuinely 0-byte file, which is a legitimate
-                        // empty download rather than a wedged subsystem (#398 gap 2).
-                        // The receiver is told what its transport's silence means. Over USB serial a
-                        // zero-length read is the per-read ReadTimeout firing on a device that is
-                        // merely quiet; over TCP it is the peer's FIN and nothing else, and the
-                        // socket keeps reporting itself readable either way. Over TCP the socket
-                        // also never surfaces silence at all — ReadAsync ignores the receive
-                        // timeout — so the inactivity window is the only thing standing between a
-                        // device that stopped answering and the full 30-minute budget (#327).
-                        var receiver = new SdCardFileReceiver(
-                            stream,
-                            zeroLengthReadMeansClosed: !IsUsbConnection,
-                            idleTimeout: SdCardTransferIdleTimeout);
-                        var listedFileSizeBytes = TryGetListedFileSize(fileName);
-                        long bytesReceived;
-                        var attempt = 0;
-                        while (true)
-                        {
-                            try
-                            {
-                                // Each attempt gets what is left of the overall budget, never a
-                                // fresh full one: retries must not be able to push the total past
-                                // the deadline the caller was promised.
-                                bytesReceived = await receiver.ReceiveAsync(
-                                    destinationStream,
-                                    fileName,
-                                    progress,
-                                    timeout: RemainingBudget(budget, stopwatch),
-                                    cancellationToken: ct,
-                                    listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
-                                break;
-                            }
-                            catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
-                            {
-                                attempt++;
-                                await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
-                                Send(ScpiMessageProducer.GetSdFile(fileName));
-                            }
-                        }
-
-                        fileSize = bytesReceived;
-                    }, token).ConfigureAwait(false);
-                },
-                budget,
-                fileName,
-                cancellationToken,
-                onWorkerAbandoned: () => workerAbandoned = true).ConfigureAwait(false);
-            }
-            finally
-            {
-                // Restore the LAN interface — but NOT when the transfer was abandoned. An abandoned
-                // worker is still alive and still owns the transport (that is why the download gate
-                // is not released until it finally unwinds), so sending the restore now would put
-                // SCPI commands onto a link a transfer is still reading, on top of a device that has
-                // already stopped answering. There is nothing to gain: the caller is told to
-                // reconnect or power-cycle, and both re-establish the interface anyway (#399/#401).
-                if (!workerAbandoned && IsConnected)
-                {
-                    try
-                    {
-                        PrepareLanInterface();
-                    }
-                    catch
-                    {
-                        // Best-effort restoration; the device may have disconnected
-                    }
-                }
-            }
-
-            stopwatch.Stop();
-            return new SdCardDownloadResult(fileName, fileSize, stopwatch.Elapsed);
-        }
-
-        /// <summary>
-        /// Looks up the size the most recent directory listing reported for a file. Returns null
-        /// ("unknown", which the receiver treats conservatively) when no listing has been fetched,
-        /// when the listing did not include this file or a size for it, or when more than one
-        /// listed entry shares the name.
-        /// </summary>
-        private long? TryGetListedFileSize(string fileName)
-        {
-            // Snapshot the field: GetSdCardFilesAsync replaces the list wholesale, so a
-            // concurrent refresh swaps the reference rather than mutating what we enumerate.
-            var listedFiles = _sdCardFiles;
-
-            long? matchedSize = null;
-            var matched = false;
-
-            foreach (var file in listedFiles)
-            {
-                // FAT names are case-insensitive. The listing keeps only the leaf name, so the
-                // same name can appear twice from different directories; that is ambiguous and
-                // an over-confident size here would wave through the very failure (a wedged
-                // subsystem serving nothing) the empty-transfer guard exists to catch.
-                if (!string.Equals(file.FileName, fileName, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (matched)
-                {
-                    return null;
-                }
-
-                matched = true;
-                matchedSize = file.SizeInBytes;
-            }
-
-            return matchedSize;
-        }
-
-        /// <summary>
-        /// Downloads a file from the device's SD card, over USB or over WiFi/TCP, to a temporary file.
-        /// </summary>
-        /// <param name="fileName">The name of the file to download.</param>
-        /// <param name="progress">Optional progress reporting.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Metadata about the downloaded file, including the local file path.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
-        /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
-        public async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
-            string fileName,
-            IProgress<SdCardTransferProgress>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            var ext = Path.GetExtension(fileName);
-            if (string.IsNullOrEmpty(ext)) ext = ".bin";
-            var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}{ext}");
-            try
-            {
-                await using var fileStream = new FileStream(
-                    tempPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    bufferSize: 65536,
-                    useAsync: true);
-
-                var result = await DownloadSdCardFileAsync(fileName, fileStream, progress, cancellationToken)
-                    .ConfigureAwait(false);
-
-                return result with { FilePath = tempPath };
-            }
-            catch
-            {
-                try { File.Delete(tempPath); } catch { /* ignore cleanup failures */ }
-                throw;
-            }
         }
 
         /// <summary>
@@ -3028,605 +1927,103 @@ namespace Daqifi.Core.Device
         /// <remarks>Virtual only as a test seam — a 20-second window is not unit-testable.</remarks>
         internal virtual TimeSpan SdCardTransferIdleTimeout => SdCardFileReceiver.DefaultIdleTimeout;
 
-        /// <summary>
-        /// The part of <paramref name="budget"/> not yet consumed, floored at zero (a negative
-        /// timeout is not a legal <see cref="CancellationTokenSource"/> delay).
-        /// </summary>
-        private static TimeSpan RemainingBudget(TimeSpan budget, Stopwatch stopwatch)
+        #endregion
+
+        #region ILanChipInfoProvider
+
+        /// <inheritdoc />
+        public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
+            => _lanChipInfoOperations.GetLanChipInfoAsync(cancellationToken);
+
+        #endregion
+
+        #region IDeviceDiagnostics
+
+        /// <inheritdoc />
+        public Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.GetSystemLogAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task ClearSystemLogAsync(CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.ClearSystemLogAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task<LogLevelSetting> SetLogLevelAsync(string module, int level, CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.SetLogLevelAsync(module, level, cancellationToken);
+
+        /// <inheritdoc />
+        public Task<IReadOnlyList<string>> GetCommandHistoryAsync(CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.GetCommandHistoryAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task TestSystemLogAsync(CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.TestSystemLogAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task<int> GetSystemErrorCountAsync(CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.GetSystemErrorCountAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task<StreamStats> GetStreamStatsAsync(CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.GetStreamStatsAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task<MemoryDiagnostics> GetMemoryDiagnosticsAsync(CancellationToken cancellationToken = default)
+            => _diagnosticsOperations.GetMemoryDiagnosticsAsync(cancellationToken);
+
+        #endregion
+
+        #region IDeviceOperationHost
+
+        // Explicit implementation: this is how the collaborators reach the device, and none of it
+        // belongs on the public surface. Every member forwards to the member it names, so the
+        // virtual ones stay virtual and a subclass that overrides them still intercepts every
+        // operation that was moved out of this class.
+
+        bool IDeviceOperationHost.IsConnected => IsConnected;
+
+        bool IDeviceOperationHost.IsUsbConnection => IsUsbConnection;
+
+        bool IDeviceOperationHost.IsStreaming
         {
-            var remaining = budget - stopwatch.Elapsed;
-            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+            get => IsStreaming;
+            set => IsStreaming = value;
         }
 
-        /// <summary>
-        /// The instant the download is given up on regardless of what it is doing. It sits just
-        /// past the cooperative <paramref name="budget"/> so that a transfer which IS observing
-        /// its token still fails through the receiver's own timeout — which reports how many
-        /// bytes arrived — and the hard deadline only decides the case where it is not.
-        /// </summary>
-        private static TimeSpan HardDeadlineFor(TimeSpan budget)
-        {
-            var graceMs = Math.Clamp(budget.TotalMilliseconds * 0.1, 100, 5000);
-            return budget + TimeSpan.FromMilliseconds(graceMs);
-        }
+        int IDeviceOperationHost.StreamingFrequency => StreamingFrequency;
 
-        /// <summary>
-        /// Runs an SD download on a worker task and races it against a hard deadline, so neither
-        /// the deadline nor the caller's cancellation depends on the transfer being somewhere it
-        /// can observe a token (#399). On expiry the worker is abandoned rather than awaited.
-        /// </summary>
-        /// <param name="operation">The transfer. Receives a token cancelled by caller cancellation or the deadline, whichever comes first.</param>
-        /// <param name="budget">The cooperative budget; the hard deadline is <see cref="HardDeadlineFor"/> of it.</param>
-        /// <param name="fileName">Used only in the <see cref="TimeoutException"/> message.</param>
-        /// <param name="cancellationToken">The caller's token, observed by the race itself and not only by the worker.</param>
-        /// <param name="onWorkerAbandoned">
-        /// Invoked, before this method throws, when the worker is given up on while still running.
-        /// Lets the caller skip any cleanup that would touch the transport the abandoned worker
-        /// still owns.
-        /// </param>
-        /// <exception cref="InvalidOperationException">
-        /// Thrown when a previous download still owns <see cref="_sdDownloadGate"/> — it is either
-        /// genuinely in flight or was abandoned and is still parked on the transport.
-        /// </exception>
-        private async Task RunWithHardDeadlineAsync(
-            Func<CancellationToken, Task> operation,
-            TimeSpan budget,
-            string fileName,
+        void IDeviceOperationHost.StopStreaming() => StopStreaming();
+
+        void IDeviceOperationHost.Send<T>(IOutboundMessage<T> message) => Send(message);
+
+#pragma warning disable CA1068 // Matches the seam it forwards to.
+        Task<IReadOnlyList<string>> IDeviceOperationHost.ExecuteTextCommandAsync(
+            Action setupAction,
+            int responseTimeoutMs,
+            int completionTimeoutMs,
             CancellationToken cancellationToken,
-            Action? onWorkerAbandoned = null)
-        {
-            // Checked before taking the gate so a cancelled caller neither acquires it nor gets an
-            // answer about some other transfer.
-            cancellationToken.ThrowIfCancellationRequested();
+            Func<CancellationToken, Task>? prepareAsync,
+            Func<Task>? finalizeAsync)
+            => ExecuteTextCommandAsync(
+                setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync, finalizeAsync);
+#pragma warning restore CA1068
 
-            // Fail fast rather than becoming a second reader on a stream an abandoned transfer
-            // still holds. Wait(0) never blocks: this either takes the gate or reports the state.
-            if (!_sdDownloadGate.Wait(0))
-            {
-                // Cancellation wins when it raced the gate check — the same precedence the abandon
-                // path below applies. The caller asked to stop; that is a truer answer than a
-                // report about a different download.
-                cancellationToken.ThrowIfCancellationRequested();
+        Task IDeviceOperationHost.ExecuteRawCaptureAsync(
+            Func<Stream, CancellationToken, Task> rawAction,
+            CancellationToken cancellationToken)
+            => ExecuteRawCaptureAsync(rawAction, cancellationToken);
 
-                throw new InvalidOperationException(
-                    "A previous SD card download is still in flight, or was abandoned after timing out and " +
-                    "is still parked on the transport. Reconnect the device before retrying.");
-            }
+        void IDeviceOperationHost.EnsureSupported(DeviceFeature feature) => EnsureSupported(feature);
 
-            // Released exactly once, by whichever path is last to be done with the worker: the
-            // finally below in the normal case, or the abandon-path continuation when the worker
-            // finally unwinds. Interlocked because a worker that completes right at the deadline
-            // boundary can reach both.
-            var gateReleased = 0;
-            void ReleaseGate()
-            {
-                if (Interlocked.Exchange(ref gateReleased, 1) != 0)
-                {
-                    return;
-                }
+        FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature)
+            => CreateFeatureNotSupportedException(feature);
 
-                try
-                {
-                    _sdDownloadGate.Release();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // The device was disposed while a transfer was still abandoned. Benign
-                    // teardown, and this can run from a discarded continuation — never throw.
-                }
-            }
+        TimeSpan IDeviceOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
 
-            var hardDeadline = HardDeadlineFor(budget);
+        TimeSpan IDeviceOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
 
-            // hardDeadlineCts runs on its own timer, independent of the Task.Delay race below, so
-            // it still reaches the worker if the worker only returns long after the race was
-            // decided. linkedCts is what the worker observes: caller cancellation OR the deadline.
-            var hardDeadlineCts = new CancellationTokenSource(hardDeadline);
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardDeadlineCts.Token);
+        void IDeviceOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
 
-            // Stops the racing delay the moment the outcome is decided — without it, a download
-            // that finishes in a second would leave a 30-minute timer registered behind it.
-            var raceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-            // LongRunning (a dedicated thread, not a pooled one): the transfer's synchronous
-            // prefix — the consumer stop-and-join, PrepareSdInterface's blocking writes — otherwise
-            // runs on the CALLING thread up to the first await, which on a UI thread means a
-            // wedged device freezes the window, and which would put that prefix outside the very
-            // deadline it needs to be inside. A pooled Task.Run would also tie up a worker for the
-            // transfer's full blocking duration. Pass CancellationToken.None to StartNew itself:
-            // the worker's own token still cancels its waits, and "cancelled before start" must
-            // not surface as an operation fault. (Mirrors WifiBridgeActivator, #294/#295/#326.)
-            var workerTask = Task.Factory.StartNew(
-                () => operation(linkedCts.Token),
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default).Unwrap();
-
-            try
-            {
-                var winner = await Task.WhenAny(
-                    workerTask,
-                    Task.Delay(hardDeadline, raceCts.Token)).ConfigureAwait(false);
-
-                // Only abandon when the worker is genuinely still running: WhenAny can hand back
-                // the delay even though the worker completed at that same boundary, and awaiting
-                // it below honors that result instead of discarding it.
-                if (winner != workerTask && !workerTask.IsCompleted)
-                {
-                    // Tell the caller before unwinding: the worker keeps running and keeps the
-                    // transport, so any cleanup that would write to it has to be skipped.
-                    onWorkerAbandoned?.Invoke();
-
-                    // Cancel explicitly instead of relying on the deadline timer having fired: the
-                    // delay above and hardDeadlineCts are two separate timers of the same duration,
-                    // so the delay can win by a hair and leave a late-returning worker running one
-                    // more state-changing step after the caller already threw. Idempotent.
-                    hardDeadlineCts.Cancel();
-
-                    // The worker may be parked in native serial I/O that no token can interrupt, so
-                    // it is ABANDONED, not awaited — waiting for it is the hang being bounded here.
-                    // Observe its eventual fault so it cannot resurface as an UnobservedTaskException,
-                    // and dispose the sources only once it is done with them (disposing early would
-                    // turn its pending waits into ObjectDisposedException instead of cancellation).
-                    _ = workerTask.ContinueWith(
-                        t =>
-                        {
-                            _ = t.Exception;
-                            linkedCts.Dispose();
-                            hardDeadlineCts.Dispose();
-
-                            // Only now is the transport genuinely free for another download.
-                            ReleaseGate();
-                        },
-                        CancellationToken.None,
-                        TaskContinuationOptions.ExecuteSynchronously,
-                        TaskScheduler.Default);
-
-                    // Prefer surfacing caller cancellation over a generic timeout when both raced.
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    throw new TimeoutException(
-                        $"SD card download of '{fileName}' did not complete within " +
-                        $"{hardDeadline.TotalSeconds:0.#}s and was abandoned. The device's SD " +
-                        "subsystem is not responding; reconnect (or power-cycle) before retrying.");
-                }
-
-                // Propagate success or the transfer's own exception unchanged.
-                await workerTask.ConfigureAwait(false);
-            }
-            finally
-            {
-                raceCts.Cancel();
-                raceCts.Dispose();
-
-                // The abandon path hands disposal and the gate to its continuation instead; do it
-                // here only when the worker actually finished (the common, non-hung case).
-                if (workerTask.IsCompleted)
-                {
-                    linkedCts.Dispose();
-                    hardDeadlineCts.Dispose();
-                    ReleaseGate();
-                }
-            }
-        }
-
-        /// <summary>
-        /// Checks whether any line in the response contains a SCPI error indicator.
-        /// These errors (e.g., "**ERROR: -200") can occur transiently when the device
-        /// firmware has not finished switching the SPI bus interface.
-        /// </summary>
-        /// <param name="lines">The response lines to check.</param>
-        /// <returns>True if any line contains a SCPI error, false otherwise.</returns>
-        private static bool ContainsScpiError(IReadOnlyList<string> lines)
-        {
-            return lines.Any(IsScpiErrorLine);
-        }
-
-        // Strict SCPI error format: "**ERROR" or bare "ERROR" followed by a SCPI delimiter
-        // (":", space, tab, or end-of-line). Distinguishes a true SCPI error from firmware
-        // status text like "Error !! No SD Card Detected", which should not be surfaced as
-        // SdCardOperationException.LastScpiError. Shared with ScpiInitializationErrorException
-        // classification in DaqifiDevice.InitializeAsync so both sites recognize the same set
-        // of delimiter-separated error formats (closes a gap where "ERROR -200,..." or
-        // "ERROR\t-200,..." without a colon went undetected).
-        private static bool IsScpiErrorLine(string line)
-        {
-            return ScpiResponseClassifier.IsScpiErrorLine(line);
-        }
-
-        // Permissive: any line that looks like a device error or status message,
-        // including firmware text such as "Error !! ...". Used to recognize that
-        // the parser would yield no result, without polluting LastScpiError with
-        // non-SCPI text. Shared classifier so the SD-response rule (closes #190
-        // — filenames starting with "error_" must NOT match) stays in lockstep
-        // across both call sites.
-        private static bool IsNonResultLine(string line)
-        {
-            return ScpiResponseClassifier.IsErrorResponseLine(line);
-        }
-
-        /// <summary>
-        /// Inspects the final response from a <c>SYSTem:STORage:SD:LISt?</c> exchange
-        /// and throws a typed <see cref="SdCardOperationException"/> when the device
-        /// reported a real failure (no SD card, filesystem error, generic SCPI error).
-        /// If any non-error/non-empty line is present, callers proceed to parse — even
-        /// if SCPI error lines are interleaved — so a successful directory listing is
-        /// never masked by stray transient errors.
-        /// </summary>
-        private static void ThrowIfSdCardListError(IReadOnlyList<string> lines)
-        {
-            // LastScpiError must only carry a real SCPI-formatted error so callers
-            // can rely on its shape. Firmware status text ("Error !! ...") is
-            // surfaced via the exception's Message and RawDeviceResponse instead.
-            var lastScpiError = lines.LastOrDefault(IsScpiErrorLine)?.Trim();
-
-            // Specific firmware-emitted error markers take precedence over generic
-            // content/error checks. They're plain text (not SCPI-shaped), so a
-            // simple "is there any content line?" check would otherwise miss them
-            // and pass garbage to the parser.
-            if (lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0))
-            {
-                throw new SdCardNotPresentException(lines, lastScpiError);
-            }
-
-            var filesystemErrorLine = lines.FirstOrDefault(l =>
-                l.IndexOf("Failed to open directory", StringComparison.OrdinalIgnoreCase) >= 0);
-            if (filesystemErrorLine != null)
-            {
-                throw new SdCardFilesystemException(lines, lastScpiError, filesystemErrorLine.Trim());
-            }
-
-            // If any line looks like a real result (non-empty, not an error or
-            // firmware status line), hand off to the parser. Stray interleaved
-            // error lines are still parsed away by SdCardFileListParser.
-            var hasContentLine = lines.Any(line =>
-                !string.IsNullOrWhiteSpace(line) && !IsNonResultLine(line));
-            if (hasContentLine)
-            {
-                return;
-            }
-
-            if (lastScpiError != null)
-            {
-                throw new SdCardOperationException(
-                    "The SD card list operation failed: " + lastScpiError,
-                    lines,
-                    lastScpiError);
-            }
-
-            // Defensive fallback: firmware status text ("Error !! ...") with no
-            // SCPI error and no recognized marker. Shouldn't happen for known
-            // firmware paths, but surfacing it as a typed exception is far
-            // better than silently returning an empty list.
-            var nonResultLine = lines.FirstOrDefault(l =>
-                !string.IsNullOrWhiteSpace(l) && IsNonResultLine(l))?.Trim();
-            if (nonResultLine != null)
-            {
-                throw new SdCardOperationException(
-                    "The SD card list operation failed: " + nonResultLine,
-                    lines,
-                    lastScpiError: null);
-            }
-
-            // No error lines and no content lines — empty directory. Caller continues.
-            // Safe to treat as empty rather than as a lost reply: GetSdCardFilesAsync only reaches
-            // this point once the device has answered the end-of-listing terminator (#396).
-        }
-
-        /// <summary>
-        /// Validates an SD card filename to prevent SCPI command injection.
-        /// </summary>
-        /// <param name="fileName">The filename to validate.</param>
-        /// <exception cref="ArgumentException">Thrown when the filename contains invalid characters.</exception>
-        private static void ValidateSdCardFileName(string fileName)
-        {
-            if (fileName.IndexOfAny(new[] { '"', '\n', '\r', ';' }) >= 0)
-            {
-                throw new ArgumentException(
-                    "Filename contains invalid characters. Quotes, newlines, and semicolons are not allowed.",
-                    nameof(fileName));
-            }
-        }
-
-        /// <inheritdoc />
-        public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetLanChipInfo),
-                responseTimeoutMs: 2000,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (LanChipInfoParser.TryParseLines(lines, out var info))
-            {
-                return info;
-            }
-
-            // Closes #203: LAN:ENAbled=1 in saved settings but the WINC1500 state
-            // machine hasn't reached INITIALIZED yet (steady-state, not the
-            // post-reboot transient #144 already retries for) makes GETChipInfo?
-            // return this specific SCPI error instead of JSON. Surface it distinctly
-            // so the caller's retry loop can react (kick LAN:APPLY) instead of just
-            // waiting out a blind delay.
-            var errorLine = lines.LastOrDefault(IsScpiErrorLine);
-            if (errorLine != null && ScpiResponseClassifier.TryExtractErrorCode(errorLine, out var errorCode) && errorCode == -200)
-            {
-                throw new LanNotInitializedException(errorLine.Trim());
-            }
-
-            return null;
-        }
-
-        // -----------------------------------------------------------------
-        // IDeviceDiagnostics
-        //
-        // Each method issues a single SCPI query/command as a text command
-        // (the protobuf consumer is paused for the exchange, same as the SD
-        // and LAN-chip queries) and hands the response to a tolerant parser.
-        // Unlike the SD operations these do not switch the SPI bus, so there
-        // is no PrepareSdInterface / settle delay; and they intentionally do
-        // not stop streaming, so callers can sample live counters — though
-        // parsing is most reliable when the device is not actively streaming.
-        // -----------------------------------------------------------------
-
-        /// <summary>Time allowed for the first diagnostics response line. Generous because
-        /// <c>SYSTem:LOG?</c> and the stats queries can emit dozens of lines.</summary>
-        private const int DIAGNOSTICS_RESPONSE_TIMEOUT_MS = 2000;
-
-        /// <summary>
-        /// Throws a <see cref="DeviceDiagnosticsException"/> when a diagnostics command produced no
-        /// usable result and the device's response consisted solely of SCPI error/status lines —
-        /// i.e. the command failed (commonly an unsupported header on below-floor firmware) rather
-        /// than legitimately returning nothing. A truly empty response (no lines) is treated as
-        /// success so callers can distinguish "empty log" from "command failed".
-        /// </summary>
-        private static void ThrowIfErrorOnlyResponse(int parsedResultCount, IReadOnlyList<string> lines, string operation)
-        {
-            if (parsedResultCount == 0 && IsErrorOnlyResponse(lines))
-            {
-                throw new DeviceDiagnosticsException(
-                    $"The device returned an error while attempting to {operation}.",
-                    lines);
-            }
-        }
-
-        /// <summary>
-        /// Returns true when the response contains at least one non-empty line and every non-empty
-        /// line is a SCPI error/status line (per <see cref="ScpiResponseClassifier"/>).
-        /// </summary>
-        private static bool IsErrorOnlyResponse(IReadOnlyList<string> lines)
-        {
-            var sawContent = false;
-            foreach (var line in lines)
-            {
-                if (string.IsNullOrWhiteSpace(line))
-                {
-                    continue;
-                }
-
-                sawContent = true;
-                if (!IsNonResultLine(line))
-                {
-                    return false;
-                }
-            }
-
-            return sawContent;
-        }
-
-        /// <inheritdoc />
-        public async Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetSystemLog),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            var entries = SystemLogParser.Parse(lines);
-
-            // The parser drops error/status lines, so an error-only response would
-            // otherwise be indistinguishable from a genuinely empty log buffer.
-            // Surface a command failure (e.g. unsupported on below-floor firmware)
-            // rather than returning a misleading empty list.
-            ThrowIfErrorOnlyResponse(entries.Count, lines, "read the system log");
-
-            return entries;
-        }
-
-        /// <inheritdoc />
-        public async Task ClearSystemLogAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.ClearSystemLog),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            // On success the device echoes a short ack ("Log cleared"); an error-only
-            // response means the command failed and must not be swallowed.
-            ThrowIfErrorOnlyResponse(0, lines, "clear the system log");
-        }
-
-        /// <inheritdoc />
-        public async Task<LogLevelSetting> SetLogLevelAsync(string module, int level, CancellationToken cancellationToken = default)
-        {
-            // Build the command first so argument validation (ArgumentException /
-            // ArgumentOutOfRangeException) surfaces the same way regardless of
-            // connection state, matching SetAnalogOutput / SetDioDirection.
-            var command = ScpiMessageProducer.SetLogLevel(module, level);
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(command),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (ContainsScpiError(lines))
-            {
-                throw new DeviceDiagnosticsException(
-                    $"The device rejected log level {level} for module '{module}'.",
-                    lines);
-            }
-
-            if (LogLevelParser.TryParseLines(lines, out var setting))
-            {
-                return setting;
-            }
-
-            throw new DeviceDiagnosticsException(
-                $"Setting the log level for module '{module}' returned an unparseable response.",
-                lines);
-        }
-
-        /// <inheritdoc />
-        public async Task<IReadOnlyList<string>> GetCommandHistoryAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetCommandHistory),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            var commands = CommandHistoryParser.Parse(lines);
-
-            // An empty list is valid ("No command history"), but an error-only
-            // response is a failure — distinguish the two. The "No command history"
-            // marker is not an error line, so it never trips this check.
-            ThrowIfErrorOnlyResponse(commands.Count, lines, "read the command history");
-
-            return commands;
-        }
-
-        /// <inheritdoc />
-        public async Task TestSystemLogAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.TestSystemLog),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            // On success the device echoes "Added test log messages"; an error-only
-            // response means the command failed and must not be swallowed.
-            ThrowIfErrorOnlyResponse(0, lines, "run the system-log self-test");
-        }
-
-        /// <inheritdoc />
-        public async Task<int> GetSystemErrorCountAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetSystemErrorCount),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            foreach (var line in lines)
-            {
-                if (string.IsNullOrWhiteSpace(line))
-                {
-                    continue;
-                }
-
-                if (int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
-                {
-                    return count;
-                }
-            }
-
-            throw new DeviceDiagnosticsException(
-                "The error-count query returned an unparseable response.",
-                lines);
-        }
-
-        /// <inheritdoc />
-        public async Task<StreamStats> GetStreamStatsAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetStreamStats),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (StreamStatsParser.TryParse(lines, out var stats))
-            {
-                return stats;
-            }
-
-            throw new DeviceDiagnosticsException(
-                "The streaming-stats query returned an unparseable response.",
-                lines);
-        }
-
-        /// <inheritdoc />
-        public async Task<MemoryDiagnostics> GetMemoryDiagnosticsAsync(CancellationToken cancellationToken = default)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var lines = await ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.GetMemoryDiagnostics),
-                responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            if (MemoryDiagnosticsParser.TryParse(lines, out var diagnostics))
-            {
-                return diagnostics;
-            }
-
-            throw new DeviceDiagnosticsException(
-                "The memory-diagnostics query returned an unparseable response.",
-                lines);
-        }
+        #endregion
     }
 }

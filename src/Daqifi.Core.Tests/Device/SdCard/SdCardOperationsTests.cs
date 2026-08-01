@@ -1491,6 +1491,26 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task CheckSdCardSpaceAsync_WarningSenderIsTheDevice()
+        {
+            // The space check now lives in a collaborator, but the event belongs to the device's
+            // public surface: subscribers key off the sender to tell devices apart. Nothing
+            // asserted this before the split — every existing subscriber discards the sender —
+            // so a collaborator raising the event in its own name would have been a silent,
+            // compile-clean behavior change (#344).
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "52428800,4294967296" };
+            device.Connect();
+
+            object? sender = null;
+            device.LowSdSpaceWarning += (s, _) => sender = s;
+
+            await device.CheckSdCardSpaceAsync();
+
+            Assert.Same(device, sender);
+        }
+
+        [Fact]
         public async Task CheckSdCardSpaceAsync_WhenPlentyOfSpace_DoesNotRaiseWarning()
         {
             // ~3.7 GB free of a 4 GB card.
