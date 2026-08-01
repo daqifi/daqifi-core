@@ -1,3 +1,5 @@
+using Daqifi.Core.Communication.Consumers;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
@@ -390,6 +392,156 @@ public class DaqifiDeviceOperationSerializationTests
         return handler?.GetInvocationList().Length ?? 0;
     }
 
+    // ── Qodo round 1, finding 1: the drain must cover in-flight writes ──────────────────────
+
+    [Fact]
+    public void Producer_WithAWriteInFlight_ReportsQueueEmptyButNotIdle()
+    {
+        // The trap, stated as an assertion. MessageProducer dequeues BEFORE it writes, so the
+        // queue reads empty while the write is still going out. Anything using
+        // QueuedMessageCount == 0 as "the wire is quiet" is wrong; IsIdle is the real signal.
+        using var stream = new GatedWriteStream();
+        using var producer = new MessageProducer<string>(stream);
+        producer.Start();
+
+        producer.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+
+        Assert.True(stream.WaitForWriteToStart(DeadlockBudget), "The producer never started writing.");
+
+        Assert.Equal(0, producer.QueuedMessageCount);
+        Assert.False(producer.IsIdle, "IsIdle reported true while a write was still in flight.");
+
+        stream.ReleaseWrites();
+    }
+
+    [Fact]
+    public async Task TextExchange_DoesNotTakeTheStreamWhileAWriteIsStillInFlight()
+    {
+        // The device-level consequence: swapping the stream's reader mid-write means that
+        // command's reply is collected into the exchange's answer. The exchange must still be
+        // waiting — protobuf consumer running, stream not taken — while the write is blocked.
+        using var transport = new GatedWriteTransport();
+        using var device = new SlowDrainTextExchangeDevice("Draining Device", transport);
+        device.Connect();
+
+        device.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+        Assert.True(transport.WaitForWriteToStart(DeadlockBudget), "The producer never started writing.");
+
+        var exchange = Task.Run(() => device.RunTextExchangeAsync(() => { }));
+
+        // Sampled across the whole window rather than once at the end: a drain that returns early
+        // swaps within a few tens of milliseconds and then restarts the consumer when the exchange
+        // finishes, so a single late sample would see it running again and prove nothing. The
+        // write stays blocked throughout, so with the barrier working the consumer is never
+        // stopped at any point here.
+        for (var i = 0; i < 12; i++)
+        {
+            await Task.Delay(25);
+            Assert.True(
+                ConsumerIsRunning(device),
+                $"The text exchange took the stream while a command was still being written (sample {i}).");
+        }
+
+        transport.ReleaseWrites();
+        await exchange.WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    // ── Qodo round 1, finding 2: deferred sends must not be overtaken ───────────────────────
+
+    [Fact]
+    public async Task Send_ArrivingDuringTheFlush_DoesNotOvertakeAlreadyDeferredMessages()
+    {
+        // Deferral has to stay on while the parked messages are replayed. If it is switched off
+        // first, a send arriving mid-replay goes straight out and lands ahead of messages that
+        // were queued before it.
+        //
+        // Binary payloads on purpose: they take the direct-write path, so each replayed send is a
+        // real blocking write and the replay window is wide enough to aim at deterministically.
+        using var transport = new GatedWriteTransport(writeDelay: TimeSpan.FromMilliseconds(120));
+        using var device = new DaqifiDevice("Ordering Device", transport);
+        device.Connect();
+
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        // Parked while the operation holds the device.
+        foreach (var tag in new[] { "A1", "A2", "A3" })
+        {
+            await Task.Run(() => device.Send(new TaggedBinaryMessage(tag)));
+        }
+
+        // A competitor that fires once the replay is under way. Started before the flush and
+        // gated, so it carries none of the flushing flow's context.
+        using var replayStarted = new ManualResetEventSlim(false);
+        transport.OnWriteStarted = () => replayStarted.Set();
+
+        var competitor = new Thread(() =>
+        {
+            replayStarted.Wait(DeadlockBudget);
+            device.Send(new TaggedBinaryMessage("B"));
+        })
+        {
+            IsBackground = true,
+        };
+        competitor.Start();
+
+        transport.ReleaseWrites();
+        release.SetResult();
+
+        await operation.WaitAsync(DeadlockBudget);
+        Assert.True(competitor.Join(TimeSpan.FromSeconds(10)));
+
+        await WaitForWriteAsync(transport, "B");
+
+        var order = transport.Writes.Where(w => w.Length <= 2).ToList();
+        Assert.Equal(new[] { "A1", "A2", "A3", "B" }, order);
+
+        device.Disconnect();
+    }
+
+    private static bool ConsumerIsRunning(DaqifiDevice device)
+    {
+        var consumer = typeof(DaqifiDevice)
+            .GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(device);
+
+        return consumer is IMessageConsumer<DaqifiOutMessage> { IsRunning: true };
+    }
+
+    /// <summary>A message whose payload is a short ASCII tag, so write order is readable.</summary>
+    private sealed class TaggedBinaryMessage : IOutboundMessage<byte[]>
+    {
+        public TaggedBinaryMessage(string tag) => Data = Encoding.UTF8.GetBytes(tag);
+
+        public byte[] Data { get; set; }
+
+        public byte[] GetBytes() => Data;
+    }
+
+    /// <summary>Raises the drain budget so the wait is observable rather than a race.</summary>
+    private sealed class SlowDrainTextExchangeDevice : DaqifiDevice
+    {
+        public SlowDrainTextExchangeDevice(string name, IStreamTransport transport)
+            : base(name, transport)
+        {
+        }
+
+        internal override TimeSpan OutboundDrainWait => TimeSpan.FromSeconds(5);
+
+        public Task<IReadOnlyList<string>> RunTextExchangeAsync(Action setupAction) =>
+            ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 300, completionTimeoutMs: 100);
+    }
+
     // ── The inbound path stays clear ────────────────────────────────────────────────────────
 
     [Fact]
@@ -423,12 +575,18 @@ public class DaqifiDeviceOperationSerializationTests
 
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────
 
-    private static async Task WaitForWriteAsync(RecordingTransport transport, string fragment)
+    private static Task WaitForWriteAsync(RecordingTransport transport, string fragment) =>
+        WaitForWriteAsync(() => transport.Writes, fragment);
+
+    private static Task WaitForWriteAsync(GatedWriteTransport transport, string fragment) =>
+        WaitForWriteAsync(() => transport.Writes, fragment);
+
+    private static async Task WaitForWriteAsync(Func<IReadOnlyList<string>> writes, string fragment)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
-            if (transport.Writes.Any(w => w.Contains(fragment, StringComparison.Ordinal)))
+            if (writes().Any(w => w.Contains(fragment, StringComparison.Ordinal)))
             {
                 return;
             }
@@ -436,7 +594,7 @@ public class DaqifiDeviceOperationSerializationTests
             await Task.Delay(20);
         }
 
-        Assert.Fail($"'{fragment}' never reached the wire. Writes: {string.Join(" | ", transport.Writes)}");
+        Assert.Fail($"'{fragment}' never reached the wire. Writes: {string.Join(" | ", writes())}");
     }
 
     /// <summary>Exposes the protected text-exchange entry point.</summary>
@@ -455,6 +613,154 @@ public class DaqifiDeviceOperationSerializationTests
                 responseTimeoutMs: 300,
                 completionTimeoutMs: 100,
                 cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// A stream that parks inside <see cref="Write"/> until released, and reports when a write has
+    /// actually begun — the state where the queue is empty but the wire is not yet quiet.
+    /// </summary>
+    private sealed class GatedWriteStream : Stream
+    {
+        private readonly ManualResetEventSlim _released = new(false);
+        private readonly ManualResetEventSlim _writeStarted = new(false);
+        private readonly List<string> _writes = new();
+        private readonly object _gate = new();
+        private readonly TimeSpan _writeDelay;
+
+        public GatedWriteStream(TimeSpan? writeDelay = null) => _writeDelay = writeDelay ?? TimeSpan.Zero;
+
+        /// <summary>Invoked on the writing thread each time a write begins.</summary>
+        public Action? OnWriteStarted { get; set; }
+
+        public IReadOnlyList<string> Writes
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _writes.ToList();
+                }
+            }
+        }
+
+        public bool WaitForWriteToStart(TimeSpan timeout) => _writeStarted.Wait(timeout);
+
+        public void ReleaseWrites() => _released.Set();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            Thread.Sleep(5);
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            _writeStarted.Set();
+            OnWriteStarted?.Invoke();
+
+            _released.Wait(TimeSpan.FromSeconds(10));
+
+            if (_writeDelay > TimeSpan.Zero)
+            {
+                Thread.Sleep(_writeDelay);
+            }
+
+            lock (_gate)
+            {
+                _writes.Add(Encoding.UTF8.GetString(buffer, offset, count));
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _released.Set();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>Transport over a <see cref="GatedWriteStream"/>.</summary>
+    private sealed class GatedWriteTransport : IStreamTransport
+    {
+        private readonly GatedWriteStream _stream;
+        private bool _isConnected;
+        private bool _disposed;
+
+        public GatedWriteTransport(TimeSpan? writeDelay = null) => _stream = new GatedWriteStream(writeDelay);
+
+        public IReadOnlyList<string> Writes => _stream.Writes;
+
+        public Action? OnWriteStarted
+        {
+            get => _stream.OnWriteStarted;
+            set => _stream.OnWriteStarted = value;
+        }
+
+        public bool WaitForWriteToStart(TimeSpan timeout) => _stream.WaitForWriteToStart(timeout);
+
+        public void ReleaseWrites() => _stream.ReleaseWrites();
+
+        public Stream Stream => _disposed
+            ? throw new ObjectDisposedException(nameof(GatedWriteTransport))
+            : _stream;
+
+        public bool IsConnected => _isConnected && !_disposed;
+
+        public string ConnectionInfo => _isConnected ? "Gated: Connected" : "Gated: Disconnected";
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(GatedWriteTransport));
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            _stream.ReleaseWrites();
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public void Connect() => ConnectAsync().Wait();
+
+        public void Disconnect() => DisconnectAsync().Wait();
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _stream.ReleaseWrites();
+            _isConnected = false;
+            _disposed = true;
+        }
     }
 
     /// <summary>

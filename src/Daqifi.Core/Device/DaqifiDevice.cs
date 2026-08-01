@@ -1077,13 +1077,34 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Stops deferring and sends everything parked while the operation ran, in order.
+        /// How many times <see cref="FlushDeferredSends"/> will replay a fresh batch before it
+        /// stops racing the senders and finishes holding <see cref="_deferralGate"/>.
+        /// </summary>
+        private const int MaxFlushRounds = 8;
+
+        /// <summary>
+        /// Sends everything parked while the operation ran, in order, and only then stops deferring.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Called before the semaphore is released, so the parked messages are queued ahead of
-        /// whatever the next operation does. Clearing the flag and taking the list happen together
-        /// under <see cref="_deferralGate"/>, which is what guarantees no message is parked into a
-        /// list that has already been drained.
+        /// whatever the next operation does.
+        /// </para>
+        /// <para>
+        /// Deferral stays <b>on</b> for the whole replay. Clearing the flag first and replaying
+        /// afterwards would leave a window where another thread sees "nothing in flight", sends
+        /// straight to the producer, and overtakes messages parked before it — losing exactly the
+        /// ordering this mechanism exists to keep.
+        /// </para>
+        /// <para>
+        /// The replay itself runs <i>outside</i> the gate, which is what keeps <see cref="Send{T}"/>
+        /// non-blocking — the whole reason deferral was chosen over making it wait. The cost is that
+        /// a send can be parked while a replay is running, so this drains in rounds until a round
+        /// finds the list empty and can stop deferring in the same breath it observes that. A sender
+        /// fast enough to refill the list every round would loop forever, so after
+        /// <see cref="MaxFlushRounds"/> the last round finishes under the gate: senders block for
+        /// one final replay instead of this spinning for as long as they keep sending.
+        /// </para>
         /// <para>
         /// A parked send that fails is logged and dropped rather than thrown: the caller was told
         /// the message was accepted before this point, and <see cref="Send{T}"/> has never
@@ -1093,19 +1114,43 @@ namespace Daqifi.Core.Device
         /// </remarks>
         private void FlushDeferredSends()
         {
-            List<Action>? parked;
+            for (var round = 0; round < MaxFlushRounds; round++)
+            {
+                List<Action>? parked;
+                lock (_deferralGate)
+                {
+                    parked = _deferredSends;
+                    _deferredSends = null;
+
+                    if (parked == null)
+                    {
+                        // Nothing arrived while the previous round was replaying. Deferral stops
+                        // here, atomically with that observation, so no message can be parked into
+                        // a list nobody will drain.
+                        _operationInFlight = false;
+                        return;
+                    }
+                }
+
+                ReplayDeferredSends(parked);
+            }
+
             lock (_deferralGate)
             {
                 _operationInFlight = false;
-                parked = _deferredSends;
+
+                var remaining = _deferredSends;
                 _deferredSends = null;
+                if (remaining != null)
+                {
+                    ReplayDeferredSends(remaining);
+                }
             }
+        }
 
-            if (parked == null)
-            {
-                return;
-            }
-
+        /// <summary>Sends one batch of parked messages, in order, never throwing.</summary>
+        private void ReplayDeferredSends(List<Action> parked)
+        {
             foreach (var send in parked)
             {
                 try
@@ -1167,18 +1212,29 @@ namespace Daqifi.Core.Device
         /// Short on purpose: it is only covering messages queued microseconds before the exchange
         /// opened, and the exchange has its own stale-line boundary as a backstop.
         /// </remarks>
-        private static readonly TimeSpan OutboundDrainWait = TimeSpan.FromMilliseconds(250);
+        internal virtual TimeSpan OutboundDrainWait => TimeSpan.FromMilliseconds(250);
 
         /// <summary>
         /// Waits, briefly, for messages queued before this exchange to reach the wire.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// New sends from other threads are already parked by the time this runs, but anything
-        /// queued just before the exchange opened is still in the producer's queue. Written after
-        /// the consumer swap, its reply would land in this exchange's lines instead of the protobuf
-        /// consumer's — a reply matched to the wrong request. Letting the queue empty first puts
-        /// those replies back where they belong. Bounded, because a device that is not draining its
-        /// receive buffer must not stall the exchange: the stale-line boundary still covers it.
+        /// queued just before the exchange opened is still on its way out. Written after the
+        /// consumer swap, its reply would land in this exchange's lines instead of the protobuf
+        /// consumer's — a reply matched to the wrong request. Letting the outbound side go quiet
+        /// first puts those replies back where they belong.
+        /// </para>
+        /// <para>
+        /// Waits on <see cref="IMessageProducer{T}.IsIdle"/>, never on
+        /// <c>QueuedMessageCount == 0</c>: the count drops as soon as a message is dequeued, which
+        /// is <i>before</i> it is written, so a count of zero can mean "still writing". That is the
+        /// very case this barrier exists to catch.
+        /// </para>
+        /// <para>
+        /// Bounded, because a device that is not draining its receive buffer must not stall the
+        /// exchange: the stale-line boundary still covers what slips through.
+        /// </para>
         /// </remarks>
         private async Task DrainOutboundQueueAsync(CancellationToken cancellationToken)
         {
@@ -1189,7 +1245,7 @@ namespace Daqifi.Core.Device
             }
 
             var deadline = DateTime.UtcNow + OutboundDrainWait;
-            while (producer.QueuedMessageCount > 0 && DateTime.UtcNow < deadline)
+            while (!producer.IsIdle && DateTime.UtcNow < deadline)
             {
                 await Task.Delay(10, cancellationToken).ConfigureAwait(false);
             }
