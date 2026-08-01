@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
+using Daqifi.Core.Firmware.Winc;
 using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Core.Firmware;
@@ -743,28 +744,30 @@ internal sealed class WifiModuleUpdater
 
     private string ResolveWifiToolPath(string firmwarePath)
     {
-        if (File.Exists(firmwarePath))
+        if (!File.Exists(firmwarePath) && !Directory.Exists(firmwarePath))
         {
-            return firmwarePath;
+            throw new FileNotFoundException("WiFi firmware path was not found.", firmwarePath);
         }
 
-        if (Directory.Exists(firmwarePath))
+        // Resolution goes through the shared locator so there is a single answer to
+        // "can this environment flash the WiFi module?" (part of #271).
+        var locator = new WincFlashToolLocator(Options.WifiFlashToolFileName);
+        if (locator.TryResolveToolPath(firmwarePath, out var toolPath))
         {
-            var matches = Directory.GetFiles(
-                firmwarePath,
-                Options.WifiFlashToolFileName,
-                SearchOption.AllDirectories);
-
-            if (matches.Length == 0)
-            {
-                throw new FileNotFoundException(
-                    $"Could not locate '{Options.WifiFlashToolFileName}' under '{firmwarePath}'.");
-            }
-
-            return matches[0];
+            return toolPath;
         }
 
-        throw new FileNotFoundException("WiFi firmware path was not found.", firmwarePath);
+        // Say why plainly. Microchip's flash tool is a Windows .cmd/.exe, so on Linux and macOS
+        // this is not a misconfigured path — the tool genuinely cannot be there, and the caller
+        // needs to know that rather than reading it as a missing download.
+        var platformNote = OperatingSystem.IsWindows()
+            ? string.Empty
+            : $" On {(OperatingSystem.IsMacOS() ? "macOS" : "this platform")} the WiFi flash tool is " +
+              "unavailable — Microchip ships it as a Windows program. WiFi module flashing is " +
+              "currently Windows-only; see issue #271.";
+
+        throw new FileNotFoundException(
+            $"Could not locate '{Options.WifiFlashToolFileName}' under '{firmwarePath}'.{platformNote}");
     }
 
     private string ResolveWifiPort(IStreamingDevice device)
