@@ -96,6 +96,64 @@ public class FirmwareUpdateServiceTests
         Assert.Equal(100, terminalProgress.PercentComplete);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task ExecuteWithRetryAsync_WithNonPositiveMaxAttempts_ThrowsAndNeverRunsTheAction(int maxAttempts)
+    {
+        // The retry helper is shared plumbing for flash-critical steps (erase, program,
+        // verify). A caller asking for zero attempts must fail loudly rather than return
+        // a silent success that skipped the operation entirely.
+        var context = new FirmwareUpdateContext(
+            new object(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FirmwareUpdateServiceOptions());
+
+        var actionRan = false;
+
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => context.ExecuteWithRetryAsync(
+                "erase flash",
+                maxAttempts,
+                TimeSpan.Zero,
+                _ =>
+                {
+                    actionRan = true;
+                    return Task.CompletedTask;
+                },
+                _ => true,
+                CancellationToken.None));
+
+        Assert.Equal("maxAttempts", ex.ParamName);
+        Assert.False(actionRan);
+    }
+
+    [Fact]
+    public async Task ExecuteWithRetryAsync_WithSingleAttempt_RunsTheActionExactlyOnce()
+    {
+        // Guards the boundary: 1 is valid and must not be caught by the new check.
+        var context = new FirmwareUpdateContext(
+            new object(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FirmwareUpdateServiceOptions());
+
+        var runCount = 0;
+
+        await context.ExecuteWithRetryAsync(
+            "erase flash",
+            1,
+            TimeSpan.Zero,
+            _ =>
+            {
+                runCount++;
+                return Task.CompletedTask;
+            },
+            _ => true,
+            CancellationToken.None);
+
+        Assert.Equal(1, runCount);
+    }
+
     [Fact]
     public async Task UpdateFirmwareAsync_RaisesStateChangedWithTheServiceAsSender()
     {

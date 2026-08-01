@@ -191,6 +191,15 @@ internal sealed class FirmwareUpdateContext
         }
     }
 
+    /// <summary>
+    /// Runs <paramref name="action"/>, retrying up to <paramref name="maxAttempts"/> times while
+    /// <paramref name="isTransient"/> classifies the failure as retryable.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="maxAttempts"/> is less than 1. Rejected rather than clamped: a caller asking
+    /// for zero attempts has a bug, and silently returning success would skip a flash-critical step
+    /// (erase, program, verify) with no failure signal at all.
+    /// </exception>
     internal async Task ExecuteWithRetryAsync(
         string operation,
         int maxAttempts,
@@ -199,6 +208,14 @@ internal sealed class FirmwareUpdateContext
         Func<Exception, bool> isTransient,
         CancellationToken cancellationToken)
     {
+        if (maxAttempts < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxAttempts),
+                maxAttempts,
+                $"Operation '{operation}' requires at least one attempt.");
+        }
+
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
