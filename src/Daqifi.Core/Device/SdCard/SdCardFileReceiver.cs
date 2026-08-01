@@ -48,9 +48,10 @@ public sealed class SdCardFileReceiver
     private const int DefaultBufferSize = 16384;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SdCardFileReceiver"/> class for a transport
-    /// that reports silence with a zero-length read — USB serial, where the port's own read
-    /// timeout provides that signal.
+    /// Initializes a new instance of the <see cref="SdCardFileReceiver"/> class with the behavior
+    /// it had before the inactivity window existed: silence is reported by a zero-length read (USB
+    /// serial, where the port's own read timeout provides that signal), and the only thing that
+    /// ends a quiet transfer is the caller's own deadline or cancellation.
     /// </summary>
     /// <param name="sourceStream">The transport stream to read raw bytes from.</param>
     /// <param name="bufferSize">Read buffer size in bytes. Defaults to 16384 (16 KB).</param>
@@ -58,13 +59,25 @@ public sealed class SdCardFileReceiver
     /// Thrown when <paramref name="bufferSize"/> is not positive.
     /// </exception>
     /// <remarks>
-    /// Kept with its original signature rather than folded into the overload below as optional
-    /// parameters: optional arguments are a compile-time convenience, so adding parameters here
-    /// would change the CLR signature and leave already-compiled consumers of the
-    /// <c>Daqifi.Core</c> package calling a constructor that no longer exists.
+    /// This overload exists for consumers compiled against an earlier <c>Daqifi.Core</c>, so it
+    /// preserves what they were compiled against on <b>both</b> axes. Keeping the signature is the
+    /// obvious half: optional arguments are a compile-time convenience, so adding parameters to it
+    /// would change the CLR signature and leave those consumers calling a constructor that no
+    /// longer exists. Keeping the semantics is the half that is easy to lose — delegating with the
+    /// new default would switch on a 20-second inactivity window that no such caller ever asked
+    /// for, and any transport that can go quiet without returning zero bytes would start being
+    /// abandoned mid-transfer. A silent behavior change is worse than the loud binary break this
+    /// overload exists to prevent, so the window is explicitly off here.
+    /// <para>
+    /// Use the overload below to opt into it.
+    /// </para>
     /// </remarks>
     public SdCardFileReceiver(Stream sourceStream, int bufferSize = DefaultBufferSize)
-        : this(sourceStream, zeroLengthReadMeansClosed: false, idleTimeout: null, bufferSize: bufferSize)
+        : this(
+            sourceStream,
+            zeroLengthReadMeansClosed: false,
+            idleTimeout: Timeout.InfiniteTimeSpan,
+            bufferSize: bufferSize)
     {
     }
 

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -653,6 +654,55 @@ public class SdCardFileReceiverTests
         var ctor = typeof(SdCardFileReceiver).GetConstructor(new[] { typeof(Stream), typeof(int) });
 
         Assert.NotNull(ctor);
+    }
+
+    [Fact]
+    public async Task Ctor_OriginalSignature_LeavesTheCallersDeadlineInCharge()
+    {
+        // Restoring the CLR signature is only half of what an old caller is owed. The other half is
+        // that it still DOES what it did: before the inactivity window existed, a transport that
+        // went quiet without returning zero bytes ran until the caller's own deadline. Delegating
+        // with the new default would have switched on a 20-second window nobody asked for and
+        // started abandoning those transfers — a silent change, and precisely to the callers this
+        // overload exists to protect.
+        using var sourceStream = new NeverEndingStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(
+                destinationStream, "legacy.bin", timeout: TimeSpan.FromMilliseconds(400)));
+
+        // The caller's deadline ended it, not an idle window: an active window shorter than 400 ms
+        // would report NoDataReceived and its own duration instead.
+        Assert.Equal(SdCardTransferStallReason.TransferTimeout, ex.Reason);
+        Assert.Equal(TimeSpan.FromMilliseconds(400), ex.Timeout);
+    }
+
+    [Fact]
+    public void Ctor_OriginalSignature_LeavesTheInactivityWindowOff()
+    {
+        // The behavioral test above can only rule out a window shorter than its own deadline, and
+        // the default is 20 seconds — too long to wait out in a unit test. So assert the state
+        // directly, the same way the signature test asserts on metadata: a null window is "off",
+        // and this fails for ANY window, not just a short one.
+        using var stream = new MemoryStream();
+
+        Assert.Null(IdleTimeoutOf(new SdCardFileReceiver(stream)));
+
+        // Control: the opt-in overload does get the default, so this is pinning the difference
+        // between the two constructors rather than asserting the feature is simply never on.
+        Assert.Equal(
+            SdCardFileReceiver.DefaultIdleTimeout,
+            IdleTimeoutOf(new SdCardFileReceiver(stream, zeroLengthReadMeansClosed: true)));
+    }
+
+    private static TimeSpan? IdleTimeoutOf(SdCardFileReceiver receiver)
+    {
+        var field = typeof(SdCardFileReceiver).GetField(
+            "_idleTimeout", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (TimeSpan?)field!.GetValue(receiver);
     }
 
     [Theory]
