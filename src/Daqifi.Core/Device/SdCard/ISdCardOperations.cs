@@ -178,7 +178,7 @@ namespace Daqifi.Core.Device.SdCard
         Task FormatSdCardAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Downloads a file from the device's SD card over USB.
+        /// Downloads a file from the device's SD card, over USB or over WiFi/TCP.
         /// </summary>
         /// <param name="fileName">The name of the file to download.</param>
         /// <param name="destinationStream">The stream to write file contents to.</param>
@@ -213,7 +213,7 @@ namespace Daqifi.Core.Device.SdCard
             CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Downloads a file from the device's SD card over USB to a temporary file.
+        /// Downloads a file from the device's SD card, over USB or over WiFi/TCP, to a temporary file.
         /// </summary>
         /// <param name="fileName">The name of the file to download.</param>
         /// <param name="progress">Optional progress reporting.</param>

@@ -511,6 +511,150 @@ public class SdCardFileReceiverTests
 
     #endregion
 
+    #region WiFi/TCP transport (#327)
+
+    [Fact]
+    public async Task ReceiveAsync_TcpSizedChunks_ReceivesTheWholeFile()
+    {
+        // The firmware clamps every SD reply chunk it writes to the TCP buffer at 1024 bytes
+        // (#599), so a WiFi download arrives as a long run of short reads no matter how large the
+        // receive buffer is.
+        var fileData = new byte[50_000];
+        new Random(1327).NextBytes(fileData);
+        using var sourceStream = new ChunkedMemoryStream(Combine(fileData, EofMarker), chunkSize: 1024);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, zeroLengthReadMeansClosed: true);
+
+        var bytesReceived = await receiver.ReceiveAsync(destinationStream, "wifi.bin");
+
+        Assert.Equal(fileData.Length, bytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(7)]
+    [InlineData(13)]
+    [InlineData(14)]
+    public async Task ReceiveAsync_EofMarkerSplitAtAnyOffsetOfATcpChunk_DetectedCorrectly(int bytesOfMarkerInFirstChunk)
+    {
+        // The 1024-byte clamp lands wherever the file's length puts it, so the terminator can be
+        // cut at any offset. Size the file so the chunk boundary falls that many bytes into the
+        // marker, and check the split is invisible to the caller.
+        var fileLength = 1024 - bytesOfMarkerInFirstChunk + 1024;
+        var fileData = new byte[fileLength];
+        new Random(bytesOfMarkerInFirstChunk).NextBytes(fileData);
+
+        using var sourceStream = new ChunkedMemoryStream(Combine(fileData, EofMarker), chunkSize: 1024);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, zeroLengthReadMeansClosed: true);
+
+        var bytesReceived = await receiver.ReceiveAsync(destinationStream, "wifi.bin");
+
+        Assert.Equal(fileLength, bytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ThrottledTcpDelivery_KeepsGoingWhileChunksArrive()
+    {
+        // The firmware's SD task and the WiFi task that drains the TCP buffer run at different
+        // priorities, so chunks arrive with gaps. The inactivity window must be a per-gap budget
+        // that each chunk resets, not a total the whole transfer has to fit inside.
+        var fileData = Encoding.ASCII.GetBytes(new string('x', 40));
+        using var sourceStream = new ThrottledStream(
+            Combine(fileData, EofMarker), chunkSize: 8, gap: TimeSpan.FromMilliseconds(30));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream, zeroLengthReadMeansClosed: true, idleTimeout: TimeSpan.FromSeconds(2));
+
+        var bytesReceived = await receiver.ReceiveAsync(destinationStream, "wifi.bin");
+
+        Assert.Equal(fileData.Length, bytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransportGoesSilentWithoutReturningZero_StallsOnTheIdleWindow()
+    {
+        // A socket never reports silence: NetworkStream.ReadAsync ignores Socket.ReceiveTimeout, so
+        // a device that stops answering mid-file leaves the read parked. Without the inactivity
+        // window the transfer would sit there for the caller's whole download budget.
+        using var sourceStream = new NeverEndingStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream, zeroLengthReadMeansClosed: true, idleTimeout: TimeSpan.FromMilliseconds(200));
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(
+                destinationStream, "wifi.bin", timeout: TimeSpan.FromMinutes(30)));
+
+        Assert.Equal(SdCardTransferStallReason.NoDataReceived, ex.Reason);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), ex.Timeout);
+        Assert.Contains("stopped feeding the transfer", ex.Message);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_IdleWindowDisabled_LeavesTheOverallDeadlineInCharge()
+    {
+        using var sourceStream = new NeverEndingStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream, zeroLengthReadMeansClosed: true, idleTimeout: Timeout.InfiniteTimeSpan);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(
+                destinationStream, "wifi.bin", timeout: TimeSpan.FromMilliseconds(150)));
+
+        Assert.Equal(SdCardTransferStallReason.TransferTimeout, ex.Reason);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ZeroLengthReadOnANetworkTransport_ReportsTransportClosed()
+    {
+        // NetworkStream.CanRead stays true after the peer's FIN, so the stream cannot be asked what
+        // an empty read means — only the caller knows. On a socket it can mean one thing.
+        using var sourceStream = new TokenIgnoringSilentStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, zeroLengthReadMeansClosed: true);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destinationStream, "wifi.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(SdCardTransferStallReason.TransportClosed, ex.Reason);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ZeroLengthReadOnSerial_StillReportsNoDataReceived()
+    {
+        // Regression guard for the USB path: there an empty read is the ordinary per-read timeout
+        // on a quiet device, and calling that a closed transport would tell callers not to retry
+        // something that is entirely retryable (#398 gap 1).
+        using var sourceStream = new TokenIgnoringSilentStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, zeroLengthReadMeansClosed: false);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destinationStream, "usb.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(SdCardTransferStallReason.NoDataReceived, ex.Reason);
+        Assert.Null(ex.Timeout);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Ctor_NonPositiveIdleTimeout_Throws(int seconds)
+    {
+        using var sourceStream = new MemoryStream();
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new SdCardFileReceiver(sourceStream, idleTimeout: TimeSpan.FromSeconds(seconds)));
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private static byte[] Combine(params byte[][] arrays)
@@ -658,6 +802,60 @@ public class SdCardFileReceiverTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(Read(buffer, offset, count));
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A stream that hands out small chunks with a pause between them and never returns an empty
+    /// read, the way a socket delivers a throttled SD reply.
+    /// </summary>
+    private sealed class ThrottledStream : Stream
+    {
+        private readonly byte[] _data;
+        private readonly int _chunkSize;
+        private readonly TimeSpan _gap;
+        private int _position;
+
+        public ThrottledStream(byte[] data, int chunkSize, TimeSpan gap)
+        {
+            _data = data;
+            _chunkSize = chunkSize;
+            _gap = gap;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => _data.Length;
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            await Task.Delay(_gap, cancellationToken);
+
+            var available = _data.Length - _position;
+            if (available <= 0)
+            {
+                // Past the payload the device simply says nothing more, as a socket would.
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            var toRead = Math.Min(Math.Min(count, _chunkSize), available);
+            Array.Copy(_data, _position, buffer, offset, toRead);
+            _position += toRead;
+            return toRead;
         }
 
         public override void Flush() { }

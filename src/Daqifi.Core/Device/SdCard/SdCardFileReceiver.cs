@@ -19,15 +19,57 @@ public sealed class SdCardFileReceiver
     internal static readonly byte[] EndOfFileMarker =
         Encoding.ASCII.GetBytes("__END_OF_FILE__");
 
+    /// <summary>
+    /// How long the transfer may go without receiving a single byte before it is declared stalled,
+    /// when the caller does not specify a window of its own.
+    /// </summary>
+    /// <remarks>
+    /// Only a network transport actually needs this. On USB serial the port has a per-read
+    /// <c>ReadTimeout</c> and <c>SerialStream.ReadAsync</c> returns 0 bytes when it elapses, so
+    /// silence is noticed within half a second by the zero-length-read path below. A socket has no
+    /// equivalent: <c>NetworkStream.ReadAsync</c> ignores <c>Socket.ReceiveTimeout</c> and simply
+    /// waits, so without this window a device that stopped answering mid-file would keep the
+    /// transfer parked until the caller's whole (30-minute) download budget expired.
+    /// <para>
+    /// The value is well clear of the longest legitimate gap the firmware can produce: its SD
+    /// reply writer retries a full TCP buffer for up to ten seconds before it gives up on a chunk.
+    /// </para>
+    /// </remarks>
+    internal static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromSeconds(20);
+
     private readonly Stream _sourceStream;
     private readonly int _bufferSize;
+    private readonly bool _zeroLengthReadMeansClosed;
+    private readonly TimeSpan? _idleTimeout;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SdCardFileReceiver"/> class.
     /// </summary>
     /// <param name="sourceStream">The transport stream to read raw bytes from.</param>
     /// <param name="bufferSize">Read buffer size in bytes. Defaults to 16384 (16 KB).</param>
-    public SdCardFileReceiver(Stream sourceStream, int bufferSize = 16384)
+    /// <param name="zeroLengthReadMeansClosed">
+    /// Whether a zero-length read means the peer closed the connection. True for a stream-oriented
+    /// network transport, where that is the only thing zero bytes can mean; false for USB serial,
+    /// where it is the ordinary per-read-timeout signal from a device that is merely quiet. It
+    /// selects between <see cref="SdCardTransferStallReason.TransportClosed"/> and
+    /// <see cref="SdCardTransferStallReason.NoDataReceived"/> — the stream itself cannot tell them
+    /// apart, because <c>NetworkStream.CanRead</c> stays true after the peer's FIN.
+    /// </param>
+    /// <param name="idleTimeout">
+    /// How long to wait without receiving a byte before declaring the transfer stalled. Defaults
+    /// to <see cref="DefaultIdleTimeout"/>; pass <see cref="Timeout.InfiniteTimeSpan"/>
+    /// to disable the window and rely solely on the overall transfer deadline.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="bufferSize"/> is not positive, or when
+    /// <paramref name="idleTimeout"/> is neither positive nor
+    /// <see cref="Timeout.InfiniteTimeSpan"/>.
+    /// </exception>
+    public SdCardFileReceiver(
+        Stream sourceStream,
+        int bufferSize = 16384,
+        bool zeroLengthReadMeansClosed = false,
+        TimeSpan? idleTimeout = null)
     {
         _sourceStream = sourceStream ?? throw new ArgumentNullException(nameof(sourceStream));
 
@@ -36,7 +78,20 @@ public sealed class SdCardFileReceiver
             throw new ArgumentOutOfRangeException(nameof(bufferSize), "Buffer size must be greater than zero.");
         }
 
+        var effectiveIdleTimeout = idleTimeout ?? DefaultIdleTimeout;
+        if (effectiveIdleTimeout != Timeout.InfiniteTimeSpan && effectiveIdleTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(idleTimeout),
+                effectiveIdleTimeout,
+                "Idle timeout must be positive, or Timeout.InfiniteTimeSpan to disable it.");
+        }
+
         _bufferSize = bufferSize;
+        _zeroLengthReadMeansClosed = zeroLengthReadMeansClosed;
+        _idleTimeout = effectiveIdleTimeout == Timeout.InfiniteTimeSpan
+            ? null
+            : effectiveIdleTimeout;
     }
 
     /// <summary>
@@ -120,9 +175,19 @@ public sealed class SdCardFileReceiver
             while (true)
             {
                 int bytesRead;
+
+                // One inactivity window per read. Allocated per iteration rather than reset in
+                // place because a CancellationTokenSource cannot be un-cancelled: reusing one
+                // would turn a byte that arrived at the exact instant the window closed into a
+                // permanently dead token for every read after it.
+                using var idleCts = _idleTimeout is null
+                    ? null
+                    : CancellationTokenSource.CreateLinkedTokenSource(token);
+                idleCts?.CancelAfter(_idleTimeout!.Value);
+
                 try
                 {
-                    bytesRead = await _sourceStream.ReadAsync(buffer, 0, buffer.Length, token)
+                    bytesRead = await _sourceStream.ReadAsync(buffer, 0, buffer.Length, idleCts?.Token ?? token)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -132,6 +197,19 @@ public sealed class SdCardFileReceiver
                         totalBytesReceived,
                         SdCardTransferStallReason.TransferTimeout,
                         effectiveTimeout,
+                        ex);
+                }
+                catch (OperationCanceledException ex) when (idleCts is { IsCancellationRequested: true } && !token.IsCancellationRequested)
+                {
+                    // Nothing arrived for the whole window while neither the caller nor the overall
+                    // deadline had anything to say — the device stopped feeding the transfer. This
+                    // is the only stall signal a socket gives (see DefaultIdleTimeout); on serial
+                    // the zero-length-read path below gets there first and this never fires.
+                    throw new SdCardTransferStalledException(
+                        fileName,
+                        totalBytesReceived,
+                        SdCardTransferStallReason.NoDataReceived,
+                        _idleTimeout,
                         ex);
                 }
 
@@ -145,15 +223,17 @@ public sealed class SdCardFileReceiver
 
                 if (bytesRead == 0)
                 {
-                    // A zero-byte read is NOT proof the stream closed. Over USB serial — the
-                    // transport SD download runs on — Core sets a per-read SerialPort.ReadTimeout
-                    // and .NET's SerialStream.ReadAsync returns 0 on that timeout instead of
-                    // throwing, so zero bytes is the ORDINARY stall signal there. Only an
-                    // unreadable stream is genuinely closed; report the two distinctly so a
-                    // caller can retry a stall and give up on a closed transport (#398 gap 1).
-                    var reason = _sourceStream.CanRead
-                        ? SdCardTransferStallReason.NoDataReceived
-                        : SdCardTransferStallReason.TransportClosed;
+                    // A zero-byte read is NOT proof the stream closed on every transport. Over USB
+                    // serial Core sets a per-read SerialPort.ReadTimeout and .NET's
+                    // SerialStream.ReadAsync returns 0 on that timeout instead of throwing, so zero
+                    // bytes is the ORDINARY stall signal there (#398 gap 1). On a socket it is the
+                    // opposite: zero bytes is the peer's FIN and nothing else, and the stream will
+                    // not admit it — NetworkStream.CanRead stays true until the stream is disposed,
+                    // so the CanRead probe alone would report a closed connection as merely quiet.
+                    // The caller, which knows its transport, settles it (#327).
+                    var reason = _zeroLengthReadMeansClosed || !_sourceStream.CanRead
+                        ? SdCardTransferStallReason.TransportClosed
+                        : SdCardTransferStallReason.NoDataReceived;
 
                     throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason);
                 }

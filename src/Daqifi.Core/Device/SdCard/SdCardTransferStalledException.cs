@@ -30,9 +30,11 @@ namespace Daqifi.Core.Device.SdCard
         public SdCardTransferStallReason Reason { get; }
 
         /// <summary>
-        /// Gets the overall transfer deadline that elapsed, when
-        /// <see cref="Reason"/> is <see cref="SdCardTransferStallReason.TransferTimeout"/>;
-        /// otherwise <c>null</c>.
+        /// Gets the window that elapsed without progress: the overall transfer deadline when
+        /// <see cref="Reason"/> is <see cref="SdCardTransferStallReason.TransferTimeout"/>, or the
+        /// inactivity window when <see cref="Reason"/> is
+        /// <see cref="SdCardTransferStallReason.NoDataReceived"/> because the transport simply went
+        /// silent rather than returning an empty read. <c>null</c> otherwise.
         /// </summary>
         public TimeSpan? Timeout { get; }
 
@@ -43,8 +45,10 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="bytesReceived">File bytes received before the stall.</param>
         /// <param name="reason">Why the transfer stalled.</param>
         /// <param name="timeout">
-        /// The elapsed transfer deadline, for
-        /// <see cref="SdCardTransferStallReason.TransferTimeout"/>.
+        /// The window that elapsed without progress — the transfer deadline for
+        /// <see cref="SdCardTransferStallReason.TransferTimeout"/>, or the inactivity window for a
+        /// <see cref="SdCardTransferStallReason.NoDataReceived"/> stall on a transport that goes
+        /// silent instead of returning an empty read.
         /// </param>
         /// <param name="innerException">Optional inner exception.</param>
         public SdCardTransferStalledException(
@@ -88,6 +92,15 @@ namespace Daqifi.Core.Device.SdCard
                         "the EOF marker. {2}",
                         fileName,
                         (timeout ?? TimeSpan.Zero).TotalSeconds,
+                        received),
+                _ when timeout.HasValue =>
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        "No data arrived for SD card file '{0}' for {1:F0} seconds, so the transfer "
+                        + "was abandoned before the EOF marker. {2} The device stopped feeding the "
+                        + "transfer; retry the download.",
+                        fileName,
+                        timeout.Value.TotalSeconds,
                         received),
                 _ =>
                     $"No data arrived for SD card file '{fileName}' before the EOF marker. {received} " +

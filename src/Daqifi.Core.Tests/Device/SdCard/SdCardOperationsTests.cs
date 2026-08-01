@@ -1801,6 +1801,62 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.DoesNotContain("SYSTem:STORage:SD:SPACe?", device.SentMessages.Select(m => m.Data));
         }
 
+        [Fact]
+        public async Task DownloadSdCardFileAsync_OverWifi_ChunkedAndThrottledDelivery_ReceivesTheWholeFile()
+        {
+            // The end-to-end shape of a WiFi download: the firmware clamps every chunk it writes to
+            // the TCP buffer at 1024 bytes (#599) and the chunks arrive with gaps, so the terminator
+            // lands split across reads and the file is reassembled from a long run of short ones.
+            var fileData = new byte[5_000];
+            new Random(599).NextBytes(fileData);
+
+            var device = new ChunkedWifiDownloadDevice("TestDevice", fileData, chunkSize: 1024);
+            device.Metadata.FirmwareVersion = "3.7.2";
+            device.Connect();
+            using var destination = new MemoryStream();
+
+            var result = await device.DownloadSdCardFileAsync("wifi.bin", destination);
+
+            Assert.Equal(fileData.Length, result.FileSize);
+            Assert.Equal(fileData, destination.ToArray());
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_OverWifi_DeviceGoesSilent_StallsOnTheIdleWindow()
+        {
+            // A socket never surfaces silence of its own accord, so before the inactivity window
+            // this sat on the read until the 30-minute download budget expired. It has to give up
+            // in the window instead — and say the device stopped feeding it, not that time ran out.
+            var device = new SilentWifiDownloadDevice("TestDevice")
+            {
+                IdleTimeoutOverride = TimeSpan.FromMilliseconds(200)
+            };
+            device.Metadata.FirmwareVersion = "3.7.2";
+            device.Connect();
+            using var destination = new MemoryStream();
+
+            var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+                () => device.DownloadSdCardFileAsync("wifi.bin", destination));
+
+            Assert.Equal(SdCardTransferStallReason.NoDataReceived, ex.Reason);
+            Assert.Equal(TimeSpan.FromMilliseconds(200), ex.Timeout);
+        }
+
+        [Fact]
+        public async Task StopSdCardLoggingAsync_OverWifi_DoesNotReEnableLan()
+        {
+            // LAN:ENAbled 1 re-initializes the WiFi module, which would drop the very connection
+            // this command arrived on. Nothing disabled the LAN over WiFi in the first place, so
+            // there is nothing to restore — the mirror of PrepareLanInterface's transport check.
+            var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
+            device.Connect();
+
+            await device.StopSdCardLoggingAsync();
+
+            var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(new[] { "SYSTem:StopStreamData", "SYSTem:STORage:SD:ENAble 0" }, sentCommands);
+        }
+
         #endregion
 
         [Theory]
@@ -3260,6 +3316,98 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
                 using var fakeStream = new MemoryStream(data);
                 await rawAction(fakeStream, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// A WiFi/TCP device whose SD reply arrives the way the firmware actually writes it: in
+        /// chunks no larger than the TCP clamp (#599), with a pause between them, and with no
+        /// zero-length read to mark the end — a socket that has run out of data simply waits.
+        /// </summary>
+        private sealed class ChunkedWifiDownloadDevice : DaqifiStreamingDevice
+        {
+            private readonly byte[] _fileData;
+            private readonly int _chunkSize;
+
+            public ChunkedWifiDownloadDevice(string name, byte[] fileData, int chunkSize)
+                : base(name)
+            {
+                _fileData = fileData;
+                _chunkSize = chunkSize;
+            }
+
+            public override bool IsUsbConnection => false;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+            }
+
+            protected override async Task ExecuteRawCaptureAsync(
+                Func<Stream, CancellationToken, Task> rawAction,
+                CancellationToken cancellationToken = default)
+            {
+                using var fakeStream = new SlowChunkStream(_fileData, _chunkSize, TimeSpan.FromMilliseconds(1));
+                await rawAction(fakeStream, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// A WiFi/TCP device that acknowledges the GET and then never sends anything, and — like a
+        /// socket — never returns an empty read to say so.
+        /// </summary>
+        private sealed class SilentWifiDownloadDevice : DaqifiStreamingDevice
+        {
+            public SilentWifiDownloadDevice(string name)
+                : base(name)
+            {
+            }
+
+            public TimeSpan IdleTimeoutOverride { get; init; } = TimeSpan.FromMilliseconds(200);
+
+            public override bool IsUsbConnection => false;
+
+            internal override TimeSpan SdCardTransferIdleTimeout => IdleTimeoutOverride;
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+            }
+
+            protected override async Task ExecuteRawCaptureAsync(
+                Func<Stream, CancellationToken, Task> rawAction,
+                CancellationToken cancellationToken = default)
+            {
+                using var fakeStream = new SilentStream();
+                await rawAction(fakeStream, cancellationToken);
+            }
+
+            private sealed class SilentStream : Stream
+            {
+                public override bool CanRead => true;
+                public override bool CanSeek => false;
+                public override bool CanWrite => false;
+                public override long Length => throw new NotSupportedException();
+                public override long Position
+                {
+                    get => throw new NotSupportedException();
+                    set => throw new NotSupportedException();
+                }
+
+                public override int Read(byte[] buffer, int offset, int count)
+                {
+                    Thread.Sleep(Timeout.Infinite);
+                    return 0;
+                }
+
+                public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                    return 0;
+                }
+
+                public override void Flush() { }
+                public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+                public override void SetLength(long value) => throw new NotSupportedException();
+                public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
             }
         }
     }
