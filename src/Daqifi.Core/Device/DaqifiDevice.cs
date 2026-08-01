@@ -625,15 +625,375 @@ namespace Daqifi.Core.Device
             _transport.StatusChanged += OnTransportStatusChanged;
         }
 
+        #region Lifecycle serialization (issue #379)
+
+        /// <summary>
+        /// Serializes connect against disconnect, on both the synchronous and the asynchronous
+        /// paths.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Automatic reconnection (issue #379) introduced a second thread that opens and closes the
+        /// transport, and cancellation is not synchronization: <see cref="SupersedeReconnect"/>
+        /// asks the loop to stop and returns immediately, but a loop already inside a blocking
+        /// <c>Connect()</c> cannot be interrupted and will run to completion. Without this, a
+        /// caller's <see cref="Disconnect"/> could be opening and closing the same serial port
+        /// concurrently, and both threads could build and start a message consumer — leaving two
+        /// readers on one stream, the framing corruption this class refuses to risk anywhere else.
+        /// </para>
+        /// <para>
+        /// Narrow on purpose. This is an internal lifecycle invariant — the device never drives its
+        /// own transport from two threads at once — and deliberately <b>not</b> the general
+        /// per-device operation serialization of issue #342, which has to decide ordering across
+        /// the whole public API and interacts with <c>_textExchangeLock</c>. Nothing here changes
+        /// what any public method does when uncontended.
+        /// </para>
+        /// <para>
+        /// A semaphore rather than a monitor because <see cref="ConnectAsync"/> and
+        /// <see cref="DisconnectAsync"/> hold it across <c>await</c>, which a monitor cannot do —
+        /// its continuation may resume on a different thread. Semaphores are not reentrant, so
+        /// re-entry is tracked separately by <see cref="_isInsideLifecycleOperation"/>.
+        /// </para>
+        /// </remarks>
+        private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+
+        /// <summary>
+        /// True while the current logical flow already holds <see cref="_lifecycleLock"/>.
+        /// </summary>
+        /// <remarks>
+        /// Both connect and disconnect raise <see cref="StatusChanged"/> from inside their critical
+        /// section, and a consumer handler calling <see cref="Disconnect"/> from there is re-entry
+        /// on the same flow — which runs nested today with no lock at all and must keep working
+        /// rather than deadlock against a non-reentrant semaphore. <see cref="AsyncLocal{T}"/>
+        /// rather than a thread id so it survives an <c>await</c> resuming on another thread, the
+        /// same technique <c>_isInsideTextExchange</c> already uses in this class.
+        /// </remarks>
+        private readonly AsyncLocal<bool> _isInsideLifecycleOperation = new();
+
+        /// <summary>
+        /// How long <see cref="Connect"/> waits for a lifecycle operation already in flight before
+        /// giving up. Overridable for tests, mirroring <c>SdCardDownloadTimeout</c>.
+        /// </summary>
+        internal virtual TimeSpan LifecycleLockTimeout => TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// How long <see cref="Disconnect"/> waits for a lifecycle operation already in flight
+        /// before abandoning the wait. Far more generous than
+        /// <see cref="LifecycleLockTimeout"/> because a teardown that gives up early is a teardown
+        /// that did not happen. Overridable for tests, mirroring <c>SdCardDownloadTimeout</c>.
+        /// </summary>
+        internal virtual TimeSpan TeardownLockTimeout => TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// What a lifecycle operation does when it cannot have <see cref="_lifecycleLock"/> to
+        /// itself. Running anyway is deliberately not an option: the whole point of the lock is
+        /// that two threads must never drive the transport at once, and a guarantee with a
+        /// "proceed regardless" branch is not a guarantee.
+        /// </summary>
+        private enum LifecycleContention
+        {
+            /// <summary>
+            /// Give up and throw rather than run alongside. For <see cref="Connect"/>: nothing has
+            /// been opened, so failing costs the caller a retry and nothing else.
+            /// </summary>
+            Fail,
+
+            /// <summary>
+            /// Give up and report it, leaving the operation in flight alone. For
+            /// <see cref="Disconnect"/>: the caller is told nothing was torn down rather than being
+            /// blocked forever behind a holder that may never return.
+            /// </summary>
+            Abandon
+        }
+
+        /// <summary>
+        /// The wait a contention policy allows, and what to do when it runs out.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The two callers want opposite things from contention, so neither a shared timeout nor a
+        /// shared fallback would suit both.
+        /// </para>
+        /// <para>
+        /// <b><see cref="Connect"/> fails.</b> It waits <see cref="LifecycleLockTimeout"/> and then
+        /// throws. Opening a second connection alongside one already in flight is exactly what this
+        /// lock exists to prevent — both threads would find no message consumer, both would build
+        /// and start one, and the loser's reader would be left running on the same stream, silently
+        /// corrupting frame boundaries for the rest of the session. A caller who gets a
+        /// <see cref="TimeoutException"/> instead has lost nothing: no handle was opened, no state
+        /// changed, and they can try again.
+        /// </para>
+        /// <para>
+        /// <b><see cref="Disconnect"/> abandons.</b> It waits <see cref="TeardownLockTimeout"/> —
+        /// far longer, because a teardown that gives up early is a teardown that did not happen —
+        /// and then reports that it did not run, leaving the holder alone. It must not throw
+        /// (<c>Dispose</c> depends on it) and must not run alongside (that is the corruption
+        /// above). An unbounded wait is not an option either: <c>SerialPort.Open</c> is called
+        /// synchronously with no timeout and can wedge in uncancellable native I/O — a hazard this
+        /// codebase already knows well enough to have built a process-wide port quarantine around
+        /// it in <see cref="Discovery.SerialDeviceFinder"/> — so waiting on it forever would turn
+        /// <c>Dispose</c> into a permanent block. Abandoning the stuck operation is the house
+        /// answer to uncancellable native I/O here.
+        /// </para>
+        /// </remarks>
+        private TimeSpan ContentionWait(LifecycleContention onContention) =>
+            onContention == LifecycleContention.Abandon ? TeardownLockTimeout : LifecycleLockTimeout;
+
+        /// <summary>
+        /// Builds the failure for a connect that could not have the lock to itself.
+        /// </summary>
+        private TimeoutException LifecycleTimeout(TimeSpan timeout)
+        {
+            SafeLog(() => _logger.LogError(
+                "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
+                + "within {TimeoutSeconds}s; refusing to connect alongside the operation in flight.",
+                Name,
+                timeout.TotalSeconds));
+
+            return new TimeoutException(
+                $"Device '{Name}' could not start connecting within "
+                + $"{timeout.TotalSeconds:0.#}s because another connect or disconnect "
+                + "was still in progress. Nothing was opened; retry once it has finished.");
+        }
+
+        /// <summary>Reports a teardown that gave up waiting for a stuck lifecycle operation.</summary>
+        private void LogAbandonedTeardown(TimeSpan timeout) =>
+            SafeLog(() => _logger.LogError(
+                "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
+                + "within {TimeoutSeconds}s, so nothing was torn down. A connect is most likely "
+                + "wedged in uncancellable native I/O; it will release its own session when it "
+                + "returns.",
+                Name,
+                timeout.TotalSeconds));
+
+        /// <summary>
+        /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, never alongside another.
+        /// See <see cref="ContentionWait"/> for the per-policy semantics.
+        /// </summary>
+        /// <returns><c>true</c> if the operation ran; <c>false</c> if the wait was abandoned.</returns>
+        /// <exception cref="TimeoutException">
+        /// Thrown when <paramref name="onContention"/> is <see cref="LifecycleContention.Fail"/> and
+        /// another lifecycle operation held the lock for the whole timeout.
+        /// </exception>
+        private bool RunLifecycleExclusive(Action operation, LifecycleContention onContention)
+        {
+            // Re-entry from inside the critical section (a StatusChanged handler calling back in)
+            // proceeds without acquiring, exactly as a reentrant monitor would.
+            if (_isInsideLifecycleOperation.Value)
+            {
+                operation();
+                return true;
+            }
+
+            var timeout = ContentionWait(onContention);
+            var acquired = false;
+
+            try
+            {
+                acquired = _lifecycleLock.Wait(timeout);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposed underneath us; there is nothing left to serialize against.
+                operation();
+                return true;
+            }
+
+            if (!acquired)
+            {
+                if (onContention == LifecycleContention.Abandon)
+                {
+                    LogAbandonedTeardown(timeout);
+                    return false;
+                }
+
+                throw LifecycleTimeout(timeout);
+            }
+
+            _isInsideLifecycleOperation.Value = true;
+            try
+            {
+                operation();
+                return true;
+            }
+            finally
+            {
+                _isInsideLifecycleOperation.Value = false;
+                ReleaseLifecycleLock();
+            }
+        }
+
+        /// <inheritdoc cref="RunLifecycleExclusive"/>
+        private async Task<bool> RunLifecycleExclusiveAsync(
+            Func<Task> operation,
+            LifecycleContention onContention,
+            CancellationToken cancellationToken)
+        {
+            if (_isInsideLifecycleOperation.Value)
+            {
+                await operation().ConfigureAwait(false);
+                return true;
+            }
+
+            var timeout = ContentionWait(onContention);
+            var isTeardown = onContention == LifecycleContention.Abandon;
+            var acquired = false;
+
+            // A teardown's token is NOT allowed to govern this wait. Issue #341 defines what the
+            // token means for DisconnectAsync — it shortens the courtesy wait for an in-flight
+            // command exchange, never aborts the disconnect, and never surfaces as an
+            // OperationCanceledException — and this lock is a second, later wait that contract
+            // never covered. Passing the token here made a cancelled DisconnectAsync skip teardown
+            // altogether and report Disconnected with the transport still open and the message
+            // pumps still running; and because SemaphoreSlim throws for an already-cancelled token
+            // even when the semaphore is free, that happened on every cancelled disconnect, not
+            // just a contended one. The wait stays bounded by TeardownLockTimeout, which is what
+            // protects against a genuinely wedged holder (issue #379). The token still reaches
+            // AcquireTextExchangeLockForTeardownAsync inside the teardown, where it means what
+            // #341 says it means.
+            //
+            // The connect path is the opposite case and does honour the token: ConnectAsync is
+            // documented to be abandonable and to throw OperationCanceledException.
+            var acquireToken = isTeardown ? CancellationToken.None : cancellationToken;
+
+            try
+            {
+                acquired = await _lifecycleLock.WaitAsync(timeout, acquireToken).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                await operation().ConfigureAwait(false);
+                return true;
+            }
+
+            if (!acquired)
+            {
+                if (isTeardown)
+                {
+                    LogAbandonedTeardown(timeout);
+                    return false;
+                }
+
+                throw LifecycleTimeout(timeout);
+            }
+
+            _isInsideLifecycleOperation.Value = true;
+            try
+            {
+                await operation().ConfigureAwait(false);
+                return true;
+            }
+            finally
+            {
+                _isInsideLifecycleOperation.Value = false;
+                ReleaseLifecycleLock();
+            }
+        }
+
+        private void ReleaseLifecycleLock()
+        {
+            try
+            {
+                _lifecycleLock.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Raced a Dispose that already tore the semaphore down.
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// Connects to the device.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Opens the transport on the calling thread. <see cref="ConnectAsync"/> is the
         /// non-blocking, cancellable equivalent and is preferred on a UI thread; this overload is
         /// kept for existing callers and behaves exactly as it always has.
+        /// </para>
+        /// <para>
+        /// A caller-issued connect supersedes any automatic reconnect in progress: the loop is
+        /// cancelled and unwinds without touching the session this call establishes. Cancelling it
+        /// does not stop it instantly — an attempt already inside a blocking transport connect runs
+        /// to completion — so this waits for any connect or disconnect in flight rather than
+        /// running alongside it, and throws if one is still in flight after
+        /// <see cref="LifecycleLockTimeout"/>. Nothing has been opened in that case, so the call is
+        /// safe to retry.
+        /// </para>
         /// </remarks>
+        /// <exception cref="TimeoutException">
+        /// Thrown when another connect or disconnect was still in progress after
+        /// <see cref="LifecycleLockTimeout"/>. Nothing was opened.
+        /// </exception>
         public void Connect()
+        {
+            _callerWantsDisconnected = false;
+            SupersedeReconnect();
+            ConnectCore();
+        }
+
+        /// <summary>
+        /// The body of <see cref="Connect"/>, without the reconnect-supersede step — the reconnect
+        /// loop calls this so it does not cancel itself.
+        /// </summary>
+        private void ConnectCore()
+        {
+            RunLifecycleExclusive(ConnectCoreUnsynchronized, LifecycleContention.Fail);
+            HonourTeardownRaisedDuringConnect();
+        }
+
+        /// <inheritdoc cref="ConnectCore"/>
+        private async Task ConnectCoreAsync(CancellationToken cancellationToken)
+        {
+            await RunLifecycleExclusiveAsync(
+                () => ConnectCoreUnsynchronizedAsync(cancellationToken),
+                LifecycleContention.Fail,
+                cancellationToken).ConfigureAwait(false);
+
+            HonourTeardownRaisedDuringConnect();
+        }
+
+        /// <summary>
+        /// Closes a connection this call established if a teardown landed while it was in flight.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Matters in the one case where the caller's <see cref="Disconnect"/> could not do it
+        /// itself: a connect wedged in uncancellable native I/O holds the lifecycle lock long enough
+        /// for the teardown to abandon its wait, so the teardown returns having deliberately left
+        /// the transport alone — and whatever this connect goes on to build would otherwise be live,
+        /// with a reader running, after the caller was told the device was disconnected.
+        /// </para>
+        /// <para>
+        /// Shared by both connect entry points rather than living in the reconnect loop:
+        /// <see cref="AbandonIfSuperseded"/> covers the same ground for a reconnect attempt, but it
+        /// is part of the loop and never runs for a caller's own connect.
+        /// </para>
+        /// <para>
+        /// The ordering is not a race: <see cref="Disconnect"/> sets the flag <i>before</i> it
+        /// contends for the lock, and this reads it <i>after</i> releasing it. A teardown that
+        /// abandoned must therefore have been waiting while the connect still held the lock, so its
+        /// write always happens-before this read.
+        /// </para>
+        /// </remarks>
+        private void HonourTeardownRaisedDuringConnect()
+        {
+            if (!_callerWantsDisconnected && !_disposed)
+            {
+                return;
+            }
+
+            SafeLog(() => _logger.LogWarning(
+                "[Lifecycle] Device '{DeviceName}' was disconnected while this connect was in flight; "
+                + "closing the connection it established.",
+                Name));
+
+            DisconnectCore(ConnectionStatus.Disconnected);
+        }
+
+        private void ConnectCoreUnsynchronized()
         {
             BeginConnect();
 
@@ -666,10 +1026,21 @@ namespace Daqifi.Core.Device
         /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
         /// <returns>A task representing the asynchronous connect operation.</returns>
         /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
+        /// <exception cref="TimeoutException">
+        /// Thrown when another connect or disconnect was still in progress after
+        /// <see cref="LifecycleLockTimeout"/>. Nothing was opened.
+        /// </exception>
         // Deliberately not virtual, matching Connect(). A virtual async twin of a non-virtual sync
         // method is a trap: a subclass would override this one, leave Connect() unintercepted, and
         // get different behavior depending on which entry point the caller reached for.
         public async Task ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            _callerWantsDisconnected = false;
+            SupersedeReconnect();
+            await ConnectCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task ConnectCoreUnsynchronizedAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -823,8 +1194,94 @@ namespace Daqifi.Core.Device
         /// sees <c>_isDisconnecting == true</c> via the post-acquisition
         /// validation and bails out cleanly. Callers wanting a non-blocking
         /// disconnect should use <see cref="DisconnectAsync"/>.
+        /// <para>
+        /// Also waits for any connect or disconnect already in flight — an automatic reconnect
+        /// attempt parked inside a blocking transport connect, typically — rather than tearing down
+        /// alongside it. That wait is bounded by <see cref="TeardownLockTimeout"/>, generously,
+        /// because <c>SerialPort.Open</c> is uncancellable and can wedge indefinitely; waiting on
+        /// it without a bound would make this method — and therefore <see cref="Dispose"/> — hang
+        /// forever. If the wait is abandoned, the device still reports
+        /// <see cref="ConnectionStatus.Disconnected"/>, but the transport is deliberately left to
+        /// the stuck operation, which releases it when it finally returns. That outcome is logged
+        /// at <b>error</b> level: it is a rare safety fallback rather than routine, it means a port
+        /// is wedged and the transport was not released on the caller's schedule, and it is exactly
+        /// the line an operator needs to still be there after log filtering. This never throws on
+        /// contention.
+        /// </para>
         /// </remarks>
         public void Disconnect()
+        {
+            // A user-issued teardown always beats an automatic reconnect: record the intent and
+            // stop the loop before tearing anything down. Setting the flag first matters — a
+            // reconnect already inside a blocking Connect() will finish it regardless, and this is
+            // what tells it to put the session straight back down instead of leaving the device
+            // quietly alive behind the caller's back.
+            _callerWantsDisconnected = true;
+            SupersedeReconnect();
+            DisconnectCore(ConnectionStatus.Disconnected);
+        }
+
+        /// <summary>
+        /// The body of <see cref="Disconnect"/>, parameterized by the status the device settles on.
+        /// </summary>
+        /// <param name="finalStatus">
+        /// The status to report once teardown is done. <see cref="ConnectionStatus.Disconnected"/>
+        /// for a caller-issued disconnect; <see cref="ConnectionStatus.Retrying"/> for the teardown
+        /// the reconnect loop performs between attempts, which must not look to consumers like the
+        /// session ended on purpose.
+        /// </param>
+        private void DisconnectCore(ConnectionStatus finalStatus)
+        {
+            if (RunLifecycleExclusive(
+                    () => DisconnectCoreUnsynchronized(finalStatus),
+                    LifecycleContention.Abandon))
+            {
+                return;
+            }
+
+            MarkDisconnectedWithoutTeardown(finalStatus);
+        }
+
+        /// <inheritdoc cref="DisconnectCore"/>
+        private async Task DisconnectCoreAsync(ConnectionStatus finalStatus, CancellationToken cancellationToken)
+        {
+            if (await RunLifecycleExclusiveAsync(
+                    () => DisconnectCoreUnsynchronizedAsync(finalStatus, cancellationToken),
+                    LifecycleContention.Abandon,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            MarkDisconnectedWithoutTeardown(finalStatus);
+        }
+
+        /// <summary>
+        /// Settles the device's reported state when teardown had to be abandoned.
+        /// </summary>
+        /// <remarks>
+        /// The wait was abandoned because a lifecycle operation is stuck, most likely a
+        /// <c>SerialPort.Open</c> wedged in uncancellable native I/O. Racing it would be the stream
+        /// corruption the lifecycle lock exists to prevent, so the transport is left to the holder —
+        /// which releases it once it unwedges, because <see cref="_callerWantsDisconnected"/> was
+        /// set before this wait began and every connect path re-reads it after dropping the lock:
+        /// <see cref="HonourTeardownRaisedDuringConnect"/> for a caller's own connect,
+        /// <see cref="AbandonIfSuperseded"/> for a reconnect attempt.
+        /// <para>
+        /// What can still be done safely is record the caller's intent at the device level. These
+        /// are this class's own fields, not the transport, so setting them cannot corrupt anything
+        /// the stuck operation is doing — and without them the device would keep reporting itself
+        /// connected after the caller had asked it not to.
+        /// </para>
+        /// </remarks>
+        private void MarkDisconnectedWithoutTeardown(ConnectionStatus finalStatus)
+        {
+            State = DeviceState.Disconnected;
+            _isInitialized = false;
+            Status = finalStatus;
+        }
+
+        private void DisconnectCoreUnsynchronized(ConnectionStatus finalStatus)
         {
             _isDisconnecting = true;
             var lockAcquired = AcquireTextExchangeLockForTeardown();
@@ -838,7 +1295,7 @@ namespace Daqifi.Core.Device
             }
             finally
             {
-                FinishDisconnect(lockAcquired);
+                FinishDisconnect(lockAcquired, finalStatus);
             }
         }
 
@@ -871,6 +1328,16 @@ namespace Daqifi.Core.Device
         // Not virtual, for the same reason as ConnectAsync.
         public async Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
+            // Same intent-first ordering as Disconnect: see the comment there.
+            _callerWantsDisconnected = true;
+            SupersedeReconnect();
+            await DisconnectCoreAsync(ConnectionStatus.Disconnected, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task DisconnectCoreUnsynchronizedAsync(
+            ConnectionStatus finalStatus,
+            CancellationToken cancellationToken)
+        {
             _isDisconnecting = true;
             var lockAcquired = await AcquireTextExchangeLockForTeardownAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -890,7 +1357,7 @@ namespace Daqifi.Core.Device
             }
             finally
             {
-                FinishDisconnect(lockAcquired);
+                FinishDisconnect(lockAcquired, finalStatus);
             }
         }
 
@@ -981,9 +1448,15 @@ namespace Daqifi.Core.Device
         /// never be left reporting Connected because teardown threw.
         /// </summary>
         /// <param name="lockAcquired">Whether the text-exchange lock was acquired before teardown.</param>
-        private void FinishDisconnect(bool lockAcquired)
+        /// <param name="finalStatus">
+        /// The status to settle on. Parameterized for the reconnect loop, whose teardown between
+        /// attempts reports <see cref="ConnectionStatus.Retrying"/> rather than
+        /// <see cref="ConnectionStatus.Disconnected"/> — nobody asked for that teardown, and it
+        /// must not look to consumers like the session ended on purpose (issue #379).
+        /// </param>
+        private void FinishDisconnect(bool lockAcquired, ConnectionStatus finalStatus)
         {
-            Status = ConnectionStatus.Disconnected;
+            Status = finalStatus;
             State = DeviceState.Disconnected;
             _isInitialized = false;
             _isDisconnecting = false;
@@ -1860,10 +2333,541 @@ namespace Daqifi.Core.Device
                 // not during an intentional Disconnect() call
                 if (Status == ConnectionStatus.Connected && !_isDisconnecting)
                 {
+                    // Read before raising Lost: a handler is free to call Connect or Disconnect
+                    // synchronously from inside it, and if it does, this drop must not start a
+                    // reconnect for a session the caller has already moved on from.
+                    var epochAtDrop = Volatile.Read(ref _sessionEpoch);
+
+                    // Snapshot the session BEFORE anything observes the drop. Raising Lost runs
+                    // consumer handlers synchronously on this thread, and a handler is entirely
+                    // entitled to start tearing the device down — by which point what the session
+                    // looked like is no longer recoverable. No-op unless reconnect is enabled, so
+                    // the default path does exactly what it did before (issue #379).
+                    //
+                    // Skipped while a reconnect is already running: a drop during an attempt would
+                    // otherwise overwrite the snapshot of the session being restored with the empty
+                    // half-built one, and the loop would go on to restore nothing.
+                    if (ReconnectOptions.Enabled && !IsReconnecting)
+                    {
+                        try
+                        {
+                            CaptureSessionSnapshot();
+                        }
+                        catch (Exception ex)
+                        {
+                            SafeLog(() => _logger.LogWarning(
+                                ex, "[Reconnect] Capturing the session state after a drop failed; the session cannot be restored."));
+                        }
+                    }
+
                     Status = ConnectionStatus.Lost;
+
+                    BeginReconnectIfEnabled(epochAtDrop);
                 }
             }
         }
+
+        #region Automatic reconnection (issue #379)
+
+        private ReconnectOptions _reconnectOptions = new();
+
+        /// <summary>
+        /// Gets or sets the policy for re-establishing a session after
+        /// <see cref="ConnectionStatus.Lost"/>. Disabled by default: a drop is reported and nothing
+        /// else happens, exactly as it always has been.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// With <see cref="ReconnectOptions.Enabled"/> set, a detected drop starts a background
+        /// loop that reconnects the <em>same</em> endpoint, re-runs <see cref="InitializeAsync"/>,
+        /// and restores the session state Core owns — the channel enable set, the streaming
+        /// frequency, and an interrupted stream. Progress arrives on <see cref="ReconnectAttempt"/>
+        /// / <see cref="Reconnected"/> / <see cref="ReconnectFailed"/> and as
+        /// <see cref="ConnectionStatus.Retrying"/> between attempts.
+        /// </para>
+        /// <para>
+        /// Deliberately <b>not</b> restored: anything the device owns rather than Core (DIO
+        /// directions and output levels, PWM state, analog outputs, calibration written to RAM), an
+        /// SD logging session, and any in-flight operation — an SD download interrupted by a drop
+        /// fails, and is not resumed or retried.
+        /// </para>
+        /// <para>
+        /// Same-endpoint only. A serial device that comes back on a different port path, or a
+        /// device whose IP address changed, is a new endpoint and needs a fresh
+        /// <c>DaqifiDeviceFactory</c> connect. Failing over to a different transport is out of
+        /// scope entirely.
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentNullException">Thrown when set to null.</exception>
+        public ReconnectOptions ReconnectOptions
+        {
+            get => _reconnectOptions;
+            set
+            {
+                ArgumentNullException.ThrowIfNull(value);
+                _reconnectOptions = value;
+            }
+        }
+
+        /// <summary>
+        /// Occurs before each automatic reconnect attempt, carrying the attempt number and the
+        /// backoff wait that precedes it.
+        /// </summary>
+        /// <remarks>
+        /// Raised on a background thread, like every event in this group. Handlers should do the
+        /// minimum; one that throws is caught and ignored.
+        /// </remarks>
+        public event EventHandler<ReconnectAttemptEventArgs>? ReconnectAttempt;
+
+        /// <summary>
+        /// Occurs once an automatic reconnect has restored the session — the device is connected,
+        /// re-initialized, its channel configuration re-applied, and an interrupted stream running
+        /// again.
+        /// </summary>
+        public event EventHandler<ReconnectedEventArgs>? Reconnected;
+
+        /// <summary>
+        /// Occurs when automatic reconnection stops without restoring the session, because it ran
+        /// out of attempts or was cancelled.
+        /// </summary>
+        /// <remarks>
+        /// Running out of attempts is also raised on <see cref="ErrorOccurred"/> with
+        /// <see cref="DeviceErrorSource.Reconnect"/> and leaves the device on
+        /// <see cref="ConnectionStatus.Failed"/>, so giving up is impossible to miss even with
+        /// nothing subscribed here. Cancellation is not an error and does neither.
+        /// </remarks>
+        public event EventHandler<ReconnectFailedEventArgs>? ReconnectFailed;
+
+        // 0 = idle, 1 = a reconnect loop is running. Guards against a second loop being started by
+        // the Lost that a failing attempt's own teardown can produce.
+        private int _reconnectRunning;
+
+        // Volatile: written by the thread that starts a loop and by the loop's own cleanup, read by
+        // CancelReconnect from any thread. A stale read only ever delays a cancellation, never
+        // corrupts one — the epoch check is what actually stops the loop — but there is no reason
+        // to leave even that on the table.
+        private volatile CancellationTokenSource? _reconnectCts;
+
+        // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
+        // when it starts and re-checks before each step that touches device state; a change means
+        // the caller has moved on and the loop must unwind. This is what keeps the loop from
+        // re-opening a transport the caller just closed, without Disconnect() having to block on a
+        // loop that may be calling back into it.
+        private int _sessionEpoch;
+
+        // Which way the caller last pointed the device. The epoch says *that* a caller superseded
+        // the loop; this says *what they wanted*, which is what decides how the loop unwinds.
+        // Connect() is a blocking, multi-second operation, so a caller can always land in the
+        // middle of one — no amount of checking beforehand avoids that, and by the time the loop
+        // looks again it may be holding a session it has just brought up. If the caller wants the
+        // device down, that session is the loop's own doing and has to go back down with it;
+        // if the caller wants it up, it is theirs and must be left strictly alone.
+        private volatile bool _callerWantsDisconnected;
+
+        /// <summary>
+        /// Gets a value indicating whether an automatic reconnect is currently in progress.
+        /// </summary>
+        public bool IsReconnecting => Volatile.Read(ref _reconnectRunning) != 0;
+
+        /// <summary>
+        /// Stops any automatic reconnect in progress. Safe to call at any time, including when
+        /// nothing is reconnecting.
+        /// </summary>
+        /// <remarks>
+        /// The loop unwinds at its next checkpoint — it does not interrupt a connect attempt
+        /// already in flight — and reports <see cref="ReconnectFailed"/> with
+        /// <see cref="ReconnectFailedEventArgs.WasCanceled"/> set. The device is left on
+        /// <see cref="ConnectionStatus.Lost"/>: the connection really is gone, and nothing is
+        /// trying to bring it back. This returns immediately rather than waiting for the loop, so
+        /// it is safe to call from a device event handler.
+        /// </remarks>
+        public void CancelReconnect()
+        {
+            try
+            {
+                _reconnectCts?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The loop finished and disposed its own token source. Nothing to cancel.
+            }
+        }
+
+        /// <summary>
+        /// Cancels any reconnect in progress <i>and</i> declares the session it was rebuilding
+        /// obsolete, so the unwinding loop leaves the caller's new session strictly alone.
+        /// </summary>
+        private void SupersedeReconnect()
+        {
+            Interlocked.Increment(ref _sessionEpoch);
+            CancelReconnect();
+        }
+
+        /// <summary>
+        /// Starts the reconnect loop on a background thread, if the policy allows one and none is
+        /// already running.
+        /// </summary>
+        /// <remarks>
+        /// Called from the transport's status callback, which runs on the reader loop or the
+        /// liveness timer — so the work is handed to the thread pool rather than done inline.
+        /// </remarks>
+        /// <param name="expectedEpoch">
+        /// The session epoch observed before the drop was announced. A mismatch means a caller
+        /// connected or disconnected in the meantime — including from inside their own
+        /// <see cref="StatusChanged"/> handler — and this drop is no longer theirs to recover from.
+        /// </param>
+        private void BeginReconnectIfEnabled(int expectedEpoch)
+        {
+            if (!ReconnectOptions.Enabled || _transport == null || _disposed || _isDisconnecting)
+            {
+                return;
+            }
+
+            // Only ever start from a device that is actually sitting on a lost connection with the
+            // session it was lost from still current.
+            if (Status != ConnectionStatus.Lost || Volatile.Read(ref _sessionEpoch) != expectedEpoch)
+            {
+                return;
+            }
+
+            // One loop at a time. A failing attempt tears the transport down again, which can
+            // produce another Lost; without this that would fork a second loop racing the first.
+            if (Interlocked.CompareExchange(ref _reconnectRunning, 1, 0) != 0)
+            {
+                return;
+            }
+
+            var cts = new CancellationTokenSource();
+            _reconnectCts = cts;
+
+            var epoch = Volatile.Read(ref _sessionEpoch);
+            var options = ReconnectOptions;
+
+            _ = Task.Run(async () =>
+            {
+                var wasCanceled = false;
+
+                try
+                {
+                    await RunReconnectLoopAsync(options, epoch, cts.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // The loop handles its own failures; anything escaping is a bug in it, and must
+                    // not become an unobserved task exception.
+                    SafeLog(() => _logger.LogError(ex, "[Reconnect] The reconnect loop terminated unexpectedly."));
+                }
+                finally
+                {
+                    wasCanceled = cts.IsCancellationRequested;
+
+                    // Clear the token source before releasing the running flag, so a loop started
+                    // by the next drop cannot have its own source nulled out from under it.
+                    _reconnectCts = null;
+                    cts.Dispose();
+                    Interlocked.Exchange(ref _reconnectRunning, 0);
+                }
+
+                // A drop that landed in the moments between this loop finishing its work and
+                // releasing the running flag would have been skipped by the single-flight guard,
+                // stranding the device on Lost with nothing trying to bring it back. Pick it up.
+                // Exhausting the attempts settles on Failed, and cancellation is excluded here, so
+                // neither can retrigger.
+                if (!wasCanceled)
+                {
+                    BeginReconnectIfEnabled(Volatile.Read(ref _sessionEpoch));
+                }
+            });
+        }
+
+        /// <summary>
+        /// Attempts, with backoff, to rebuild the session that was just lost.
+        /// </summary>
+        /// <param name="options">
+        /// The policy as it stood when the drop was detected. Assigning a new
+        /// <see cref="ReconnectOptions"/> mid-flight therefore leaves this loop on the terms it
+        /// started under and applies from the next drop; mutating the instance already assigned
+        /// does reach it, since the loop holds that same object.
+        /// </param>
+        /// <param name="epoch">The session epoch at the time of the drop.</param>
+        /// <param name="cancellationToken">Cancelled by <see cref="CancelReconnect"/>.</param>
+        private async Task RunReconnectLoopAsync(
+            ReconnectOptions options,
+            int epoch,
+            CancellationToken cancellationToken)
+        {
+            var startedAt = DateTime.UtcNow;
+            Exception? lastError = null;
+            var attempt = 0;
+
+            SafeLog(() => _logger.LogInformation(
+                "[Reconnect] Device '{DeviceName}' lost its connection; reconnecting (up to {MaxAttempts} attempt(s)).",
+                Name,
+                options.MaxAttempts));
+
+            while (attempt < options.MaxAttempts)
+            {
+                attempt++;
+
+                if (IsSessionStale(epoch) || cancellationToken.IsCancellationRequested)
+                {
+                    ReportReconnectStopped(epoch, attempt - 1, lastError, wasCanceled: true);
+                    return;
+                }
+
+                var delay = options.CalculateDelay(attempt);
+                RaiseReconnectEvent(ReconnectAttempt, new ReconnectAttemptEventArgs(
+                    attempt, options.MaxAttempts, delay, lastError), nameof(ReconnectAttempt));
+
+                try
+                {
+                    // Tear down what is left of the dead session first: the producer and consumer
+                    // are still bound to a stream that is gone, and Connect() only rebuilds them
+                    // once they have been nulled. Reported as Retrying, not Disconnected — nobody
+                    // asked for this teardown.
+                    DisconnectCore(ConnectionStatus.Retrying);
+
+                    if (delay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (IsSessionStale(epoch))
+                    {
+                        ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
+                        return;
+                    }
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    ConnectCore();
+
+                    // Connect() blocks for as long as opening the port takes, so a caller can — and
+                    // on a slow serial open, will — land squarely in the middle of it. There is now
+                    // a live transport and a running reader that this loop built, so bailing out
+                    // here is not enough on its own: if the caller wants the device down, the
+                    // session has to be taken back down with it.
+                    if (AbandonIfSuperseded(epoch, attempt, lastError))
+                    {
+                        return;
+                    }
+
+                    await InitializeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    var streamingResumed = await RestoreSessionSnapshotAsync(
+                        options, cancellationToken).ConfigureAwait(false);
+
+                    // Same again before declaring victory: initialization and restore are several
+                    // seconds of SCPI round-trips, and a session the caller has since disowned must
+                    // not be handed to them as a successful reconnect.
+                    if (AbandonIfSuperseded(epoch, attempt, lastError))
+                    {
+                        return;
+                    }
+
+                    SafeLog(() => _logger.LogInformation(
+                        "[Reconnect] Device '{DeviceName}' reconnected on attempt {Attempt}.", Name, attempt));
+
+                    RaiseReconnectEvent(Reconnected, new ReconnectedEventArgs(
+                        attempt, DateTime.UtcNow - startedAt, streamingResumed), nameof(Reconnected));
+                    return;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    SafeLog(() => _logger.LogWarning(
+                        ex,
+                        "[Reconnect] Attempt {Attempt} of {MaxAttempts} to reconnect device '{DeviceName}' failed.",
+                        attempt,
+                        options.MaxAttempts,
+                        Name));
+                }
+            }
+
+            ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: false);
+        }
+
+        /// <summary>
+        /// Checks whether a caller has superseded the session this loop is rebuilding and, if so,
+        /// unwinds whatever the loop has already brought up before reporting that it stopped.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Called at the points where the loop is holding a live session of its own making — after
+        /// <see cref="ConnectCore"/>, and again once initialization and restore are done. Both are
+        /// preceded by long blocking work, which is exactly when a caller's
+        /// <see cref="Disconnect"/> lands, so a check beforehand cannot substitute for this one.
+        /// </para>
+        /// <para>
+        /// What "unwind" means depends on what the caller wanted, which is why the epoch alone is
+        /// not enough to decide it. After a <see cref="Disconnect"/> or a disposal the live session
+        /// is the loop's own doing and is torn straight back down — leaving it up is a device the
+        /// caller closed quietly coming back to life. After a caller's own <see cref="Connect"/>
+        /// the session belongs to them, and tearing it down would be the same bug in reverse, so it
+        /// is left alone and only logged.
+        /// </para>
+        /// </remarks>
+        /// <returns><c>true</c> if the loop must stop.</returns>
+        private bool AbandonIfSuperseded(int epoch, int attempt, Exception? lastError)
+        {
+            if (!IsSessionStale(epoch))
+            {
+                return false;
+            }
+
+            if (_callerWantsDisconnected || _disposed)
+            {
+                SafeLog(() => _logger.LogInformation(
+                    "[Reconnect] Device '{DeviceName}' was disconnected while a reconnect attempt was in flight; "
+                    + "closing the connection the attempt had established.",
+                    Name));
+
+                try
+                {
+                    DisconnectCore(ConnectionStatus.Disconnected);
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort unwind of an abandoned attempt. A transport already disposed out
+                    // from under us can throw here, and there is nothing left to salvage by
+                    // letting that escape into the loop's retry logic.
+                    SafeLog(() => _logger.LogDebug(
+                        ex, "[Reconnect] Closing the abandoned reconnect attempt's connection failed."));
+                }
+            }
+            else
+            {
+                SafeLog(() => _logger.LogWarning(
+                    "[Reconnect] Device '{DeviceName}' was reconnected by its caller while an automatic "
+                    + "reconnect attempt was in flight; leaving the caller's connection alone.",
+                    Name));
+            }
+
+            ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
+            return true;
+        }
+
+        /// <summary>
+        /// True once a caller-issued connect, disconnect or disposal has superseded the session the
+        /// reconnect loop was started for.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately does not consult <c>_isDisconnecting</c>: the loop's own teardown between
+        /// attempts sets that flag, so reading it here would make the loop consider itself stale.
+        /// A caller-issued <see cref="Disconnect"/> bumps the epoch before it sets the flag, which
+        /// is what this actually needs to see.
+        /// </remarks>
+        private bool IsSessionStale(int epoch) =>
+            _disposed || Volatile.Read(ref _sessionEpoch) != epoch;
+
+        /// <summary>
+        /// Settles the device after a reconnect loop that did not restore the session, and reports
+        /// why.
+        /// </summary>
+        /// <remarks>
+        /// Exhausting the attempts is terminal and loud: <see cref="ConnectionStatus.Failed"/>, a
+        /// logged error, and an <see cref="ErrorOccurred"/> raise. Being cancelled is neither — the
+        /// caller asked for it — so the device is simply left reporting
+        /// <see cref="ConnectionStatus.Lost"/>, which is the truth. Neither touches
+        /// <see cref="Status"/> at all once the session is stale, since by then the status belongs
+        /// to whatever the caller did next.
+        /// </remarks>
+        private void ReportReconnectStopped(int epoch, int attemptsMade, Exception? lastError, bool wasCanceled)
+        {
+            if (!IsSessionStale(epoch))
+            {
+                // An attempt can fail after the transport is back up (a re-initialization that
+                // times out, say), so tear the half-built session down rather than leaving a live
+                // handle and a running reader behind a terminal status.
+                DisconnectCore(wasCanceled ? ConnectionStatus.Lost : ConnectionStatus.Failed);
+            }
+
+            if (wasCanceled)
+            {
+                SafeLog(() => _logger.LogInformation(
+                    "[Reconnect] Reconnection of device '{DeviceName}' was cancelled after {AttemptsMade} attempt(s).",
+                    Name,
+                    attemptsMade));
+            }
+            else
+            {
+                SafeLog(() => _logger.LogError(
+                    lastError,
+                    "[Reconnect] Device '{DeviceName}' could not be reconnected after {AttemptsMade} attempt(s); giving up.",
+                    Name,
+                    attemptsMade));
+
+                // Terminal failure has to be impossible to miss, so it goes to the device error
+                // surface as well as to this group's own event (issue #379 / #378).
+                RaiseDeviceError(
+                    DeviceErrorSource.Reconnect,
+                    new DeviceReconnectFailedException(Name, attemptsMade, lastError));
+            }
+
+            RaiseReconnectEvent(
+                ReconnectFailed,
+                new ReconnectFailedEventArgs(attemptsMade, lastError, wasCanceled),
+                nameof(ReconnectFailed));
+        }
+
+        /// <summary>
+        /// Raises one of the reconnect events, isolating the loop from a subscriber that throws —
+        /// the same guarantee <see cref="RaiseDeviceError"/> and <c>SendFailed</c> give.
+        /// </summary>
+        private void RaiseReconnectEvent<TArgs>(
+            EventHandler<TArgs>? handler,
+            TArgs args,
+            string eventName)
+            where TArgs : EventArgs
+        {
+            if (handler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handler(this, args);
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _logger.LogWarning(ex, "[{EventName}] subscriber threw", eventName));
+            }
+        }
+
+        /// <summary>
+        /// When overridden in a derived class, records the session state that a reconnect should
+        /// restore. Called on the thread that detected the drop, before anything else observes it,
+        /// and only when reconnect is enabled.
+        /// </summary>
+        /// <remarks>
+        /// The base device owns nothing session-shaped — its channel collection is repopulated from
+        /// the device's own status message on every connect — so this does nothing here.
+        /// <see cref="DaqifiStreamingDevice"/> overrides it to record which channels were enabled
+        /// and whether a stream was running.
+        /// </remarks>
+        protected virtual void CaptureSessionSnapshot()
+        {
+        }
+
+        /// <summary>
+        /// When overridden in a derived class, re-applies the state recorded by
+        /// <see cref="CaptureSessionSnapshot"/> to a device that has just been reconnected and
+        /// re-initialized.
+        /// </summary>
+        /// <param name="options">The policy governing this reconnect.</param>
+        /// <param name="cancellationToken">Cancelled if reconnection is cancelled.</param>
+        /// <returns><c>true</c> if an interrupted stream was restarted.</returns>
+        protected virtual Task<bool> RestoreSessionSnapshotAsync(
+            ReconnectOptions options,
+            CancellationToken cancellationToken) => Task.FromResult(false);
+
+        #endregion
 
         /// <summary>
         /// Logs a message that the producer's background thread could not deliver.

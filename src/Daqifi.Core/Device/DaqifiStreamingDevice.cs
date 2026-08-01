@@ -389,6 +389,25 @@ namespace Daqifi.Core.Device
 
             if (IsStreaming) return;
 
+            BeginStreamingSession();
+
+            IsStreaming = true;
+            Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
+        }
+
+        /// <summary>
+        /// Resets everything that is scoped to one streaming session, so the frames that follow are
+        /// decoded against this session rather than the last one.
+        /// </summary>
+        /// <remarks>
+        /// Shared by <see cref="StartStreaming"/> and by the tracking of a start-streaming command
+        /// sent directly through <see cref="Send{T}"/>. It is one method precisely so the two cannot
+        /// drift: a raw-started stream that skipped this would reconstruct timestamps from the
+        /// previous session's anchor and re-use its gap detector, producing samples stamped with
+        /// times that never happened — silently.
+        /// </remarks>
+        private void BeginStreamingSession()
+        {
             // Re-anchor per-session timestamp reconstruction: the first frame of this session
             // anchors to the current host time, and subsequent frames advance by the device-tick
             // delta. Apply the device-reported tick frequency (falls back to the 50 MHz default
@@ -406,9 +425,6 @@ namespace Daqifi.Core.Device
             _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
             _suppressedWarmupFrameCount = 0;
             Interlocked.Exchange(ref _decodeFailureCount, 0);
-
-            IsStreaming = true;
-            Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
         }
 
         /// <summary>
@@ -427,6 +443,350 @@ namespace Daqifi.Core.Device
             IsStreaming = false;
             Send(ScpiMessageProducer.StopStreaming);
         }
+
+        #region Session state tracking for commands sent directly (issue #379)
+
+        /// <summary>The command <see cref="ScpiMessageProducer.StartStreaming"/> emits.</summary>
+        private const string StartStreamingCommand = "SYSTem:StartStreamData";
+
+        /// <summary>The command <see cref="ScpiMessageProducer.StopStreaming"/> emits.</summary>
+        private const string StopStreamingCommand = "SYSTem:StopStreamData";
+
+        /// <summary>The command <see cref="ScpiMessageProducer.EnableAdcChannels"/> emits.</summary>
+        private const string EnableAdcChannelsCommand = "ENAble:VOLTage:DC";
+
+        /// <summary>
+        /// Sends a command, and keeps this device's view of the streaming session in step with it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="Send{T}"/> is public and is a perfectly ordinary way to drive a device — the
+        /// example CLI does the whole job that way — but a session driven through it used to be
+        /// completely invisible to this class: <see cref="IsStreaming"/> stayed <c>false</c> while
+        /// data poured in, and the enabled-channel set stayed empty. That mattered once reconnect
+        /// arrived (issue #379). A physical cable pull on the bench recovered the link and then
+        /// reported <c>StreamingResumed: false</c>, because as far as Core was concerned nothing had
+        /// ever been streaming — while re-initialization had in fact just stopped the stream that
+        /// was running. The session looked restored and was not.
+        /// </para>
+        /// <para>
+        /// So the two commands that define a streaming session are recognized here regardless of
+        /// which API produced them, and the same state is updated that
+        /// <see cref="StartStreaming"/> / <see cref="StopStreaming"/> and
+        /// <see cref="EnableChannel"/> would have set. This is the same principle as #409, where
+        /// analog <c>IsEnabled</c> is resynced from the device's own reported mask: what Core
+        /// believes about a session has to track what is actually true of it.
+        /// </para>
+        /// <para>
+        /// Only these commands are interpreted, and only after the send itself has succeeded.
+        /// Everything else passes through untouched.
+        /// </para>
+        /// <para>
+        /// <b>What equivalence with the typed API covers.</b> Each typed method was walked and every
+        /// effect beyond setting a flag accounted for, so this is a stated scope rather than a
+        /// hopeful one:
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>
+        /// <see cref="StartStreaming"/> — the whole per-session reset (timestamp anchor and tick
+        /// frequency, gap detector, warmup guard and its counter, decode-failure count) is shared
+        /// through <see cref="BeginStreamingSession"/> and runs here too. Skipping it was a real
+        /// defect: frames decoded against a previous session's anchor carry times that never
+        /// happened.
+        /// </description></item>
+        /// <item><description>
+        /// <see cref="StopStreaming"/> — does nothing beyond clearing the flag, so clearing it here
+        /// is complete.
+        /// </description></item>
+        /// <item><description>
+        /// <see cref="EnableChannels"/> — assigns <see cref="IChannel.IsEnabled"/> under the
+        /// channels lock and derives the outbound mask from it. The mask has already been sent by
+        /// the time this runs, so only the assignment is replayed, and it is applied to every
+        /// analog channel because the firmware treats the mask as a set-replace.
+        /// </description></item>
+        /// </list>
+        /// <para>
+        /// <b>Deliberately outside it.</b> The global DIO enable is one switch for the whole port
+        /// rather than a per-channel mask, so a raw <c>DIO:PORt:ENAble</c> carries no information
+        /// about <i>which</i> digital channels were wanted and none is inferred. Argument validation
+        /// is not replayed either: by the time a command is seen here it has already gone to the
+        /// device, and the device is the authority on whether it accepted it.
+        /// </para>
+        /// <para>
+        /// Running after the send is safe rather than merely convenient. A string command is handed
+        /// to the background producer, so it has not reached the wire when this runs, and the device
+        /// cannot answer a command it has not received; on the producer-less path that writes
+        /// synchronously there is no message consumer decoding frames at all. Either way no frame
+        /// can be decoded between the send and the state it should be decoded against.
+        /// </para>
+        /// </remarks>
+        /// <typeparam name="T">The type of the message data payload.</typeparam>
+        /// <param name="message">The message to send.</param>
+        public override void Send<T>(IOutboundMessage<T> message)
+        {
+            base.Send(message);
+
+            // Only after the send has actually gone through: a command that threw never reached
+            // the device and must not move this device's idea of the session.
+            if (message is IOutboundMessage<string> textCommand)
+            {
+                TrackSessionCommand(textCommand.Data);
+            }
+        }
+
+        /// <summary>
+        /// Updates the streaming-session view from a command that has just been sent.
+        /// </summary>
+        private void TrackSessionCommand(string? command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                return;
+            }
+
+            var trimmed = command.Trim();
+
+            if (trimmed.StartsWith(StopStreamingCommand, StringComparison.OrdinalIgnoreCase))
+            {
+                IsStreaming = false;
+                return;
+            }
+
+            if (trimmed.StartsWith(StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
+            {
+                TrackStreamingStart(trimmed.AsSpan(StartStreamingCommand.Length));
+                return;
+            }
+
+            if (trimmed.StartsWith(EnableAdcChannelsCommand, StringComparison.OrdinalIgnoreCase))
+            {
+                TrackAdcEnableMask(trimmed.AsSpan(EnableAdcChannelsCommand.Length));
+            }
+        }
+
+        /// <summary>
+        /// Records a start-streaming command, but only one carrying a rate this device can model.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A command whose argument is missing, unparseable, or outside the device's sampling range
+        /// is <b>not</b> treated as the start of a session. Marking one as streaming anyway would be
+        /// wrong three times over: the firmware rejects such a command and does not start streaming,
+        /// so the flag would not describe the device; <see cref="StreamingFrequency"/> would be left
+        /// holding a rate from some earlier session, which a reconnect would then faithfully restore
+        /// — resuming at a rate nobody asked for is the silent-wrong-data failure this whole feature
+        /// exists to prevent; and a stale <see cref="IsStreaming"/> makes the next legitimate
+        /// <see cref="StartStreaming"/> a silent no-op, which is the same stale-flag trap that
+        /// issue #118 and the defensive stops scattered through the SD paths already guard against.
+        /// </para>
+        /// <para>
+        /// The existing state is left alone rather than cleared. A device already streaming at a
+        /// good rate goes on doing exactly that when the firmware rejects a malformed start, so
+        /// <see cref="IsStreaming"/> and <see cref="StreamingFrequency"/> both remain true of it;
+        /// forcing them off would swap one inaccuracy for another.
+        /// </para>
+        /// <para>
+        /// Because of this, <see cref="IsStreaming"/> is never <c>true</c> alongside a rate that was
+        /// not validated — so session restore has no "streaming at an unknown rate" case to decide
+        /// what to do about. The state it replays is always one that was really commanded.
+        /// </para>
+        /// </remarks>
+        private void TrackStreamingStart(ReadOnlySpan<char> argument)
+        {
+            var rate = argument.Trim();
+
+            // One read of the ceiling, used for both the check and the assignment below. The public
+            // StreamingFrequency setter re-reads it and throws when it does not like the value, and
+            // MaxSamplingRate is a mutable public property — so validating against one read and
+            // then assigning through a setter that takes another would let a concurrent
+            // capabilities update throw out of a Send whose command has already gone to the device.
+            // Tracking a command must never be able to fail the send that carried it.
+            var maxSamplingRate = Math.Max(1, Metadata.Capabilities.MaxSamplingRate);
+
+            if (!int.TryParse(rate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency)
+                || frequency < 1
+                || frequency > maxSamplingRate)
+            {
+                Trace.WriteLine(
+                    $"[{nameof(TrackStreamingStart)}] Ignoring a start-streaming command with an unusable rate "
+                    + $"('{rate.ToString()}'); the session state is unchanged.");
+                return;
+            }
+
+            // Frequency first: anything observing IsStreaming must never catch it true next to a
+            // rate belonging to a previous session. Assigned to the backing field, not through the
+            // validating setter, for the reason above — the value has just been validated against
+            // the same rule.
+            _streamingFrequency = frequency;
+
+            if (IsStreaming)
+            {
+                // A restart while already streaming. The typed API cannot even express this
+                // (StartStreaming returns early), so there is no session boundary to re-anchor at
+                // and no equivalence to preserve; recording the new rate is all that is warranted.
+                return;
+            }
+
+            // A session is beginning, so it gets exactly the preparation StartStreaming would have
+            // given it. Ordering matches too: the state is ready before the flag flips.
+            BeginStreamingSession();
+            IsStreaming = true;
+        }
+
+        /// <summary>
+        /// Applies a sent ADC enable bitmask to this device's analog channels, so a caller who
+        /// enabled channels with a raw command has the same restorable session as one who used
+        /// <see cref="EnableChannels"/>.
+        /// </summary>
+        /// <remarks>
+        /// The mask is a set-replace, exactly as the firmware treats it, so every analog channel is
+        /// assigned from it rather than only the set bits. A device-reported mask still wins on the
+        /// next status frame (#409) — that is the device's own view, and it outranks what was asked
+        /// for.
+        /// </remarks>
+        private void TrackAdcEnableMask(ReadOnlySpan<char> argument)
+        {
+            if (!uint.TryParse(argument.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var mask))
+            {
+                return;
+            }
+
+            WithChannelsLock(() =>
+            {
+                foreach (var channel in SnapshotChannels())
+                {
+                    if (channel.Type != ChannelType.Analog || channel.ChannelNumber > MaxAdcBitmaskChannel)
+                    {
+                        continue;
+                    }
+
+                    channel.IsEnabled = (mask & (1u << channel.ChannelNumber)) != 0;
+                }
+            });
+        }
+
+        #endregion
+
+        #region Session restore after an automatic reconnect (issue #379)
+
+        /// <summary>
+        /// What the streaming session looked like at the instant the connection dropped. Null until
+        /// a drop is detected with reconnect enabled.
+        /// </summary>
+        private volatile StreamingSessionSnapshot? _sessionSnapshot;
+
+        /// <summary>
+        /// The subset of a streaming session that Core owns and can therefore put back: which
+        /// channels were enabled, and whether data was flowing.
+        /// </summary>
+        private sealed class StreamingSessionSnapshot
+        {
+            public StreamingSessionSnapshot(HashSet<(ChannelType Type, int Number)> enabledChannels, bool wasStreaming)
+            {
+                EnabledChannels = enabledChannels;
+                WasStreaming = wasStreaming;
+            }
+
+            /// <summary>
+            /// The enabled channels, held by identity rather than by reference: a reconnect can
+            /// replace the channel objects, and a device that came back with a different channel
+            /// count should restore the intersection rather than fail.
+            /// </summary>
+            public HashSet<(ChannelType Type, int Number)> EnabledChannels { get; }
+
+            public bool WasStreaming { get; }
+        }
+
+        /// <inheritdoc />
+        protected override void CaptureSessionSnapshot()
+        {
+            var enabled = new HashSet<(ChannelType, int)>();
+            foreach (var channel in GetChannelsSnapshot())
+            {
+                if (channel.IsEnabled)
+                {
+                    enabled.Add((channel.Type, channel.ChannelNumber));
+                }
+            }
+
+            _sessionSnapshot = new StreamingSessionSnapshot(enabled, IsStreaming);
+        }
+
+        /// <summary>
+        /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
+        /// restarts a stream that was interrupted.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The enable set has to be replayed from the snapshot rather than read back off the
+        /// channel objects: <see cref="DaqifiDevice.PopulateChannelsFromStatus"/> resyncs analog
+        /// <c>IsEnabled</c> from the device's own enabled mask on every status message (#409), so by
+        /// the time re-initialization is done the in-memory view reflects the freshly reconnected
+        /// device, not the session that was lost.
+        /// </para>
+        /// <para>
+        /// The streaming frequency needs no replay — it is a host-side setting that the drop never
+        /// touched — but it does have to reach the device again, which is what the resumed
+        /// <see cref="StartStreaming"/> does.
+        /// </para>
+        /// <para>
+        /// A resumed stream is a genuinely new session: timestamp reconstruction re-anchors and the
+        /// gap detector resets, because the device's tick counter may well have restarted while it
+        /// was away, and carrying the old anchor across would manufacture a nonsense gap.
+        /// <see cref="DaqifiDevice.Reconnected"/> is the marker for the outage, and it carries its
+        /// duration.
+        /// </para>
+        /// </remarks>
+        protected override Task<bool> RestoreSessionSnapshotAsync(
+            ReconnectOptions options,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+
+            // A reconnected device is never streaming: re-initialization has just sent it
+            // StopStreamData. The flag, though, is still set from before the drop — nothing stopped
+            // the stream, the connection simply ended — and leaving it that way would report a
+            // device as streaming while it sits idle, and make StartStreaming() a silent no-op.
+            IsStreaming = false;
+
+            var snapshot = _sessionSnapshot;
+            if (snapshot == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Normalize to a known state before re-applying: whatever the device came back with is
+            // not necessarily what it had, and the enable commands are set-replace anyway.
+            DisableAllChannels();
+
+            var toEnable = new List<IChannel>();
+            foreach (var channel in GetChannelsSnapshot())
+            {
+                if (snapshot.EnabledChannels.Contains((channel.Type, channel.ChannelNumber)))
+                {
+                    toEnable.Add(channel);
+                }
+            }
+
+            if (toEnable.Count > 0)
+            {
+                EnableChannels(toEnable);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var resumeStreaming = snapshot.WasStreaming && options.ResumeStreaming;
+            if (resumeStreaming)
+            {
+                StartStreaming();
+            }
+
+            return Task.FromResult(resumeStreaming);
+        }
+
+        #endregion
 
         /// <summary>
         /// The default bounded-buffer capacity (in samples) used by <see cref="StreamSamplesAsync"/>.

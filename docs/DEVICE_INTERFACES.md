@@ -523,11 +523,20 @@ device.StatusChanged += (sender, args) =>
             Console.WriteLine("Device connected successfully");
             break;
         case ConnectionStatus.Lost:
-            Console.WriteLine("Connection lost - may attempt reconnection");
+            Console.WriteLine("Connection lost");
+            break;
+        case ConnectionStatus.Retrying:
+            Console.WriteLine("Reconnecting...");   // only with reconnect enabled
+            break;
+        case ConnectionStatus.Failed:
+            Console.WriteLine("Reconnection gave up");
             break;
     }
 };
 ```
+
+See [Reconnecting automatically after a drop](#reconnecting-automatically-after-a-drop) for the
+`Retrying` and `Failed` states, which a device only ever reports once reconnection is turned on.
 
 ### Detecting a dropped connection
 
@@ -581,6 +590,102 @@ reader and writer loops report every read/write outcome to a transport that does
 The failures that feed this escalation are also reported individually, as they happen, on
 `IDevice.ErrorOccurred` — see [Error Surface](#error-surface). That event is diagnostics only;
 `ConnectionStatus.Lost` remains the single signal that means "the connection is over".
+
+### Reconnecting automatically after a drop
+
+By default a drop is where the story ends: `Lost` is reported and nothing else happens. Set
+`ReconnectOptions` and the device will rebuild the session by itself — reconnect the transport,
+re-initialize, put the channel configuration back, and restart a stream that was interrupted — with
+no code from you in the loop.
+
+```csharp
+device.ReconnectOptions = ReconnectOptions.Default;   // 5 attempts, 1 s backing off to 30 s
+
+device.Reconnected += (_, e) =>
+    Console.WriteLine($"back after {e.Outage.TotalSeconds:0.#}s (attempt {e.AttemptNumber})");
+
+device.ReconnectFailed += (_, e) =>
+    Console.WriteLine($"gave up after {e.AttemptsMade} attempts: {e.LastError?.Message}");
+```
+
+`ReconnectOptions.Fast` and `ReconnectOptions.Resilient` are ready-made policies for links that
+blip briefly and for unattended long runs respectively; build your own for anything else.
+`ReconnectOptions.Disabled` (the default) says so explicitly.
+
+**What you can watch.** `ReconnectAttempt` fires before each attempt with its number and the wait
+that precedes it; `Reconnected` fires once the session is fully back; `ReconnectFailed` fires when
+it stops without one. The status follows along, so a UI can show progress without subscribing to
+anything new:
+
+| Status | Meaning |
+|---|---|
+| `Lost` | The drop was detected. Also where a cancelled reconnect leaves the device. |
+| `Retrying` | Waiting out the backoff before the next attempt. |
+| `Connected` | The session is back, configuration and stream included. |
+| `Failed` | Every attempt failed. Terminal — nothing more will be tried. |
+
+Running out of attempts is deliberately hard to miss: as well as `ReconnectFailed` and the `Failed`
+status, it is logged as an error and raised on `ErrorOccurred` with source
+`DeviceErrorSource.Reconnect`, carrying a `DeviceReconnectFailedException` whose inner exception is
+whatever ended the final attempt.
+
+**What gets restored.** Only what the library itself owns:
+
+- the set of enabled channels (analog and digital),
+- the streaming frequency, and
+- an active stream, unless `ResumeStreaming` is turned off.
+
+It does not matter whether you established that state through the typed API
+(`EnableChannels`, `StartStreaming`) or by sending the SCPI yourself with
+`Send(ScpiMessageProducer.StartStreaming(...))` — the device recognizes its own streaming and
+ADC-enable commands whichever way they were sent, so a session driven entirely by raw commands is
+restored just the same. The one exception is the global DIO enable: it is a single switch for the
+whole port rather than a per-channel mask, so sending it directly tells the device nothing about
+*which* digital channels you wanted. Use `EnableChannels` for those.
+
+**What does not.** Everything else is the device's own state, and Core does not presume to know
+what it should be after an outage of unknown length:
+
+- DIO directions and output levels, PWM enable/duty/frequency, analog outputs, and calibration
+  written only to device RAM;
+- an SD card logging session — the device keeps logging or does not, entirely on its own;
+- **any operation that was in flight.** An SD card download interrupted by a drop fails, and is
+  neither resumed nor retried; run it again once `Reconnected` says the device is back.
+
+A resumed stream is a genuinely new session: timestamp reconstruction re-anchors and the gap
+detector resets, because the device's tick counter may well have restarted while it was away.
+`Reconnected.Outage` is the measure of the interruption, not a `GapDetected` event.
+
+**Same endpoint only.** Reconnection re-opens the endpoint the device was already using. It cannot
+follow a device that moved: a serial device that comes back on a different port path, or one whose
+IP address changed after a reboot, is a new endpoint and needs a fresh `DaqifiDeviceFactory`
+connect. Failing over from one transport to another (USB to WiFi, say) is out of scope.
+
+**Stopping it.** `CancelReconnect()` stops the loop at its next checkpoint and leaves the device on
+`Lost`; `Disconnect()` and `Dispose()` do the same and then tear down. A caller-issued `Connect()`
+or `Disconnect()` always wins — the loop unwinds without touching the session the caller
+established, and a `Disconnect()` issued from inside a `Lost` handler stops the reconnect before it
+even starts.
+
+Which is the other half of the rule: with reconnect enabled, **stop tearing down on `Lost`
+yourself**. The teardown shown under [Detecting a dropped
+connection](#detecting-a-dropped-connection) is for devices without a reconnect policy. Here the
+device does it for you, between attempts, and doing it as well just cancels the recovery you asked
+for.
+
+```csharp
+device.ReconnectOptions = new ReconnectOptions
+{
+    Enabled = true,
+    MaxAttempts = 10,
+    InitialDelay = TimeSpan.FromSeconds(2),
+    MaxDelay = TimeSpan.FromMinutes(1),
+    ResumeStreaming = true
+};
+```
+
+All three events are raised on a background thread, and a handler that throws is caught and
+ignored — it cannot stop a reconnect in progress.
 
 ### Working with Device Metadata
 
@@ -942,6 +1047,8 @@ streaming.
 - **Event-Driven**: Status changes and messages handled via events
 - **Observable Failures**: Background read and decode errors surface on `ErrorOccurred` instead of
   failing silently
+- **Opt-in Auto-Reconnect**: A dropped connection can rebuild itself — transport, initialization,
+  channel configuration and stream — with no consumer code
 - **Type Safety**: Generic message types provide compile-time safety
 - **Retry Support**: Built-in connection retry with exponential backoff
 - **Thread-Safe Sending**: Background message queue for thread-safe command sending

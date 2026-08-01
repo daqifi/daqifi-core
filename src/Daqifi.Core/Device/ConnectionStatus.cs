@@ -26,12 +26,18 @@ namespace Daqifi.Core.Device
         Lost,
 
         /// <summary>
-        /// The device is retrying connection after a failure.
+        /// The device is retrying connection after a failure — in particular, it is between
+        /// automatic reconnect attempts after a drop (see <see cref="ReconnectOptions"/>). Only
+        /// ever seen when reconnect is enabled; with the default policy a drop stops at
+        /// <see cref="Lost"/>.
         /// </summary>
         Retrying,
 
         /// <summary>
-        /// The device connection failed after all retry attempts.
+        /// The device connection failed after all retry attempts — automatic reconnection ran out
+        /// of attempts and gave up (see <see cref="ReconnectOptions.MaxAttempts"/>). Terminal:
+        /// nothing further will be attempted without a new <c>Connect()</c>. Only ever seen when
+        /// reconnect is enabled.
         /// </summary>
         Failed
     }
