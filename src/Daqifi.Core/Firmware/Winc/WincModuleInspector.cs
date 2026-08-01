@@ -204,6 +204,14 @@ public sealed class WincModuleInspector
         catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
             ownsPort = false;
+
+            // Hoisted so the continuation closes over the logger rather than `this`. An open that
+            // never returns keeps this continuation — and everything it captured — alive for the
+            // life of the process, and it only needs the port and the logger, not the whole
+            // inspector. `port` and `portName` are already parameters, so this removes the last
+            // reach through the instance.
+            var logger = _logger;
+
             openTask.ContinueWith(
                 completed =>
                 {
@@ -221,7 +229,7 @@ public sealed class WincModuleInspector
                         // caller must act — they already got a TimeoutException or a cancellation.
                         if (completed.Exception is { } fault)
                         {
-                            _logger.LogDebug(
+                            logger.LogDebug(
                                 fault,
                                 "Abandoned open of {PortName} faulted after it was given up on.",
                                 portName);
