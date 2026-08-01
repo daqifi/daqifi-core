@@ -422,24 +422,35 @@ namespace Daqifi.Core.Device
         /// </summary>
         private const int InitScpiErrorRetryDelayMs = 150;
 
-        // Serializes ExecuteTextCommandAsync calls device-wide (closes #186).
-        // Multiple callers — e.g. concurrent GetSdCardFilesAsync /
-        // DrainErrorQueueAsync / GetSystemInfoAsync — would otherwise race the
-        // protobuf-consumer pause/swap/restart sequence on the same stream and
-        // either intermix SCPI bytes on the wire or interleave reply lines
-        // between callers' returned lists. SemaphoreSlim chosen over Lock
-        // because the method is async; counter is (1, 1) for mutual exclusion.
+        // THE device operation lock. Originally introduced to serialize ExecuteTextCommandAsync
+        // calls device-wide (closes #186): multiple callers — e.g. concurrent GetSdCardFilesAsync /
+        // DrainErrorQueueAsync / GetSystemInfoAsync — would otherwise race the protobuf-consumer
+        // pause/swap/restart sequence on the same stream and either intermix SCPI bytes on the wire
+        // or interleave reply lines between callers' returned lists.
+        //
+        // It is now also what RunExclusiveAsync takes (closes #342), so a caller can declare a
+        // multi-command sequence indivisible and have text exchanges, deferred Send()s and teardown
+        // all coordinate against the same one lock. Deliberately ONE lock rather than an operation
+        // lock layered over the text-exchange lock: two locks would need an ordering, and the code
+        // that would have to respect it (Disconnect, Dispose, the reconnect loop, every SD
+        // operation) is exactly the code that must never deadlock. The field name is unchanged
+        // because the text exchange is still its busiest user.
+        //
+        // SemaphoreSlim chosen over Lock because the holders are async; counter is (1, 1) for
+        // mutual exclusion. Not reentrant, so re-entry is tracked by _ownsOperationLock below.
         private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
 
         // Async-context flag that tracks whether the current logical flow
-        // already holds _textExchangeLock. AsyncLocal flows across await
+        // is inside the consumer swap of ExecuteTextCommandAsync. AsyncLocal flows across await
         // resumptions on different threads, so a setupAction that re-enters
         // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
         // detected and surfaced as InvalidOperationException — instead of
-        // wedging on _textExchangeLock.WaitAsync() (the re-entrant call
-        // would corrupt the consumer swap mid-flight). Plain
+        // corrupting the consumer swap mid-flight. Plain
         // Environment.CurrentManagedThreadId capture wouldn't work — the
         // value seen before await may not match the value seen after.
+        //
+        // Distinct from _ownsOperationLock: this one says "a consumer swap is in progress on this
+        // flow" (nesting is a bug), that one says "this flow holds the lock" (nesting is fine).
         private readonly AsyncLocal<bool> _isInsideTextExchange = new();
 
         /// <summary>
@@ -899,6 +910,288 @@ namespace Daqifi.Core.Device
             catch (ObjectDisposedException)
             {
                 // Raced a Dispose that already tore the semaphore down.
+            }
+        }
+
+        #endregion
+
+        #region Operation serialization (issue #342)
+
+        /// <summary>
+        /// True while the current logical flow owns <c>_textExchangeLock</c>.
+        /// </summary>
+        /// <remarks>
+        /// Set by <see cref="RunExclusiveAsync{TResult}"/> and by the text exchange, and read by
+        /// everything that would otherwise wait on a lock it already holds. <see cref="AsyncLocal{T}"/>
+        /// rather than a thread id so it survives an <c>await</c> resuming on another thread — the
+        /// same technique <c>_isInsideLifecycleOperation</c> and <c>_isInsideTextExchange</c> use.
+        /// </remarks>
+        private readonly AsyncLocal<bool> _ownsOperationLock = new();
+
+        /// <summary>
+        /// Guards <see cref="_operationInFlight"/> and <see cref="_deferredSends"/> as one unit.
+        /// </summary>
+        /// <remarks>
+        /// They have to move together or the deferral leaks: checking the flag and parking the
+        /// message in two steps lets an operation finish in between, leaving a message in a list
+        /// nobody will ever flush.
+        /// </remarks>
+        private readonly object _deferralGate = new();
+
+        /// <summary>True while some flow owns the operation lock.</summary>
+        private bool _operationInFlight;
+
+        /// <summary>
+        /// Sends parked by <see cref="Send{T}"/> because another flow held the operation lock.
+        /// Flushed, in order, by that flow on its way out.
+        /// </summary>
+        private List<Action>? _deferredSends;
+
+        /// <summary>
+        /// Serializes writes on the producer-less path, where <see cref="Send{T}"/> writes to the
+        /// stream on the caller's own thread. Two threads writing a stream concurrently is the one
+        /// place SCPI bytes really can interleave mid-command; the queued path is already safe
+        /// because a single producer thread does every write.
+        /// </summary>
+        private readonly object _directWriteGate = new();
+
+        /// <summary>
+        /// Runs <paramref name="operation"/> with exclusive use of the device: no other operation,
+        /// text query or command send from another thread runs alongside it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Individual calls are already safe to make from any thread. This exists for the case a
+        /// single call cannot express — a <b>sequence</b> that must not be split, such as "set the
+        /// direction, then drive the pin" or "set duty, then frequency, then enable". Without it,
+        /// two threads each doing that can have their commands interleaved and leave the device in
+        /// a state neither asked for.
+        /// </para>
+        /// <para>
+        /// While the operation runs, a <see cref="Send{T}"/> from another thread is <b>deferred</b>,
+        /// not blocked: it returns immediately, as fire-and-forget always has, and the message goes
+        /// out in order once this operation finishes. Text queries from other threads wait, exactly
+        /// as they already waited for each other.
+        /// </para>
+        /// <para>
+        /// Reentrant on the same logical flow, so the body is free to call anything on the device,
+        /// including the SD card and diagnostic methods that open a text exchange of their own, and
+        /// including <see cref="Disconnect"/>. <see cref="Connect"/> is the one exception worth
+        /// knowing about: it takes the lifecycle lock, which a concurrent <see cref="Disconnect"/>
+        /// takes <i>before</i> this one, so reconnecting from inside an exclusive block can cost
+        /// both sides their bounded wait. Reconnect outside the block.
+        /// </para>
+        /// <para>
+        /// Keep the body short and do not fan out inside it: work started with
+        /// <c>Task.Run</c>/<c>_ = SomethingAsync()</c> inherits the flow's ownership of the lock, so
+        /// it would not be deferred and could still interleave. Teardown does not wait forever
+        /// either — <see cref="Disconnect"/> gives an in-flight operation a bounded courtesy wait
+        /// and then tears down regardless.
+        /// </para>
+        /// </remarks>
+        /// <param name="operation">The sequence to run exclusively.</param>
+        /// <param name="cancellationToken">Observed while waiting for the lock, then handed to the operation.</param>
+        /// <returns>A task that completes when the operation has finished.</returns>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device has been disposed.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when cancelled while waiting for the lock.</exception>
+        public Task RunExclusiveAsync(
+            Func<CancellationToken, Task> operation,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(operation);
+
+            return RunExclusiveAsync<object?>(
+                async ct =>
+                {
+                    await operation(ct).ConfigureAwait(false);
+                    return null;
+                },
+                cancellationToken);
+        }
+
+        /// <inheritdoc cref="RunExclusiveAsync(Func{CancellationToken, Task}, CancellationToken)"/>
+        /// <typeparam name="TResult">The type the operation produces.</typeparam>
+        /// <returns>The operation's result.</returns>
+        public async Task<TResult> RunExclusiveAsync<TResult>(
+            Func<CancellationToken, Task<TResult>> operation,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(operation);
+
+            // Already ours: run nested, exactly as a reentrant monitor would. This is what lets an
+            // exclusive block call GetSdCardFilesAsync — which opens a text exchange on this same
+            // lock — instead of deadlocking against a non-reentrant semaphore.
+            if (_ownsOperationLock.Value)
+            {
+                return await operation(cancellationToken).ConfigureAwait(false);
+            }
+
+            await AcquireOperationLockAsync(cancellationToken).ConfigureAwait(false);
+
+            // Set HERE rather than inside the helper above: an async method's AsyncLocal writes do
+            // not flow back to its caller, only forward to its callees. Assigning it in this frame
+            // is what makes the body — and everything the body awaits — see the ownership.
+            _ownsOperationLock.Value = true;
+            MarkOperationInFlight();
+
+            try
+            {
+                return await operation(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _ownsOperationLock.Value = false;
+                FlushDeferredSends();
+                ReleaseOperationLock();
+            }
+        }
+
+        /// <summary>
+        /// Waits for the operation lock, translating a disposed semaphore into the same clean
+        /// failure every other caller of this lock reports.
+        /// </summary>
+        private async Task AcquireOperationLockAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException ex)
+            {
+                throw new DeviceNotConnectedException(
+                    "No operation can run exclusively on this device because it is disposed.",
+                    ex,
+                    isShuttingDown: true);
+            }
+        }
+
+        /// <summary>
+        /// Publishes "an operation owns the device" so <see cref="Send{T}"/> starts deferring.
+        /// </summary>
+        private void MarkOperationInFlight()
+        {
+            lock (_deferralGate)
+            {
+                _operationInFlight = true;
+            }
+        }
+
+        /// <summary>
+        /// Stops deferring and sends everything parked while the operation ran, in order.
+        /// </summary>
+        /// <remarks>
+        /// Called before the semaphore is released, so the parked messages are queued ahead of
+        /// whatever the next operation does. Clearing the flag and taking the list happen together
+        /// under <see cref="_deferralGate"/>, which is what guarantees no message is parked into a
+        /// list that has already been drained.
+        /// <para>
+        /// A parked send that fails is logged and dropped rather than thrown: the caller was told
+        /// the message was accepted before this point, and <see cref="Send{T}"/> has never
+        /// guaranteed delivery. The usual case is a device that disconnected while the operation
+        /// ran, where throwing here would surface a teardown as the operation's failure.
+        /// </para>
+        /// </remarks>
+        private void FlushDeferredSends()
+        {
+            List<Action>? parked;
+            lock (_deferralGate)
+            {
+                _operationInFlight = false;
+                parked = _deferredSends;
+                _deferredSends = null;
+            }
+
+            if (parked == null)
+            {
+                return;
+            }
+
+            foreach (var send in parked)
+            {
+                try
+                {
+                    send();
+                }
+                catch (Exception ex)
+                {
+                    SafeLog(() => _logger.LogWarning(
+                        ex,
+                        "A message deferred while an exclusive operation was running could not be "
+                        + "sent afterwards; it was dropped."));
+                }
+            }
+        }
+
+        private void ReleaseOperationLock()
+        {
+            try
+            {
+                _textExchangeLock.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Raced a Dispose that already tore the semaphore down.
+            }
+        }
+
+        /// <summary>
+        /// Parks a send if another flow currently owns the device, and reports whether it did.
+        /// </summary>
+        /// <remarks>
+        /// The flow that owns the lock is never deferred — those are the operation's own commands,
+        /// and parking them would leave the operation waiting for itself.
+        /// </remarks>
+        private bool TryDeferSend<T>(IOutboundMessage<T> message)
+        {
+            if (_ownsOperationLock.Value)
+            {
+                return false;
+            }
+
+            lock (_deferralGate)
+            {
+                if (!_operationInFlight)
+                {
+                    return false;
+                }
+
+                (_deferredSends ??= new List<Action>()).Add(() => SendNow(message));
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// How long the text exchange lets the outbound queue drain before it takes the stream.
+        /// </summary>
+        /// <remarks>
+        /// Short on purpose: it is only covering messages queued microseconds before the exchange
+        /// opened, and the exchange has its own stale-line boundary as a backstop.
+        /// </remarks>
+        private static readonly TimeSpan OutboundDrainWait = TimeSpan.FromMilliseconds(250);
+
+        /// <summary>
+        /// Waits, briefly, for messages queued before this exchange to reach the wire.
+        /// </summary>
+        /// <remarks>
+        /// New sends from other threads are already parked by the time this runs, but anything
+        /// queued just before the exchange opened is still in the producer's queue. Written after
+        /// the consumer swap, its reply would land in this exchange's lines instead of the protobuf
+        /// consumer's — a reply matched to the wrong request. Letting the queue empty first puts
+        /// those replies back where they belong. Bounded, because a device that is not draining its
+        /// receive buffer must not stall the exchange: the stale-line boundary still covers it.
+        /// </remarks>
+        private async Task DrainOutboundQueueAsync(CancellationToken cancellationToken)
+        {
+            var producer = _messageProducer;
+            if (producer == null)
+            {
+                return;
+            }
+
+            var deadline = DateTime.UtcNow + OutboundDrainWait;
+            while (producer.QueuedMessageCount > 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -1372,6 +1665,16 @@ namespace Daqifi.Core.Device
         /// <returns><c>true</c> when the lock was acquired and must be released after teardown.</returns>
         private bool AcquireTextExchangeLockForTeardown()
         {
+            // This flow already owns the lock — a Disconnect() from inside RunExclusiveAsync, or
+            // from a StatusChanged handler raised within one. Waiting would burn the whole teardown
+            // budget on a lock we are holding ourselves and then tear down anyway; run nested
+            // instead, and leave the release to the owner. Reported as "not acquired" precisely so
+            // FinishDisconnect does not release a lock this teardown never took.
+            if (_ownsOperationLock.Value)
+            {
+                return false;
+            }
+
             try
             {
                 return _textExchangeLock.Wait(TextExchangeTeardownWait);
@@ -1391,6 +1694,13 @@ namespace Daqifi.Core.Device
         /// </param>
         private async Task<bool> AcquireTextExchangeLockForTeardownAsync(CancellationToken cancellationToken)
         {
+            // See AcquireTextExchangeLockForTeardown: re-entry from a flow that already owns the
+            // lock runs nested rather than waiting on itself.
+            if (_ownsOperationLock.Value)
+            {
+                return false;
+            }
+
             try
             {
                 return await _textExchangeLock.WaitAsync(TextExchangeTeardownWait, cancellationToken)
@@ -1475,6 +1785,21 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Sends a message to the device.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Fire-and-forget, and safe to call from any thread: the message is handed to a background
+        /// queue and this returns before the write happens, so delivery is not guaranteed. See
+        /// <see cref="SendFailed"/> for the only signal that a specific message was not delivered.
+        /// </para>
+        /// <para>
+        /// If another thread is inside <see cref="RunExclusiveAsync{TResult}"/> or a text query when
+        /// this is called, the message is held back and sent, in order, as soon as that finishes
+        /// (issue #342). This call still does not block — it returns as immediately as it always
+        /// has — but the message can reach the device later than it used to. That is the point: a
+        /// command written while a text query owns the stream gets its reply mixed into that
+        /// query's answer.
+        /// </para>
+        /// </remarks>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
         /// <param name="message">The message to send to the device.</param>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
@@ -1489,6 +1814,26 @@ namespace Daqifi.Core.Device
                 throw new DeviceNotConnectedException();
             }
 
+            // Checked before the message can be parked. A null used to fail loudly at the producer;
+            // deferred, it would instead fail on a background flush where the exception is logged
+            // and dropped, turning a caller's bug into a silently missing command.
+            ArgumentNullException.ThrowIfNull(message);
+
+            if (TryDeferSend(message))
+            {
+                return;
+            }
+
+            SendNow(message);
+        }
+
+        /// <summary>
+        /// Puts a message on its way to the device immediately — the body <see cref="Send{T}"/> runs
+        /// once it knows nothing else owns the device, and the body a deferred send is replayed
+        /// through afterwards.
+        /// </summary>
+        private void SendNow<T>(IOutboundMessage<T> message)
+        {
             // Use the queued message producer when available and the message is string-based;
             // this is the common path (SCPI text commands).
             if (_messageProducer != null && message is IOutboundMessage<string> stringMessage)
@@ -1508,7 +1853,15 @@ namespace Daqifi.Core.Device
             }
 
             var bytes = message.GetBytes();
-            stream.Write(bytes, 0, bytes.Length);
+
+            // The queued path gets its mutual exclusion from having exactly one writer thread; this
+            // path has none, and two callers writing at once is the one case where SCPI bytes can
+            // genuinely interleave mid-command. The lock is a leaf — nothing is acquired underneath
+            // it — so it cannot participate in a cycle.
+            lock (_directWriteGate)
+            {
+                stream.Write(bytes, 0, bytes.Length);
+            }
         }
 
         /// <summary>
@@ -1762,21 +2115,33 @@ namespace Daqifi.Core.Device
                     + "do not call it from inside a setupAction callback.");
             }
 
-            try
+            // The exchange runs under the device's operation lock. A flow that already owns it —
+            // one inside RunExclusiveAsync, typically — runs nested rather than waiting on a
+            // semaphore it is itself holding, and leaves the release to the owner.
+            var ownsLock = !_ownsOperationLock.Value;
+            if (ownsLock)
             {
-                await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException ex)
-            {
-                // Dispose() raced ahead of us and disposed the semaphore.
-                // Surface the same clean failure as the post-acquisition
-                // _disposed check below, instead of leaking a low-level
-                // teardown exception to callers. The original is kept as
-                // InnerException so this rare race stays diagnosable.
-                throw new DeviceNotConnectedException(
-                    "ExecuteTextCommandAsync cannot run because the device is disposed.",
-                    ex,
-                    isShuttingDown: true);
+                try
+                {
+                    await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException ex)
+                {
+                    // Dispose() raced ahead of us and disposed the semaphore.
+                    // Surface the same clean failure as the post-acquisition
+                    // _disposed check below, instead of leaking a low-level
+                    // teardown exception to callers. The original is kept as
+                    // InnerException so this rare race stays diagnosable.
+                    throw new DeviceNotConnectedException(
+                        "ExecuteTextCommandAsync cannot run because the device is disposed.",
+                        ex,
+                        isShuttingDown: true);
+                }
+
+                // Assigned in this frame, not in a helper: an async method's AsyncLocal writes flow
+                // forward to its callees but never back to its caller.
+                _ownsOperationLock.Value = true;
+                MarkOperationInFlight();
             }
 
             _isInsideTextExchange.Value = true;
@@ -1841,6 +2206,17 @@ namespace Daqifi.Core.Device
 
                     SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
                 }
+
+                // Let anything queued before this exchange opened reach the wire while the protobuf
+                // consumer is still the one reading, so its reply is not mistaken for an answer to
+                // a command this exchange is about to send (issue #342). New sends from other
+                // threads are already parked by this point, so the queue can only shrink.
+                //
+                // Deliberately OUTSIDE the swap's try/finally below: this is the one step here that
+                // can throw (a cancelled token) before the consumer has been stopped, and that
+                // finally restarts the consumer — which on a consumer that was never stopped means
+                // subscribing the inbound handler a second time and dispatching every frame twice.
+                await DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
 
                 var collectedLines = new List<string>();
                 var stream = _transport.Stream;
@@ -2036,18 +2412,17 @@ namespace Daqifi.Core.Device
                 }
 
                 _isInsideTextExchange.Value = false;
-                // Release can race with Dispose() — Dispose acquires the lock
-                // before disposing it, but if that acquisition timed out and
-                // Dispose proceeded anyway, our SemaphoreSlim handle is now
-                // gone. Treat that as a benign teardown signal rather than
-                // surfacing it from the finally and masking the original
-                // exception (if any) from the try body.
-                try
+
+                // Only the flow that took the lock releases it; a nested exchange leaves it to the
+                // RunExclusiveAsync block that owns it. Parked sends are flushed before the release
+                // so they are queued ahead of whatever runs next, and ReleaseOperationLock absorbs
+                // a Dispose that already tore the semaphore down (Dispose acquires the lock first,
+                // but proceeds anyway if that acquisition times out).
+                if (ownsLock)
                 {
-                    _textExchangeLock.Release();
-                }
-                catch (ObjectDisposedException)
-                {
+                    _ownsOperationLock.Value = false;
+                    FlushDeferredSends();
+                    ReleaseOperationLock();
                 }
 
                 if (finalizeFailure != null)

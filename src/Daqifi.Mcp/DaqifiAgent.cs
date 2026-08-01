@@ -14,10 +14,24 @@ namespace Daqifi.Mcp;
 /// <see cref="ISdCardOperations"/>). One instance is shared by all tool calls.
 /// </summary>
 /// <remarks>
-/// The MCP transport may dispatch tool calls concurrently, so every operation that connects,
-/// disconnects, or mutates device state is serialized behind <see cref="_gate"/>. Read-only
-/// introspection snapshots the channel collection instead, so it never blocks and never folds the
-/// live <c>Channels</c> view while the device's consumer thread repopulates it.
+/// The MCP transport may dispatch tool calls concurrently. Serialization is split by what is
+/// actually being protected:
+/// <list type="bullet">
+/// <item><description>
+/// <b>Per device</b> — a tool call that sends more than one command is wrapped in
+/// <see cref="DaqifiDevice.RunExclusiveAsync{TResult}"/>, so Core holds that device's operation
+/// lock for the whole sequence and nothing from another tool call splits it (issue #342). This
+/// used to be <see cref="_gate"/>, which had the side effect of serializing every device against
+/// every other one; two devices now run genuinely in parallel.
+/// </description></item>
+/// <item><description>
+/// <b>Across the registry</b> — <see cref="_gate"/> is now only what it needs to be: the lock
+/// around adding to and removing from the connection registry, where the thing being protected is
+/// this agent's own state rather than any one device.
+/// </description></item>
+/// </list>
+/// Read-only introspection takes neither: it snapshots the channel collection, so it never blocks
+/// and never folds the live <c>Channels</c> view while the device's consumer thread repopulates it.
 /// The live set of connections is owned by a <see cref="DaqifiDeviceRegistry"/> keyed by our own
 /// <c>device_id</c>, which also supplies stale-handle pruning, disposal, and cross-transport
 /// duplicate detection (the same unit reached over both USB and WiFi).
@@ -28,6 +42,12 @@ public sealed class DaqifiAgent
     private readonly ILogger<DaqifiAgent> _logger;
     private readonly ConcurrentDictionary<string, IDeviceInfo> _discovered = new(StringComparer.Ordinal);
     private readonly DaqifiDeviceRegistry _registry = new();
+
+    /// <summary>
+    /// Serializes changes to the connection registry — connect, disconnect, shutdown. Device-level
+    /// serialization is Core's job now (see the class remarks), so this no longer stands between
+    /// two tool calls that touch different devices.
+    /// </summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public DaqifiAgent(ServerOptions options, ILogger<DaqifiAgent>? logger = null)
@@ -143,12 +163,11 @@ public sealed class DaqifiAgent
     /// </summary>
     public async Task<ConfigureResult> ConfigureAnalogChannelsAsync(string deviceId, int[] enabledChannels)
     {
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
 
+        return await device.RunExclusiveAsync(async _ =>
+        {
             var analog = Snapshot(device).Where(c => c.Type == ChannelType.Analog).ToList();
             var validNumbers = analog.Select(c => c.ChannelNumber).ToHashSet();
 
@@ -177,11 +196,7 @@ public sealed class DaqifiAgent
             await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
 
             return new ConfigureResult(deviceId, EnabledAnalog(device), streaming.StreamingFrequency);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -191,12 +206,11 @@ public sealed class DaqifiAgent
     /// </summary>
     public async Task<ConfigureDigitalResult> ConfigureDigitalChannelsAsync(string deviceId, int[] enabledChannels)
     {
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
 
+        return await device.RunExclusiveAsync(async _ =>
+        {
             var digital = Snapshot(device).Where(c => c.Type == ChannelType.Digital).ToList();
             var validNumbers = digital.Select(c => c.ChannelNumber).ToHashSet();
 
@@ -224,11 +238,7 @@ public sealed class DaqifiAgent
             await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
 
             return new ConfigureDigitalResult(deviceId, EnabledDigital(device));
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -239,21 +249,16 @@ public sealed class DaqifiAgent
     {
         var parsed = ParseDirection(direction);
 
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
-            var ch = RequireDigitalChannel(device, channel);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
+        var ch = RequireDigitalChannel(device, channel);
 
+        return await device.RunExclusiveAsync(_ =>
+        {
             streaming.SetDioDirection(ch, parsed);
 
-            return DigitalPinResult.From(deviceId, ch);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return Task.FromResult(DigitalPinResult.From(deviceId, ch));
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -262,13 +267,14 @@ public sealed class DaqifiAgent
     /// </summary>
     public async Task<DigitalPinResult> SetDigitalOutputAsync(string deviceId, int channel, bool high)
     {
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
-            var ch = RequireDigitalChannel(device, channel);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
+        var ch = RequireDigitalChannel(device, channel);
 
+        // Direction-then-value is the sequence that must not be split: another tool call landing
+        // between them could flip the pin back to input before the value is driven.
+        return await device.RunExclusiveAsync(_ =>
+        {
             if (ch.Direction != ChannelDirection.Output)
             {
                 streaming.SetDioDirection(ch, ChannelDirection.Output);
@@ -276,12 +282,8 @@ public sealed class DaqifiAgent
 
             streaming.SetDioValue(ch, high);
 
-            return DigitalPinResult.From(deviceId, ch);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return Task.FromResult(DigitalPinResult.From(deviceId, ch));
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -291,13 +293,12 @@ public sealed class DaqifiAgent
     /// </summary>
     public async Task<PwmResult> SetPwmOutputAsync(string deviceId, int channel, int dutyCyclePercent, int frequencyHz)
     {
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
-            var ch = RequireDigitalChannel(device, channel);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
+        var ch = RequireDigitalChannel(device, channel);
 
+        return await device.RunExclusiveAsync(_ =>
+        {
             // Duty before frequency before enable: the firmware applies a stored duty when the
             // frequency is (re)programmed, so this order never leaves a stale compare value.
             // Core.PwmFrequencyHz always holds a commandable value (a session default when
@@ -314,12 +315,8 @@ public sealed class DaqifiAgent
 
             streaming.SetPwmEnabled(ch, true);
 
-            return PwmResult.From(deviceId, streaming, ch);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return Task.FromResult(PwmResult.From(deviceId, streaming, ch));
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -328,21 +325,16 @@ public sealed class DaqifiAgent
     /// </summary>
     public async Task<PwmResult> DisablePwmAsync(string deviceId, int channel)
     {
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
-            var ch = RequireDigitalChannel(device, channel);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
+        var ch = RequireDigitalChannel(device, channel);
 
+        return await device.RunExclusiveAsync(_ =>
+        {
             streaming.SetPwmEnabled(ch, false);
 
-            return PwmResult.From(deviceId, streaming, ch);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return Task.FromResult(PwmResult.From(deviceId, streaming, ch));
+        }).ConfigureAwait(false);
     }
 
     public async Task<SampleRateResult> SetSampleRateAsync(string deviceId, int rateHz)
@@ -352,12 +344,11 @@ public sealed class DaqifiAgent
             throw new InvalidOperationException("rate_hz must be >= 1.");
         }
 
-        await _gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
 
+        return await device.RunExclusiveAsync(_ =>
+        {
             // MaxSamplingRate is the absolute sampling-ISR ceiling, not what the device will
             // actually accept for the channels enabled right now — that is
             // CapabilityStreaming.CurrentMaximumRateHz, refreshed after every channel-
@@ -383,12 +374,8 @@ public sealed class DaqifiAgent
             }
 
             streaming.StreamingFrequency = rateHz;
-            return new SampleRateResult(deviceId, rateHz);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            return Task.FromResult(new SampleRateResult(deviceId, rateHz));
+        }).ConfigureAwait(false);
     }
 
     // --------------------------------------------------------- SD card logging
@@ -398,42 +385,33 @@ public sealed class DaqifiAgent
     {
         var fmt = ParseFormat(format);
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            RequireControl();
-            var (device, streaming) = RequireStreaming(deviceId);
-            var sd = RequireSdCard(device);
+        RequireControl();
+        var (device, streaming) = RequireStreaming(deviceId);
+        var sd = RequireSdCard(device);
 
+        return await device.RunExclusiveAsync(async ct =>
+        {
             // Core owns the naming convention and reports the effective on-card filename back to
             // us, so we no longer duplicate the log_{timestamp} generation here.
-            var session = await sd.StartSdCardLoggingSessionAsync(fileName, channelMask: null, format: fmt, cancellationToken)
+            var session = await sd.StartSdCardLoggingSessionAsync(fileName, channelMask: null, format: fmt, ct)
                 .ConfigureAwait(false);
 
             return new StartLoggingResult(
                 deviceId, session.FileName, session.Format.ToString(), streaming.StreamingFrequency, EnabledAnalog(device));
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<string> StopLoggingAsync(string deviceId, CancellationToken cancellationToken)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        RequireControl();
+        var (device, _) = RequireStreaming(deviceId);
+        var sd = RequireSdCard(device);
+
+        return await device.RunExclusiveAsync(async ct =>
         {
-            RequireControl();
-            var (device, _) = RequireStreaming(deviceId);
-            var sd = RequireSdCard(device);
-            await sd.StopSdCardLoggingAsync(cancellationToken).ConfigureAwait(false);
+            await sd.StopSdCardLoggingAsync(ct).ConfigureAwait(false);
             return $"Stopped SD-card logging on '{deviceId}'.";
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     // ------------------------------------------------------------------ shutdown
