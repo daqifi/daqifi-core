@@ -148,7 +148,10 @@ internal sealed class WincSerialBridgeClient
     /// host must follow immediately; anything sent in between is lost. The settle delay gives the
     /// device's UART time to reconfigure before the next byte arrives.
     /// </remarks>
-    internal void ChangeBaudRate(int newBaudRate, TimeSpan settleDelay)
+    internal void ChangeBaudRate(
+        int newBaudRate,
+        TimeSpan settleDelay,
+        CancellationToken cancellationToken = default)
     {
         if (newBaudRate <= 0)
         {
@@ -161,7 +164,10 @@ internal sealed class WincSerialBridgeClient
 
         if (settleDelay > TimeSpan.Zero)
         {
-            Thread.Sleep(settleDelay);
+            // Cancellable rather than Thread.Sleep so a cancel during the settle window is
+            // observed instead of being slept through.
+            cancellationToken.WaitHandle.WaitOne(settleDelay);
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         _port.DiscardInBuffer();

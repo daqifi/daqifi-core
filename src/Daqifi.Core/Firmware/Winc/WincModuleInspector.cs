@@ -43,6 +43,7 @@ public sealed class WincModuleInspector
     private readonly ILogger _logger;
     private readonly TimeSpan _baudSettleDelay;
     private readonly TimeSpan _responseTimeout;
+    private readonly TimeSpan _openTimeout;
 
     /// <summary>
     /// Creates an inspector that opens real serial ports.
@@ -59,12 +60,14 @@ public sealed class WincModuleInspector
         Func<string, int, IWincSerialPort> portFactory,
         ILogger? logger = null,
         TimeSpan? baudSettleDelay = null,
-        TimeSpan? responseTimeout = null)
+        TimeSpan? responseTimeout = null,
+        TimeSpan? openTimeout = null)
     {
         _portFactory = portFactory ?? throw new ArgumentNullException(nameof(portFactory));
         _logger = logger ?? NullLogger.Instance;
         _baudSettleDelay = baudSettleDelay ?? TimeSpan.FromMilliseconds(100);
         _responseTimeout = responseTimeout ?? TimeSpan.FromSeconds(2);
+        _openTimeout = openTimeout ?? TimeSpan.FromSeconds(5);
     }
 
     /// <summary>
@@ -90,7 +93,12 @@ public sealed class WincModuleInspector
     {
         using var session = OpenSession(portName, cancellationToken);
 
+        // Each bridge exchange is individually bounded by the response timeout, but a caller who
+        // cancels should not have to wait out the remaining ones.
+        cancellationToken.ThrowIfCancellationRequested();
         var chipId = session.Reader.ReadChipId();
+
+        cancellationToken.ThrowIfCancellationRequested();
         var flashId = session.Reader.ReadFlashJedecId();
 
         _logger.LogInformation(
@@ -127,9 +135,14 @@ public sealed class WincModuleInspector
         cancellationToken.ThrowIfCancellationRequested();
 
         var port = _portFactory(portName, InitialBaudRate);
+
+        // Ownership flag: once the open has been abandoned it is still running on a pool thread
+        // and holding the handle, so disposing here would race it. In that case the abandonment
+        // continuation owns disposal instead.
+        var ownsPort = true;
         try
         {
-            port.Open();
+            OpenWithTimeout(port, portName, ref ownsPort, cancellationToken);
 
             var bridge = new WincSerialBridgeClient(port, _responseTimeout, _logger);
 
@@ -140,7 +153,7 @@ public sealed class WincModuleInspector
                     "firmware-update (bridge) mode before the module can be reached.");
             }
 
-            bridge.ChangeBaudRate(FastBaudRate, _baudSettleDelay);
+            bridge.ChangeBaudRate(FastBaudRate, _baudSettleDelay, cancellationToken);
 
             // Re-handshake at the new rate: this both confirms the switch actually took and leaves
             // the bridge back in its op-code state before any command is issued.
@@ -151,11 +164,68 @@ public sealed class WincModuleInspector
                     $"{FastBaudRate} baud.");
             }
 
-            return new BridgeSession(port, new WincFlashReader(bridge, logger: _logger));
+            return new BridgeSession(port, new WincFlashReader(bridge));
         }
         catch
         {
-            port.Dispose();
+            if (ownsPort)
+            {
+                port.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Opens the port under a hard deadline.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="System.IO.Ports.SerialPort.Open"/> can block indefinitely on a wedged or
+    /// half-enumerated USB CDC device and takes no cancellation token, so the only way to stay
+    /// responsive is to run it elsewhere and walk away from it. An abandoned open keeps running on
+    /// a pool thread and still owns the handle, so disposal is handed to a continuation rather than
+    /// done here — disposing underneath a blocked open is how you turn a hang into a crash.
+    /// <paramref name="ownsPort"/> is cleared on that path so the caller does not double-dispose.
+    /// </remarks>
+    private void OpenWithTimeout(
+        IWincSerialPort port,
+        string portName,
+        ref bool ownsPort,
+        CancellationToken cancellationToken)
+    {
+        var openTask = Task.Run(port.Open, CancellationToken.None);
+
+        try
+        {
+            openTask.WaitAsync(_openTimeout, cancellationToken).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+            ownsPort = false;
+            openTask.ContinueWith(
+                _ =>
+                {
+                    try
+                    {
+                        port.Dispose();
+                    }
+                    catch (Exception)
+                    {
+                        // Best-effort cleanup of a port we already gave up on.
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            if (ex is TimeoutException)
+            {
+                throw new TimeoutException(
+                    $"Opening serial port {portName} did not complete within {_openTimeout}. The port " +
+                    "may be held by another process, or the device may be half-enumerated.");
+            }
+
             throw;
         }
     }

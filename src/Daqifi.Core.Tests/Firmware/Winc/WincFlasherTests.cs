@@ -133,6 +133,35 @@ public class WincFlasherTests
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateReader(CreateReadyPort()).ReadFlash(0, length));
     }
 
+    [Theory]
+    [InlineData(0xFFFF00u, 0x200)]   // straddles the top of the 24-bit space
+    [InlineData(0xFFFFFFu, 2)]       // one byte past the last address
+    [InlineData(0xFFFFFFu, int.MaxValue)]
+    public void ReadFlash_RejectsSpansThatWouldWrapTheAddress(uint offset, int length)
+    {
+        // Without the bounds check, offset + read wraps past 32 bits and the chunk silently
+        // targets the wrong flash address — returning plausible data with no error at all.
+        var port = CreateReadyPort();
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => CreateReader(port).ReadFlash(offset, length));
+
+        Assert.Equal("length", ex.ParamName);
+        Assert.Empty(port.ReceivedHeaders);
+    }
+
+    [Fact]
+    public void ReadFlash_AcceptsASpanEndingExactlyAtTheLastAddress()
+    {
+        // Boundary: the final byte is addressable and must not be rejected.
+        var port = CreateReadyPort();
+        port.Blocks[ShareMemoryBase] = new byte[16];
+
+        var data = CreateReader(port).ReadFlash(WincFlashReader.MaxFlashAddress - 15, 16);
+
+        Assert.Equal(16, data.Length);
+    }
+
     [Fact]
     public void ReadFlash_ObservesCancellation()
     {
@@ -189,6 +218,47 @@ public class WincFlasherTests
 
         Assert.Contains("bridge", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(port.WasDisposed);
+    }
+
+    [Fact]
+    public async Task Inspector_AbandonsAnOpenThatHangs_RatherThanBlockingForever()
+    {
+        // SerialPort.Open takes no cancellation token and can block indefinitely on a wedged or
+        // half-enumerated USB CDC device. The only way to stay responsive is a hard deadline.
+        var port = new HangingOpenPort();
+        var inspector = new WincModuleInspector(
+            (_, _) => port,
+            baudSettleDelay: TimeSpan.Zero,
+            openTimeout: TimeSpan.FromMilliseconds(150));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var ex = await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
+        sw.Stop();
+
+        Assert.Contains("did not complete", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"took {sw.Elapsed}, should have bailed at the deadline");
+
+        // The abandoned open still owns the handle, so this side must NOT have disposed it.
+        Assert.False(port.DisposedWhileOpenStillBlocked);
+
+        port.ReleaseOpen();
+    }
+
+    [Fact]
+    public async Task Inspector_ObservesCancellationDuringAHangingOpen()
+    {
+        var port = new HangingOpenPort();
+        var inspector = new WincModuleInspector(
+            (_, _) => port,
+            baudSettleDelay: TimeSpan.Zero,
+            openTimeout: TimeSpan.FromMinutes(5));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => inspector.ReadIdentityAsync("COM1", cts.Token));
+
+        port.ReleaseOpen();
     }
 
     [Fact]
@@ -264,11 +334,84 @@ public class WincFlasherTests
     }
 
     [Fact]
+    public void Locator_TryResolve_PropagatesAnUnreadableTree_RatherThanReportingNotFound()
+    {
+        // "Could not locate the tool - WiFi flashing is Windows-only" is genuinely misleading when
+        // the tool is sitting right there behind a permissions problem, so this case must surface.
+        if (OperatingSystem.IsWindows())
+        {
+            return; // chmod semantics differ; the behavior under test is the catch removal itself.
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"winc_{Guid.NewGuid():N}");
+        var locked = Path.Combine(root, "locked");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(Path.Combine(locked, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.None);
+
+            var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+
+            Assert.ThrowsAny<Exception>(() => locator.TryResolveToolPath(root, out _));
+
+            // IsAvailable stays total: a probe answers yes/no and must not throw.
+            Assert.False(locator.IsAvailable(root));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Locator_IsNotAvailable_ForAPathThatDoesNotExist()
     {
         var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
 
         Assert.False(locator.IsAvailable(Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}")));
+    }
+
+    /// <summary>
+    /// A port whose <see cref="Open"/> blocks until released, standing in for the real
+    /// <c>SerialPort.Open()</c> hang on a wedged or half-enumerated USB CDC device.
+    /// </summary>
+    private sealed class HangingOpenPort : IWincSerialPort
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+
+        /// <summary>True if something disposed the port while the open was still blocked.</summary>
+        internal bool DisposedWhileOpenStillBlocked { get; private set; }
+
+        public bool IsOpen { get; private set; }
+        public int BaudRate { get; set; } = 115200;
+
+        public void Open()
+        {
+            _release.Wait();
+            IsOpen = true;
+        }
+
+        internal void ReleaseOpen() => _release.Set();
+
+        public void Close() => IsOpen = false;
+        public void DiscardInBuffer() { }
+        public void Write(byte[] buffer, int offset, int count) { }
+
+        public void ReadExactly(byte[] buffer, int offset, int count, TimeSpan timeout)
+            => throw new TimeoutException("Port never opened.");
+
+        public void Dispose()
+        {
+            if (!_release.IsSet)
+            {
+                DisposedWhileOpenStillBlocked = true;
+            }
+
+            _release.Set();
+        }
     }
 
     [Fact]

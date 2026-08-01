@@ -32,14 +32,38 @@ public sealed class WincFlashToolLocator
     }
 
     /// <summary>
-    /// Whether the flash tool is present for the given firmware path.
+    /// Whether the flash tool is present for the given firmware path. Total by design — a probe
+    /// answers yes or no, so an unreadable tree reports <c>false</c> rather than throwing.
     /// </summary>
-    public bool IsAvailable(string firmwarePath) => TryResolveToolPath(firmwarePath, out _);
+    /// <remarks>
+    /// Use <see cref="TryResolveToolPath"/> when a caller is about to act on the answer and needs
+    /// to tell "not there" apart from "could not look".
+    /// </remarks>
+    public bool IsAvailable(string firmwarePath)
+    {
+        try
+        {
+            return TryResolveToolPath(firmwarePath, out _);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Resolves the flash tool for a firmware path: the path itself when it is the tool, otherwise
     /// the first match found beneath it.
     /// </summary>
+    /// <returns><c>true</c> when the tool was found.</returns>
+    /// <exception cref="IOException">The directory tree could not be searched.</exception>
+    /// <exception cref="UnauthorizedAccessException">The directory tree could not be read.</exception>
+    /// <remarks>
+    /// A tree that exists but cannot be read propagates rather than returning <c>false</c>.
+    /// Collapsing it into "not found" is what produces the genuinely misleading
+    /// "could not locate the tool — WiFi flashing is Windows-only" message on a machine where the
+    /// tool is sitting right there behind a permissions problem.
+    /// </remarks>
     public bool TryResolveToolPath(string firmwarePath, [NotNullWhen(true)] out string? toolPath)
     {
         toolPath = null;
@@ -60,21 +84,13 @@ public sealed class WincFlashToolLocator
             return false;
         }
 
-        try
+        var matches = Directory.GetFiles(firmwarePath, _toolFileName, SearchOption.AllDirectories);
+        if (matches.Length == 0)
         {
-            var matches = Directory.GetFiles(firmwarePath, _toolFileName, SearchOption.AllDirectories);
-            if (matches.Length == 0)
-            {
-                return false;
-            }
-
-            toolPath = matches[0];
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // An unreadable tree is indistinguishable from a missing tool for availability purposes.
             return false;
         }
+
+        toolPath = matches[0];
+        return true;
     }
 }

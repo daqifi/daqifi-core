@@ -1,6 +1,3 @@
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-
 namespace Daqifi.Core.Firmware.Winc;
 
 /// <summary>
@@ -49,18 +46,19 @@ internal sealed class WincFlashReader
     /// <summary>Bit that starts a flash-controller transfer.</summary>
     private const uint CommandStartBit = 1u << 7;
 
+    /// <summary>
+    /// Highest addressable flash byte. The fast-read command carries a 24-bit address, so this is
+    /// what the protocol can express regardless of the part's actual capacity.
+    /// </summary>
+    internal const uint MaxFlashAddress = 0xFFFFFF;
+
     private readonly WincSerialBridgeClient _bridge;
-    private readonly ILogger _logger;
     private readonly int _transferPollLimit;
 
-    internal WincFlashReader(
-        WincSerialBridgeClient bridge,
-        int transferPollLimit = 1000,
-        ILogger? logger = null)
+    internal WincFlashReader(WincSerialBridgeClient bridge, int transferPollLimit = 1000)
     {
         _bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
         _transferPollLimit = transferPollLimit;
-        _logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>
@@ -107,6 +105,19 @@ internal sealed class WincFlashReader
             throw new ArgumentOutOfRangeException(nameof(length), length, "Read length must be positive.");
         }
 
+        // Bounds-check in 64-bit before any address arithmetic. Without this the per-chunk
+        // `offset + read` would silently wrap past 32 bits and quietly read the wrong part of
+        // flash — returning plausible-looking data with no error at all.
+        var endExclusive = (long)offset + length;
+        if (endExclusive > (long)MaxFlashAddress + 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length),
+                length,
+                $"A read of {length} bytes at 0x{offset:X6} would end at 0x{endExclusive:X}, past the " +
+                $"highest addressable flash byte 0x{MaxFlashAddress:X6}.");
+        }
+
         var result = new byte[length];
         var read = 0;
 
@@ -115,6 +126,7 @@ internal sealed class WincFlashReader
             cancellationToken.ThrowIfCancellationRequested();
 
             var chunk = Math.Min(WincBridgeProtocol.MaxReadBlockSize, length - read);
+            // Safe: the bounds check above guarantees offset + read stays within 24 bits.
             var chunkData = ReadFlashChunk((uint)(offset + read), chunk);
             Buffer.BlockCopy(chunkData, 0, result, read, chunk);
             read += chunk;
