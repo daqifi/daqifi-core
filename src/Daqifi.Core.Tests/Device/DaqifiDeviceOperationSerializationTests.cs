@@ -399,6 +399,57 @@ public class DaqifiDeviceOperationSerializationTests
         return handler?.GetInvocationList().Length ?? 0;
     }
 
+    // ── Qodo round 3: teardown must reset deferral state ────────────────────────────────────
+
+    [Fact]
+    public async Task Send_AfterATeardownThatCouldNotTakeTheLock_IsStillDelivered()
+    {
+        // The silent-loss case. Teardown is bounded: when an in-flight operation does not finish
+        // inside the wait, the disconnect proceeds anyway — and the operation that would normally
+        // clear the deferral flag on its way out is precisely the one that did not finish. If the
+        // flag survives the teardown, every Send() on the NEXT session parks into a backlog with
+        // no drainer, and Send() reports success while the command goes nowhere.
+        //
+        // Driven through the abandoned-lock path on purpose. A clean disconnect resets the flag via
+        // the operation's own exit path and would pass either way.
+        using var transport = new RecordingTransport();
+        using var device = new DaqifiDevice("Stranded Device", transport);
+        device.Connect();
+
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+
+        var wedged = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        // A cancelled token makes the teardown give up on the operation lock immediately — the
+        // same exit the bounded wait takes when it times out, without waiting out the budget.
+        using var giveUpImmediately = new CancellationTokenSource();
+        await giveUpImmediately.CancelAsync();
+        await device.DisconnectAsync(giveUpImmediately.Token).WaitAsync(DeadlockBudget);
+
+        Assert.False(device.IsConnected);
+        Assert.False(wedged.IsCompleted, "The operation was supposed to still be in flight.");
+
+        // New session. The previous one's deferral state must not follow it here.
+        device.Connect();
+        Assert.True(device.IsConnected);
+
+        await Task.Run(() => device.Send(ScpiMessageProducer.SetDioPortState(4, 1)));
+
+        await WaitForWriteAsync(transport, "DIO:PORt:STATe");
+
+        release.SetResult();
+        await wedged.WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
     // ── Qodo round 1, finding 1: the drain must cover in-flight writes ──────────────────────
 
     [Fact]

@@ -1215,14 +1215,36 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Drops any parked sends. Called when the session they belonged to is torn down: those
-        /// commands were addressed to a connection that no longer exists.
+        /// Returns deferral to its resting state: nothing parked, nothing deferring.
         /// </summary>
-        private void DiscardDeferredSends()
+        /// <remarks>
+        /// <para>
+        /// Called when a session is torn down. The parked commands were addressed to a connection
+        /// that no longer exists, and — the part that matters — the "an operation owns the device"
+        /// flag has to go with them.
+        /// </para>
+        /// <para>
+        /// Both, or neither. Dropping the backlog while leaving the flag set is the same hazard
+        /// wearing a different hat: the next session would park every <see cref="Send{T}"/> into a
+        /// fresh backlog with nothing left to drain it, and because <c>Send()</c> reports success
+        /// the moment it parks, the caller would be told the command was on its way while it
+        /// silently went nowhere. Teardown is exactly where that gets stranded, because the
+        /// operation whose completion would normally clear the flag is the one that failed to
+        /// finish inside the bounded wait.
+        /// </para>
+        /// <para>
+        /// Safe even when a wedged operation is still holding the operation lock. That operation
+        /// still owns the semaphore, so no new operation can begin before it releases, and its own
+        /// exit path runs before that release — it cannot clear the flag out from under a later
+        /// operation.
+        /// </para>
+        /// </remarks>
+        private void ResetDeferralState()
         {
             lock (_deferralGate)
             {
                 _deferredSends = null;
+                _operationInFlight = false;
             }
         }
 
@@ -1897,10 +1919,10 @@ namespace Daqifi.Core.Device
             _isInitialized = false;
             _isDisconnecting = false;
 
-            // Parked commands belonged to the session that just ended; the producer they were
-            // headed for has been torn down. Dropping them here also stops a backlog outliving its
-            // drainer, which would otherwise leave the next session deferring into it.
-            DiscardDeferredSends();
+            // Deferral goes back to its resting state with the session. Both halves — the parked
+            // commands and the "an operation owns the device" flag — or the next session defers
+            // into a backlog nobody will drain and loses messages silently.
+            ResetDeferralState();
             if (lockAcquired)
             {
                 try
