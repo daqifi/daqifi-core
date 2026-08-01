@@ -1,4 +1,5 @@
 using Daqifi.Core.Firmware.Winc;
+using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Core.Tests.Firmware.Winc;
 
@@ -250,30 +251,49 @@ public class WincFlasherTests
         // The abandoned open is no longer awaited by anyone, so if it later faults nothing would
         // observe the exception - a silently swallowed background failure (#377/#394).
         //
-        // Asserted at the seam rather than through TaskScheduler.UnobservedTaskException plus a
-        // forced GC. That route depends on collector and finalizer timing, which is exactly the
-        // kind of nondeterminism that produces a flaky CI gate, and the event is process-global so
-        // it couples this test to every other task in a parallel run. Reading Task.Exception is
-        // what marks a fault observed, so a hook receiving that exception proves the read happened
-        // - the same property, decided by the code under test instead of by the runtime.
-        var faultObserved = new TaskCompletionSource<Exception>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
+        // Asserted through the logger rather than TaskScheduler.UnobservedTaskException plus a
+        // forced GC. That route depends on collector and finalizer timing — nondeterminism that
+        // makes a flaky CI gate — and the event is process-global, coupling this test to every
+        // other task in a parallel run.
+        //
+        // Reading Task.Exception is what marks a fault observed, and production already reads it
+        // to hand to the logger. So a logger that captures the exception proves the read happened,
+        // using a seam that exists for production reasons rather than a test-only hook.
+        var logger = new CapturingLogger();
         var port = new FaultingAfterDelayPort(TimeSpan.FromMilliseconds(150));
         var inspector = new WincModuleInspector(
             (_, _) => port,
+            logger,
             baudSettleDelay: TimeSpan.Zero,
-            openTimeout: TimeSpan.FromMilliseconds(50),
-            abandonedOpenFaultObserver: ex => faultObserved.TrySetResult(ex));
+            openTimeout: TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
 
-        var observed = await faultObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var observed = await logger.FirstException.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.IsType<InvalidOperationException>(
-            Assert.IsType<AggregateException>(observed).InnerException);
+        Assert.IsType<AggregateException>(observed);
+        Assert.IsType<InvalidOperationException>(((AggregateException)observed).InnerException);
 
         // The continuation still owns disposal of the port it took over.
+        await port.Disposed.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Inspector_DisposesTheAbandonedPort_EvenWhenObservingTheFaultThrows()
+    {
+        // Releasing the handle is the whole reason the abandonment continuation exists. If a
+        // throwing logger could skip past the disposal, the abandoned port would leak and break
+        // every later open until the process exits — strictly worse than the fault being reported.
+        var port = new FaultingAfterDelayPort(TimeSpan.FromMilliseconds(150));
+        var inspector = new WincModuleInspector(
+            (_, _) => port,
+            new ThrowingLogger(),
+            baudSettleDelay: TimeSpan.Zero,
+            openTimeout: TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
+
+        // Disposal must still happen despite the observation throwing.
         await port.Disposed.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
@@ -471,6 +491,48 @@ public class WincFlasherTests
         var longPath = "/" + new string('x', 40_000);
 
         Assert.Null(Record.Exception(() => locator.IsAvailable(longPath)));
+    }
+
+    /// <summary>Captures logged exceptions, exposing the first one as an awaitable.</summary>
+    private sealed class CapturingLogger : ILogger
+    {
+        private readonly TaskCompletionSource<Exception> _firstException =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task<Exception> FirstException => _firstException.Task;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (exception is not null)
+            {
+                _firstException.TrySetResult(exception);
+            }
+        }
+    }
+
+    /// <summary>A logger that throws, standing in for a misbehaving logging pipeline.</summary>
+    private sealed class ThrowingLogger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => throw new InvalidOperationException("logger-boom");
     }
 
     /// <summary>
