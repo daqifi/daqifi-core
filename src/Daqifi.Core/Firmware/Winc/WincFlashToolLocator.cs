@@ -32,12 +32,23 @@ public sealed class WincFlashToolLocator
     }
 
     /// <summary>
-    /// Whether the flash tool is present for the given firmware path. Total by design — a probe
-    /// answers yes or no, so an unreadable tree reports <c>false</c> rather than throwing.
+    /// Whether the flash tool is present for the given firmware path.
     /// </summary>
+    /// <returns>
+    /// <c>true</c> when the tool was found; <c>false</c> for every other outcome, including a path
+    /// that does not exist, a malformed or too-long path, and a tree that exists but cannot be read.
+    /// </returns>
     /// <remarks>
-    /// Use <see cref="TryResolveToolPath"/> when a caller is about to act on the answer and needs
-    /// to tell "not there" apart from "could not look".
+    /// <para>
+    /// Total by design, and the implementation matches: a capability probe answers yes or no, and
+    /// callers reach for it precisely when they do not want to reason about filesystem failure
+    /// modes. Catching narrowly would leave a UI or a decision path crashing on a malformed string.
+    /// </para>
+    /// <para>
+    /// Because it cannot distinguish "not there" from "could not look", use
+    /// <see cref="TryResolveToolPath"/> when a caller is about to act on the answer and needs the
+    /// real reason.
+    /// </para>
     /// </remarks>
     public bool IsAvailable(string firmwarePath)
     {
@@ -45,8 +56,11 @@ public sealed class WincFlashToolLocator
         {
             return TryResolveToolPath(firmwarePath, out _);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
+            // Deliberately broad: the documented contract is that this never throws. Narrowing it
+            // to the IO family would let an ArgumentException from a malformed path escape a probe
+            // whose whole purpose is to be safe to call with anything.
             return false;
         }
     }

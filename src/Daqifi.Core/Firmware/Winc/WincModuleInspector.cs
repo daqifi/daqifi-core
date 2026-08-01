@@ -204,8 +204,21 @@ public sealed class WincModuleInspector
         {
             ownsPort = false;
             openTask.ContinueWith(
-                _ =>
+                completed =>
                 {
+                    // Observe the abandoned open's fault. Nobody awaits this task any more, so an
+                    // unobserved exception here would be exactly the silently-swallowed background
+                    // failure #377/#394 set out to eliminate. Reading Exception marks it observed;
+                    // surfacing it at Debug keeps the diagnostic without implying the caller needs
+                    // to act — they already got a TimeoutException or a cancellation.
+                    if (completed.Exception is { } fault)
+                    {
+                        _logger.LogDebug(
+                            fault,
+                            "Abandoned open of {PortName} faulted after it was given up on.",
+                            portName);
+                    }
+
                     try
                     {
                         port.Dispose();

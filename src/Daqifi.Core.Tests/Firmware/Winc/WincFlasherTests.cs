@@ -245,6 +245,48 @@ public class WincFlasherTests
     }
 
     [Fact]
+    public async Task Inspector_ObservesTheFaultOfAnAbandonedOpen()
+    {
+        // The abandoned open is no longer awaited by anyone, so if it later faults nothing would
+        // observe the exception - a silently swallowed background failure (#377/#394). The
+        // continuation must read it. Verified via the unobserved-exception hook: after forcing a
+        // GC, no unobserved fault should have been raised for our exception.
+        var unobserved = new List<Exception>();
+        void Handler(object? _, UnobservedTaskExceptionEventArgs e)
+        {
+            if (e.Exception?.InnerException is InvalidOperationException { Message: "abandoned-open-fault" })
+            {
+                unobserved.Add(e.Exception);
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            var port = new FaultingAfterDelayPort(TimeSpan.FromMilliseconds(300));
+            var inspector = new WincModuleInspector(
+                (_, _) => port,
+                baudSettleDelay: TimeSpan.Zero,
+                openTimeout: TimeSpan.FromMilliseconds(50));
+
+            await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
+
+            // Let the abandoned open run to its fault, then force finalization.
+            await Task.Delay(TimeSpan.FromMilliseconds(600));
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.Empty(unobserved);
+            Assert.True(port.WasDisposedByContinuation);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Handler;
+        }
+    }
+
+    [Fact]
     public async Task Inspector_ObservesCancellationDuringAHangingOpen()
     {
         var port = new HangingOpenPort();
@@ -412,6 +454,59 @@ public class WincFlasherTests
 
             _release.Set();
         }
+    }
+
+    [Theory]
+    [InlineData("\0invalid")]                       // embedded NUL - ArgumentException, not IO
+    [InlineData("   ")]
+    [InlineData("")]
+    public void Locator_IsAvailable_IsTotal_EvenForMalformedPaths(string path)
+    {
+        // IsAvailable is documented as never throwing. A narrow IO-only catch would let an
+        // ArgumentException from a malformed path escape a probe whose entire purpose is to be
+        // safe to call with anything.
+        var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+
+        var ex = Record.Exception(() => locator.IsAvailable(path));
+
+        Assert.Null(ex);
+        Assert.False(locator.IsAvailable(path));
+    }
+
+    [Fact]
+    public void Locator_IsAvailable_IsTotal_ForAnAbsurdlyLongPath()
+    {
+        var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
+        var longPath = "/" + new string('x', 40_000);
+
+        Assert.Null(Record.Exception(() => locator.IsAvailable(longPath)));
+    }
+
+    /// <summary>
+    /// A port whose <see cref="Open"/> blocks briefly and then throws, standing in for an open that
+    /// is abandoned on the timeout and only fails afterwards.
+    /// </summary>
+    private sealed class FaultingAfterDelayPort(TimeSpan delay) : IWincSerialPort
+    {
+        internal bool WasDisposedByContinuation { get; private set; }
+
+        public bool IsOpen => false;
+        public int BaudRate { get; set; } = 115200;
+
+        public void Open()
+        {
+            Thread.Sleep(delay);
+            throw new InvalidOperationException("abandoned-open-fault");
+        }
+
+        public void Close() { }
+        public void DiscardInBuffer() { }
+        public void Write(byte[] buffer, int offset, int count) { }
+
+        public void ReadExactly(byte[] buffer, int offset, int count, TimeSpan timeout)
+            => throw new TimeoutException("Port never opened.");
+
+        public void Dispose() => WasDisposedByContinuation = true;
     }
 
     [Fact]
