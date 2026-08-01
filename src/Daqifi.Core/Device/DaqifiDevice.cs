@@ -836,28 +836,39 @@ namespace Daqifi.Core.Device
             }
 
             var timeout = ContentionWait(onContention);
+            var isTeardown = onContention == LifecycleContention.Abandon;
             var acquired = false;
+
+            // A teardown's token is NOT allowed to govern this wait. Issue #341 defines what the
+            // token means for DisconnectAsync — it shortens the courtesy wait for an in-flight
+            // command exchange, never aborts the disconnect, and never surfaces as an
+            // OperationCanceledException — and this lock is a second, later wait that contract
+            // never covered. Passing the token here made a cancelled DisconnectAsync skip teardown
+            // altogether and report Disconnected with the transport still open and the message
+            // pumps still running; and because SemaphoreSlim throws for an already-cancelled token
+            // even when the semaphore is free, that happened on every cancelled disconnect, not
+            // just a contended one. The wait stays bounded by TeardownLockTimeout, which is what
+            // protects against a genuinely wedged holder (issue #379). The token still reaches
+            // AcquireTextExchangeLockForTeardownAsync inside the teardown, where it means what
+            // #341 says it means.
+            //
+            // The connect path is the opposite case and does honour the token: ConnectAsync is
+            // documented to be abandonable and to throw OperationCanceledException.
+            var acquireToken = isTeardown ? CancellationToken.None : cancellationToken;
 
             try
             {
-                acquired = await _lifecycleLock.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+                acquired = await _lifecycleLock.WaitAsync(timeout, acquireToken).ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {
                 await operation().ConfigureAwait(false);
                 return true;
             }
-            catch (OperationCanceledException) when (onContention == LifecycleContention.Abandon)
-            {
-                // A teardown is never abandoned by its own token — the caller asked to stop
-                // waiting for the in-flight operation, not to stop disconnecting.
-                LogAbandonedTeardown(timeout);
-                return false;
-            }
 
             if (!acquired)
             {
-                if (onContention == LifecycleContention.Abandon)
+                if (isTeardown)
                 {
                     LogAbandonedTeardown(timeout);
                     return false;

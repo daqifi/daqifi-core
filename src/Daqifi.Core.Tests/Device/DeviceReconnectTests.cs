@@ -960,6 +960,72 @@ public class DeviceReconnectTests
     }
 
     [Fact]
+    public async Task ACancelledDisconnectAsync_StillTearsTheConnectionDown()
+    {
+        // A defect that exists only in the merged result. #341 defines the token for
+        // DisconnectAsync as shortening the wait for an in-flight command exchange — the disconnect
+        // itself always completes and never throws. #379's lifecycle lock added a second wait that
+        // the token was then handed to, and a cancelled token there was treated as "abandon
+        // teardown". SemaphoreSlim throws for an already-cancelled token even when it is free, so
+        // this hit EVERY cancelled disconnect, not just a contended one: the device reported
+        // Disconnected with the transport still open and the message pumps still running.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Cancelled Teardown Device", transport);
+
+        ConnectAndInitialize(device);
+        Assert.True(transport.IsConnected);
+
+        using var alreadyCancelled = new CancellationTokenSource();
+        await alreadyCancelled.CancelAsync();
+
+        // #341's contract: this must not throw, however cancelled the token is.
+        await device.DisconnectAsync(alreadyCancelled.Token);
+
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(device.IsConnected);
+
+        // The wire-level evidence: teardown really ran rather than being skipped.
+        Assert.False(transport.IsConnected);
+
+        // And the pumps really stopped — a device whose producer was left running would still
+        // accept a send instead of refusing it.
+        Assert.Throws<DeviceNotConnectedException>(
+            () => device.Send(ScpiMessageProducer.StopStreaming));
+    }
+
+    [Fact]
+    public async Task ACancelledDisconnectAsync_StillWaitsOutAConnectInFlight()
+    {
+        // The token must not shortcut the lifecycle wait either: tearing down alongside a connect
+        // is the corruption the lock exists to prevent, so a cancelled teardown still waits for the
+        // holder — bounded by TeardownLockTimeout, which is what covers a genuinely wedged one.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Cancelled Contended Device", transport);
+
+        ConnectAndInitialize(device);
+
+        var connectGate = transport.BlockConnects();
+        transport.ConnectEntered.Reset();
+
+        var connecting = Task.Run(() => device.Connect());
+        Assert.True(
+            transport.ConnectEntered.Wait(EventTimeout),
+            "the connect never reached the transport");
+
+        ReleaseAfter(connectGate, TimeSpan.FromMilliseconds(200));
+
+        using var alreadyCancelled = new CancellationTokenSource();
+        await alreadyCancelled.CancelAsync();
+
+        await device.DisconnectAsync(alreadyCancelled.Token);
+        await connecting;
+
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(transport.IsConnected);
+        Assert.False(transport.SawConcurrentLifecycleCalls);
+    }
+
+    [Fact]
     public void ANormalConnectDisconnectCycle_ReportsNoLifecycleContention()
     {
         // The uncontended path is unchanged by the lock: nothing waits, nothing overlaps.
