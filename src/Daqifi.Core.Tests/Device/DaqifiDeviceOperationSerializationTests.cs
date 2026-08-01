@@ -22,6 +22,13 @@ public class DaqifiDeviceOperationSerializationTests
 {
     private static readonly TimeSpan DeadlockBudget = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// How long a helper thread waits for the phase of the run it is meant to race. Deliberately
+    /// shorter than the joins that follow, so "the phase never happened" fails as itself instead of
+    /// as a join timeout.
+    /// </summary>
+    private static readonly TimeSpan PhaseBoundaryWait = TimeSpan.FromSeconds(5);
+
     // ── Mutual exclusion ────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -485,9 +492,21 @@ public class DaqifiDeviceOperationSerializationTests
         using var replayStarted = new ManualResetEventSlim(false);
         transport.OnWriteStarted = () => replayStarted.Set();
 
+        // The wait's result is captured and asserted, not discarded. If the replay never starts,
+        // the competitor must not send at all — otherwise "B came last" would be satisfied by a
+        // race that never happened, and a real regression would show up as a flake instead of a
+        // failure.
+        var replayObserved = false;
         var competitor = new Thread(() =>
         {
-            replayStarted.Wait(DeadlockBudget);
+            // Shorter than the Join below, so a phase boundary that never fires surfaces as the
+            // specific "replay never started" assertion rather than an opaque join timeout.
+            replayObserved = replayStarted.Wait(PhaseBoundaryWait);
+            if (!replayObserved)
+            {
+                return;
+            }
+
             device.Send(new TaggedBinaryMessage("B"));
         })
         {
@@ -499,12 +518,97 @@ public class DaqifiDeviceOperationSerializationTests
         release.SetResult();
 
         await operation.WaitAsync(DeadlockBudget);
-        Assert.True(competitor.Join(TimeSpan.FromSeconds(10)));
+        Assert.True(competitor.Join(TimeSpan.FromSeconds(10)), "The competing sender never finished.");
+
+        // Join established the happens-before, so this read is safe.
+        Assert.True(
+            replayObserved,
+            "The replay never started, so the competitor never raced it and the ordering assertion below would be vacuous.");
 
         await WaitForWriteAsync(transport, "B");
 
         var order = transport.Writes.Where(w => w.Length <= 2).ToList();
         Assert.Equal(new[] { "A1", "A2", "A3", "B" }, order);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_DoesNotBlockWhileALargeBacklogIsBeingFlushed()
+    {
+        // The flush is bounded so one operation cannot be kept from returning by a fast sender.
+        // That bound must NOT be paid for by finishing the last stretch under the deferral gate:
+        // Send() takes that same gate, so it would then block on whatever blocking I/O the replay
+        // is doing — losing the non-blocking guarantee that is the whole reason deferral was
+        // chosen over making Send() wait.
+        //
+        // The backlog here is deliberately larger than the per-flush bound, so the probe lands in
+        // the stretch that runs after the bound is hit.
+        using var transport = new GatedWriteTransport(writeDelay: TimeSpan.FromMilliseconds(10));
+        using var device = new DaqifiDevice("Backlog Device", transport);
+        device.Connect();
+        transport.ReleaseWrites();
+
+        const int backlog = 120;
+        const int probeAfterWrites = 80; // comfortably past the 64-message per-flush bound
+
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < backlog; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i}"));
+            }
+        });
+
+        using var deepIntoFlush = new ManualResetEventSlim(false);
+        var writes = 0;
+        transport.OnWriteStarted = () =>
+        {
+            if (Interlocked.Increment(ref writes) >= probeAfterWrites)
+            {
+                deepIntoFlush.Set();
+            }
+        };
+
+        var probeElapsed = TimeSpan.MaxValue;
+        var probeRan = false;
+        var probe = new Thread(() =>
+        {
+            probeRan = deepIntoFlush.Wait(PhaseBoundaryWait);
+            if (!probeRan)
+            {
+                return;
+            }
+
+            var sw = Stopwatch.StartNew();
+            device.Send(new TaggedBinaryMessage("probe"));
+            sw.Stop();
+            probeElapsed = sw.Elapsed;
+        })
+        {
+            IsBackground = true,
+        };
+        probe.Start();
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+        Assert.True(probe.Join(TimeSpan.FromSeconds(30)), "The probing sender never finished.");
+
+        Assert.True(probeRan, "The flush never reached the probe point, so nothing was measured.");
+        Assert.True(
+            probeElapsed < TimeSpan.FromMilliseconds(150),
+            $"Send() blocked for {probeElapsed.TotalMilliseconds:0}ms during the flush; it must never wait on replay I/O.");
 
         device.Disconnect();
     }

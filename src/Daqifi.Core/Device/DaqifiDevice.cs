@@ -942,10 +942,16 @@ namespace Daqifi.Core.Device
         private bool _operationInFlight;
 
         /// <summary>
-        /// Sends parked by <see cref="Send{T}"/> because another flow held the operation lock.
-        /// Flushed, in order, by that flow on its way out.
+        /// The backlog: sends parked by <see cref="Send{T}"/> because another flow held the
+        /// operation lock. Replayed, in order, by that flow on its way out.
         /// </summary>
-        private List<Action>? _deferredSends;
+        /// <remarks>
+        /// Non-null means "a backlog exists", and that is itself a reason to keep deferring — a
+        /// message sent straight out while this is draining would overtake messages parked before
+        /// it. It therefore stays non-null (and may be empty) for the whole drain, and is nulled
+        /// only in the same locked moment the drain observes it empty.
+        /// </remarks>
+        private Queue<Action>? _deferredSends;
 
         /// <summary>
         /// Serializes writes on the producer-less path, where <see cref="Send{T}"/> writes to the
@@ -1077,10 +1083,16 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// How many times <see cref="FlushDeferredSends"/> will replay a fresh batch before it
-        /// stops racing the senders and finishes holding <see cref="_deferralGate"/>.
+        /// How many parked messages one operation will replay on its way out before handing the
+        /// rest to a background flush.
         /// </summary>
-        private const int MaxFlushRounds = 8;
+        /// <remarks>
+        /// A bound is needed because the operation holding the device is the one doing the
+        /// replaying, and senders can refill the backlog while it works — without a bound, a fast
+        /// enough sender would keep that operation from ever returning, with the operation lock
+        /// held and everything else queued behind it.
+        /// </remarks>
+        private const int MaxDeferredSendsPerFlush = 64;
 
         /// <summary>
         /// Sends everything parked while the operation ran, in order, and only then stops deferring.
@@ -1097,13 +1109,20 @@ namespace Daqifi.Core.Device
         /// ordering this mechanism exists to keep.
         /// </para>
         /// <para>
-        /// The replay itself runs <i>outside</i> the gate, which is what keeps <see cref="Send{T}"/>
-        /// non-blocking — the whole reason deferral was chosen over making it wait. The cost is that
-        /// a send can be parked while a replay is running, so this drains in rounds until a round
-        /// finds the list empty and can stop deferring in the same breath it observes that. A sender
-        /// fast enough to refill the list every round would loop forever, so after
-        /// <see cref="MaxFlushRounds"/> the last round finishes under the gate: senders block for
-        /// one final replay instead of this spinning for as long as they keep sending.
+        /// Every replay runs <i>outside</i> <see cref="_deferralGate"/> — always, with no exception
+        /// for a final round. A replayed send can be a blocking stream write, and
+        /// <see cref="Send{T}"/> takes that same gate, so replaying under it would make
+        /// <c>Send()</c> block on I/O: the exact property deferral was chosen over waiting to
+        /// preserve. Messages are therefore taken one at a time, and the backlog stays non-null
+        /// while the drain runs, which is what keeps a concurrent send parking behind it instead of
+        /// overtaking it.
+        /// </para>
+        /// <para>
+        /// Bounded by <see cref="MaxDeferredSendsPerFlush"/> so a fast sender cannot keep this
+        /// operation from returning. Past that the rest is handed to a background flush, which takes
+        /// the operation lock exactly as any operation does — so it can never replay into somebody
+        /// else's exchange — and drains the same way. The backlog stays non-null across the handoff,
+        /// so ordering survives it.
         /// </para>
         /// <para>
         /// A parked send that fails is logged and dropped rather than thrown: the caller was told
@@ -1114,56 +1133,96 @@ namespace Daqifi.Core.Device
         /// </remarks>
         private void FlushDeferredSends()
         {
-            for (var round = 0; round < MaxFlushRounds; round++)
+            for (var sent = 0; sent < MaxDeferredSendsPerFlush; sent++)
             {
-                List<Action>? parked;
+                Action next;
                 lock (_deferralGate)
                 {
-                    parked = _deferredSends;
-                    _deferredSends = null;
-
-                    if (parked == null)
+                    if (_deferredSends == null || _deferredSends.Count == 0)
                     {
-                        // Nothing arrived while the previous round was replaying. Deferral stops
-                        // here, atomically with that observation, so no message can be parked into
-                        // a list nobody will drain.
+                        // Drained. Deferral stops here, in the same locked moment that emptiness is
+                        // observed, so no message can be parked into a backlog nobody will drain.
+                        _deferredSends = null;
                         _operationInFlight = false;
                         return;
                     }
+
+                    next = _deferredSends.Dequeue();
                 }
 
-                ReplayDeferredSends(parked);
+                // Outside the gate on purpose: this can block on a stream write, and Send() takes
+                // the same gate. The backlog is still non-null, so a send arriving now parks behind
+                // what is being replayed rather than overtaking it.
+                ReplayDeferredSend(next);
             }
 
-            lock (_deferralGate)
-            {
-                _operationInFlight = false;
-
-                var remaining = _deferredSends;
-                _deferredSends = null;
-                if (remaining != null)
-                {
-                    ReplayDeferredSends(remaining);
-                }
-            }
+            HandOffRemainingDrain();
         }
 
-        /// <summary>Sends one batch of parked messages, in order, never throwing.</summary>
-        private void ReplayDeferredSends(List<Action> parked)
+        /// <summary>
+        /// Hands an unfinished backlog to a background flush so the current operation can return.
+        /// </summary>
+        /// <remarks>
+        /// An empty exclusive operation <i>is</i> a flush: it takes the operation lock, and its own
+        /// exit path drains the backlog exactly as this one did. Going through the lock is the point
+        /// — a bare background replay could write into a text exchange that started in the meantime.
+        /// <see cref="_operationInFlight"/> is deliberately left set and the backlog left non-null,
+        /// so sends keep deferring across the handoff and ordering holds; whichever operation next
+        /// reaches its exit path (this background one, or a real one that got the lock first) clears
+        /// them.
+        /// </remarks>
+        private void HandOffRemainingDrain()
         {
-            foreach (var send in parked)
+            _ = Task.Run(async () =>
             {
                 try
                 {
-                    send();
+                    await RunExclusiveAsync(_ => Task.CompletedTask).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
+                    // The only way in is a disposed device, where nothing else can be running and
+                    // these sends can never reach anything. Drop the backlog rather than leave
+                    // Send() deferring into one nobody will drain.
+                    lock (_deferralGate)
+                    {
+                        _deferredSends = null;
+                        _operationInFlight = false;
+                    }
+
                     SafeLog(() => _logger.LogWarning(
                         ex,
-                        "A message deferred while an exclusive operation was running could not be "
-                        + "sent afterwards; it was dropped."));
+                        "Messages deferred while an exclusive operation was running were dropped: "
+                        + "the device went away before they could be sent."));
                 }
+            });
+        }
+
+        /// <summary>Sends one parked message, never throwing.</summary>
+        private void ReplayDeferredSend(Action send)
+        {
+            try
+            {
+                send();
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _logger.LogWarning(
+                    ex,
+                    "A message deferred while an exclusive operation was running could not be "
+                    + "sent afterwards; it was dropped."));
+            }
+        }
+
+        /// <summary>
+        /// Drops any parked sends. Called when the session they belonged to is torn down: those
+        /// commands were addressed to a connection that no longer exists.
+        /// </summary>
+        private void DiscardDeferredSends()
+        {
+            lock (_deferralGate)
+            {
+                _deferredSends = null;
             }
         }
 
@@ -1180,11 +1239,22 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Parks a send if another flow currently owns the device, and reports whether it did.
+        /// Parks a send if it must not go out yet, and reports whether it did.
         /// </summary>
         /// <remarks>
+        /// <para>
+        /// Two reasons to park. An operation owns the device, so writing now would land inside its
+        /// exchange; or a backlog is still being replayed, so writing now would overtake messages
+        /// parked before this one.
+        /// </para>
+        /// <para>
         /// The flow that owns the lock is never deferred — those are the operation's own commands,
         /// and parking them would leave the operation waiting for itself.
+        /// </para>
+        /// <para>
+        /// Only ever appends: this holds the gate for a queue insert and nothing else, which is what
+        /// lets <see cref="Send{T}"/> promise it will not block.
+        /// </para>
         /// </remarks>
         private bool TryDeferSend<T>(IOutboundMessage<T> message)
         {
@@ -1195,12 +1265,12 @@ namespace Daqifi.Core.Device
 
             lock (_deferralGate)
             {
-                if (!_operationInFlight)
+                if (!_operationInFlight && _deferredSends == null)
                 {
                     return false;
                 }
 
-                (_deferredSends ??= new List<Action>()).Add(() => SendNow(message));
+                (_deferredSends ??= new Queue<Action>()).Enqueue(() => SendNow(message));
                 return true;
             }
         }
@@ -1826,6 +1896,11 @@ namespace Daqifi.Core.Device
             State = DeviceState.Disconnected;
             _isInitialized = false;
             _isDisconnecting = false;
+
+            // Parked commands belonged to the session that just ended; the producer they were
+            // headed for has been torn down. Dropping them here also stops a backlog outliving its
+            // drainer, which would otherwise leave the next session deferring into it.
+            DiscardDeferredSends();
             if (lockAcquired)
             {
                 try
