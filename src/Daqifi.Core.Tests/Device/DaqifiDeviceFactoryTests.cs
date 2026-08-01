@@ -20,6 +20,9 @@ public class DaqifiDeviceFactoryTests
         Assert.Equal("DAQiFi Device", options.DeviceName);
         Assert.Null(options.ConnectionRetry);
         Assert.True(options.InitializeDevice);
+        // Connecting takes control of the device (and stops any running stream) unless
+        // explicitly opted out of — the historical behavior (#385).
+        Assert.False(options.PreserveActiveStream);
     }
 
     [Fact]
@@ -32,6 +35,26 @@ public class DaqifiDeviceFactoryTests
         Assert.Equal("DAQiFi Device", options.DeviceName);
         Assert.Null(options.ConnectionRetry);
         Assert.True(options.InitializeDevice);
+        Assert.False(options.PreserveActiveStream);
+    }
+
+    [Fact]
+    public void DeviceConnectionOptions_Observing_PreservesActiveStream()
+    {
+        // Act
+        var options = DeviceConnectionOptions.Observing;
+
+        // Assert — the opt-in preset still initializes, it just does so non-disruptively
+        Assert.True(options.PreserveActiveStream);
+        Assert.True(options.InitializeDevice);
+    }
+
+    [Fact]
+    public void DeviceConnectionOptions_FastAndResilient_DoNotPreserveActiveStream()
+    {
+        // Assert — the existing presets keep the historical take-control behavior
+        Assert.False(DeviceConnectionOptions.Fast.PreserveActiveStream);
+        Assert.False(DeviceConnectionOptions.Resilient.PreserveActiveStream);
     }
 
     [Fact]

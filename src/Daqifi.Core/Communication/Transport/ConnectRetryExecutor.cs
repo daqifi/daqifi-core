@@ -18,7 +18,8 @@ internal static class ConnectRetryExecutor
     /// <param name="retryOptions">Retry configuration, or null for a single no-retry attempt.</param>
     /// <param name="connectAttempt">
     /// Opens the transport handle. Receives the resolved options so it can honor the
-    /// connection timeout. Throwing signals a failed attempt.
+    /// connection timeout, and the caller's cancellation token so it can abandon an
+    /// attempt already in flight. Throwing signals a failed attempt.
     /// </param>
     /// <param name="onAttemptFailed">
     /// Disposes/nulls the transport handle after a failed attempt, before the next
@@ -29,33 +30,58 @@ internal static class ConnectRetryExecutor
     /// <c>(false, error)</c> on each failure (a retry-in-progress exception between
     /// attempts, the real exception on the terminal failure).
     /// </param>
+    /// <param name="cancellationToken">
+    /// Observed between attempts, while waiting out a backoff delay, and by
+    /// <paramref name="connectAttempt"/> itself. A cancellation is never treated as a retryable
+    /// attempt failure: the loop stops immediately and the
+    /// <see cref="OperationCanceledException"/> is surfaced to the caller, which is what lets an
+    /// auto-reconnect loop be torn down promptly rather than after the remaining attempts.
+    /// </param>
+    /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     public static async Task ExecuteAsync(
         ConnectionRetryOptions? retryOptions,
-        Func<ConnectionRetryOptions, Task> connectAttempt,
+        Func<ConnectionRetryOptions, CancellationToken, Task> connectAttempt,
         Action onAttemptFailed,
-        Action<bool, Exception?> onStatusChanged)
+        Action<bool, Exception?> onStatusChanged,
+        CancellationToken cancellationToken = default)
     {
         var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
         var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
         Exception? lastException = null;
 
+        cancellationToken.ThrowIfCancellationRequested();
+
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             try
             {
+                // Checked every iteration, not just before the delay: a retry policy configured
+                // with no backoff skips the delay entirely, and without this a cancellation that
+                // arrived during the previous attempt would be answered with another dial.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 // Calculate delay for this attempt
                 if (attempt > 1)
                 {
                     var delay = options.CalculateDelay(attempt);
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay);
+                        await Task.Delay(delay, cancellationToken);
                     }
                 }
 
-                await connectAttempt(options);
+                await connectAttempt(options, cancellationToken);
                 onStatusChanged(true, null);
                 return; // Success!
+            }
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            {
+                // The caller gave up on this connect. Clean up the half-built handle exactly as a
+                // failed attempt would, report the transport as disconnected, and stop — retrying
+                // after a cancellation would keep the device dialling long after the caller left.
+                onAttemptFailed();
+                onStatusChanged(false, ex);
+                throw;
             }
             catch (Exception ex)
             {

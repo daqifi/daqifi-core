@@ -14,6 +14,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -25,7 +26,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that can be connected to and communicated with.
     /// This is the base implementation of the IDevice interface.
     /// </summary>
-    public class DaqifiDevice : IDevice, IDisposable
+    public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable
     {
         /// <summary>
         /// Gets the name of the device.
@@ -312,6 +313,45 @@ namespace Daqifi.Core.Device
         /// </summary>
         public DeviceState State { get; private set; } = DeviceState.Disconnected;
 
+        /// <summary>
+        /// When <c>true</c>, <see cref="InitializeAsync"/> omits the initialization commands that
+        /// would halt or re-route a stream the device is already running, so connecting does not
+        /// disturb a session started elsewhere. Default is <c>false</c> — the historical behavior,
+        /// where connecting takes control of the device.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Streaming is a single global device state: one acquisition at one rate, delivered to one
+        /// interface. The default initialization sequence stops that stream, sets the device's power
+        /// state, fixes the stream format, and (over USB) routes the stream to this connection. That
+        /// is correct when this session owns the device — it also clears a stream orphaned by a
+        /// previously crashed session — but a <em>second</em> session running it silently ends the
+        /// first session's acquisition, with no error surfaced to either side.
+        /// </para>
+        /// <para>
+        /// With this set, initialization sends only <c>SYSTem:ECHO -1</c> (so replies to this
+        /// connection can be parsed) followed by the read-only identity and capability queries.
+        /// Skipped are <c>SYSTem:StopStreamData</c>, <c>SYSTem:POWer:STATe 1</c>,
+        /// <c>SYSTem:STReam:FORmat 0</c>, and the USB <c>SYSTem:STReam:INTerface</c> routing step.
+        /// </para>
+        /// <para>
+        /// The resulting session is fully usable for status, metadata, channel inspection, and any
+        /// command the caller chooses to send. It is <em>not</em> configured to stream: the device's
+        /// stream format and destination interface are left exactly as the other session left them,
+        /// and stream frames continue to go wherever they were already going. A session that later
+        /// wants to stream itself must take control of the device, which necessarily stops whatever
+        /// the other session was doing.
+        /// </para>
+        /// <para>
+        /// Read once, when <see cref="InitializeAsync"/> runs; changing it afterwards has no effect.
+        /// This guards only against this library's own connect sequence — it is not device-side
+        /// arbitration, and two processes can still fight over one unit. Within a single process,
+        /// prefer <see cref="DaqifiDeviceRegistry"/>, which refuses to open the same physical unit
+        /// twice.
+        /// </para>
+        /// </remarks>
+        public bool PreserveActiveStream { get; set; }
+
         private ConnectionStatus _status;
 
         /// <summary>
@@ -335,7 +375,15 @@ namespace Daqifi.Core.Device
         protected IStreamTransport? Transport => _transport;
 
         private IProtocolHandler? _protocolHandler;
+
+        // "Teardown has finished" — read by ExecuteTextCommandCoreAsync to reject work on a dead
+        // device. Distinct from _disposeClaimed below, which marks teardown as *started*.
         private bool _disposed;
+
+        // Disposal gate, 0 until a caller claims teardown. Interlocked rather than a bool because
+        // Dispose() and DisposeAsync() are documented as interchangeable and DisposeAsync spends
+        // real awaited time inside the window a plain flag would leave open. See TryClaimDisposal.
+        private int _disposeClaimed;
         private bool _isDisconnecting;
         private bool _isInitialized;
         private readonly List<IChannel> _channels = new();
@@ -393,7 +441,15 @@ namespace Daqifi.Core.Device
         // Environment.CurrentManagedThreadId capture wouldn't work — the
         // value seen before await may not match the value seen after.
         private readonly AsyncLocal<bool> _isInsideTextExchange = new();
-        
+
+        /// <summary>
+        /// How long <see cref="Disconnect"/> / <see cref="DisconnectAsync"/> wait to acquire
+        /// <c>_textExchangeLock</c> before tearing down anyway. See the remarks on
+        /// <see cref="Disconnect"/> for how the budget is derived.
+        /// </summary>
+        private static readonly TimeSpan TextExchangeTeardownWait = TimeSpan.FromSeconds(10);
+
+
         /// <summary>
         /// Gets the current connection status of the device.
         /// </summary>
@@ -500,7 +556,25 @@ namespace Daqifi.Core.Device
         /// Collapses repeated background failures so a systematic fault stays visible without
         /// storming <see cref="ErrorOccurred"/>. See that event for the documented policy.
         /// </summary>
-        private readonly DeviceErrorThrottle _errorThrottle = new();
+        private DeviceErrorThrottle _errorThrottle = new();
+
+        /// <summary>
+        /// Test seam: replaces the background-error throttle, so a test can widen the collapsing
+        /// window far beyond the default instead of racing it. Never called in production.
+        /// </summary>
+        /// <remarks>
+        /// A test that wants to prove a reconnect clears the throttle otherwise has to observe two
+        /// errors inside the default five-second window — which makes the result depend on how
+        /// quickly the machine happened to run, in both directions: too slow and the second error
+        /// is due anyway (the test passes without proving anything), tighten the bound and a loaded
+        /// CI box fails a correct implementation. Widening the window removes the clock from the
+        /// question entirely. Call before connecting; the field is read from background threads.
+        /// </remarks>
+        /// <param name="throttle">The throttle to use.</param>
+        internal void SetErrorThrottleForTesting(DeviceErrorThrottle throttle)
+        {
+            _errorThrottle = throttle ?? throw new ArgumentNullException(nameof(throttle));
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiDevice"/> class.
@@ -551,8 +625,11 @@ namespace Daqifi.Core.Device
             _transport.StatusChanged += OnTransportStatusChanged;
         }
 
+        #region Lifecycle serialization (issue #379)
+
         /// <summary>
-        /// Serializes <see cref="ConnectCore"/> against <see cref="DisconnectCore"/>.
+        /// Serializes connect against disconnect, on both the synchronous and the asynchronous
+        /// paths.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -572,13 +649,26 @@ namespace Daqifi.Core.Device
         /// what any public method does when uncontended.
         /// </para>
         /// <para>
-        /// A <see cref="Monitor"/> rather than a semaphore because it is reentrant: both methods
-        /// raise <see cref="StatusChanged"/> from inside their critical section, and a consumer
-        /// handler calling <see cref="Disconnect"/> from there is re-entry on the same thread. That
-        /// runs nested today with no lock at all, and must keep working rather than deadlocking.
+        /// A semaphore rather than a monitor because <see cref="ConnectAsync"/> and
+        /// <see cref="DisconnectAsync"/> hold it across <c>await</c>, which a monitor cannot do —
+        /// its continuation may resume on a different thread. Semaphores are not reentrant, so
+        /// re-entry is tracked separately by <see cref="_isInsideLifecycleOperation"/>.
         /// </para>
         /// </remarks>
-        private readonly object _lifecycleLock = new();
+        private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+
+        /// <summary>
+        /// True while the current logical flow already holds <see cref="_lifecycleLock"/>.
+        /// </summary>
+        /// <remarks>
+        /// Both connect and disconnect raise <see cref="StatusChanged"/> from inside their critical
+        /// section, and a consumer handler calling <see cref="Disconnect"/> from there is re-entry
+        /// on the same flow — which runs nested today with no lock at all and must keep working
+        /// rather than deadlock against a non-reentrant semaphore. <see cref="AsyncLocal{T}"/>
+        /// rather than a thread id so it survives an <c>await</c> resuming on another thread, the
+        /// same technique <c>_isInsideTextExchange</c> already uses in this class.
+        /// </remarks>
+        private readonly AsyncLocal<bool> _isInsideLifecycleOperation = new();
 
         /// <summary>
         /// How long <see cref="Connect"/> waits for a lifecycle operation already in flight before
@@ -617,7 +707,7 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, never alongside another.
+        /// The wait a contention policy allows, and what to do when it runs out.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -636,38 +726,50 @@ namespace Daqifi.Core.Device
         /// <para>
         /// <b><see cref="Disconnect"/> abandons.</b> It waits <see cref="TeardownLockTimeout"/> —
         /// far longer, because a teardown that gives up early is a teardown that did not happen —
-        /// and then returns <c>false</c> without running, leaving the holder alone. It must not
-        /// throw (<c>Dispose</c> depends on it) and must not run alongside (that is the corruption
-        /// above), so reporting that nothing was torn down is what is left.
-        /// </para>
-        /// <para>
-        /// An earlier revision waited here <i>without</i> a bound, on the reasoning that every
-        /// possible holder is itself a bounded lifecycle operation. That reasoning was wrong:
-        /// <c>SerialPort.Open</c> is called synchronously with no timeout and can wedge in
-        /// uncancellable native I/O — a hazard this codebase already knows well enough to have
-        /// built a process-wide port quarantine around it in
-        /// <see cref="Discovery.SerialDeviceFinder"/>. An unbounded wait inherits that hang and
-        /// turns <c>Dispose</c> into a permanent block. The house answer to uncancellable native
-        /// I/O here is to abandon the stuck operation rather than wait on it, which is what this
-        /// now does; the abandoned holder still cleans up after itself, because
-        /// <see cref="_callerWantsDisconnected"/> is set before the wait begins and
-        /// <see cref="AbandonIfSuperseded"/> tears down whatever it eventually built.
-        /// </para>
-        /// <para>
-        /// Neither policy can deadlock: nothing that holds another lock in this class ever waits on
-        /// a lifecycle operation (<c>_textExchangeLock</c> is taken <i>inside</i> this one, never
-        /// the other way round), and <see cref="Monitor"/> grants re-entry immediately to a thread
-        /// that already holds the lock — which is what keeps a handler calling <c>Disconnect</c>
-        /// from inside a <see cref="StatusChanged"/> raise working rather than deadlocking against
-        /// itself.
-        /// </para>
-        /// <para>
-        /// An even earlier revision logged a warning and ran the operation anyway on timeout,
-        /// copying the bargain <c>_textExchangeLock</c> strikes. That was the wrong precedent to
-        /// borrow: a text-exchange timeout degrades a single command, whereas this one corrupts the
-        /// stream for the whole session, which is not something to log and continue into.
+        /// and then reports that it did not run, leaving the holder alone. It must not throw
+        /// (<c>Dispose</c> depends on it) and must not run alongside (that is the corruption
+        /// above). An unbounded wait is not an option either: <c>SerialPort.Open</c> is called
+        /// synchronously with no timeout and can wedge in uncancellable native I/O — a hazard this
+        /// codebase already knows well enough to have built a process-wide port quarantine around
+        /// it in <see cref="Discovery.SerialDeviceFinder"/> — so waiting on it forever would turn
+        /// <c>Dispose</c> into a permanent block. Abandoning the stuck operation is the house
+        /// answer to uncancellable native I/O here.
         /// </para>
         /// </remarks>
+        private TimeSpan ContentionWait(LifecycleContention onContention) =>
+            onContention == LifecycleContention.Abandon ? TeardownLockTimeout : LifecycleLockTimeout;
+
+        /// <summary>
+        /// Builds the failure for a connect that could not have the lock to itself.
+        /// </summary>
+        private TimeoutException LifecycleTimeout(TimeSpan timeout)
+        {
+            SafeLog(() => _logger.LogError(
+                "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
+                + "within {TimeoutSeconds}s; refusing to connect alongside the operation in flight.",
+                Name,
+                timeout.TotalSeconds));
+
+            return new TimeoutException(
+                $"Device '{Name}' could not start connecting within "
+                + $"{timeout.TotalSeconds:0.#}s because another connect or disconnect "
+                + "was still in progress. Nothing was opened; retry once it has finished.");
+        }
+
+        /// <summary>Reports a teardown that gave up waiting for a stuck lifecycle operation.</summary>
+        private void LogAbandonedTeardown(TimeSpan timeout) =>
+            SafeLog(() => _logger.LogError(
+                "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
+                + "within {TimeoutSeconds}s, so nothing was torn down. A connect is most likely "
+                + "wedged in uncancellable native I/O; it will release its own session when it "
+                + "returns.",
+                Name,
+                timeout.TotalSeconds));
+
+        /// <summary>
+        /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, never alongside another.
+        /// See <see cref="ContentionWait"/> for the per-policy semantics.
+        /// </summary>
         /// <returns><c>true</c> if the operation ran; <c>false</c> if the wait was abandoned.</returns>
         /// <exception cref="TimeoutException">
         /// Thrown when <paramref name="onContention"/> is <see cref="LifecycleContention.Fail"/> and
@@ -675,70 +777,139 @@ namespace Daqifi.Core.Device
         /// </exception>
         private bool RunLifecycleExclusive(Action operation, LifecycleContention onContention)
         {
-            var isTeardown = onContention == LifecycleContention.Abandon;
-            var timeout = isTeardown ? TeardownLockTimeout : LifecycleLockTimeout;
+            // Re-entry from inside the critical section (a StatusChanged handler calling back in)
+            // proceeds without acquiring, exactly as a reentrant monitor would.
+            if (_isInsideLifecycleOperation.Value)
+            {
+                operation();
+                return true;
+            }
+
+            var timeout = ContentionWait(onContention);
             var acquired = false;
 
             try
             {
-                // The ref overload is the documented-safe pattern: it sets the flag as part of
-                // taking the lock, so the finally below can never miss a release.
-                Monitor.TryEnter(_lifecycleLock, timeout, ref acquired);
+                acquired = _lifecycleLock.Wait(timeout);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposed underneath us; there is nothing left to serialize against.
+                operation();
+                return true;
+            }
 
-                if (!acquired)
+            if (!acquired)
+            {
+                if (onContention == LifecycleContention.Abandon)
                 {
-                    if (isTeardown)
-                    {
-                        SafeLog(() => _logger.LogError(
-                            "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
-                            + "within {TimeoutSeconds}s, so nothing was torn down. A connect is most likely "
-                            + "wedged in uncancellable native I/O; it will release its own session when it "
-                            + "returns.",
-                            Name,
-                            timeout.TotalSeconds));
-
-                        return false;
-                    }
-
-                    SafeLog(() => _logger.LogError(
-                        "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
-                        + "within {TimeoutSeconds}s; refusing to connect alongside the operation in flight.",
-                        Name,
-                        timeout.TotalSeconds));
-
-                    throw new TimeoutException(
-                        $"Device '{Name}' could not start connecting within "
-                        + $"{timeout.TotalSeconds:0.#}s because another connect or disconnect "
-                        + "was still in progress. Nothing was opened; retry once it has finished.");
+                    LogAbandonedTeardown(timeout);
+                    return false;
                 }
 
+                throw LifecycleTimeout(timeout);
+            }
+
+            _isInsideLifecycleOperation.Value = true;
+            try
+            {
                 operation();
                 return true;
             }
             finally
             {
-                if (acquired)
-                {
-                    Monitor.Exit(_lifecycleLock);
-                }
+                _isInsideLifecycleOperation.Value = false;
+                ReleaseLifecycleLock();
             }
         }
+
+        /// <inheritdoc cref="RunLifecycleExclusive"/>
+        private async Task<bool> RunLifecycleExclusiveAsync(
+            Func<Task> operation,
+            LifecycleContention onContention,
+            CancellationToken cancellationToken)
+        {
+            if (_isInsideLifecycleOperation.Value)
+            {
+                await operation().ConfigureAwait(false);
+                return true;
+            }
+
+            var timeout = ContentionWait(onContention);
+            var acquired = false;
+
+            try
+            {
+                acquired = await _lifecycleLock.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                await operation().ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (onContention == LifecycleContention.Abandon)
+            {
+                // A teardown is never abandoned by its own token — the caller asked to stop
+                // waiting for the in-flight operation, not to stop disconnecting.
+                LogAbandonedTeardown(timeout);
+                return false;
+            }
+
+            if (!acquired)
+            {
+                if (onContention == LifecycleContention.Abandon)
+                {
+                    LogAbandonedTeardown(timeout);
+                    return false;
+                }
+
+                throw LifecycleTimeout(timeout);
+            }
+
+            _isInsideLifecycleOperation.Value = true;
+            try
+            {
+                await operation().ConfigureAwait(false);
+                return true;
+            }
+            finally
+            {
+                _isInsideLifecycleOperation.Value = false;
+                ReleaseLifecycleLock();
+            }
+        }
+
+        private void ReleaseLifecycleLock()
+        {
+            try
+            {
+                _lifecycleLock.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Raced a Dispose that already tore the semaphore down.
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// Connects to the device.
         /// </summary>
         /// <remarks>
         /// <para>
-        /// A caller-issued connect supersedes any automatic reconnect in progress: the loop is
-        /// cancelled and unwinds without touching the session this call establishes.
+        /// Opens the transport on the calling thread. <see cref="ConnectAsync"/> is the
+        /// non-blocking, cancellable equivalent and is preferred on a UI thread; this overload is
+        /// kept for existing callers and behaves exactly as it always has.
         /// </para>
         /// <para>
-        /// Cancelling the loop does not stop it instantly — an attempt already inside a blocking
-        /// transport connect runs to completion — so this waits for any connect or disconnect in
-        /// flight rather than running alongside it. If one is still in flight after
-        /// <see cref="LifecycleLockTimeout"/>, this throws rather than opening a connection
-        /// alongside it: nothing has been opened and no state has changed, so the call is safe to
-        /// retry. See <see cref="_lifecycleLock"/> for why running anyway is not an option.
+        /// A caller-issued connect supersedes any automatic reconnect in progress: the loop is
+        /// cancelled and unwinds without touching the session this call establishes. Cancelling it
+        /// does not stop it instantly — an attempt already inside a blocking transport connect runs
+        /// to completion — so this waits for any connect or disconnect in flight rather than
+        /// running alongside it, and throws if one is still in flight after
+        /// <see cref="LifecycleLockTimeout"/>. Nothing has been opened in that case, so the call is
+        /// safe to retry.
         /// </para>
         /// </remarks>
         /// <exception cref="TimeoutException">
@@ -754,99 +925,243 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// The body of <see cref="Connect"/>, without the reconnect-supersede step — the reconnect
-        /// loop calls this so it does not cancel itself. Serialized against
-        /// <see cref="DisconnectCore"/> so the two can never drive the transport at once.
+        /// loop calls this so it does not cancel itself.
+        /// </summary>
+        private void ConnectCore()
+        {
+            RunLifecycleExclusive(ConnectCoreUnsynchronized, LifecycleContention.Fail);
+            HonourTeardownRaisedDuringConnect();
+        }
+
+        /// <inheritdoc cref="ConnectCore"/>
+        private async Task ConnectCoreAsync(CancellationToken cancellationToken)
+        {
+            await RunLifecycleExclusiveAsync(
+                () => ConnectCoreUnsynchronizedAsync(cancellationToken),
+                LifecycleContention.Fail,
+                cancellationToken).ConfigureAwait(false);
+
+            HonourTeardownRaisedDuringConnect();
+        }
+
+        /// <summary>
+        /// Closes a connection this call established if a teardown landed while it was in flight.
         /// </summary>
         /// <remarks>
-        /// Ends by honouring a teardown that landed while the connect was in flight. That matters
-        /// most in the one case where the caller's <see cref="Disconnect"/> could not do it itself:
-        /// a connect wedged in uncancellable native I/O holds the lifecycle lock long enough for
-        /// the teardown to abandon its wait, so the teardown returns having deliberately left the
-        /// transport alone — and whatever this connect goes on to build would otherwise be live,
-        /// with a reader running, after the caller was told the device was disconnected.
         /// <para>
-        /// The check lives here rather than in <see cref="Connect"/> because both entry points need
-        /// it. <see cref="AbandonIfSuperseded"/> covers the same ground for the reconnect loop, but
-        /// it is part of the loop and never runs for a caller's own connect.
+        /// Matters in the one case where the caller's <see cref="Disconnect"/> could not do it
+        /// itself: a connect wedged in uncancellable native I/O holds the lifecycle lock long enough
+        /// for the teardown to abandon its wait, so the teardown returns having deliberately left
+        /// the transport alone — and whatever this connect goes on to build would otherwise be live,
+        /// with a reader running, after the caller was told the device was disconnected.
+        /// </para>
+        /// <para>
+        /// Shared by both connect entry points rather than living in the reconnect loop:
+        /// <see cref="AbandonIfSuperseded"/> covers the same ground for a reconnect attempt, but it
+        /// is part of the loop and never runs for a caller's own connect.
         /// </para>
         /// <para>
         /// The ordering is not a race: <see cref="Disconnect"/> sets the flag <i>before</i> it
         /// contends for the lock, and this reads it <i>after</i> releasing it. A teardown that
-        /// abandoned must therefore have been waiting while this still held the lock, so its write
-        /// always happens-before this read.
+        /// abandoned must therefore have been waiting while the connect still held the lock, so its
+        /// write always happens-before this read.
         /// </para>
         /// </remarks>
-        private void ConnectCore()
+        private void HonourTeardownRaisedDuringConnect()
         {
-            RunLifecycleExclusive(ConnectCoreUnsynchronized, LifecycleContention.Fail);
-
-            if (_callerWantsDisconnected || _disposed)
+            if (!_callerWantsDisconnected && !_disposed)
             {
-                SafeLog(() => _logger.LogWarning(
-                    "[Lifecycle] Device '{DeviceName}' was disconnected while this connect was in flight; "
-                    + "closing the connection it established.",
-                    Name));
-
-                DisconnectCore(ConnectionStatus.Disconnected);
+                return;
             }
+
+            SafeLog(() => _logger.LogWarning(
+                "[Lifecycle] Device '{DeviceName}' was disconnected while this connect was in flight; "
+                + "closing the connection it established.",
+                Name));
+
+            DisconnectCore(ConnectionStatus.Disconnected);
         }
 
         private void ConnectCoreUnsynchronized()
         {
-            Status = ConnectionStatus.Connecting;
-            State = DeviceState.Connecting;
-
-            // A reconnect is a new session: its first background failure should be reported
-            // immediately rather than collapsed into a throttle window the previous session opened.
-            _errorThrottle.Reset();
+            BeginConnect();
 
             try
             {
                 // Connect transport if available
                 _transport?.Connect();
 
-                // Create message producer and consumer from transport if needed
-                if (_transport != null)
-                {
-                    // The reader/writer loops are the first thing to notice a device that has
-                    // gone away; a transport that can act on that gets told (issue #382).
-                    var healthSink = _transport as ITransportHealthSink;
-
-                    if (_messageProducer == null)
-                    {
-                        _messageProducer = new MessageProducer<string>(_transport.Stream, healthSink: healthSink);
-                        _messageProducer.SendFailed += OnMessageSendFailed;
-                    }
-
-                    if (_messageConsumer == null)
-                    {
-                        _messageConsumer = new StreamMessageConsumer<DaqifiOutMessage>(
-                            _transport.Stream,
-                            new ProtobufMessageParser(),
-                            healthSink: healthSink);
-                    }
-
-                    // Read/parse/dispatch failures used to be raised into an event with no
-                    // subscribers (issue #378). Subscribe here rather than alongside
-                    // MessageReceived: that one is attached and detached around every consumer
-                    // swap, and error visibility must not have holes in it. '-=' first keeps a
-                    // reconnect on the same consumer instance from double-subscribing.
-                    _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
-                    _messageConsumer.ErrorOccurred += OnConsumerErrorOccurred;
-                }
-
-                // Start message producer and consumer if available
-                _messageProducer?.Start();
-                _messageConsumer?.Start();
-
-                Status = ConnectionStatus.Connected;
-                State = DeviceState.Connected;
+                CompleteConnect();
             }
             catch
             {
-                Status = ConnectionStatus.Disconnected;
-                State = DeviceState.Disconnected;
+                FailConnect();
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Connects to the device, abandoning the attempt if <paramref name="cancellationToken"/>
+        /// is signalled.
+        /// </summary>
+        /// <remarks>
+        /// The asynchronous counterpart to <see cref="Connect"/>: it never blocks the calling
+        /// thread on the transport handshake, and the token is threaded all the way down to
+        /// <see cref="IStreamTransport.ConnectAsync(ConnectionRetryOptions?, CancellationToken)"/>,
+        /// so an attempt can be given up mid-flight — including between retries, where the retry
+        /// loop would otherwise keep dialling. A cancel that lands after the transport has come up
+        /// closes it again, so a cancelled attempt never leaves a half-open connection behind.
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
+        /// <returns>A task representing the asynchronous connect operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
+        /// <exception cref="TimeoutException">
+        /// Thrown when another connect or disconnect was still in progress after
+        /// <see cref="LifecycleLockTimeout"/>. Nothing was opened.
+        /// </exception>
+        // Deliberately not virtual, matching Connect(). A virtual async twin of a non-virtual sync
+        // method is a trap: a subclass would override this one, leave Connect() unintercepted, and
+        // get different behavior depending on which entry point the caller reached for.
+        public async Task ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            _callerWantsDisconnected = false;
+            SupersedeReconnect();
+            await ConnectCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task ConnectCoreUnsynchronizedAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            BeginConnect();
+
+            var transportConnected = false;
+            try
+            {
+                if (_transport != null)
+                {
+                    await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                    transportConnected = true;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                CompleteConnect();
+            }
+            catch (OperationCanceledException)
+            {
+                FailConnect();
+
+                // The transport opened and then the caller gave up — close it rather than leave a
+                // live connection owned by a device that reports itself disconnected. Matters most
+                // for a reconnect loop (issue #379), where the leaked handle would still be holding
+                // the serial port when the next attempt tries to open it.
+                if (transportConnected)
+                {
+                    await SafeDisconnectTransportAsync().ConfigureAwait(false);
+                }
+
+                throw;
+            }
+            catch
+            {
+                FailConnect();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Marks the device as connecting and opens a fresh error-reporting session. Shared entry
+        /// point for <see cref="Connect"/> and <see cref="ConnectAsync"/>.
+        /// </summary>
+        private void BeginConnect()
+        {
+            Status = ConnectionStatus.Connecting;
+            State = DeviceState.Connecting;
+
+            // A reconnect is a new session: its first background failure should be reported
+            // immediately rather than collapsed into a throttle window the previous session opened.
+            // Lives here, not in Connect(), so the async path resets it too — the factory connects
+            // through ConnectAsync, so leaving it on the sync path alone would mean the primary
+            // connect path silently kept the previous session's throttle state (issue #378).
+            _errorThrottle.Reset();
+        }
+
+        /// <summary>
+        /// Builds (when needed) and starts the message pumps over the now-open transport, then
+        /// marks the device connected. Shared by <see cref="Connect"/> and
+        /// <see cref="ConnectAsync"/> so the sync and async paths cannot drift apart.
+        /// </summary>
+        private void CompleteConnect()
+        {
+            // Create message producer and consumer from transport if needed
+            if (_transport != null)
+            {
+                // The reader/writer loops are the first thing to notice a device that has
+                // gone away; a transport that can act on that gets told (issue #382).
+                var healthSink = _transport as ITransportHealthSink;
+
+                if (_messageProducer == null)
+                {
+                    _messageProducer = new MessageProducer<string>(_transport.Stream, healthSink: healthSink);
+                    _messageProducer.SendFailed += OnMessageSendFailed;
+                }
+
+                if (_messageConsumer == null)
+                {
+                    _messageConsumer = new StreamMessageConsumer<DaqifiOutMessage>(
+                        _transport.Stream,
+                        new ProtobufMessageParser(),
+                        healthSink: healthSink);
+                }
+
+                // Read/parse/dispatch failures used to be raised into an event with no
+                // subscribers (issue #378). Subscribe here rather than alongside
+                // MessageReceived: that one is attached and detached around every consumer
+                // swap, and error visibility must not have holes in it. '-=' first keeps a
+                // reconnect on the same consumer instance from double-subscribing.
+                _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
+                _messageConsumer.ErrorOccurred += OnConsumerErrorOccurred;
+            }
+
+            // Start message producer and consumer if available
+            _messageProducer?.Start();
+            _messageConsumer?.Start();
+
+            Status = ConnectionStatus.Connected;
+            State = DeviceState.Connected;
+        }
+
+        /// <summary>
+        /// Rolls the device's reported state back to disconnected after a failed or abandoned
+        /// connect attempt.
+        /// </summary>
+        private void FailConnect()
+        {
+            Status = ConnectionStatus.Disconnected;
+            State = DeviceState.Disconnected;
+        }
+
+        /// <summary>
+        /// Best-effort transport close used on the cancellation path, where an exception must not
+        /// replace the <see cref="OperationCanceledException"/> the caller is waiting for.
+        /// </summary>
+        private async Task SafeDisconnectTransportAsync()
+        {
+            if (_transport == null)
+            {
+                return;
+            }
+
+            try
+            {
+                await _transport.DisconnectAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    ex,
+                    "Failed to close the transport after a cancelled connect attempt."));
             }
         }
 
@@ -856,7 +1171,7 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
         /// tearing down the consumer / producer / transport. This prevents
-        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
@@ -866,8 +1181,8 @@ namespace Daqifi.Core.Device
         /// of responseTimeoutMs*5 = 5s by default + safety margin) and
         /// most custom-timeout callers; on timeout the in-flight exchange
         /// sees <c>_isDisconnecting == true</c> via the post-acquisition
-        /// validation and bails out cleanly. Callers wanting non-blocking
-        /// disconnect should drive this off a Task.Run.
+        /// validation and bails out cleanly. Callers wanting a non-blocking
+        /// disconnect should use <see cref="DisconnectAsync"/>.
         /// <para>
         /// Also waits for any connect or disconnect already in flight — an automatic reconnect
         /// attempt parked inside a blocking transport connect, typically — rather than tearing down
@@ -913,20 +1228,43 @@ namespace Daqifi.Core.Device
                 return;
             }
 
-            // The wait was abandoned: a lifecycle operation is stuck, most likely a
-            // SerialPort.Open wedged in uncancellable native I/O. Racing it would be the
-            // stream corruption this lock exists to prevent, so the transport is left to the
-            // holder — which releases it once it unwedges, because _callerWantsDisconnected was
-            // set before this wait began and every connect path re-reads it after dropping the
-            // lock: ConnectCore for a caller's own connect, AbandonIfSuperseded for a reconnect
-            // attempt. Both are needed — AbandonIfSuperseded belongs to the reconnect loop and
-            // never runs for a caller's connect, which is how a wedged caller connect could
-            // previously come back to life after Disconnect had already returned.
-            //
-            // What can still be done safely is record the caller's intent at the device level.
-            // These are this class's own fields, not the transport, so setting them cannot
-            // corrupt anything the stuck operation is doing — and without them the device would
-            // keep reporting itself connected after the caller had asked it not to.
+            MarkDisconnectedWithoutTeardown(finalStatus);
+        }
+
+        /// <inheritdoc cref="DisconnectCore"/>
+        private async Task DisconnectCoreAsync(ConnectionStatus finalStatus, CancellationToken cancellationToken)
+        {
+            if (await RunLifecycleExclusiveAsync(
+                    () => DisconnectCoreUnsynchronizedAsync(finalStatus, cancellationToken),
+                    LifecycleContention.Abandon,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            MarkDisconnectedWithoutTeardown(finalStatus);
+        }
+
+        /// <summary>
+        /// Settles the device's reported state when teardown had to be abandoned.
+        /// </summary>
+        /// <remarks>
+        /// The wait was abandoned because a lifecycle operation is stuck, most likely a
+        /// <c>SerialPort.Open</c> wedged in uncancellable native I/O. Racing it would be the stream
+        /// corruption the lifecycle lock exists to prevent, so the transport is left to the holder —
+        /// which releases it once it unwedges, because <see cref="_callerWantsDisconnected"/> was
+        /// set before this wait began and every connect path re-reads it after dropping the lock:
+        /// <see cref="HonourTeardownRaisedDuringConnect"/> for a caller's own connect,
+        /// <see cref="AbandonIfSuperseded"/> for a reconnect attempt.
+        /// <para>
+        /// What can still be done safely is record the caller's intent at the device level. These
+        /// are this class's own fields, not the transport, so setting them cannot corrupt anything
+        /// the stuck operation is doing — and without them the device would keep reporting itself
+        /// connected after the caller had asked it not to.
+        /// </para>
+        /// </remarks>
+        private void MarkDisconnectedWithoutTeardown(ConnectionStatus finalStatus)
+        {
             State = DeviceState.Disconnected;
             _isInitialized = false;
             Status = finalStatus;
@@ -935,71 +1273,190 @@ namespace Daqifi.Core.Device
         private void DisconnectCoreUnsynchronized(ConnectionStatus finalStatus)
         {
             _isDisconnecting = true;
-            // Best-effort coordination with ExecuteTextCommandAsync —
-            // acquire the lock so we don't tear the transport out from
-            // under an in-flight text exchange. The lock IS released in
-            // the finally below when acquired (so a future Connect()
-            // followed by ExecuteTextCommandAsync isn't blocked); a
-            // stuck exchange that holds past the timeout drops to the
-            // _isDisconnecting validation path inside the exchange.
-            var lockAcquired = false;
-            try
-            {
-                lockAcquired = _textExchangeLock.Wait(TimeSpan.FromSeconds(10));
-            }
-            catch (ObjectDisposedException)
-            {
-                // Disconnect called after Dispose — nothing to coordinate.
-            }
+            var lockAcquired = AcquireTextExchangeLockForTeardown();
 
             try
             {
-                // Unsubscribe from message consumer/producer events
-                if (_messageConsumer != null)
-                {
-                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
-                }
-
-                if (_messageProducer != null)
-                {
-                    _messageProducer.SendFailed -= OnMessageSendFailed;
-                }
-
-                // Stop message consumer and producer safely if available
-                _messageConsumer?.StopSafely();
-                _messageProducer?.StopSafely();
-
-                // Null the producer/consumer so a subsequent Connect()
-                // rebuilds them against the transport's current Stream.
-                // SerialStreamTransport.Stream returns _serialPort.BaseStream,
-                // which is a new instance after Disconnect() → Connect()
-                // reopens the port; reusing the old producer/consumer would
-                // leave them bound to the previous (disposed) BaseStream
-                // and any Send() would silently no-op. Surfaced by PR #200's
-                // post-reconnect readiness probe (LAN chip-info returning
-                // null on every attempt because Send went to a dead stream).
-                _messageConsumer = null;
-                _messageProducer = null;
+                StopMessagePumps();
 
                 // Disconnect transport if available
                 _transport?.Disconnect();
             }
             finally
             {
-                Status = finalStatus;
-                State = DeviceState.Disconnected;
-                _isInitialized = false;
-                _isDisconnecting = false;
-                if (lockAcquired)
+                FinishDisconnect(lockAcquired, finalStatus);
+            }
+        }
+
+        /// <summary>
+        /// Disconnects from the device without blocking the calling thread.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The asynchronous counterpart to <see cref="Disconnect"/>, and the one to use on a UI
+        /// thread: the courtesy wait for an in-flight text exchange (up to
+        /// <see cref="TextExchangeTeardownWait"/>) is awaited rather than blocked on, and the
+        /// remaining teardown — joining the reader/writer threads and closing the transport — is
+        /// pushed off the caller's thread.
+        /// </para>
+        /// <para>
+        /// <b>What the token does.</b> It shortens the courtesy wait: cancelling stops waiting for
+        /// the in-flight exchange and proceeds straight to teardown, exactly as the timeout does.
+        /// It never aborts the disconnect itself, and this method does not throw
+        /// <see cref="OperationCanceledException"/> — a teardown abandoned half-way would leave
+        /// producers, consumers and the transport in an indeterminate state, which is strictly
+        /// worse than finishing. On return the device is always disconnected.
+        /// </para>
+        /// <para>
+        /// <see cref="StatusChanged"/> is therefore raised on a thread pool thread rather than the
+        /// caller's; marshal to your UI thread in the handler if that matters.
+        /// </para>
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe while disconnecting.</param>
+        /// <returns>A task representing the asynchronous disconnect operation.</returns>
+        // Not virtual, for the same reason as ConnectAsync.
+        public async Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            // Same intent-first ordering as Disconnect: see the comment there.
+            _callerWantsDisconnected = true;
+            SupersedeReconnect();
+            await DisconnectCoreAsync(ConnectionStatus.Disconnected, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task DisconnectCoreUnsynchronizedAsync(
+            ConnectionStatus finalStatus,
+            CancellationToken cancellationToken)
+        {
+            _isDisconnecting = true;
+            var lockAcquired = await AcquireTextExchangeLockForTeardownAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            try
+            {
+                // StopSafely joins the reader/writer threads with a bounded timeout, and closing a
+                // serial port whose device has gone away can stall: neither belongs on a UI thread,
+                // so the whole teardown runs on the thread pool. The ConfigureAwait(false) below
+                // keeps the transport close and the finally block there too.
+                await Task.Run(StopMessagePumps, CancellationToken.None).ConfigureAwait(false);
+
+                if (_transport != null)
                 {
-                    try
-                    {
-                        _textExchangeLock.Release();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                    }
+                    await _transport.DisconnectAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                FinishDisconnect(lockAcquired, finalStatus);
+            }
+        }
+
+        /// <summary>
+        /// Best-effort coordination with <c>ExecuteTextCommandAsync</c> before teardown: acquire
+        /// the lock so the transport is not torn out from under an in-flight text exchange. The
+        /// lock IS released by <see cref="FinishDisconnect"/> when acquired (so a future
+        /// <see cref="Connect"/> followed by <c>ExecuteTextCommandAsync</c> isn't blocked); a stuck
+        /// exchange that holds past the timeout drops to the <c>_isDisconnecting</c> validation
+        /// path inside the exchange.
+        /// </summary>
+        /// <returns><c>true</c> when the lock was acquired and must be released after teardown.</returns>
+        private bool AcquireTextExchangeLockForTeardown()
+        {
+            try
+            {
+                return _textExchangeLock.Wait(TextExchangeTeardownWait);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disconnect called after Dispose — nothing to coordinate.
+                return false;
+            }
+        }
+
+        /// <inheritdoc cref="AcquireTextExchangeLockForTeardown"/>
+        /// <param name="cancellationToken">
+        /// Shortens the wait. A cancellation is swallowed rather than propagated: teardown must
+        /// still run, and the in-flight exchange sees <c>_isDisconnecting == true</c> and bails out
+        /// on its own — the same outcome as letting the wait time out.
+        /// </param>
+        private async Task<bool> AcquireTextExchangeLockForTeardownAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await _textExchangeLock.WaitAsync(TextExchangeTeardownWait, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // DisconnectAsync called after Dispose — nothing to coordinate.
+                return false;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Unsubscribes, stops and drops the message producer/consumer. Shared by
+        /// <see cref="Disconnect"/> and <see cref="DisconnectAsync"/>.
+        /// </summary>
+        private void StopMessagePumps()
+        {
+            // Unsubscribe from message consumer/producer events
+            if (_messageConsumer != null)
+            {
+                _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
+            }
+
+            if (_messageProducer != null)
+            {
+                _messageProducer.SendFailed -= OnMessageSendFailed;
+            }
+
+            // Stop message consumer and producer safely if available
+            _messageConsumer?.StopSafely();
+            _messageProducer?.StopSafely();
+
+            // Null the producer/consumer so a subsequent Connect()
+            // rebuilds them against the transport's current Stream.
+            // SerialStreamTransport.Stream returns _serialPort.BaseStream,
+            // which is a new instance after Disconnect() → Connect()
+            // reopens the port; reusing the old producer/consumer would
+            // leave them bound to the previous (disposed) BaseStream
+            // and any Send() would silently no-op. Surfaced by PR #200's
+            // post-reconnect readiness probe (LAN chip-info returning
+            // null on every attempt because Send went to a dead stream).
+            _messageConsumer = null;
+            _messageProducer = null;
+        }
+
+        /// <summary>
+        /// Settles the device's reported state after teardown and releases the text-exchange lock
+        /// if it was taken. Runs from a <c>finally</c> in both disconnect paths, so the device can
+        /// never be left reporting Connected because teardown threw.
+        /// </summary>
+        /// <param name="lockAcquired">Whether the text-exchange lock was acquired before teardown.</param>
+        /// <param name="finalStatus">
+        /// The status to settle on. Parameterized for the reconnect loop, whose teardown between
+        /// attempts reports <see cref="ConnectionStatus.Retrying"/> rather than
+        /// <see cref="ConnectionStatus.Disconnected"/> — nobody asked for that teardown, and it
+        /// must not look to consumers like the session ended on purpose (issue #379).
+        /// </param>
+        private void FinishDisconnect(bool lockAcquired, ConnectionStatus finalStatus)
+        {
+            Status = finalStatus;
+            State = DeviceState.Disconnected;
+            _isInitialized = false;
+            _isDisconnecting = false;
+            if (lockAcquired)
+            {
+                try
+                {
+                    _textExchangeLock.Release();
+                }
+                catch (ObjectDisposedException)
+                {
                 }
             }
         }
@@ -1169,6 +1626,28 @@ namespace Daqifi.Core.Device
         /// it did before this exchange began.
         /// </para>
         /// </param>
+        /// <param name="finalizeAsync">
+        /// Optional phase that undoes what <paramref name="prepareAsync"/> established — the SD card
+        /// operations use it to hand the shared SPI bus back to the LAN interface.
+        /// <para>
+        /// It is the mirror of the prepare phase and runs under the <b>same</b> lock acquisition, so
+        /// nothing can interleave between this exchange's commands and the state it restores (#407).
+        /// It runs after the protobuf consumer has been restarted, mirroring the prepare phase
+        /// running before the consumer was swapped out.
+        /// </para>
+        /// <para>
+        /// It runs whether the exchange succeeds or fails, so the device is never left in the
+        /// prepared state. It takes no cancellation token on purpose: it is cleanup, and a cancelled
+        /// or timed-out exchange still has to put the device back. Keep it short and non-blocking —
+        /// it holds the lock while it runs.
+        /// </para>
+        /// <para>
+        /// If the exchange failed and the finalize phase then fails too, the finalize failure is
+        /// logged and dropped and the exchange's original failure is what the caller sees — a
+        /// cleanup failure must never hide the failure that caused the cleanup. If the exchange
+        /// succeeded, a finalize failure is the only failure there is, and it propagates.
+        /// </para>
+        /// </param>
         /// <returns>
         /// A list of text lines received from the device. Lines that were already in flight when the
         /// exchange opened — late replies to earlier commands — are excluded: only what arrived once
@@ -1182,10 +1661,10 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
-        // prepareAsync is added AFTER cancellationToken (technically violating CA1068
-        // "CancellationToken should be last") to keep existing positional callers working, matching
-        // the convention established in IFirmwareUpdateService for the same reason. It is a
-        // parameter on this seam rather than a second virtual method deliberately: a parallel
+        // prepareAsync and finalizeAsync are added AFTER cancellationToken (technically violating
+        // CA1068 "CancellationToken should be last") to keep existing positional callers working,
+        // matching the convention established in IFirmwareUpdateService for the same reason. They
+        // are parameters on this seam rather than separate virtual methods deliberately: a parallel
         // method would be bypassed silently by any subclass that overrides only this one, which for
         // an instrumented device or a test double means the override quietly stops intercepting SD
         // operations with nothing to indicate it. Overriders must widen their signature — a compile
@@ -1196,10 +1675,12 @@ namespace Daqifi.Core.Device
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
-            Func<CancellationToken, Task>? prepareAsync = null)
+            Func<CancellationToken, Task>? prepareAsync = null,
+            Func<Task>? finalizeAsync = null)
         {
             return ExecuteTextCommandCoreAsync(
                 prepareAsync,
+                finalizeAsync,
                 _ => { setupAction(); return Task.CompletedTask; },
                 responseTimeoutMs,
                 completionTimeoutMs,
@@ -1208,7 +1689,7 @@ namespace Daqifi.Core.Device
 #pragma warning restore CA1068
 
         /// <summary>
-        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>
+        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
         /// that accepts an async setup action so callers can <c>await</c> cancellable operations
         /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
         /// blocking the thread-pool thread.
@@ -1234,6 +1715,7 @@ namespace Daqifi.Core.Device
         {
             return ExecuteTextCommandCoreAsync(
                 prepareAsync: null,
+                finalizeAsync: null,
                 setupActionAsync,
                 responseTimeoutMs,
                 completionTimeoutMs,
@@ -1242,6 +1724,7 @@ namespace Daqifi.Core.Device
 
         private async Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
             Func<CancellationToken, Task>? prepareAsync,
+            Func<Task>? finalizeAsync,
             Func<CancellationToken, Task> setupActionAsync,
             int responseTimeoutMs,
             int completionTimeoutMs,
@@ -1286,6 +1769,12 @@ namespace Daqifi.Core.Device
             }
 
             _isInsideTextExchange.Value = true;
+
+            // Whether the exchange got past validation and so owes its finalize phase, and whether
+            // it is on its way out normally rather than with an exception unwinding. Both are read
+            // only by the finalize block in the outer finally below.
+            var exchangeStarted = false;
+            var completedNormally = false;
             try
             {
                 // All validation runs INSIDE the lock so a competing thread
@@ -1322,6 +1811,11 @@ namespace Daqifi.Core.Device
                     throw new TransportNotConnectedException(
                         "Device transport is no longer connected.");
                 }
+
+                // Past validation: from here on the exchange acts on the device, so its finalize
+                // phase (if any) is owed however this ends — including a prepare phase that failed
+                // part-way and left the device half-way into the state it was establishing.
+                exchangeStarted = true;
 
                 var sw = Stopwatch.StartNew();
 
@@ -1500,12 +1994,36 @@ namespace Daqifi.Core.Device
 
                 // The text consumer is stopped by this point, so the list is no longer being
                 // appended to concurrently and can be re-projected safely.
-                return staleLineCount > 0
+                var result = staleLineCount > 0
                     ? collectedLines.Skip(staleLineCount).ToList()
                     : collectedLines;
+
+                completedNormally = true;
+                return result;
             }
             finally
             {
+                // Finalize phase, if any — the mirror of the prepare phase above, and deliberately
+                // still inside the lock: an exchange that switches shared device state on the way in
+                // has to switch it back before anything else can run, or the pairing is only half
+                // serialized (#407). It runs after the protobuf consumer has been restarted, just as
+                // the prepare phase ran before the consumer was swapped out.
+                // A failure here is never thrown from this point: doing so would abandon the rest of
+                // the finally, leaking the lock this exchange holds. It is held until after the
+                // release below and dealt with there.
+                Exception? finalizeFailure = null;
+                if (exchangeStarted && finalizeAsync != null)
+                {
+                    try
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        finalizeFailure = ex;
+                    }
+                }
+
                 _isInsideTextExchange.Value = false;
                 // Release can race with Dispose() — Dispose acquires the lock
                 // before disposing it, but if that acquisition timed out and
@@ -1519,6 +2037,29 @@ namespace Daqifi.Core.Device
                 }
                 catch (ObjectDisposedException)
                 {
+                }
+
+                if (finalizeFailure != null)
+                {
+                    if (completedNormally)
+                    {
+                        // Nothing else is unwinding, so a failed restore is the only failure there
+                        // is. Surface it rather than report a success the device never got back
+                        // from — the caller's next command would run against the wrong state.
+                        // Rethrown only now, with the lock already released, so a failed restore
+                        // cannot also wedge the device.
+                        ExceptionDispatchInfo.Capture(finalizeFailure).Throw();
+                    }
+
+                    // Otherwise an exception is already on its way to the caller, and it is the one
+                    // that explains what went wrong. Replacing it with this one would lose the
+                    // diagnosis, so the cleanup failure is logged instead: cleanup never hides the
+                    // failure that caused the cleanup.
+                    SafeLog(() => _logger.LogError(
+                        finalizeFailure,
+                        "The text exchange's finalize phase failed while another failure was already "
+                        + "unwinding. The original failure is being surfaced to the caller; the device "
+                        + "may be left in the state the prepare phase established."));
                 }
             }
         }
@@ -1542,7 +2083,7 @@ namespace Daqifi.Core.Device
         /// on hardware faults, or discard them if known-stale.
         /// </para>
         /// <para>
-        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task})"/>, which
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>, which
         /// pauses the protobuf consumer for the duration of the text exchange.
         /// Avoid calling this during active streaming or concurrently with
         /// other text commands.
@@ -2429,17 +2970,94 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Disposes the device and releases resources.
         /// </summary>
+        /// <remarks>
+        /// Disconnects first, which blocks the calling thread. <see cref="DisposeAsync"/> is the
+        /// non-blocking equivalent — prefer <c>await using</c> over <c>using</c> on a UI thread.
+        /// </remarks>
         public void Dispose()
         {
-            if (!_disposed)
+            if (!TryClaimDisposal())
+            {
+                return;
+            }
+
+            try
             {
                 Disconnect();
-                _messageConsumer?.Dispose();
-                _messageProducer?.Dispose();
-                _transport?.Dispose();
-                _textExchangeLock.Dispose();
-                _disposed = true;
             }
+            finally
+            {
+                ReleaseResources();
+            }
+        }
+
+        /// <summary>
+        /// Disposes the device and releases resources without blocking the calling thread, so
+        /// <c>await using var device = ...</c> is safe on a UI thread.
+        /// </summary>
+        /// <remarks>
+        /// Equivalent to <see cref="Dispose"/> except that the disconnect it performs first runs
+        /// through <see cref="DisconnectAsync"/>. Safe to call more than once, and safe to mix with
+        /// <see cref="Dispose"/> — whichever runs first wins and the other becomes a no-op.
+        /// </remarks>
+        /// <returns>A task representing the asynchronous dispose operation.</returns>
+        public async ValueTask DisposeAsync()
+        {
+            if (!TryClaimDisposal())
+            {
+                return;
+            }
+
+            try
+            {
+                await DisconnectAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                ReleaseResources();
+            }
+        }
+
+        /// <summary>
+        /// Claims the right to tear this device down, atomically and exactly once.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The gate is taken at the <i>start</i> of disposal rather than published at the end,
+        /// because <see cref="DisposeAsync"/> spends real time awaiting
+        /// <see cref="DisconnectAsync"/>. A plain "have we finished disposing?" flag leaves that
+        /// entire window open, so a concurrent <see cref="Dispose"/> — an <c>await using</c> scope
+        /// unwinding while another shutdown path fires, say — would sail through the check and run
+        /// a second teardown, disposing the transport and the text-exchange semaphore twice.
+        /// </para>
+        /// <para>
+        /// The loser returns immediately rather than waiting for the winner to finish. That is the
+        /// normal contract for a redundant <see cref="IDisposable.Dispose"/> call, and the
+        /// alternative — having <see cref="Dispose"/> block on the in-flight
+        /// <see cref="DisposeAsync"/> — would reintroduce on the calling thread exactly the stall
+        /// this class now exists to avoid.
+        /// </para>
+        /// </remarks>
+        /// <returns><c>true</c> for the first caller only.</returns>
+        private bool TryClaimDisposal() => Interlocked.Exchange(ref _disposeClaimed, 1) == 0;
+
+        /// <summary>
+        /// Releases everything the device owns once it is already disconnected. Shared tail of
+        /// <see cref="Dispose"/> and <see cref="DisposeAsync"/>.
+        /// </summary>
+        /// <remarks>
+        /// The transport is already closed by the preceding disconnect, so
+        /// <see cref="IDisposable.Dispose"/> on it does not block here. Runs from a
+        /// <c>finally</c> so that a disconnect which throws — a serial close can — still releases
+        /// the handles rather than leaking them on a device that can never be disposed again.
+        /// </remarks>
+        private void ReleaseResources()
+        {
+            _messageConsumer?.Dispose();
+            _messageProducer?.Dispose();
+            _transport?.Dispose();
+            _textExchangeLock.Dispose();
+            _disposed = true;
         }
 
         /// <summary>
@@ -2459,6 +3077,13 @@ namespace Daqifi.Core.Device
         /// 3. Turn device on (if needed)
         /// 4. Set protobuf message format
         /// 5. Query device info and block until the device reports its channel configuration
+        ///
+        /// <b>Steps 2-4 write global device state.</b> Streaming is a single global state on a DAQiFi
+        /// device, so step 2 stops a stream <em>any</em> session started, not just this one:
+        /// connecting to a device another session is already streaming silently ends that session's
+        /// acquisition. That is the right default when this session owns the device (it also clears a
+        /// stream orphaned by a crashed session). Set <see cref="PreserveActiveStream"/> before
+        /// calling this to skip steps 2-4 and connect as a non-disruptive observer instead.
         ///
         /// Rather than returning after a fixed delay, the method awaits the first
         /// <see cref="ChannelsPopulated"/> event so callers receive a fully populated device.
@@ -2520,6 +3145,14 @@ namespace Daqifi.Core.Device
                     _messageConsumer.MessageReceived += OnInboundMessageReceived;
                 }
 
+                // Snapshot into a local, once. Every retry attempt and the derived-class hook
+                // further down are then handed the same decision explicitly, so it cannot be
+                // changed out from under an initialization already in flight — neither by a caller
+                // mutating the property nor by a second concurrent InitializeAsync on this same
+                // instance. The decision belongs to this operation, so it lives on the stack rather
+                // than in a field.
+                var preserveActiveStream = PreserveActiveStream;
+
                 // Send the text-mode SCPI setup commands via ExecuteTextCommandAsync so that
                 // any -200 execution error response is captured rather than silently discarded
                 // by the protobuf consumer.  The protobuf consumer is stopped for the duration
@@ -2541,7 +3174,20 @@ namespace Daqifi.Core.Device
 
                     initLines = await ExecuteTextCommandAsync(() =>
                     {
+                        // Echo is a per-device text-mode setting, not stream state: this session
+                        // needs it off to parse its own replies, and the value is the same one any
+                        // other Core session already set. Safe to send either way.
                         Send(ScpiMessageProducer.DisableDeviceEcho);
+
+                        // Everything below writes global stream state. A secondary "observe"
+                        // session must not touch it — StopStreamData ends another session's
+                        // acquisition outright (#385), and the power-state and stream-format
+                        // commands reconfigure the same single acquisition it is running.
+                        if (preserveActiveStream)
+                        {
+                            return;
+                        }
+
                         Thread.Sleep(100);
 
                         Send(ScpiMessageProducer.StopStreaming);
@@ -2598,7 +3244,16 @@ namespace Daqifi.Core.Device
                 // this try/catch so a failure there leaves the device in a consistent terminal state
                 // rather than a falsely-ready device. _isInitialized is only set after it succeeds,
                 // so a failed init can be safely retried.
-                await OnDeviceInitializingAsync(cancellationToken).ConfigureAwait(false);
+                await OnDeviceInitializingAsync(preserveActiveStream, cancellationToken).ConfigureAwait(false);
+
+                // A cancelled initialization must never report Ready. Nothing above is guaranteed
+                // to observe the token: the capability read returns early on firmware that does not
+                // advertise the document, channel population can short-circuit when the status
+                // arrives synchronously, and a derived hook may legitimately have no awaitable work
+                // (the observing path and the non-USB path both return immediately). So the
+                // invariant is enforced here, at the one transition that matters, rather than relying
+                // on every path and every override to check for itself.
+                cancellationToken.ThrowIfCancellationRequested();
 
                 _isInitialized = true;
                 State = DeviceState.Ready;
@@ -2629,9 +3284,18 @@ namespace Daqifi.Core.Device
         /// state and other faults set <see cref="DeviceState.Error"/> — rather than a falsely-ready
         /// device, and the failed initialization can be retried. The base implementation does nothing.
         /// </remarks>
+        /// <param name="preserveActiveStream">
+        /// The <see cref="PreserveActiveStream"/> decision for <em>this</em> initialization, passed
+        /// explicitly rather than read from the device so it cannot change while initialization is in
+        /// flight. When <c>true</c>, an override must not send any command that writes global stream
+        /// state — stopping, reconfiguring, or re-routing the stream would disturb a session that is
+        /// already using the device.
+        /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        protected virtual Task OnDeviceInitializingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        protected virtual Task OnDeviceInitializingAsync(
+            bool preserveActiveStream,
+            CancellationToken cancellationToken) => Task.CompletedTask;
 
         /// <summary>
         /// Runs the capability-document read during initialization, absorbing any failure.

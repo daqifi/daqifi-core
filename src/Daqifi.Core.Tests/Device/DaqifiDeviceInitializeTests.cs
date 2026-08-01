@@ -32,6 +32,111 @@ namespace Daqifi.Core.Tests.Device
             Assert.Contains(sentData, d => d.Contains("SYSTem:POWer:STATe 1"));
             Assert.Contains(sentData, d => d.Contains("SYSTem:STReam:FORmat 0"));
             Assert.Contains(sentData, d => d.Contains("SYSTem:SYSInfoPB?"));
+
+            // The stream-disruptive commands are the default because this session is assumed to
+            // own the device; the opt-out below must not change that (#385).
+            Assert.False(device.PreserveActiveStream);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WithPreserveActiveStream_OmitsStreamDisruptiveCommands()
+        {
+            // Arrange — a secondary session attaching to a device another session may already be
+            // streaming from.
+            var device = new TestableDaqifiDevice("TestDevice") { PreserveActiveStream = true };
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert — nothing that halts, powers, or reconfigures the device's single global
+            // stream is sent.
+            var sentData = device.DirectSentMessages.Select(m => m.Data).ToList();
+
+            Assert.DoesNotContain(sentData, d => d.Contains("SYSTem:StopStreamData"));
+            Assert.DoesNotContain(sentData, d => d.Contains("SYSTem:POWer:STATe"));
+            Assert.DoesNotContain(sentData, d => d.Contains("SYSTem:STReam:FORmat"));
+
+            // ...but the session is still fully set up: echo off so its own replies parse, and the
+            // identity query that populates channels.
+            Assert.Contains(sentData, d => d.Contains("SYSTem:ECHO -1"));
+            Assert.Contains(sentData, d => d.Contains("SYSTem:SYSInfoPB?"));
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WithPreserveActiveStream_StillProducesReadyPopulatedDevice()
+        {
+            // Arrange
+            var device = new TestableDaqifiDevice("TestDevice") { PreserveActiveStream = true };
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert — skipping the disruptive commands must not cost the caller a usable session
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(4, device.Channels.Count); // 2 analog + 2 digital
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WithPreserveActiveStream_StreamingUsb_DoesNotRouteStreamToUsb()
+        {
+            // Arrange — over USB the streaming device normally claims the stream with
+            // SYSTem:STReam:INTerface 0, which would take data away from a session already
+            // receiving it over WiFi.
+            var device = new TestableStreamingDevice("TestDevice") { PreserveActiveStream = true };
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert
+            Assert.DoesNotContain(device.SentData, d => d.Contains("SYSTem:STReam:INTerface"));
+            Assert.Equal(0, device.UsbStepAttemptCount);
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(4, device.Channels.Count);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenPreserveActiveStreamChangesMidInitialization_KeepsTheDecisionItStartedWith()
+        {
+            // Arrange — an observing initialization whose flag is flipped to false after it has
+            // begun (a concurrent initialization on the same instance, or a caller mutating the
+            // property). The decision belongs to the operation, so the USB routing step must still
+            // be skipped: honoring the late change would steal a stream this session promised not
+            // to touch.
+            var device = new TestableStreamingDevice("TestDevice") { PreserveActiveStream = true };
+            device.MutateDuringInitialization = () => device.PreserveActiveStream = false;
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert
+            Assert.False(device.PreserveActiveStream); // the mutation really did land
+            Assert.DoesNotContain(device.SentData, d => d.Contains("SYSTem:STReam:INTerface"));
+            Assert.Equal(0, device.UsbStepAttemptCount);
+            Assert.Equal(DeviceState.Ready, device.State);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenPreserveActiveStreamIsSetMidInitialization_StillTakesControl()
+        {
+            // Arrange — the mirror case: a normal take-control initialization must not be silently
+            // downgraded to observing by a flag set after it started, which would leave the stream
+            // routed somewhere this session cannot read.
+            var device = new TestableStreamingDevice("TestDevice");
+            device.MutateDuringInitialization = () => device.PreserveActiveStream = true;
+            device.Connect();
+
+            // Act
+            await device.InitializeAsync();
+
+            // Assert
+            Assert.True(device.PreserveActiveStream); // the mutation really did land
+            Assert.Contains(device.SentData, d => d.Contains("SYSTem:STReam:INTerface 0"));
+            Assert.Contains(device.SentData, d => d.Contains("SYSTem:StopStreamData"));
+            Assert.Equal(DeviceState.Ready, device.State);
         }
 
         [Fact]
@@ -433,25 +538,38 @@ namespace Daqifi.Core.Tests.Device
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    // Run the setup action so that Send() calls inside it are captured
+                    setupAction();
+                    TextCommandAttemptCount++;
+
+                    if (_failFirstAttempt && TextCommandAttemptCount == 1)
+                    {
+                        return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
+                    }
+
+                    return _textCommandResponse;
                 }
-
-                // Run the setup action so that Send() calls inside it are captured
-                setupAction();
-                TextCommandAttemptCount++;
-
-                if (_failFirstAttempt && TextCommandAttemptCount == 1)
+                finally
                 {
-                    return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
                 }
-
-                return _textCommandResponse;
             }
         }
 
@@ -465,6 +583,217 @@ namespace Daqifi.Core.Tests.Device
             ScpiError,
             ScpiErrorThenSucceed,
             Cancel
+        }
+
+        [Theory]
+        [InlineData(true)]  // observing: the hook returns immediately, no awaitable work
+        [InlineData(false)] // take-control: the hook does send SCPI
+        public async Task InitializeAsync_WhenCancelledAfterChannelsPopulate_DoesNotReportReady(bool preserveActiveStream)
+        {
+            // Arrange — cancellation lands at the one seam nothing was guaranteed to observe:
+            // after channels populate, during the capability read. Firmware that does not
+            // advertise the capability document returns from that read without touching the
+            // token, and on the observing path the derived hook then returns immediately too, so
+            // a device whose caller had already cancelled still reached Ready.
+            using var cts = new CancellationTokenSource();
+            var device = new CancelDuringCapabilityReadDevice("TestDevice", cts)
+            {
+                PreserveActiveStream = preserveActiveStream
+            };
+            device.Connect();
+
+            // Act & Assert — a cancelled initialization reports cancellation, not success.
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => device.InitializeAsync(TimeSpan.FromSeconds(5), cts.Token));
+
+            Assert.NotEqual(DeviceState.Ready, device.State);
+            Assert.Equal(DeviceState.Connected, device.State);
+        }
+
+        /// <summary>
+        /// A testable USB streaming device that cancels the supplied token from inside the
+        /// capability read — i.e. after channels have populated and before the derived
+        /// initialization hook — and returns without observing the token itself, exactly as the
+        /// real read does on firmware that does not advertise a capability document.
+        /// </summary>
+        private class CancelDuringCapabilityReadDevice : DaqifiStreamingDevice
+        {
+            private readonly CancellationTokenSource _cts;
+
+            public override bool IsUsbConnection => true;
+
+            public CancelDuringCapabilityReadDevice(string name, CancellationTokenSource cts)
+                : base(name, (IPAddress?)null)
+            {
+                _cts = cts;
+            }
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage &&
+                    stringMessage.Data.Contains("SYSInfoPB"))
+                {
+                    PopulateChannelsFromStatus(new DaqifiOutMessage
+                    {
+                        AnalogInPortNum = 2,
+                        DigitalPortNum = 2
+                    });
+                }
+            }
+
+            public override Task<Daqifi.Core.Device.Capabilities.CapabilityDocument?> ReadCapabilityDocumentAsync(
+                CancellationToken cancellationToken = default)
+            {
+                _cts.Cancel();
+                return Task.FromResult<Daqifi.Core.Device.Capabilities.CapabilityDocument?>(null);
+            }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default,
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
+            {
+                try
+                {
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    setupAction();
+                    return Array.Empty<string>();
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenTwoInitializationsOverlapOnOneDevice_EachKeepsItsOwnDecision()
+        {
+            // Arrange — the race reported against the first cut of this change: the observing
+            // decision was held in an instance field, so a second InitializeAsync starting while
+            // the first was still in flight overwrote it, and the first initialization's USB
+            // routing step then acted on the second one's decision. Reproduced by holding an
+            // observing initialization inside its first SCPI exchange — past the point the
+            // decision is made, before the routing step — while a take-control initialization
+            // starts on the same instance.
+            var device = new OverlappingInitDevice("TestDevice");
+            device.Connect();
+
+            device.PreserveActiveStream = true;
+            var observing = device.InitializeAsync();
+
+            // Wait until the observing call is parked inside its first exchange.
+            await device.FirstExchangeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            device.PreserveActiveStream = false;
+            var takingControl = device.InitializeAsync();
+            await takingControl.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Act — let the observing initialization finish, now that the flag has moved under it.
+            device.ReleaseFirstExchange();
+            await observing.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Assert — one initialization decided to observe and one to take control, and each
+            // reached its own hook with its own decision. A shared field yields {false, false}.
+            Assert.Equal(
+                new[] { false, true },
+                device.HookDecisions.OrderBy(flag => flag).ToArray());
+        }
+
+        /// <summary>
+        /// A testable USB streaming device that records the decision each initialization passes to
+        /// <c>OnDeviceInitializingAsync</c>, and can park its first text exchange so a second
+        /// initialization can be started while the first is still in flight.
+        /// </summary>
+        private class OverlappingInitDevice : DaqifiStreamingDevice
+        {
+            private readonly TaskCompletionSource _release =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private int _exchangeCount;
+
+            /// <summary>Completes once an initialization has entered its first text exchange.</summary>
+            public TaskCompletionSource FirstExchangeEntered { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            /// <summary>The decision each initialization handed to the derived hook.</summary>
+            public System.Collections.Concurrent.ConcurrentBag<bool> HookDecisions { get; } = new();
+
+            public override bool IsUsbConnection => true;
+
+            public OverlappingInitDevice(string name) : base(name, (IPAddress?)null) { }
+
+            public void ReleaseFirstExchange() => _release.TrySetResult();
+
+            public override void Send<T>(IOutboundMessage<T> message)
+            {
+                if (message is IOutboundMessage<string> stringMessage &&
+                    stringMessage.Data.Contains("SYSInfoPB"))
+                {
+                    PopulateChannelsFromStatus(new DaqifiOutMessage
+                    {
+                        AnalogInPortNum = 2,
+                        DigitalPortNum = 2
+                    });
+                }
+            }
+
+            protected override Task OnDeviceInitializingAsync(
+                bool preserveActiveStream,
+                CancellationToken cancellationToken)
+            {
+                HookDecisions.Add(preserveActiveStream);
+                return Task.CompletedTask;
+            }
+
+            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Action setupAction,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default,
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
+            {
+                try
+                {
+                    if (prepareAsync != null)
+                    {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    setupAction();
+
+                    // Park only the very first exchange — the one belonging to the initialization
+                    // the test starts first.
+                    if (Interlocked.Increment(ref _exchangeCount) == 1)
+                    {
+                        FirstExchangeEntered.TrySetResult();
+                        await _release.Task.ConfigureAwait(false);
+                    }
+
+                    return Array.Empty<string>();
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -483,6 +812,15 @@ namespace Daqifi.Core.Tests.Device
             /// Number of times the USB SetStreamInterface step's ExecuteTextCommandAsync was invoked.
             /// </summary>
             public int UsbStepAttemptCount { get; private set; }
+
+            /// <summary>
+            /// Invoked once, from inside the first text exchange of initialization — i.e. after
+            /// InitializeAsync has captured its PreserveActiveStream decision but before the
+            /// derived USB step runs. Lets a test mutate device state mid-initialization.
+            /// </summary>
+            public Action? MutateDuringInitialization { get; set; }
+
+            private bool _mutationApplied;
 
             public override bool IsUsbConnection => true;
 
@@ -513,40 +851,59 @@ namespace Daqifi.Core.Tests.Device
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
-                Func<CancellationToken, Task>? prepareAsync = null)
+                Func<CancellationToken, Task>? prepareAsync = null,
+                Func<Task>? finalizeAsync = null)
             {
-                // Honor the exchange's prepare phase the way the real device does: it runs first,
-                // before anything this exchange sends (#396).
-                if (prepareAsync != null)
+                try
                 {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-                }
-
-                var before = _sent.Count;
-                setupAction();
-                var sentThisCall = _sent.Skip(before).ToList();
-                var isUsbStep = sentThisCall.Any(d => d.Contains("STReam:INTerface"));
-
-                if (isUsbStep)
-                {
-                    UsbStepAttemptCount++;
-
-                    switch (_usbStepBehavior)
+                    // Honor the exchange's prepare phase the way the real device does: it runs first,
+                    // before anything this exchange sends (#396).
+                    if (prepareAsync != null)
                     {
-                        case UsbStepBehavior.ScpiError:
-                            return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
-                        case UsbStepBehavior.ScpiErrorThenSucceed:
-                            if (UsbStepAttemptCount == 1)
-                            {
+                        await prepareAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (!_mutationApplied && MutateDuringInitialization != null)
+                    {
+                        _mutationApplied = true;
+                        MutateDuringInitialization();
+                    }
+
+                    var before = _sent.Count;
+                    setupAction();
+                    var sentThisCall = _sent.Skip(before).ToList();
+                    var isUsbStep = sentThisCall.Any(d => d.Contains("STReam:INTerface"));
+
+                    if (isUsbStep)
+                    {
+                        UsbStepAttemptCount++;
+
+                        switch (_usbStepBehavior)
+                        {
+                            case UsbStepBehavior.ScpiError:
                                 return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
-                            }
-                            break;
-                        case UsbStepBehavior.Cancel:
-                            throw new OperationCanceledException();
+                            case UsbStepBehavior.ScpiErrorThenSucceed:
+                                if (UsbStepAttemptCount == 1)
+                                {
+                                    return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
+                                }
+                                break;
+                            case UsbStepBehavior.Cancel:
+                                throw new OperationCanceledException();
+                        }
+                    }
+
+                    return Array.Empty<string>();
+                }
+                finally
+                {
+                    // Honor the exchange's finalize phase the way the real device does: it runs
+                    // however the exchange ended, still inside the exchange (#407).
+                    if (finalizeAsync != null)
+                    {
+                        await finalizeAsync().ConfigureAwait(false);
                     }
                 }
-
-                return Array.Empty<string>();
             }
         }
     }

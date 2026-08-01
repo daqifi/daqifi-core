@@ -238,6 +238,25 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// <returns>A task representing the asynchronous connect operation.</returns>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
     {
+        await ConnectAsync(retryOptions, CancellationToken.None);
+    }
+
+    /// <inheritdoc />
+    public async Task ConnectAsync(CancellationToken cancellationToken)
+    {
+        await ConnectAsync(null, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Cancellation is observed between attempts and while waiting out a backoff delay, and is
+    /// checked immediately before each <see cref="SerialPort.Open"/>. It cannot interrupt the
+    /// <c>Open</c> call itself — the framework offers no cancellable form of it — so on a port that
+    /// hangs open, cancellation takes effect when that call returns. In practice opening a serial
+    /// port either succeeds or fails quickly; the long wait worth cancelling is the retry loop.
+    /// </remarks>
+    public async Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
+    {
         ThrowIfDisposed();
 
         if (IsConnected)
@@ -245,7 +264,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 
         await ConnectRetryExecutor.ExecuteAsync(
             retryOptions,
-            connectAttempt: options =>
+            connectAttempt: (options, attemptToken) =>
             {
                 var timeout = (int)options.ConnectionTimeout.TotalMilliseconds;
                 _serialPort = new SerialPort(_portName, _baudRate, _parity, _dataBits, _stopBits)
@@ -255,6 +274,11 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                     DtrEnable = _enableDtr,
                     RtsEnable = _enableRts
                 };
+
+                // Last chance to bail before an uninterruptible open — on a serial port a
+                // DTR-triggered MCU reset also fires here, so not opening at all is the only way to
+                // honor a cancel that arrived while the previous attempt was backing off.
+                attemptToken.ThrowIfCancellationRequested();
 
                 _serialPort.Open();
 
@@ -269,7 +293,8 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                 _serialPort?.Dispose();
                 _serialPort = null;
             },
-            onStatusChanged: OnStatusChanged);
+            onStatusChanged: OnStatusChanged,
+            cancellationToken: cancellationToken);
 
         StartDropDetection();
     }
