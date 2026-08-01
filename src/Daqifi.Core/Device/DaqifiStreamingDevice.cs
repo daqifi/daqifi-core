@@ -32,37 +32,6 @@ namespace Daqifi.Core.Device
     public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
     {
         /// <summary>
-        /// The delay in milliseconds to wait for the WiFi module to restart after applying configuration.
-        /// </summary>
-        private const int WIFI_MODULE_RESTART_DELAY_MS = 2000;
-
-        /// <summary>
-        /// The delay in milliseconds to wait after switching between LAN and SD card interfaces.
-        /// The SD card and LAN share the SPI bus, so a settle period is needed for the device
-        /// firmware to complete the interface switch before sending further commands.
-        /// </summary>
-        private const int SD_INTERFACE_SETTLE_DELAY_MS = 100;
-
-        /// <summary>
-        /// Maximum number of retry attempts for SD card list operations that receive transient
-        /// SCPI errors (e.g., -200 Execution error) due to interface-switch timing.
-        /// </summary>
-        private const int SD_LIST_MAX_RETRIES = 1;
-
-        /// <summary>
-        /// Inactivity window that ends the SD listing text exchange, in milliseconds.
-        /// </summary>
-        /// <remarks>
-        /// Deliberately longer than the 250ms default. The listing is only accepted once its
-        /// end-of-listing terminator has been seen (see <see cref="GetSdCardFilesAsync"/>), and the
-        /// terminator can trail the last listing line by more than the default window — the firmware
-        /// walks the directory tree between chunks, and a congested WiFi link adds its own gaps. With
-        /// the default, a merely-slow terminator would read as a missing one and fail a listing that
-        /// was about to complete.
-        /// </remarks>
-        private const int SD_LIST_COMPLETION_TIMEOUT_MS = 1000;
-
-        /// <summary>
         /// Maximum number of retry attempts for the USB stream-interface command sent during
         /// <see cref="OnDeviceInitializingAsync"/> when the device returns a transient SCPI error
         /// (e.g. because the firmware still has the interface set from a prior WiFi session).
@@ -74,31 +43,6 @@ namespace Daqifi.Core.Device
         /// transient SCPI error.
         /// </summary>
         private const int UsbStreamInterfaceRetryDelayMs = 150;
-
-        /// <summary>
-        /// libscpi's <c>SCPI_ERROR_UNDEFINED_HEADER</c> — the code the firmware returns for a
-        /// command it doesn't recognize (e.g. a command that postdates the connected firmware).
-        /// This is the wire-level signal behind the <see cref="FeatureNotSupportedException"/>
-        /// backstop (ADR 0001, docs/adr/0001-firmware-feature-gating.md).
-        /// </summary>
-        private const int ScpiErrorCodeUndefinedHeader = -113;
-
-        /// <summary>
-        /// Admits one SD download at a time. A download that hits its deadline is ABANDONED, not
-        /// stopped — its worker can still be parked in native I/O holding the transport stream —
-        /// so the gate is released only when that worker actually finishes, however long that
-        /// takes. Without it, a caller retrying against a device that stays wedged (an "import
-        /// all" loop, say) would start a second reader on the same stream, which is the framing
-        /// corruption <see cref="DaqifiDevice"/> already refuses to risk when restarting the
-        /// protobuf consumer, and would stack another permanently blocked thread each time (#399).
-        /// </summary>
-        /// <remarks>
-        /// Deliberately not disposed: we only ever call <see cref="SemaphoreSlim.Wait(int)"/> and
-        /// <see cref="SemaphoreSlim.Release()"/>, never <see cref="SemaphoreSlim.AvailableWaitHandle"/>,
-        /// so there is no handle to release — and an abandoned worker may release this long after
-        /// the device is disposed, which would otherwise fault a continuation nobody observes.
-        /// </remarks>
-        private readonly SemaphoreSlim _sdDownloadGate = new(1, 1);
 
         /// <summary>
         /// Reconstructs host timestamps from the device's rolling 32-bit tick counter during a
