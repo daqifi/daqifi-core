@@ -607,22 +607,152 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_WarmupFrame_StillReRaisesRawMessage()
+    public void Decode_WarmupFrame_NotHandedToRawFrameConsumers()
     {
-        // Suppression skips only the per-channel decode; raw-frame consumers still see the frame.
+        // Issue #425: the malformed frame must not reach raw-frame consumers either. They read
+        // AnalogInDataFloat straight off the frame, so a partial payload is exactly as harmful
+        // there as in the decoded path — the example CLI's offline export inferred a channel count
+        // of one from it and truncated every sample that followed.
         var device = CreateStreamingDevice(analogCount: 2);
         AnalogChannel(device, 0).IsEnabled = true;
         AnalogChannel(device, 1).IsEnabled = true;
         device.StartStreaming();
 
-        var rawFrames = 0;
-        device.MessageReceived += (_, _) => rawFrames++;
+        var rawFrames = new List<DaqifiOutMessage>();
+        device.MessageReceived += (_, e) =>
+        {
+            if (e.Message.Data is DaqifiOutMessage frame) rawFrames.Add(frame);
+        };
+        var classified = 0;
+        device.StreamMessageReceived += _ => classified++;
 
         var warmup = new DaqifiOutMessage { MsgTimeStamp = 1 };
         warmup.AnalogInDataFloat.Add(0.1f);
         device.InvokeStreamMessage(warmup);
 
+        Assert.Empty(rawFrames);
+        Assert.Equal(0, classified);
+
+        // The next full frame reaches raw consumers untouched.
+        var full = new DaqifiOutMessage { MsgTimeStamp = 2 };
+        full.AnalogInDataFloat.Add(1f);
+        full.AnalogInDataFloat.Add(2f);
+        device.InvokeStreamMessage(full);
+
+        Assert.Equal(new[] { 1f, 2f }, Assert.Single(rawFrames).AnalogInDataFloat);
+        Assert.Equal(1, classified);
+    }
+
+    [Fact]
+    public void Decode_WarmupFrame_ReportsDiscardWithCounts()
+    {
+        // A suppressed frame must be observable: a consumer counting samples has to be able to
+        // tell "Core dropped a malformed frame" from "the device sent nothing".
+        var device = CreateStreamingDevice(analogCount: 4);
+        for (var n = 0; n < 4; n++) AnalogChannel(device, n).IsEnabled = true;
+        device.StartStreaming();
+
+        var discards = new List<StreamFrameDiscardedEventArgs>();
+        device.StreamFrameDiscarded += (_, e) => discards.Add(e);
+
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1836224389 };
+        warmup.AnalogInDataFloat.Add(2f); // the bench evidence: 1 value for 4 enabled channels
+        device.InvokeStreamMessage(warmup);
+
+        var discarded = Assert.Single(discards);
+        Assert.Equal(StreamFrameDiscardReason.PartialAnalogFrame, discarded.Reason);
+        Assert.Equal(1836224389u, discarded.DeviceTimestamp);
+        Assert.Equal(1, discarded.AnalogValueCount);
+        Assert.Equal(4, discarded.EnabledAnalogChannelCount);
+        Assert.Equal(1, device.DiscardedStreamFrameCount);
+    }
+
+    [Fact]
+    public void Decode_ThrowingDiscardSubscriber_DoesNotBreakTheStream()
+    {
+        // The catch around the discard event exists to contain a bad subscriber: the frame it was
+        // reporting is still dropped, and — the part that matters — the frames after it are still
+        // decoded. Deliberately no throwing TraceListener here: Trace.Listeners is process-global,
+        // and a test that installs a throwing listener can be reached by anything else running in
+        // the same process. SafeTrace covers the listener case in production.
+        var device = CreateStreamingDevice(analogCount: 2);
+        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 1).IsEnabled = true;
+        device.StartStreaming();
+
+        var calls = 0;
+        device.StreamFrameDiscarded += (_, _) =>
+        {
+            calls++;
+            throw new InvalidOperationException("bad subscriber");
+        };
+
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        warmup.AnalogInDataFloat.Add(0.1f);
+
+        Assert.Null(Record.Exception(() => device.InvokeStreamMessage(warmup)));
+        Assert.Equal(1, calls); // the subscriber really did run and really did throw
+
+        // The stream carries on: the next full frame decodes normally.
+        var full = new DaqifiOutMessage { MsgTimeStamp = 2000 };
+        full.AnalogInDataFloat.Add(4f);
+        full.AnalogInDataFloat.Add(8f);
+        Assert.Null(Record.Exception(() => device.InvokeStreamMessage(full)));
+        Assert.Equal(4.0, AnalogChannel(device, 0).ActiveSample!.Value);
+        Assert.Equal(8.0, AnalogChannel(device, 1).ActiveSample!.Value);
+    }
+
+    [Fact]
+    public void Decode_WellFormedFirstFrame_PassesThroughCompletelyUnchanged()
+    {
+        // The guard is meant to be safe to leave in permanently, including on firmware that no
+        // longer emits the malformed frame: a well-formed first frame must reach both consumer
+        // paths, with the same object and the same values, and report no discard at all.
+        var device = CreateStreamingDevice(analogCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        var ai1 = AnalogChannel(device, 1);
+        ai0.IsEnabled = true;
+        ai1.IsEnabled = true;
+        device.StartStreaming();
+
+        var rawFrames = new List<object?>();
+        device.MessageReceived += (_, e) => rawFrames.Add(e.Message.Data);
+        var discards = 0;
+        device.StreamFrameDiscarded += (_, _) => discards++;
+
+        var first = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        first.AnalogInDataFloat.Add(4f);
+        first.AnalogInDataFloat.Add(8f);
+        device.InvokeStreamMessage(first);
+
+        Assert.Same(first, Assert.Single(rawFrames));
+        Assert.Equal(4.0, ai0.ActiveSample!.Value);
+        Assert.Equal(8.0, ai1.ActiveSample!.Value);
+        Assert.Equal(0, discards);
+        Assert.Equal(0, device.DiscardedStreamFrameCount);
+    }
+
+    [Fact]
+    public void Decode_SingleEnabledAnalogChannel_FirstFrameNotSuppressed()
+    {
+        // One enabled channel and one analog value is a *complete* frame, not a partial one. This
+        // is the case the "analog count < enabled count" rule must never get wrong, because it is
+        // indistinguishable from the malformed frame by value count alone.
+        var device = CreateStreamingDevice(analogCount: 4);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true; // exactly one enabled
+        device.StartStreaming();
+
+        var rawFrames = 0;
+        device.MessageReceived += (_, _) => rawFrames++;
+
+        var first = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        first.AnalogInDataFloat.Add(3.5f);
+        device.InvokeStreamMessage(first);
+
         Assert.Equal(1, rawFrames);
+        Assert.Equal(3.5, ai0.ActiveSample!.Value);
+        Assert.Equal(0, device.DiscardedStreamFrameCount);
     }
 
     [Fact]
@@ -674,20 +804,23 @@ public class DaqifiStreamingDeviceDecodeTests
         ai0.IsEnabled = true;
         ai1.IsEnabled = true;
 
+        device.StreamingFrequency = 100; // 500_000 ticks per sample at the 50 MHz default
+
         // Session 1: warmup + a full frame.
         device.StartStreaming();
-        var w1 = new DaqifiOutMessage { MsgTimeStamp = 1 };
+        var w1 = new DaqifiOutMessage { MsgTimeStamp = 500_000 };
         w1.AnalogInDataFloat.Add(0.1f);
         device.InvokeStreamMessage(w1);
-        var f1 = new DaqifiOutMessage { MsgTimeStamp = 2 };
+        var f1 = new DaqifiOutMessage { MsgTimeStamp = 1_000_000 };
         f1.AnalogInDataFloat.Add(1f);
         f1.AnalogInDataFloat.Add(2f);
         device.InvokeStreamMessage(f1);
         device.StopStreaming();
 
-        // Session 2: a fresh warmup frame must again be suppressed.
+        // Session 2 starts well past the leftover window (a real stop/start gap), so its first
+        // frame is genuine — and, being partial, must again be suppressed as a warmup frame.
         device.StartStreaming();
-        var w2 = new DaqifiOutMessage { MsgTimeStamp = 3 };
+        var w2 = new DaqifiOutMessage { MsgTimeStamp = 60_000_000 };
         w2.AnalogInDataFloat.Add(5f); // single value -> partial again
         device.InvokeStreamMessage(w2);
 
@@ -749,6 +882,151 @@ public class DaqifiStreamingDeviceDecodeTests
 
         Assert.NotNull(ai0.ActiveSample);
         Assert.Equal(5.0, ai0.ActiveSample!.Value); // the 6th frame's value
+    }
+
+    #endregion
+
+    #region Cross-session leftover frames (firmware #533)
+
+    [Fact]
+    public void Decode_LeftoverFrameFromPreviousSession_DiscardedFromBothConsumerPaths()
+    {
+        // The device latches the last frame of a stopped session and emits it as the first frame of
+        // the next one, one sample period after the session it actually belongs to. It must not
+        // reach consumers or anchor the new session's clock.
+        var device = CreateStreamingDevice(analogCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        var ai1 = AnalogChannel(device, 1);
+        ai0.IsEnabled = true;
+        ai1.IsEnabled = true;
+        device.StreamingFrequency = 100; // 500_000 ticks per sample
+
+        // Session 1 ends with a frame at tick 10_000_000.
+        device.StartStreaming();
+        var last = new DaqifiOutMessage { MsgTimeStamp = 10_000_000 };
+        last.AnalogInDataFloat.Add(1f);
+        last.AnalogInDataFloat.Add(2f);
+        device.InvokeStreamMessage(last);
+        device.StopStreaming();
+
+        // Session 2 starts a long while later, but the first frame that arrives carries a counter
+        // one sample period past session 1's last frame — the latched leftover.
+        device.StartStreaming();
+        var rawFrames = 0;
+        device.MessageReceived += (_, _) => rawFrames++;
+        var discards = new List<StreamFrameDiscardedEventArgs>();
+        device.StreamFrameDiscarded += (_, e) => discards.Add(e);
+
+        var leftover = new DaqifiOutMessage { MsgTimeStamp = 10_500_000 };
+        leftover.AnalogInDataFloat.Add(98f);
+        leftover.AnalogInDataFloat.Add(99f);
+        device.InvokeStreamMessage(leftover);
+
+        Assert.Equal(0, rawFrames);
+        var discarded = Assert.Single(discards);
+        Assert.Equal(StreamFrameDiscardReason.StaleLeftoverFrame, discarded.Reason);
+        Assert.Equal(10_500_000u, discarded.DeviceTimestamp);
+        Assert.Equal(2, discarded.AnalogValueCount);          // a leftover is a *full* frame
+        Assert.Equal(2, discarded.EnabledAnalogChannelCount);
+        Assert.Equal(1.0, ai0.ActiveSample!.Value); // still session 1's values
+        Assert.Equal(2.0, ai1.ActiveSample!.Value);
+
+        // The genuine first frame of session 2 follows and is delivered normally.
+        var genuine = new DaqifiOutMessage { MsgTimeStamp = 400_000_000 };
+        genuine.AnalogInDataFloat.Add(5f);
+        genuine.AnalogInDataFloat.Add(6f);
+        device.InvokeStreamMessage(genuine);
+
+        Assert.Equal(1, rawFrames);
+        Assert.Equal(5.0, ai0.ActiveSample!.Value);
+        Assert.Equal(6.0, ai1.ActiveSample!.Value);
+        Assert.Equal(1, device.DiscardedStreamFrameCount);
+    }
+
+    [Fact]
+    public void Decode_QuickRestart_DoesNotDiscardGenuineFrames()
+    {
+        // The leftover window scales with the sample period, so a restart that takes longer than a
+        // couple of sample periods is never mistaken for a leftover. At 100 Hz the window is 25 ms;
+        // this restart gap is 200 ms.
+        var device = CreateStreamingDevice(analogCount: 2);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true;
+        AnalogChannel(device, 1).IsEnabled = true;
+        device.StreamingFrequency = 100;
+
+        device.StartStreaming();
+        var last = new DaqifiOutMessage { MsgTimeStamp = 10_000_000 };
+        last.AnalogInDataFloat.Add(1f);
+        last.AnalogInDataFloat.Add(2f);
+        device.InvokeStreamMessage(last);
+        device.StopStreaming();
+
+        device.StartStreaming();
+        var discards = 0;
+        device.StreamFrameDiscarded += (_, _) => discards++;
+
+        // 200 ms later at 50 MHz = 10_000_000 ticks on.
+        var genuine = new DaqifiOutMessage { MsgTimeStamp = 20_000_000 };
+        genuine.AnalogInDataFloat.Add(7f);
+        genuine.AnalogInDataFloat.Add(8f);
+        device.InvokeStreamMessage(genuine);
+
+        Assert.Equal(0, discards);
+        Assert.Equal(7.0, ai0.ActiveSample!.Value);
+    }
+
+    [Fact]
+    public void Decode_LeftoverGuardInactiveOnFirstSession()
+    {
+        // With no counter value from before the session there is nothing to compare against, so the
+        // first session after connect delivers its first frame untouched rather than guessing.
+        var device = CreateStreamingDevice(analogCount: 1);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true;
+        device.StartStreaming();
+
+        var discards = 0;
+        device.StreamFrameDiscarded += (_, _) => discards++;
+
+        var first = new DaqifiOutMessage { MsgTimeStamp = 7 };
+        first.AnalogInDataFloat.Add(3f);
+        device.InvokeStreamMessage(first);
+
+        Assert.Equal(0, discards);
+        Assert.Equal(3.0, ai0.ActiveSample!.Value);
+    }
+
+    [Fact]
+    public void Decode_FrameArrivingWhileStopped_SeedsTheLeftoverReference()
+    {
+        // The device can emit a final frame after the stop command lands, and the frame latched for
+        // the next session follows *that* one. A frame received while stopped is still re-raised to
+        // raw consumers, but it must also update the reference the next session is checked against.
+        var device = CreateStreamingDevice(analogCount: 1);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true;
+        device.StreamingFrequency = 100;
+
+        var trailing = new DaqifiOutMessage { MsgTimeStamp = 10_000_000 };
+        trailing.AnalogInDataFloat.Add(1f);
+
+        var rawFrames = 0;
+        device.MessageReceived += (_, _) => rawFrames++;
+        device.InvokeStreamMessage(trailing); // arrives while not streaming
+        Assert.Equal(1, rawFrames);
+        Assert.Null(ai0.ActiveSample); // re-raised but not decoded
+
+        device.StartStreaming();
+        var discards = 0;
+        device.StreamFrameDiscarded += (_, _) => discards++;
+
+        var leftover = new DaqifiOutMessage { MsgTimeStamp = 10_500_000 };
+        leftover.AnalogInDataFloat.Add(99f);
+        device.InvokeStreamMessage(leftover);
+
+        Assert.Equal(1, discards);
+        Assert.Null(ai0.ActiveSample);
     }
 
     #endregion
