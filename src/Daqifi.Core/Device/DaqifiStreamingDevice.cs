@@ -216,7 +216,9 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Gets a value indicating whether the device is connected over USB (serial transport).
-        /// SD card file downloads require a USB connection because the SD card and WiFi/LAN share the SPI bus.
+        /// The SD card and the WiFi/LAN module share one SPI bus, so this decides how every SD
+        /// operation prepares that bus, what a silent transport means to a file transfer, and
+        /// whether SD logging can be started at all.
         /// </summary>
         public virtual bool IsUsbConnection => Transport is SerialStreamTransport;
 
@@ -2520,8 +2522,11 @@ namespace Daqifi.Core.Device
             if (!IsUsbConnection)
             {
                 throw new InvalidOperationException(
-                    "SD card logging requires a USB/serial connection. " +
-                    "The SD card and WiFi/LAN share the SPI bus, so SD operations cannot be performed over a network connection.");
+                    "SD card logging requires a USB/serial connection. Starting a logging session " +
+                    "disables the LAN interface to give the SD card the shared SPI bus, which over " +
+                    "a network connection would drop the very link the command arrived on. " +
+                    "Listing, downloading and deleting SD files do work over WiFi on firmware " +
+                    "v3.7.0 and later.");
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2600,11 +2605,18 @@ namespace Daqifi.Core.Device
             if (IsUsbConnection)
             {
                 Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb));
-            }
 
-            // Re-enable LAN interface. StartSdCardLoggingAsync disables LAN because
-            // the SD card and WiFi/LAN share the SPI bus on the hardware.
-            Send(ScpiMessageProducer.EnableNetworkLan);
+                // Re-enable LAN interface. StartSdCardLoggingAsync disables LAN because
+                // the SD card and WiFi/LAN share the SPI bus on the hardware.
+                //
+                // Only over USB, and for the same reason PrepareLanInterface() is transport-aware:
+                // over WiFi/TCP the LAN was never disabled (nothing can disable it from the other
+                // end of the connection it carries), and LAN:ENAbled 1 re-initializes the WiFi
+                // module — which would drop the very link this command arrived on. A session that
+                // logged over USB, disconnected, and came back over WiFi could otherwise call this
+                // and cut itself off (#327).
+                Send(ScpiMessageProducer.EnableNetworkLan);
+            }
 
             _isLoggingToSdCard = false;
 
@@ -2728,7 +2740,7 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Downloads a file from the device's SD card over USB.
+        /// Downloads a file from the device's SD card, over USB or over WiFi/TCP.
         /// </summary>
         /// <param name="fileName">The name of the file to download.</param>
         /// <param name="destinationStream">The stream to write file contents to.</param>
@@ -2745,7 +2757,9 @@ namespace Daqifi.Core.Device
         /// listing reports as 0 bytes downloads successfully as a legitimate empty file.
         /// </exception>
         /// <exception cref="SdCardTransferStalledException">
-        /// Thrown when the transfer stops making progress before the end-of-file marker arrives.
+        /// Thrown when the transfer stops making progress before the end-of-file marker arrives:
+        /// the transport returned an empty read, closed, or — the only signal a socket gives —
+        /// went quiet for longer than <see cref="SdCardTransferIdleTimeout"/>.
         /// </exception>
         /// <exception cref="TimeoutException">
         /// Thrown when the download does not finish within <see cref="SdCardDownloadTimeout"/>.
@@ -2828,11 +2842,14 @@ namespace Daqifi.Core.Device
                 {
                     await ExecuteRawCaptureAsync(async (stream, ct) =>
                     {
-                        // Prepare SD card interface
+                        // Prepare SD card interface. Transport-aware: over USB it hands the shared
+                        // SPI bus to the card, over WiFi/TCP it leaves the LAN up because the reply
+                        // comes back over that very connection (#598/#599).
                         PrepareSdInterface();
 
-                        // Small delay to let the interface switch settle
-                        await Task.Delay(50, ct).ConfigureAwait(false);
+                        // Let the interface switch settle before the card is asked for anything —
+                        // the same wait the LIST/DELETE/space exchanges take for the same reason.
+                        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
 
                         // Send the SCPI command to request the file
                         Send(ScpiMessageProducer.GetSdFile(fileName));
@@ -2844,7 +2861,17 @@ namespace Daqifi.Core.Device
                         // bounded number of times before giving up (see #264). Passing the listed
                         // size keeps that retry off a genuinely 0-byte file, which is a legitimate
                         // empty download rather than a wedged subsystem (#398 gap 2).
-                        var receiver = new SdCardFileReceiver(stream);
+                        // The receiver is told what its transport's silence means. Over USB serial a
+                        // zero-length read is the per-read ReadTimeout firing on a device that is
+                        // merely quiet; over TCP it is the peer's FIN and nothing else, and the
+                        // socket keeps reporting itself readable either way. Over TCP the socket
+                        // also never surfaces silence at all — ReadAsync ignores the receive
+                        // timeout — so the inactivity window is the only thing standing between a
+                        // device that stopped answering and the full 30-minute budget (#327).
+                        var receiver = new SdCardFileReceiver(
+                            stream,
+                            zeroLengthReadMeansClosed: !IsUsbConnection,
+                            idleTimeout: SdCardTransferIdleTimeout);
                         var listedFileSizeBytes = TryGetListedFileSize(fileName);
                         long bytesReceived;
                         var attempt = 0;
@@ -2944,7 +2971,7 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Downloads a file from the device's SD card over USB to a temporary file.
+        /// Downloads a file from the device's SD card, over USB or over WiFi/TCP, to a temporary file.
         /// </summary>
         /// <param name="fileName">The name of the file to download.</param>
         /// <param name="progress">Optional progress reporting.</param>
@@ -2992,6 +3019,14 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>Virtual only as a test seam — a 30-minute budget is not unit-testable.</remarks>
         internal virtual TimeSpan SdCardDownloadTimeout => TimeSpan.FromMinutes(30);
+
+        /// <summary>
+        /// How long a download may go without receiving a single byte before it is declared
+        /// stalled. Bounds a WiFi/TCP transfer whose device stopped answering, which the socket
+        /// itself never reports (see <see cref="SdCardFileReceiver.DefaultIdleTimeout"/>).
+        /// </summary>
+        /// <remarks>Virtual only as a test seam — a 20-second window is not unit-testable.</remarks>
+        internal virtual TimeSpan SdCardTransferIdleTimeout => SdCardFileReceiver.DefaultIdleTimeout;
 
         /// <summary>
         /// The part of <paramref name="budget"/> not yet consumed, floored at zero (a negative
