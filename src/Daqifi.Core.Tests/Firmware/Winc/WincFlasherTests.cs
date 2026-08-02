@@ -8,7 +8,16 @@ namespace Daqifi.Core.Tests.Firmware.Winc;
 /// </summary>
 public class WincFlasherTests
 {
+    // Restated independently from the WINC driver's spi_flash.c rather than reused from
+    // production, so a typo in the production register map fails these tests instead of being
+    // silently agreed with. SPI_FLASH_BASE is 0x10200.
+    private const uint RegCommandCount = 0x10204;
+    private const uint RegDataCount = 0x10208;
+    private const uint RegBuffer1 = 0x1020C;
+    private const uint RegBuffer2 = 0x10210;
+    private const uint RegBufferDirection = 0x10214;
     private const uint TransferDoneRegister = 0x10218;
+    private const uint RegDmaAddress = 0x1021C;
     private const uint DummyRegister = 0x1084;
     private const uint ShareMemoryBase = 0xD0000;
 
@@ -125,31 +134,53 @@ public class WincFlasherTests
 
         CreateReader(port).ReadFlashJedecId();
 
-        var writes = RegisterWrites(port);
+        // Asserted as an ordered sequence, not a final-state map. Order is the protocol here:
+        // DATA_CNT and DMA_ADDR configure the transfer and CMD_CNT triggers it, so a map-based
+        // assertion would pass even if CMD_CNT fired first, or if a wrong value were written and
+        // silently corrected afterwards.
+        Assert.Equal(
+            [
+                (RegDataCount, 4u),                     // 4 result bytes
+                (RegBuffer1, 0x9Fu),                    // RDID opcode
+                (RegBufferDirection, 0x01u),
+                (RegDmaAddress, DummyRegister),         // where the result lands
+                (RegCommandCount, 1u | (1u << 7))       // 1 command byte + start bit — must be last
+            ],
+            RegisterWriteSequence(port));
+    }
 
-        Assert.Equal(4u, writes[0x10208]);        // DATA_CNT - 4 result bytes
-        Assert.Equal(0x9Fu, writes[0x1020C]);     // BUF1 - RDID opcode
-        Assert.Equal(0x01u, writes[0x10214]);     // BUF_DIR
-        Assert.Equal(DummyRegister, writes[0x1021C]); // DMA_ADDR - where the result lands
-        Assert.Equal(1u | (1u << 7), writes[0x10204]); // CMD_CNT - 1 command byte, start bit
+    [Fact]
+    public void ReadFlash_WritesTheExactFastReadRegisterSequence()
+    {
+        // Same ordering guarantee on the path that actually carries data. The controller latches
+        // the staged configuration when CMD_CNT is written, so everything else must precede it.
+        var port = CreateReadyPort();
+        port.Blocks[ShareMemoryBase] = new byte[16];
+
+        CreateReader(port).ReadFlash(0x123456, 16);
+
+        Assert.Equal(
+            [
+                (RegDataCount, 16u),
+                (RegBuffer1, 0x5634120Bu),              // 0x0B opcode + 24-bit address ascending
+                (RegBuffer2, 0xA5u),                    // fast-read dummy byte
+                (RegBufferDirection, 0x1Fu),
+                (RegDmaAddress, ShareMemoryBase),
+                (RegCommandCount, 5u | (1u << 7))       // 5 command bytes + start bit — must be last
+            ],
+            RegisterWriteSequence(port));
     }
 
     /// <summary>
-    /// Extracts address -> value for every WriteRegister command the client sent.
+    /// Every WriteRegister the client sent, in the order it was sent, as (address, value).
     /// </summary>
-    private static Dictionary<uint, uint> RegisterWrites(FakeWincSerialPort port)
-    {
-        var writes = new Dictionary<uint, uint>();
-
-        foreach (var h in port.ReceivedHeaders.Where(h => h[0] == (byte)WincBridgeProtocol.Command.WriteRegister))
-        {
-            var address = ((uint)h[7] << 24) | ((uint)h[6] << 16) | ((uint)h[5] << 8) | h[4];
-            var value = ((uint)h[11] << 24) | ((uint)h[10] << 16) | ((uint)h[9] << 8) | h[8];
-            writes[address] = value;
-        }
-
-        return writes;
-    }
+    private static List<(uint Address, uint Value)> RegisterWriteSequence(FakeWincSerialPort port)
+        => port.ReceivedHeaders
+            .Where(h => h[0] == (byte)WincBridgeProtocol.Command.WriteRegister)
+            .Select(h => (
+                Address: ((uint)h[7] << 24) | ((uint)h[6] << 16) | ((uint)h[5] << 8) | h[4],
+                Value: ((uint)h[11] << 24) | ((uint)h[10] << 16) | ((uint)h[9] << 8) | h[8]))
+            .ToList();
 
     [Fact]
     public void ReadFlash_ThrowsWhenTheControllerNeverReportsDone()
