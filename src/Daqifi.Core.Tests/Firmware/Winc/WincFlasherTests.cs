@@ -111,6 +111,47 @@ public class WincFlasherTests
     }
 
     [Fact]
+    public void ReadFlashJedecId_WritesTheExactRegisterSequenceTheWincDriverUses()
+    {
+        // Pinned register-by-register against the WINC driver's spi_flash_rdid.
+        //
+        // This exists because the bench caught what framing tests structurally could not: the
+        // original code wrote DATA_CNT 0 and DMA_ADDR 0, so no result bytes were clocked back and
+        // the read returned 0x00000000 from a live module. Every frame was well-formed and the
+        // device ACKed every one, so nothing about the protocol layer was wrong - only the values.
+        // Asserting the sequence, not just the return, is what catches that class of bug.
+        var port = CreateReadyPort();
+        port.Registers[DummyRegister] = 0x00C22018;
+
+        CreateReader(port).ReadFlashJedecId();
+
+        var writes = RegisterWrites(port);
+
+        Assert.Equal(4u, writes[0x10208]);        // DATA_CNT - 4 result bytes
+        Assert.Equal(0x9Fu, writes[0x1020C]);     // BUF1 - RDID opcode
+        Assert.Equal(0x01u, writes[0x10214]);     // BUF_DIR
+        Assert.Equal(DummyRegister, writes[0x1021C]); // DMA_ADDR - where the result lands
+        Assert.Equal(1u | (1u << 7), writes[0x10204]); // CMD_CNT - 1 command byte, start bit
+    }
+
+    /// <summary>
+    /// Extracts address -> value for every WriteRegister command the client sent.
+    /// </summary>
+    private static Dictionary<uint, uint> RegisterWrites(FakeWincSerialPort port)
+    {
+        var writes = new Dictionary<uint, uint>();
+
+        foreach (var h in port.ReceivedHeaders.Where(h => h[0] == (byte)WincBridgeProtocol.Command.WriteRegister))
+        {
+            var address = ((uint)h[7] << 24) | ((uint)h[6] << 16) | ((uint)h[5] << 8) | h[4];
+            var value = ((uint)h[11] << 24) | ((uint)h[10] << 16) | ((uint)h[9] << 8) | h[8];
+            writes[address] = value;
+        }
+
+        return writes;
+    }
+
+    [Fact]
     public void ReadFlash_ThrowsWhenTheControllerNeverReportsDone()
     {
         // The firmware's own poll loop is unbounded; ours must not be, or a WINC that stops

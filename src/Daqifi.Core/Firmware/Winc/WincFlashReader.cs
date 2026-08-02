@@ -82,10 +82,16 @@ internal sealed class WincFlashReader
     /// </summary>
     internal uint ReadFlashJedecId()
     {
-        _bridge.WriteRegister(RegDataCount, 0);
+        // DATA_CNT is the number of result bytes to clock back, and DMA_ADDR is where they land.
+        // Both matter: with DATA_CNT 0 and DMA_ADDR 0 the command still completes and TR_DONE still
+        // goes high, but nothing is transferred and the result register reads 0x00000000. That is
+        // what the bench returned before this was corrected against the WINC driver's
+        // spi_flash_rdid — a bug no amount of framing tests could have caught, because every frame
+        // was well-formed and the device answered every one of them.
+        _bridge.WriteRegister(RegDataCount, 4);
         _bridge.WriteRegister(RegBuffer1, FlashCommandReadIdentification);
         _bridge.WriteRegister(RegBufferDirection, 0x01);
-        _bridge.WriteRegister(RegDmaAddress, 0);
+        _bridge.WriteRegister(RegDmaAddress, DummyRegister);
         _bridge.WriteRegister(RegCommandCount, 1 | CommandStartBit);
 
         WaitForTransferDone("read flash JEDEC id");
