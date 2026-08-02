@@ -332,7 +332,7 @@ public class WincFlasherTests
         // to hand to the logger. So a logger that captures the exception proves the read happened,
         // using a seam that exists for production reasons rather than a test-only hook.
         var logger = new CapturingLogger();
-        var port = new FaultingAfterDelayPort(TimeSpan.FromMilliseconds(150));
+        var port = new FaultingOnReleasePort();
         var inspector = new WincModuleInspector(
             (_, _) => port,
             logger,
@@ -340,6 +340,10 @@ public class WincFlasherTests
             openTimeout: TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
+
+        // Only now let the abandoned open fault, so it provably lands after the timeout rather than
+        // racing it.
+        port.ReleaseFault();
 
         var observed = await logger.FirstException.WaitAsync(TimeSpan.FromSeconds(10));
 
@@ -356,7 +360,7 @@ public class WincFlasherTests
         // Releasing the handle is the whole reason the abandonment continuation exists. If a
         // throwing logger could skip past the disposal, the abandoned port would leak and break
         // every later open until the process exits — strictly worse than the fault being reported.
-        var port = new FaultingAfterDelayPort(TimeSpan.FromMilliseconds(150));
+        var port = new FaultingOnReleasePort();
         var inspector = new WincModuleInspector(
             (_, _) => port,
             new ThrowingLogger(),
@@ -364,6 +368,10 @@ public class WincFlasherTests
             openTimeout: TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAsync<TimeoutException>(() => inspector.ReadIdentityAsync("COM1"));
+
+        // Only now let the abandoned open fault, so it provably lands after the timeout rather than
+        // racing it.
+        port.ReleaseFault();
 
         // Disposal must still happen despite the observation throwing.
         await port.Disposed.WaitAsync(TimeSpan.FromSeconds(10));
@@ -608,23 +616,50 @@ public class WincFlasherTests
     }
 
     /// <summary>
-    /// A port whose <see cref="Open"/> blocks briefly and then throws, standing in for an open that
-    /// is abandoned on the timeout and only fails afterwards.
+    /// A port whose <see cref="Open"/> blocks until the test releases it and then throws, standing
+    /// in for an open that is abandoned on the timeout and only fails afterwards.
     /// </summary>
-    private sealed class FaultingAfterDelayPort(TimeSpan delay) : IWincSerialPort
+    /// <remarks>
+    /// The fault is gated on a signal rather than a wall-clock delay because the ordering has to be
+    /// guaranteed, not merely likely. An earlier version slept 150 ms against a 50 ms
+    /// <c>openTimeout</c> and leaned on that margin, but <see cref="Task.WaitAsync(TimeSpan)"/> only
+    /// times out when its timer fires <em>before</em> the task completes — so a runner contended
+    /// enough to slip a 50 ms timer past 150 ms saw the fault land first, and the assertion caught
+    /// <see cref="InvalidOperationException"/> instead of <see cref="TimeoutException"/>. That
+    /// reddened unrelated PRs under full-suite load while passing in isolation. Holding the fault
+    /// until the timeout has already been observed removes the timing assumption entirely.
+    /// </remarks>
+    private sealed class FaultingOnReleasePort : IWincSerialPort
     {
+        private readonly SemaphoreSlim _release = new(0, 1);
+
         private readonly TaskCompletionSource _disposed =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>Completes when the port is disposed, so tests can await it deterministically.</summary>
         internal Task Disposed => _disposed.Task;
 
+        /// <summary>
+        /// Lets the blocked open proceed to its fault. Call only once the timeout has been observed,
+        /// which is what makes the abandoned-open ordering deterministic.
+        /// </summary>
+        internal void ReleaseFault() => _release.Release();
+
         public bool IsOpen => false;
         public int BaudRate { get; set; } = 115200;
 
         public void Open()
         {
-            Thread.Sleep(delay);
+            // Bounded at the tests' own 10 s wait rather than above it. A test that fails before
+            // releasing surfaces its own assertion first either way, but anything longer leaves this
+            // parked on a pool thread after the test has finished — extra contention in the suite
+            // whose load sensitivity is the reason this class exists.
+            if (!_release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new InvalidOperationException(
+                    "Test bug: ReleaseFault was never called, so the gated open timed out.");
+            }
+
             throw new InvalidOperationException("abandoned-open-fault");
         }
 
