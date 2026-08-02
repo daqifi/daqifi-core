@@ -152,7 +152,21 @@ public class SerialStreamTransportTests
     /// </remarks>
     private static string CreateVerifiedAbsentPort()
     {
-        var enumerated = new HashSet<string>(SerialPort.GetPortNames(), StringComparer.OrdinalIgnoreCase);
+        // SerialPort.GetPortNames() can itself throw (a container without /dev access, a
+        // locked-down host). It must not take the suite down from inside a test helper: that would
+        // surface as these tests failing, which reads exactly like the feature under test broke.
+        // An enumeration that cannot answer simply contributes no names — on Unix File.Exists
+        // still gives an independent absence check, and on Windows an unclaimed high COM number
+        // remains the best available answer.
+        HashSet<string> enumerated;
+        try
+        {
+            enumerated = new HashSet<string>(SerialPort.GetPortNames(), StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            enumerated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
 
         if (OperatingSystem.IsWindows())
         {
@@ -238,6 +252,25 @@ public class SerialStreamTransportTests
 
         var typed = Assert.IsType<SerialPortConnectException>(reported);
         Assert.Equal(SerialPortConnectFailure.NotFound, typed.Reason);
+    }
+
+    [Fact]
+    public async Task SerialStreamTransport_ConnectAsync_WhenThePresenceProbeThrows_DoesNotLeakIt()
+    {
+        // The production classification path calls SerialPort.GetPortNames(), which can throw on
+        // some hosts. That must degrade the reason, never replace the connect failure with the
+        // probe's own exception or escape as an unhandled error.
+        using var transport = new SerialStreamTransport(CreateVerifiedAbsentPort())
+        {
+            PortPresenceProbe = _ => throw new UnauthorizedAccessException("the probe could not run")
+        };
+
+        var ex = await Assert.ThrowsAsync<SerialPortConnectException>(() => transport.ConnectAsync());
+
+        // The caller still gets the real open failure, with the platform exception preserved, and
+        // no trace of the probe's failure anywhere in the chain.
+        Assert.NotNull(ex.InnerException);
+        Assert.DoesNotContain("the probe could not run", ex.ToString());
     }
 
     [Fact]
