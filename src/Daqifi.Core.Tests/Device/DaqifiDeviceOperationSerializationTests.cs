@@ -450,6 +450,75 @@ public class DaqifiDeviceOperationSerializationTests
         device.Disconnect();
     }
 
+    [Fact]
+    public async Task Send_FromAFlowThatOutlivedItsSession_NoLongerBypassesDeferral()
+    {
+        // Ownership of the device is a property of a SESSION. A flow that acquired the operation
+        // lock, then had the transport torn down and replaced underneath it, is not the owner of
+        // the new session — and must not keep skipping deferral as though it were.
+        //
+        // The vehicle is the documented fan-out hazard: work started from inside an exclusive
+        // block inherits that block's execution context, and with it the block's ownership. Here
+        // that inherited ownership is deliberately made to outlive a teardown, which is precisely
+        // the stale-owner shape. It must not let the leaked sender write straight through while a
+        // completely unrelated operation owns the reconnected device.
+        using var transport = new RecordingTransport();
+        using var device = new DaqifiDevice("Outlived Device", transport);
+        device.Connect();
+
+        using var sendNow = new ManualResetEventSlim(false);
+        using var sendDone = new ManualResetEventSlim(false);
+        Task? leaked = null;
+
+        await device.RunExclusiveAsync(_ =>
+        {
+            // Inherits this block's context — and therefore its ownership.
+            leaked = Task.Run(() =>
+            {
+                sendNow.Wait(DeadlockBudget);
+                device.Send(ScpiMessageProducer.SetDioPortState(5, 1));
+                sendDone.Set();
+            });
+            return Task.CompletedTask;
+        }).WaitAsync(DeadlockBudget);
+
+        // Tear the session down and bring a new one up. The leaked sender is now a flow from a
+        // session that no longer exists.
+        await device.DisconnectAsync().WaitAsync(DeadlockBudget);
+        device.Connect();
+        Assert.True(device.IsConnected);
+
+        // A genuine operation now owns the reconnected device.
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        var owner = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        sendNow.Set();
+        Assert.True(sendDone.Wait(DeadlockBudget), "The leaked sender never ran.");
+
+        // Still owned by someone else, so the stale flow's message must be parked, not written.
+        await Task.Delay(250);
+        Assert.DoesNotContain(transport.Writes, w => w.Contains("DIO:PORt:STATe", StringComparison.Ordinal));
+
+        release.SetResult();
+        await owner.WaitAsync(DeadlockBudget);
+        if (leaked != null)
+        {
+            await leaked.WaitAsync(DeadlockBudget);
+        }
+
+        // ...and delivered once that operation finishes.
+        await WaitForWriteAsync(transport, "DIO:PORt:STATe");
+
+        device.Disconnect();
+    }
+
     // ── Qodo round 1, finding 1: the drain must cover in-flight writes ──────────────────────
 
     [Fact]

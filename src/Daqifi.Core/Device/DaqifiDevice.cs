@@ -437,7 +437,7 @@ namespace Daqifi.Core.Device
         // because the text exchange is still its busiest user.
         //
         // SemaphoreSlim chosen over Lock because the holders are async; counter is (1, 1) for
-        // mutual exclusion. Not reentrant, so re-entry is tracked by _ownsOperationLock below.
+        // mutual exclusion. Not reentrant, so re-entry is tracked by _operationLockGeneration below.
         private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
 
         // Async-context flag that tracks whether the current logical flow
@@ -449,7 +449,7 @@ namespace Daqifi.Core.Device
         // Environment.CurrentManagedThreadId capture wouldn't work — the
         // value seen before await may not match the value seen after.
         //
-        // Distinct from _ownsOperationLock: this one says "a consumer swap is in progress on this
+        // Distinct from _operationLockGeneration: this one says "a consumer swap is in progress on this
         // flow" (nesting is a bug), that one says "this flow holds the lock" (nesting is fine).
         private readonly AsyncLocal<bool> _isInsideTextExchange = new();
 
@@ -918,15 +918,53 @@ namespace Daqifi.Core.Device
         #region Operation serialization (issue #342)
 
         /// <summary>
-        /// True while the current logical flow owns <c>_textExchangeLock</c>.
+        /// The session generation in which the current logical flow acquired
+        /// <c>_textExchangeLock</c>, or 0 when it does not hold it.
         /// </summary>
         /// <remarks>
-        /// Set by <see cref="RunExclusiveAsync{TResult}"/> and by the text exchange, and read by
-        /// everything that would otherwise wait on a lock it already holds. <see cref="AsyncLocal{T}"/>
-        /// rather than a thread id so it survives an <c>await</c> resuming on another thread — the
-        /// same technique <c>_isInsideLifecycleOperation</c> and <c>_isInsideTextExchange</c> use.
+        /// Set by <see cref="RunExclusiveAsync{TResult}"/> and by the text exchange.
+        /// <see cref="AsyncLocal{T}"/> rather than a thread id so it survives an <c>await</c>
+        /// resuming on another thread — the same technique <c>_isInsideLifecycleOperation</c> and
+        /// <c>_isInsideTextExchange</c> use.
+        /// <para>
+        /// A generation rather than a bool because holding the lock and owning the <i>current
+        /// session</i> are different questions, and teardown separates them. See
+        /// <see cref="HoldsOperationLock"/> and <see cref="OwnsCurrentSession"/>.
+        /// </para>
         /// </remarks>
-        private readonly AsyncLocal<bool> _ownsOperationLock = new();
+        private readonly AsyncLocal<int> _operationLockGeneration = new();
+
+        /// <summary>
+        /// Bumped by every teardown, retiring the ownership of any flow that took the lock in an
+        /// earlier session. Starts at 1 so that 0 always means "does not hold the lock".
+        /// </summary>
+        private int _operationGeneration = 1;
+
+        /// <summary>
+        /// True when this flow acquired the operation lock — in <i>any</i> session.
+        /// </summary>
+        /// <remarks>
+        /// This is the re-entrancy question, and it must stay session-blind. A flow that holds the
+        /// semaphore must never be told to wait for it, whatever has happened to the session in the
+        /// meantime: <c>ExecuteTextCommandAsync</c> waits on it without a timeout, so answering
+        /// "no" to a flow that really does hold it is not a degraded result, it is a hang.
+        /// </remarks>
+        private bool HoldsOperationLock => _operationLockGeneration.Value != 0;
+
+        /// <summary>
+        /// True when this flow acquired the operation lock in the session that is still current.
+        /// </summary>
+        /// <remarks>
+        /// This is the authority question, and it is the one <see cref="Send{T}"/> asks before
+        /// skipping deferral. Exclusivity is a property of a session: once the transport has been
+        /// torn down and a new one opened, a flow still running from the old session is not the
+        /// owner of the new one and its sends must queue behind that session's rules like anybody
+        /// else's. Without this, a flow that outlived its teardown would keep bypassing deferral
+        /// into a session it has no claim on.
+        /// </remarks>
+        private bool OwnsCurrentSession =>
+            _operationLockGeneration.Value != 0
+            && _operationLockGeneration.Value == Volatile.Read(ref _operationGeneration);
 
         /// <summary>
         /// Guards <see cref="_operationInFlight"/> and <see cref="_deferredSends"/> as one unit.
@@ -1027,7 +1065,7 @@ namespace Daqifi.Core.Device
             // Already ours: run nested, exactly as a reentrant monitor would. This is what lets an
             // exclusive block call GetSdCardFilesAsync — which opens a text exchange on this same
             // lock — instead of deadlocking against a non-reentrant semaphore.
-            if (_ownsOperationLock.Value)
+            if (HoldsOperationLock)
             {
                 return await operation(cancellationToken).ConfigureAwait(false);
             }
@@ -1037,7 +1075,7 @@ namespace Daqifi.Core.Device
             // Set HERE rather than inside the helper above: an async method's AsyncLocal writes do
             // not flow back to its caller, only forward to its callees. Assigning it in this frame
             // is what makes the body — and everything the body awaits — see the ownership.
-            _ownsOperationLock.Value = true;
+            _operationLockGeneration.Value = Volatile.Read(ref _operationGeneration);
             MarkOperationInFlight();
 
             try
@@ -1046,7 +1084,7 @@ namespace Daqifi.Core.Device
             }
             finally
             {
-                _ownsOperationLock.Value = false;
+                _operationLockGeneration.Value = 0;
                 FlushDeferredSends();
                 ReleaseOperationLock();
             }
@@ -1233,14 +1271,30 @@ namespace Daqifi.Core.Device
         /// finish inside the bounded wait.
         /// </para>
         /// <para>
-        /// Safe even when a wedged operation is still holding the operation lock. That operation
-        /// still owns the semaphore, so no new operation can begin before it releases, and its own
-        /// exit path runs before that release — it cannot clear the flag out from under a later
-        /// operation.
+        /// The generation bump is what makes the reset safe when a wedged operation is still
+        /// holding the lock. Clearing the flag alone would leave that flow bypassing deferral —
+        /// <see cref="TryDeferSend"/> asks <see cref="OwnsCurrentSession"/> <i>before</i> it looks
+        /// at the flag — so it would keep sending into the next session as though it still owned
+        /// it. Retiring the generation ends that claim: the flow keeps the semaphore (only it can
+        /// release it, and its exit path still must) but stops counting as the owner of a session
+        /// that has been replaced.
+        /// </para>
+        /// <para>
+        /// Note what is deliberately <b>not</b> done here: the reset is unconditional, and in
+        /// particular is not gated on teardown having acquired the lock. Gating it would strand
+        /// <see cref="_operationInFlight"/> exactly when the lock could not be taken — the case a
+        /// bounded teardown exists for — leaving the next session deferring into a backlog with no
+        /// drainer. And it would not achieve isolation either, because the stale flow's bypass does
+        /// not consult that flag at all. What the flag governs is every <i>other</i> flow; gating it
+        /// would silence them and leave the stale one talking.
         /// </para>
         /// </remarks>
         private void ResetDeferralState()
         {
+            // Retire the outgoing session's ownership before reopening the gate, so no flow can be
+            // both "not deferring" and "not the owner" at the same instant.
+            Interlocked.Increment(ref _operationGeneration);
+
             lock (_deferralGate)
             {
                 _deferredSends = null;
@@ -1280,7 +1334,7 @@ namespace Daqifi.Core.Device
         /// </remarks>
         private bool TryDeferSend<T>(IOutboundMessage<T> message)
         {
-            if (_ownsOperationLock.Value)
+            if (OwnsCurrentSession)
             {
                 return false;
             }
@@ -1818,7 +1872,7 @@ namespace Daqifi.Core.Device
             // budget on a lock we are holding ourselves and then tear down anyway; run nested
             // instead, and leave the release to the owner. Reported as "not acquired" precisely so
             // FinishDisconnect does not release a lock this teardown never took.
-            if (_ownsOperationLock.Value)
+            if (HoldsOperationLock)
             {
                 return false;
             }
@@ -1844,7 +1898,7 @@ namespace Daqifi.Core.Device
         {
             // See AcquireTextExchangeLockForTeardown: re-entry from a flow that already owns the
             // lock runs nested rather than waiting on itself.
-            if (_ownsOperationLock.Value)
+            if (HoldsOperationLock)
             {
                 return false;
             }
@@ -2271,7 +2325,7 @@ namespace Daqifi.Core.Device
             // The exchange runs under the device's operation lock. A flow that already owns it —
             // one inside RunExclusiveAsync, typically — runs nested rather than waiting on a
             // semaphore it is itself holding, and leaves the release to the owner.
-            var ownsLock = !_ownsOperationLock.Value;
+            var ownsLock = !HoldsOperationLock;
             if (ownsLock)
             {
                 try
@@ -2293,7 +2347,7 @@ namespace Daqifi.Core.Device
 
                 // Assigned in this frame, not in a helper: an async method's AsyncLocal writes flow
                 // forward to its callees but never back to its caller.
-                _ownsOperationLock.Value = true;
+                _operationLockGeneration.Value = Volatile.Read(ref _operationGeneration);
                 MarkOperationInFlight();
             }
 
@@ -2573,7 +2627,7 @@ namespace Daqifi.Core.Device
                 // but proceeds anyway if that acquisition times out).
                 if (ownsLock)
                 {
-                    _ownsOperationLock.Value = false;
+                    _operationLockGeneration.Value = 0;
                     FlushDeferredSends();
                     ReleaseOperationLock();
                 }
