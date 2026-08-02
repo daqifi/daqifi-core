@@ -274,6 +274,20 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// a permission gate at all. Retry behavior is unchanged; a translated failure is still one
     /// failed attempt.
     /// </para>
+    /// <para>
+    /// <b>Behavioral change for callers.</b> This method used to surface whatever
+    /// <see cref="SerialPort.Open"/> threw — on macOS and Linux always an
+    /// <see cref="UnauthorizedAccessException"/> whatever the real cause, on Windows a
+    /// <see cref="FileNotFoundException"/> or an <see cref="UnauthorizedAccessException"/>. Those
+    /// are now wrapped, so <c>catch (UnauthorizedAccessException)</c> around a connect no longer
+    /// matches and any branching on the platform exception's type has to move. Catch
+    /// <see cref="SerialPortConnectException"/> and switch on
+    /// <see cref="SerialPortConnectException.Reason"/>, which is the classification the platform
+    /// exception never reliably carried; <c>catch (IOException)</c> still matches for callers that
+    /// only need the broad case. The original exception remains available as
+    /// <see cref="Exception.InnerException"/>, so nothing is lost — only the type that arrives at
+    /// the catch site changes.
+    /// </para>
     /// </remarks>
     /// <exception cref="SerialPortConnectException">
     /// Thrown when the final attempt cannot open the port, with

@@ -32,6 +32,13 @@ namespace Daqifi.Core.Communication.Transport;
 /// as <see cref="Exception.InnerException"/>.
 /// </para>
 /// <para>
+/// <b>Migrating.</b> A connect that previously threw <see cref="UnauthorizedAccessException"/>
+/// now throws this instead, so <c>catch (UnauthorizedAccessException)</c> no longer matches.
+/// Replace it with <c>catch (SerialPortConnectException ex)</c> and switch on <see cref="Reason"/>
+/// — that distinction is the thing the old exception could not express, since on macOS a missing
+/// port and a busy port threw the very same exception.
+/// </para>
+/// <para>
 /// <b>Retries.</b> This type does not change retry behavior — a failed open is still one failed
 /// attempt under <see cref="ConnectionRetryOptions"/>. It does let a caller decide whether
 /// retrying is worthwhile: <see cref="SerialPortConnectFailure.InUse"/> can clear on its own,
