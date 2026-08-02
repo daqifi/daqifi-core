@@ -123,7 +123,20 @@ namespace Daqifi.Core.Device
         /// session began. A healthy stream on firmware without the device-side defects leaves it at
         /// zero; on firmware 3.7.2 it is typically one, for the malformed leading frame.
         /// </summary>
-        /// <remarks>Reset by <see cref="StartStreaming"/>, so it describes the current session.</remarks>
+        /// <remarks>
+        /// <para>
+        /// Reset whenever a streaming session begins, so it describes the current session — that
+        /// includes a session started by a raw <c>SYSTem:StartStreamData</c> through
+        /// <see cref="Send{T}"/>, not only by <see cref="StartStreaming"/>.
+        /// </para>
+        /// <para>
+        /// Every drop is counted whether or not anyone is subscribed to
+        /// <see cref="StreamFrameDiscarded"/>, so a consumer that subscribes after streaming has
+        /// begun will see a total larger than the number of events it received. Read inside a
+        /// <see cref="StreamFrameDiscarded"/> handler, the count already includes the frame being
+        /// reported.
+        /// </para>
+        /// </remarks>
         public long DiscardedStreamFrameCount => Interlocked.Read(ref _discardedStreamFrameCount);
 
         /// <summary>
@@ -590,7 +603,7 @@ namespace Daqifi.Core.Device
                 || frequency < 1
                 || frequency > maxSamplingRate)
             {
-                Trace.WriteLine(
+                SafeTrace(
                     $"[{nameof(TrackStreamingStart)}] Ignoring a start-streaming command with an unusable rate "
                     + $"('{rate.ToString()}'); the session state is unchanged.");
                 return;
@@ -873,7 +886,11 @@ namespace Daqifi.Core.Device
         {
             if (IsStreaming && _frameGate.IsValidating && _frameGate.IsLeftoverFromPreviousSession(message))
             {
-                RaiseStreamFrameDiscarded(StreamFrameDiscardReason.StaleLeftoverFrame, message);
+                RaiseStreamFrameDiscarded(
+                    StreamFrameDiscardReason.StaleLeftoverFrame,
+                    message,
+                    CountAnalogValues(message),
+                    CountEnabledAnalogChannels(SnapshotChannels()));
                 return;
             }
 
@@ -905,11 +922,27 @@ namespace Daqifi.Core.Device
         /// <param name="message">The frame to deliver.</param>
         private void EmitStreamFrame(DaqifiOutMessage message)
         {
-            var suppressAnalog = _awaitingFirstFullAnalogFrame && ShouldSuppressPartialAnalog(message);
+            var suppressAnalog = false;
+            var analogValueCount = 0;
+            var enabledAnalogChannelCount = 0;
+
+            if (_awaitingFirstFullAnalogFrame)
+            {
+                suppressAnalog = ShouldSuppressPartialAnalog(
+                    message, out analogValueCount, out enabledAnalogChannelCount);
+            }
 
             if (suppressAnalog)
             {
-                RaiseStreamFrameDiscarded(StreamFrameDiscardReason.PartialAnalogFrame, message);
+                // The counts reported here are the very ones the suppression decision was made on,
+                // not a fresh reading: channel enablement can change from another thread, and a
+                // discard whose reported numbers disagree with the reason it was discarded would
+                // make the telemetry harder to trust than no telemetry at all.
+                RaiseStreamFrameDiscarded(
+                    StreamFrameDiscardReason.PartialAnalogFrame,
+                    message,
+                    analogValueCount,
+                    enabledAnalogChannelCount);
             }
             else
             {
@@ -943,12 +976,20 @@ namespace Daqifi.Core.Device
         /// <see cref="MaxSuppressedWarmupFrames"/> have been suppressed.
         /// </summary>
         /// <param name="message">The frame about to be delivered.</param>
+        /// <param name="analogValueCount">The number of analog values the frame carried.</param>
+        /// <param name="enabledAnalogChannelCount">
+        /// The number of enabled analog channels the decision was made against. Handed back so the
+        /// discard event reports the same numbers the decision used rather than re-reading channel
+        /// state that another thread may have changed in between.
+        /// </param>
         /// <returns><c>true</c> when the frame's analog values must be withheld.</returns>
-        private bool ShouldSuppressPartialAnalog(DaqifiOutMessage message)
+        private bool ShouldSuppressPartialAnalog(
+            DaqifiOutMessage message,
+            out int analogValueCount,
+            out int enabledAnalogChannelCount)
         {
-            var analogValueCount = message.AnalogInDataFloat.Count > 0
-                ? message.AnalogInDataFloat.Count
-                : message.AnalogInData.Count;
+            analogValueCount = CountAnalogValues(message);
+            enabledAnalogChannelCount = 0;
 
             // A frame with no analog payload says nothing about the warmup frame either way, so the
             // guard stays armed for the first analog-bearing frame.
@@ -957,9 +998,9 @@ namespace Daqifi.Core.Device
                 return false;
             }
 
-            var enabledAnalogCount = CountEnabledAnalogChannels(SnapshotChannels());
-            if (enabledAnalogCount > 0
-                && analogValueCount < enabledAnalogCount
+            enabledAnalogChannelCount = CountEnabledAnalogChannels(SnapshotChannels());
+            if (enabledAnalogChannelCount > 0
+                && analogValueCount < enabledAnalogChannelCount
                 && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
             {
                 _suppressedWarmupFrameCount++;
@@ -971,12 +1012,30 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// The number of analog values a frame carries, from whichever payload the transport used —
+        /// USB streams pre-scaled floats, WiFi streams raw ADC counts.
+        /// </summary>
+        private static int CountAnalogValues(DaqifiOutMessage message) =>
+            message.AnalogInDataFloat.Count > 0
+                ? message.AnalogInDataFloat.Count
+                : message.AnalogInData.Count;
+
+        /// <summary>
         /// Raises <see cref="StreamFrameDiscarded"/> for a frame that was withheld, and counts it.
         /// Subscriber exceptions are isolated, mirroring <see cref="RaiseGapDetected"/>.
         /// </summary>
         /// <param name="reason">Why the frame was withheld.</param>
         /// <param name="frame">The frame that was withheld.</param>
-        private void RaiseStreamFrameDiscarded(StreamFrameDiscardReason reason, DaqifiOutMessage frame)
+        /// <param name="analogValueCount">The number of analog values the frame carried.</param>
+        /// <param name="enabledAnalogChannelCount">
+        /// The number of enabled analog channels to report. Passed in rather than re-derived so it
+        /// is the same reading the discard decision was made against.
+        /// </param>
+        private void RaiseStreamFrameDiscarded(
+            StreamFrameDiscardReason reason,
+            DaqifiOutMessage frame,
+            int analogValueCount,
+            int enabledAnalogChannelCount)
         {
             Interlocked.Increment(ref _discardedStreamFrameCount);
 
@@ -986,21 +1045,39 @@ namespace Daqifi.Core.Device
                 return;
             }
 
-            var analogValueCount = frame.AnalogInDataFloat.Count > 0
-                ? frame.AnalogInDataFloat.Count
-                : frame.AnalogInData.Count;
-
             try
             {
                 handler(this, new StreamFrameDiscardedEventArgs(
-                    reason,
-                    frame.MsgTimeStamp,
-                    analogValueCount,
-                    CountEnabledAnalogChannels(SnapshotChannels())));
+                    reason, frame.MsgTimeStamp, analogValueCount, enabledAnalogChannelCount));
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[{nameof(StreamFrameDiscarded)}] Subscriber threw: {ex}");
+                SafeTrace($"[{nameof(StreamFrameDiscarded)}] Subscriber threw: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Writes a diagnostic line, swallowing anything a misbehaving <see cref="TraceListener"/>
+        /// throws.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Trace"/> dispatches to listeners the consumer installed, so it is consumer
+        /// code and can throw like any other. That matters most in the places that exist purely to
+        /// isolate the frame pipeline from faults: a listener throwing out of the <c>catch</c> that
+        /// was containing a bad subscriber would defeat the containment and take down the very
+        /// frame processing it was protecting. Same reasoning, and the same guarantee, as
+        /// <c>DaqifiDevice.SafeLog</c> — which is private to the base class, hence this local twin.
+        /// </remarks>
+        /// <param name="message">The diagnostic line to write.</param>
+        private static void SafeTrace(string message)
+        {
+            try
+            {
+                Trace.WriteLine(message);
+            }
+            catch
+            {
+                // A trace listener that throws is not permitted to affect device operation.
             }
         }
 
@@ -1078,7 +1155,7 @@ namespace Daqifi.Core.Device
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[{nameof(GapDetected)}] Subscriber threw: {ex}");
+                SafeTrace($"[{nameof(GapDetected)}] Subscriber threw: {ex}");
             }
         }
 

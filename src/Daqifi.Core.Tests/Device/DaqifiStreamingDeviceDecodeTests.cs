@@ -4,6 +4,7 @@ using Daqifi.Core.Device;
 using Google.Protobuf;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using Xunit;
@@ -668,6 +669,43 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
+    public void Decode_ThrowingDiscardSubscriberAndThrowingTraceListener_DoesNotBreakTheStream()
+    {
+        // The catch around the discard event exists to contain a bad subscriber. Trace dispatches
+        // to listeners the consumer installed, so logging from inside that catch is itself consumer
+        // code — a throwing listener there would escape the containment and take down the frame
+        // pipeline it was protecting.
+        var device = CreateStreamingDevice(analogCount: 2);
+        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 1).IsEnabled = true;
+        device.StartStreaming();
+
+        device.StreamFrameDiscarded += (_, _) => throw new InvalidOperationException("bad subscriber");
+
+        var listener = new ThrowOnMarkerTraceListener("StreamFrameDiscarded");
+        Trace.Listeners.Add(listener);
+        try
+        {
+            var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+            warmup.AnalogInDataFloat.Add(0.1f);
+
+            Assert.Null(Record.Exception(() => device.InvokeStreamMessage(warmup)));
+            Assert.True(listener.Threw, "the trace listener should have been reached and thrown");
+
+            // The stream carries on: the next full frame decodes normally.
+            var full = new DaqifiOutMessage { MsgTimeStamp = 2000 };
+            full.AnalogInDataFloat.Add(4f);
+            full.AnalogInDataFloat.Add(8f);
+            Assert.Null(Record.Exception(() => device.InvokeStreamMessage(full)));
+            Assert.Equal(4.0, AnalogChannel(device, 0).ActiveSample!.Value);
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+    }
+
+    [Fact]
     public void Decode_WellFormedFirstFrame_PassesThroughCompletelyUnchanged()
     {
         // The guard is meant to be safe to leave in permanently, including on firmware that no
@@ -888,7 +926,11 @@ public class DaqifiStreamingDeviceDecodeTests
         device.InvokeStreamMessage(leftover);
 
         Assert.Equal(0, rawFrames);
-        Assert.Equal(StreamFrameDiscardReason.StaleLeftoverFrame, Assert.Single(discards).Reason);
+        var discarded = Assert.Single(discards);
+        Assert.Equal(StreamFrameDiscardReason.StaleLeftoverFrame, discarded.Reason);
+        Assert.Equal(10_500_000u, discarded.DeviceTimestamp);
+        Assert.Equal(2, discarded.AnalogValueCount);          // a leftover is a *full* frame
+        Assert.Equal(2, discarded.EnabledAnalogChannelCount);
         Assert.Equal(1.0, ai0.ActiveSample!.Value); // still session 1's values
         Assert.Equal(2.0, ai1.ActiveSample!.Value);
 
@@ -1030,6 +1072,29 @@ public class DaqifiStreamingDeviceDecodeTests
         var frame = new DaqifiOutMessage { MsgTimeStamp = timestamp };
         frame.AnalogInDataFloat.Add(value);
         return frame;
+    }
+
+    /// <summary>
+    /// A trace listener that throws, but only for lines containing <paramref name="marker"/>, so it
+    /// cannot disturb unrelated tests running in parallel against the global
+    /// <see cref="Trace.Listeners"/> collection.
+    /// </summary>
+    private sealed class ThrowOnMarkerTraceListener(string marker) : TraceListener
+    {
+        public bool Threw { get; private set; }
+
+        public override void Write(string? message) => WriteLine(message);
+
+        public override void WriteLine(string? message)
+        {
+            if (message?.Contains(marker, StringComparison.Ordinal) != true)
+            {
+                return;
+            }
+
+            Threw = true;
+            throw new InvalidOperationException("trace listener failure");
+        }
     }
 
     /// <summary>
