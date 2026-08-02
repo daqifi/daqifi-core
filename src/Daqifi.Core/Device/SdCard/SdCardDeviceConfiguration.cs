@@ -32,8 +32,17 @@ public sealed record SdCardDeviceConfiguration(
     /// <summary>
     /// Creates an <see cref="SdCardDeviceConfiguration"/> from a connected device's
     /// channel configuration. This captures the calibration, resolution, port range,
-    /// and internal scale values needed to convert raw ADC data in SD card log files.
+    /// internal scale, and timestamp clock values needed to interpret an SD card log file.
     /// </summary>
+    /// <remarks>
+    /// The device's own <see cref="DaqifiDevice.TimestampFrequency"/> is included because
+    /// firmware v3.7.2 and earlier write no timestamp frequency into SD card logs while still
+    /// reporting one in their live status message. Passed to
+    /// <see cref="SdCardParseOptions.ConfigurationOverride"/>, it fills that gap; a log that
+    /// does state its own frequency still wins, so this is a backstop and never an override of
+    /// better information. It is <c>0</c> when the device has not reported a frequency, which
+    /// leaves the parser's fallback in charge exactly as before.
+    /// </remarks>
     /// <param name="device">A connected and initialized device.</param>
     /// <returns>A configuration snapshot, or <c>null</c> if the device has no analog channels.</returns>
     public static SdCardDeviceConfiguration? FromDevice(DaqifiDevice device)
@@ -50,7 +59,7 @@ public sealed record SdCardDeviceConfiguration(
         return new SdCardDeviceConfiguration(
             AnalogPortCount: analogChannels.Count,
             DigitalPortCount: digitalCount,
-            TimestampFrequency: 0, // Let the parser use file-embedded or fallback frequency
+            TimestampFrequency: device.TimestampFrequency,
             DeviceSerialNumber: device.Metadata.SerialNumber,
             DevicePartNumber: device.Metadata.PartNumber,
             FirmwareRevision: device.Metadata.FirmwareVersion,

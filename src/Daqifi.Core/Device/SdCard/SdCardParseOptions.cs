@@ -32,12 +32,19 @@ public sealed class SdCardParseOptions
     /// it will be used to convert raw tick deltas to elapsed time.
     /// </para>
     /// <para>
-    /// This value is only used as a fallback — if the file contains a valid
-    /// <c>TimestampFreq</c>, it takes precedence.
+    /// This value is the last resort. A frequency stated by the file wins, and a frequency
+    /// reported by a connected device through <see cref="ConfigurationOverride"/> comes next;
+    /// this fallback applies only when neither is available.
     /// </para>
     /// <para>
-    /// Defaults to 50 MHz (the Nyquist device clock frequency). Set to 0 to
-    /// disable the fallback entirely.
+    /// Defaults to 50 MHz. That figure is a historical default and does <b>not</b> match
+    /// shipped Nyquist firmware, which reports a 42 MHz timestamp clock — converting 42 MHz
+    /// ticks as though they were 50 MHz makes every reconstructed timestamp roughly 19% fast.
+    /// Prefer supplying <see cref="ConfigurationOverride"/> from the connected device so this
+    /// guess is never needed, and check
+    /// <see cref="SdCardLogSession.TimestampFrequencySource"/> on the parsed session to see
+    /// whether it was. Set to 0 to disable the fallback entirely, which leaves tick counts
+    /// unconverted rather than converted with a guess.
     /// </para>
     /// </summary>
     public uint FallbackTimestampFrequency { get; set; } = 50_000_000;
@@ -47,8 +54,9 @@ public sealed class SdCardParseOptions
     /// config fill in any gaps not found in the file itself.
     /// <para>
     /// This is useful when the device is connected during download — the device's
-    /// live status provides calibration, resolution, and port range values that
-    /// may not be embedded in the SD card log file.
+    /// live status provides calibration, resolution, port range, and timestamp clock
+    /// values that may not be embedded in the SD card log file. Build one with
+    /// <see cref="SdCardDeviceConfiguration.FromDevice"/>.
     /// </para>
     /// </summary>
     public SdCardDeviceConfiguration? ConfigurationOverride { get; set; }

@@ -64,13 +64,27 @@ public sealed class SdCardJsonFileParser
 
         var config = InferConfiguration(lines[0], options);
 
+        // JSON log lines carry raw tick counts and no frequency of their own, so the file can
+        // only ever contribute 0 here; a connected device's frequency is what stands between
+        // the caller's fallback guess and the data.
+        var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
+            fileFrequencyHz: 0u,
+            options.ConfigurationOverride?.TimestampFrequency ?? 0u,
+            options.FallbackTimestampFrequency);
+
+        config = config with { TimestampFrequency = timestampFrequency };
+
         var samples = ParseJsonLines(
             lines,
             config,
             fileCreatedDate,
             options);
 
-        return new SdCardLogSession(fileName, fileCreatedDate, config, samples);
+        return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
+        {
+            TimestampFrequency = timestampFrequency,
+            TimestampFrequencySource = timestampSource
+        };
     }
 
     /// <summary>
@@ -248,12 +262,12 @@ public sealed class SdCardJsonFileParser
         var parsed = TryParseJsonLine(firstLine);
         var analogCount = parsed?.analog.Count ?? 0;
 
-        var timestampFreq = options.FallbackTimestampFrequency;
-
         var inferred = new SdCardDeviceConfiguration(
             AnalogPortCount: analogCount,
             DigitalPortCount: 0,  // Cannot infer from data
-            TimestampFrequency: timestampFreq,
+            // The frequency is resolved by the caller, after the override merge, so that a
+            // connected device's real clock beats a fallback guess rather than losing to it.
+            TimestampFrequency: 0u,
             DeviceSerialNumber: null,
             DevicePartNumber: null,
             FirmwareRevision: null,

@@ -40,14 +40,22 @@ namespace Daqifi.Core.Device;
 public sealed class TimestampProcessor : ITimestampProcessor
 {
     /// <summary>
-    /// Default tick period in seconds (20 nanoseconds = 20E-9 seconds).
-    /// This corresponds to a 50MHz clock.
+    /// Default tick period in seconds (20 nanoseconds = 20E-9 seconds), corresponding to a
+    /// 50 MHz clock.
     /// </summary>
+    /// <remarks>
+    /// This is a historical default, not a measurement of any shipped board: current firmware
+    /// reports a 42 MHz timestamp clock, so relying on this value instead of the
+    /// device-reported frequency scales every reconstructed timestamp by roughly 1.19. Always
+    /// prefer <see cref="SetTimestampFrequency"/> with the device's own figure, and use
+    /// <see cref="HasTimestampFrequency"/> to find out whether that has happened.
+    /// </remarks>
     public const double DefaultTickPeriod = 20E-9;
 
     /// <summary>
-    /// Default timestamp clock frequency in Hz (50MHz), corresponding to
-    /// <see cref="DefaultTickPeriod"/>.
+    /// Default timestamp clock frequency in Hz (50 MHz), corresponding to
+    /// <see cref="DefaultTickPeriod"/>. See that field for why it should not be relied on in
+    /// place of the device-reported frequency.
     /// </summary>
     public const uint DefaultTimestampFrequency = 50_000_000;
 

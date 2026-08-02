@@ -79,20 +79,23 @@ public sealed class SdCardFileParser
             }
         }
 
+        // Whatever the file itself stated, captured before the override is merged in so the
+        // two sources stay distinguishable when reporting which one was used.
+        var fileTimestampFrequency = config?.TimestampFrequency ?? 0u;
+
         // Apply ConfigurationOverride as a fallback for any fields not found in the file.
         // This is useful when the device is connected during download — the device's live
-        // status provides calibration, resolution, and port range values that may not be
-        // embedded in the SD card log file.
+        // status provides calibration, resolution, port range, and timestamp clock values
+        // that may not be embedded in the SD card log file.
         if (options.ConfigurationOverride != null)
         {
             config = MergeConfigurations(config, options.ConfigurationOverride);
         }
 
-        var timestampFrequency = config?.TimestampFrequency ?? 0u;
-        if (timestampFrequency == 0 && options.FallbackTimestampFrequency > 0)
-        {
-            timestampFrequency = options.FallbackTimestampFrequency;
-        }
+        var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
+            fileTimestampFrequency,
+            options.ConfigurationOverride?.TimestampFrequency ?? 0u,
+            options.FallbackTimestampFrequency);
 
         var tickPeriod = timestampFrequency > 0
             ? 1.0 / timestampFrequency
@@ -106,7 +109,11 @@ public sealed class SdCardFileParser
             config,
             ct);
 
-        return new SdCardLogSession(fileName, fileCreatedDate, config, samples);
+        return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
+        {
+            TimestampFrequency = timestampFrequency,
+            TimestampFrequencySource = timestampSource
+        };
     }
 
     /// <summary>

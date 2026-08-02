@@ -185,8 +185,8 @@ public sealed class SdCardJsonFileParserTests
     public async Task ParseAsync_ConfigurationOverride_UsesProvidedConfig()
     {
         // Arrange — JSON has no metadata headers, so override fills in device info gaps.
-        // TimestampFrequency is inferred from FallbackTimestampFrequency (50MHz default),
-        // so the inferred value takes precedence over the override's value.
+        // JSON lines carry no frequency of their own, so the connected device's frequency is
+        // the best information available and must beat the FallbackTimestampFrequency guess.
         await using var stream = SdCardTestJsonFileBuilder.BuildJsonFile(
             (100u, new[] { 1.0, 2.0 }, "")
         );
@@ -217,8 +217,12 @@ public sealed class SdCardJsonFileParserTests
         Assert.Equal("NQ1", session.DeviceConfig.DevicePartNumber);
         Assert.Equal("1.0.0", session.DeviceConfig.FirmwareRevision);
         Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
-        // Inferred frequency (from FallbackTimestampFrequency) takes precedence
-        Assert.Equal(50_000_000u, session.DeviceConfig.TimestampFrequency);
+        // The device's reported frequency beats the fallback guess, and says so.
+        Assert.Equal(1000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal(1000u, session.TimestampFrequency);
+        Assert.Equal(
+            global::Daqifi.Core.Device.SdCard.SdCardTimestampSource.Device,
+            session.TimestampFrequencySource);
     }
 
     [Fact]
