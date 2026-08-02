@@ -650,9 +650,16 @@ public class WincFlasherTests
 
         public void Open()
         {
-            // Bounded so a test that fails before releasing surfaces its own assertion rather than
-            // parking a pool thread for the life of the run.
-            _release.Wait(TimeSpan.FromSeconds(30));
+            // Bounded at the tests' own 10 s wait rather than above it. A test that fails before
+            // releasing surfaces its own assertion first either way, but anything longer leaves this
+            // parked on a pool thread after the test has finished — extra contention in the suite
+            // whose load sensitivity is the reason this class exists.
+            if (!_release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new InvalidOperationException(
+                    "Test bug: ReleaseFault was never called, so the gated open timed out.");
+            }
+
             throw new InvalidOperationException("abandoned-open-fault");
         }
 
