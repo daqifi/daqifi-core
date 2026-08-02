@@ -4,7 +4,6 @@ using Daqifi.Core.Device;
 using Google.Protobuf;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using Xunit;
@@ -669,40 +668,38 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_ThrowingDiscardSubscriberAndThrowingTraceListener_DoesNotBreakTheStream()
+    public void Decode_ThrowingDiscardSubscriber_DoesNotBreakTheStream()
     {
-        // The catch around the discard event exists to contain a bad subscriber. Trace dispatches
-        // to listeners the consumer installed, so logging from inside that catch is itself consumer
-        // code — a throwing listener there would escape the containment and take down the frame
-        // pipeline it was protecting.
+        // The catch around the discard event exists to contain a bad subscriber: the frame it was
+        // reporting is still dropped, and — the part that matters — the frames after it are still
+        // decoded. Deliberately no throwing TraceListener here: Trace.Listeners is process-global,
+        // and a test that installs a throwing listener can be reached by anything else running in
+        // the same process. SafeTrace covers the listener case in production.
         var device = CreateStreamingDevice(analogCount: 2);
         AnalogChannel(device, 0).IsEnabled = true;
         AnalogChannel(device, 1).IsEnabled = true;
         device.StartStreaming();
 
-        device.StreamFrameDiscarded += (_, _) => throw new InvalidOperationException("bad subscriber");
-
-        var listener = new ThrowOnMarkerTraceListener("StreamFrameDiscarded");
-        Trace.Listeners.Add(listener);
-        try
+        var calls = 0;
+        device.StreamFrameDiscarded += (_, _) =>
         {
-            var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
-            warmup.AnalogInDataFloat.Add(0.1f);
+            calls++;
+            throw new InvalidOperationException("bad subscriber");
+        };
 
-            Assert.Null(Record.Exception(() => device.InvokeStreamMessage(warmup)));
-            Assert.True(listener.Threw, "the trace listener should have been reached and thrown");
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        warmup.AnalogInDataFloat.Add(0.1f);
 
-            // The stream carries on: the next full frame decodes normally.
-            var full = new DaqifiOutMessage { MsgTimeStamp = 2000 };
-            full.AnalogInDataFloat.Add(4f);
-            full.AnalogInDataFloat.Add(8f);
-            Assert.Null(Record.Exception(() => device.InvokeStreamMessage(full)));
-            Assert.Equal(4.0, AnalogChannel(device, 0).ActiveSample!.Value);
-        }
-        finally
-        {
-            Trace.Listeners.Remove(listener);
-        }
+        Assert.Null(Record.Exception(() => device.InvokeStreamMessage(warmup)));
+        Assert.Equal(1, calls); // the subscriber really did run and really did throw
+
+        // The stream carries on: the next full frame decodes normally.
+        var full = new DaqifiOutMessage { MsgTimeStamp = 2000 };
+        full.AnalogInDataFloat.Add(4f);
+        full.AnalogInDataFloat.Add(8f);
+        Assert.Null(Record.Exception(() => device.InvokeStreamMessage(full)));
+        Assert.Equal(4.0, AnalogChannel(device, 0).ActiveSample!.Value);
+        Assert.Equal(8.0, AnalogChannel(device, 1).ActiveSample!.Value);
     }
 
     [Fact]
@@ -1072,29 +1069,6 @@ public class DaqifiStreamingDeviceDecodeTests
         var frame = new DaqifiOutMessage { MsgTimeStamp = timestamp };
         frame.AnalogInDataFloat.Add(value);
         return frame;
-    }
-
-    /// <summary>
-    /// A trace listener that throws, but only for lines containing <paramref name="marker"/>, so it
-    /// cannot disturb unrelated tests running in parallel against the global
-    /// <see cref="Trace.Listeners"/> collection.
-    /// </summary>
-    private sealed class ThrowOnMarkerTraceListener(string marker) : TraceListener
-    {
-        public bool Threw { get; private set; }
-
-        public override void Write(string? message) => WriteLine(message);
-
-        public override void WriteLine(string? message)
-        {
-            if (message?.Contains(marker, StringComparison.Ordinal) != true)
-            {
-                return;
-            }
-
-            Threw = true;
-            throw new InvalidOperationException("trace listener failure");
-        }
     }
 
     /// <summary>
