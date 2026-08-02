@@ -63,6 +63,12 @@ namespace Daqifi.Core.Device
         private readonly TimestampGapDetector _gapDetector = new();
 
         /// <summary>
+        /// Keeps frames the device latched from the previous streaming session out of this one
+        /// (daqifi-nyquist-firmware #533). Re-armed by <see cref="BeginStreamingSession"/>.
+        /// </summary>
+        private readonly StreamFrameGate _frameGate = new();
+
+        /// <summary>
         /// The maximum number of leading short-analog frames suppressed at stream start
         /// (see <see cref="_awaitingFirstFullAnalogFrame"/>). Bounds the warmup-frame guard so a
         /// genuinely short stream can never be withheld indefinitely.
@@ -88,6 +94,37 @@ namespace Daqifi.Core.Device
         /// <see cref="MaxSuppressedWarmupFrames"/>.
         /// </summary>
         private int _suppressedWarmupFrameCount;
+
+        /// <summary>
+        /// Backing counter for <see cref="DiscardedStreamFrameCount"/>.
+        /// </summary>
+        private long _discardedStreamFrameCount;
+
+        /// <summary>
+        /// Raised when a stream frame was withheld from consumers because the device should not have
+        /// sent it — a malformed leading frame, or one latched from the previous session.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Suppressing a bad frame is the right thing to do, but doing it invisibly is not: a
+        /// consumer counting samples or reconciling against the device's own frame count needs to
+        /// tell "Core dropped a bad frame" apart from "the device sent nothing". This event, and the
+        /// running <see cref="DiscardedStreamFrameCount"/>, are that signal.
+        /// </para>
+        /// <para>
+        /// A subscriber exception is caught and traced rather than propagated, so a misbehaving
+        /// handler cannot disturb the frame that follows.
+        /// </para>
+        /// </remarks>
+        public event EventHandler<StreamFrameDiscardedEventArgs>? StreamFrameDiscarded;
+
+        /// <summary>
+        /// Gets the number of stream frames withheld from consumers since the current streaming
+        /// session began. A healthy stream on firmware without the device-side defects leaves it at
+        /// zero; on firmware 3.7.2 it is typically one, for the malformed leading frame.
+        /// </summary>
+        /// <remarks>Reset by <see cref="StartStreaming"/>, so it describes the current session.</remarks>
+        public long DiscardedStreamFrameCount => Interlocked.Read(ref _discardedStreamFrameCount);
 
         /// <summary>
         /// Backing counter for <see cref="DecodeFailureCount"/>.
@@ -366,6 +403,11 @@ namespace Daqifi.Core.Device
             _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
             _suppressedWarmupFrameCount = 0;
             Interlocked.Exchange(ref _decodeFailureCount, 0);
+
+            // Re-arm the cross-session leftover guard against the counter value this session
+            // inherits, and at this session's rate — the window is measured in sample periods.
+            _frameGate.BeginSession(TimestampFrequency, StreamingFrequency);
+            Interlocked.Exchange(ref _discardedStreamFrameCount, 0);
         }
 
         /// <summary>
@@ -811,27 +853,74 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Handles a streaming data frame: re-raises it for raw-frame consumers (via the base
-        /// implementation) and, while streaming, decodes it into per-channel samples that drive
+        /// Handles a streaming data frame: screens out the frames the device should not have sent,
+        /// then re-raises the frame for raw-frame consumers (via the base implementation) and, while
+        /// streaming, decodes it into per-channel samples that drive
         /// <see cref="IChannel.SampleReceived"/>.
         /// </summary>
+        /// <remarks>
+        /// Screening covers both consumer paths, which is the whole point of issue #425. The
+        /// per-channel decode has guarded against the firmware's malformed leading frame since
+        /// issue #351, but the raw <see cref="DaqifiDevice.MessageReceived"/> event was still handed
+        /// the frame verbatim — and that is the path most callers actually use, including the
+        /// example CLI, whose offline export inferred a channel count of one from it and truncated
+        /// every sample that followed. Whatever is unfit for the decoded path is unfit for the raw
+        /// one; both are now gated together, and every drop is reported through
+        /// <see cref="StreamFrameDiscarded"/>.
+        /// </remarks>
         /// <param name="message">The streaming message from the device.</param>
         protected override void OnStreamMessageReceived(DaqifiOutMessage message)
         {
-            // Preserve the raw-frame MessageReceived event so existing consumers that hand-demux
-            // the protobuf frame keep working unchanged.
-            base.OnStreamMessageReceived(message);
+            if (IsStreaming && _frameGate.IsValidating && _frameGate.IsLeftoverFromPreviousSession(message))
+            {
+                RaiseStreamFrameDiscarded(StreamFrameDiscardReason.StaleLeftoverFrame, message);
+                return;
+            }
+
+            _frameGate.TrackFrame(message.MsgTimeStamp);
 
             // Only decode into channel samples while an app-driven stream is active. A stray frame
-            // that arrives outside a streaming session is still re-raised above but not decoded.
+            // that arrives outside a streaming session is still re-raised but not decoded.
             if (!IsStreaming)
             {
+                base.OnStreamMessageReceived(message);
                 return;
+            }
+
+            EmitStreamFrame(message);
+        }
+
+        /// <summary>
+        /// Delivers a frame that has cleared <see cref="_frameGate"/>: re-raises it for raw-frame
+        /// consumers and decodes it into per-channel samples.
+        /// </summary>
+        /// <remarks>
+        /// The firmware's malformed leading frame (issue #351) is caught here rather than by the
+        /// gate, because it needs the enabled-channel count and because what it costs is narrower:
+        /// only the analog payload is unusable. Such a frame is withheld from raw consumers — they
+        /// read <c>AnalogInData</c> straight off it, so there is no way to hand it over safely — but
+        /// its digital payload is still decoded and its timestamp still anchors the session clock,
+        /// exactly as before.
+        /// </remarks>
+        /// <param name="message">The frame to deliver.</param>
+        private void EmitStreamFrame(DaqifiOutMessage message)
+        {
+            var suppressAnalog = _awaitingFirstFullAnalogFrame && ShouldSuppressPartialAnalog(message);
+
+            if (suppressAnalog)
+            {
+                RaiseStreamFrameDiscarded(StreamFrameDiscardReason.PartialAnalogFrame, message);
+            }
+            else
+            {
+                // Preserve the raw-frame MessageReceived event so existing consumers that hand-demux
+                // the protobuf frame keep working unchanged.
+                base.OnStreamMessageReceived(message);
             }
 
             try
             {
-                DecodeStreamFrame(message);
+                DecodeStreamFrame(message, suppressAnalog);
             }
             catch (Exception ex)
             {
@@ -848,12 +937,86 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Decides whether a leading frame's analog payload is the firmware's malformed warmup frame
+        /// (issue #351): fewer analog values than there are enabled analog channels. Disarms the
+        /// guard on the first analog-bearing frame that is not short, or once
+        /// <see cref="MaxSuppressedWarmupFrames"/> have been suppressed.
+        /// </summary>
+        /// <param name="message">The frame about to be delivered.</param>
+        /// <returns><c>true</c> when the frame's analog values must be withheld.</returns>
+        private bool ShouldSuppressPartialAnalog(DaqifiOutMessage message)
+        {
+            var analogValueCount = message.AnalogInDataFloat.Count > 0
+                ? message.AnalogInDataFloat.Count
+                : message.AnalogInData.Count;
+
+            // A frame with no analog payload says nothing about the warmup frame either way, so the
+            // guard stays armed for the first analog-bearing frame.
+            if (analogValueCount == 0)
+            {
+                return false;
+            }
+
+            var enabledAnalogCount = CountEnabledAnalogChannels(SnapshotChannels());
+            if (enabledAnalogCount > 0
+                && analogValueCount < enabledAnalogCount
+                && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
+            {
+                _suppressedWarmupFrameCount++;
+                return true;
+            }
+
+            _awaitingFirstFullAnalogFrame = false;
+            return false;
+        }
+
+        /// <summary>
+        /// Raises <see cref="StreamFrameDiscarded"/> for a frame that was withheld, and counts it.
+        /// Subscriber exceptions are isolated, mirroring <see cref="RaiseGapDetected"/>.
+        /// </summary>
+        /// <param name="reason">Why the frame was withheld.</param>
+        /// <param name="frame">The frame that was withheld.</param>
+        private void RaiseStreamFrameDiscarded(StreamFrameDiscardReason reason, DaqifiOutMessage frame)
+        {
+            Interlocked.Increment(ref _discardedStreamFrameCount);
+
+            var handler = StreamFrameDiscarded;
+            if (handler == null)
+            {
+                return;
+            }
+
+            var analogValueCount = frame.AnalogInDataFloat.Count > 0
+                ? frame.AnalogInDataFloat.Count
+                : frame.AnalogInData.Count;
+
+            try
+            {
+                handler(this, new StreamFrameDiscardedEventArgs(
+                    reason,
+                    frame.MsgTimeStamp,
+                    analogValueCount,
+                    CountEnabledAnalogChannels(SnapshotChannels())));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[{nameof(StreamFrameDiscarded)}] Subscriber threw: {ex}");
+            }
+        }
+
+        /// <summary>
         /// Decodes a streaming frame into per-channel samples: selects the active channels in
         /// device order, chooses the correct value source (USB pre-scaled float vs. WiFi raw ADC
         /// count scaled via calibration), unpacks digital bits, and pushes a sample to each channel.
         /// </summary>
         /// <param name="message">The streaming message to decode.</param>
-        private void DecodeStreamFrame(DaqifiOutMessage message)
+        /// <param name="suppressAnalog">
+        /// When <c>true</c>, the frame's analog payload is the firmware's malformed warmup frame
+        /// (issue #351) and is skipped. Only the analog values are withheld — a combined frame's
+        /// digital payload is still decoded, and the frame's (normal one-period) timestamp still
+        /// anchors the session clock, so digital state and edges are not lost.
+        /// </param>
+        private void DecodeStreamFrame(DaqifiOutMessage message, bool suppressAnalog)
         {
             var hasFloat = message.AnalogInDataFloat.Count > 0;
             var hasRawAnalog = message.AnalogInData.Count > 0;
@@ -867,30 +1030,6 @@ namespace Daqifi.Core.Device
             // Snapshot channels once: the consumer thread that repopulates channels is the same
             // thread that runs this decode, so the structure is stable for the duration of the call.
             var channels = SnapshotChannels();
-
-            // Suppress the firmware's malformed warmup frame at stream start (issue #351): its fast
-            // streaming encoder can emit a leading analog-bearing frame with fewer values than the
-            // enabled channel mask. Only the malformed *analog* values are withheld — a combined
-            // frame's digital payload is still decoded, and the frame's (normal one-period)
-            // timestamp still anchors the session clock, so digital state/edges are not lost. Only
-            // leading short frames are suppressed (mid-stream short frames stay best-effort mapped),
-            // bounded so a genuinely short stream is never withheld indefinitely.
-            var suppressWarmupAnalog = false;
-            if (_awaitingFirstFullAnalogFrame && (hasFloat || hasRawAnalog))
-            {
-                var analogValueCount = hasFloat ? message.AnalogInDataFloat.Count : message.AnalogInData.Count;
-                var enabledAnalogCount = CountEnabledAnalogChannels(channels);
-                if (enabledAnalogCount > 0 && analogValueCount < enabledAnalogCount
-                    && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
-                {
-                    _suppressedWarmupFrameCount++;
-                    suppressWarmupAnalog = true;
-                }
-                else
-                {
-                    _awaitingFirstFullAnalogFrame = false;
-                }
-            }
 
             // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
             // the raw device tick value through to each decoded sample.
@@ -908,7 +1047,7 @@ namespace Daqifi.Core.Device
                     hostTimestamp, timestampResult.SecondsBetweenMessages, deviceTimestamp));
             }
 
-            if ((hasFloat || hasRawAnalog) && !suppressWarmupAnalog)
+            if ((hasFloat || hasRawAnalog) && !suppressAnalog)
             {
                 DecodeAnalog(message, channels, hostTimestamp, deviceTimestamp, hasFloat);
             }
