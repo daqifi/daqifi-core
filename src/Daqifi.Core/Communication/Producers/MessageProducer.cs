@@ -19,6 +19,18 @@ public class MessageProducer<T> : IMessageProducer<T>
     private readonly ConcurrentQueue<IOutboundMessage<T>> _messageQueue;
     private readonly ManualResetEventSlim _messageAvailable = new(false);
     private volatile bool _isRunning;
+
+    /// <summary>
+    /// True while the background thread is part-way through draining a batch, including the time
+    /// it spends inside the blocking stream write.
+    /// </summary>
+    /// <remarks>
+    /// Claimed <b>before</b> the dequeue that starts a batch, not after: a message leaves the queue
+    /// before it is written, so setting this afterwards would leave an instant where the queue is
+    /// empty and nothing yet reports a write in progress — exactly the gap
+    /// <see cref="IsIdle"/> exists to close.
+    /// </remarks>
+    private volatile bool _draining;
     private bool _disposed;
     private Thread? _producerThread;
 
@@ -51,6 +63,9 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// Gets the number of messages currently queued for sending.
     /// </summary>
     public int QueuedMessageCount => _messageQueue.Count;
+
+    /// <inheritdoc />
+    public bool IsIdle => !_draining && _messageQueue.IsEmpty;
 
     /// <summary>
     /// Gets a value indicating whether the producer is currently running.
@@ -173,49 +188,61 @@ public class MessageProducer<T> : IMessageProducer<T>
                     _messageAvailable.Wait(100);
                     _messageAvailable.Reset();
 
-                    // Process all available messages
-                    while (_messageQueue.TryDequeue(out var message))
+                    // Claimed around the whole batch rather than around each write, so there is
+                    // never an instant where a message has left the queue but no write is yet
+                    // reported in progress. Conservative in the other direction (it stays set
+                    // between messages of a batch), which is the safe way to be wrong.
+                    _draining = true;
+                    try
                     {
-                        try
+                        // Process all available messages
+                        while (_messageQueue.TryDequeue(out var message))
                         {
-                            WriteMessageToStream(message);
-
-                            // A successful write clears any run of failures the transport has
-                            // accumulated: the link is demonstrably alive.
-                            _healthSink?.ReportIoSuccess();
-                        }
-                        catch (Exception ex)
-                        {
-                            // Surface the failure but keep draining the queue so a single
-                            // bad write doesn't stall the remaining messages. Tell the transport
-                            // too — it is the only component that can decide a run of failures
-                            // means the device is gone rather than glitching.
-                            //
-                            // A write TIMEOUT is deliberately excluded: it means the device is not
-                            // draining its receive buffer right now (busy, or flow-controlled), not
-                            // that the link is gone. Treating it as evidence of a disconnect could
-                            // tear down a healthy connection to a momentarily busy device — the
-                            // same reason the reader loop treats a read timeout as benign.
-                            var isTimeout = ex is TimeoutException;
-                            if (!isTimeout)
+                            try
                             {
-                                _healthSink?.ReportIoFault(ex);
+                                WriteMessageToStream(message);
+
+                                // A successful write clears any run of failures the transport has
+                                // accumulated: the link is demonstrably alive.
+                                _healthSink?.ReportIoSuccess();
                             }
+                            catch (Exception ex)
+                            {
+                                // Surface the failure but keep draining the queue so a single
+                                // bad write doesn't stall the remaining messages. Tell the transport
+                                // too — it is the only component that can decide a run of failures
+                                // means the device is gone rather than glitching.
+                                //
+                                // A write TIMEOUT is deliberately excluded: it means the device is not
+                                // draining its receive buffer right now (busy, or flow-controlled), not
+                                // that the link is gone. Treating it as evidence of a disconnect could
+                                // tear down a healthy connection to a momentarily busy device — the
+                                // same reason the reader loop treats a read timeout as benign.
+                                var isTimeout = ex is TimeoutException;
+                                if (!isTimeout)
+                                {
+                                    _healthSink?.ReportIoFault(ex);
+                                }
 
-                            // A timeout gets its own greppable message so "the write never
-                            // happened because the device isn't draining" (busy/flow-controlled)
-                            // can be told apart from any other write failure in the logs.
-                            var logMessage = isTimeout
-                                ? "Timed out writing message to the stream; continuing with remaining queued messages."
-                                : "Failed to write message to the stream; continuing with remaining queued messages.";
-                            SafeLog(() => _logger.LogWarning(ex, logMessage));
+                                // A timeout gets its own greppable message so "the write never
+                                // happened because the device isn't draining" (busy/flow-controlled)
+                                // can be told apart from any other write failure in the logs.
+                                var logMessage = isTimeout
+                                    ? "Timed out writing message to the stream; continuing with remaining queued messages."
+                                    : "Failed to write message to the stream; continuing with remaining queued messages.";
+                                SafeLog(() => _logger.LogWarning(ex, logMessage));
 
-                            // The only signal a caller gets that this specific message was not
-                            // delivered (issue #408). A throwing subscriber must not take down
-                            // the background loop, so this goes through the same SafeLog guard
-                            // used for the logger above.
-                            SafeLog(() => SendFailed?.Invoke(this, new MessageSendFailedEventArgs<T>(message, ex)));
+                                // The only signal a caller gets that this specific message was not
+                                // delivered (issue #408). A throwing subscriber must not take down
+                                // the background loop, so this goes through the same SafeLog guard
+                                // used for the logger above.
+                                SafeLog(() => SendFailed?.Invoke(this, new MessageSendFailedEventArgs<T>(message, ex)));
+                            }
                         }
+                    }
+                    finally
+                    {
+                        _draining = false;
                     }
                 }
                 catch (Exception ex)

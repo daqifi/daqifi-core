@@ -937,17 +937,86 @@ Notes:
 
 ## Thread Safety
 
-The `DaqifiDevice` message producer uses a background thread with a concurrent queue, making `Send()` calls thread-safe. Multiple threads can safely send commands:
+`DaqifiDevice` and `DaqifiStreamingDevice` are safe to use from multiple threads. The contract has
+three parts, and the third one is the part people get wrong.
+
+### 1. Any single operation is safe to call from any thread
+
+Enable a channel on one thread, drive a DIO pin on another, run a text query on a third — nothing
+you can do with individual calls will produce corrupt SCPI on the wire, and a query's reply always
+belongs to that query. Core enforces this itself:
+
+- Every string command goes onto one background queue drained by one writer thread, so two commands
+  can never be spliced together mid-command.
+- Text queries (SD card listings, diagnostics, LAN chip info, the capability document — anything
+  that reads a reply) run one at a time per device. They take the device's operation lock, and a
+  `Send()` from another thread while one is running is **held back and delivered afterwards** rather
+  than written into the middle of somebody else's answer.
 
 ```csharp
-// Safe to call from multiple threads
-Parallel.For(0, 10, i =>
+// Safe. Nothing here needs coordinating.
+Parallel.For(0, 10, i => device.Send(ScpiMessageProducer.GetDeviceInfo));
+```
+
+### 2. A sequence that must not be split goes in `RunExclusiveAsync`
+
+The one thing a single call cannot express is "these commands belong together". Two threads each
+doing set-direction-then-set-value can have their commands interleaved, and the pin ends up in a
+state neither thread asked for. Wrap the sequence:
+
+```csharp
+await device.RunExclusiveAsync(_ =>
 {
-    device.Send(ScpiMessageProducer.GetDeviceInfo);
+    streaming.SetDioDirection(channel, ChannelDirection.Output);
+    streaming.SetDioValue(channel, true);
+    return Task.CompletedTask;
+});
+
+// Bodies can be async and can return a value. Text queries nest freely inside —
+// the lock is reentrant on the same logical flow.
+var files = await device.RunExclusiveAsync(async ct =>
+{
+    await sd.StartSdCardLoggingAsync(cancellationToken: ct);
+    return await sd.GetSdCardFilesAsync(ct);
 });
 ```
 
-However, for connection state changes (Connect/Disconnect), coordinate access from a single thread or use proper synchronization.
+While the body runs, other threads' `Send()` calls are deferred (they still return immediately) and
+other threads' text queries wait. Keep bodies short, and do not start background work inside one:
+a `Task.Run` launched from the body inherits the flow's ownership of the lock, so its commands would
+*not* be deferred and could still interleave.
+
+`RunExclusiveAsync` is per device. Two devices always run in parallel — there is no global lock.
+
+### 3. Connect / Disconnect / Dispose serialize themselves, but do not wait forever
+
+The device never drives its transport from two threads at once, so you do not have to funnel
+lifecycle calls through one thread. What you should know:
+
+- `Connect()` throws `TimeoutException` if another connect or disconnect is still in flight after
+  10 seconds. Nothing was opened, so retrying is safe.
+- `Disconnect()` / `Dispose()` give an in-flight text query or `RunExclusiveAsync` block a bounded
+  courtesy wait (10 seconds) and then tear down regardless. A teardown that waited forever would
+  hang on a wedged serial port, which is worse. Calling `Disconnect()` from *inside* your own
+  `RunExclusiveAsync` body is fine and does not wait at all.
+- Deferred sends belonging to an operation that was still running when the device went away are
+  logged and dropped, consistent with `Send()` never having guaranteed delivery.
+
+### What is *not* covered
+
+- Streaming callbacks (`StreamSamplesAsync`, sample events, decode) never take the operation lock
+  and are never blocked by it. A live stream keeps flowing while control operations run.
+- `IChannel` objects are mutable and shared. Reading `channel.IsEnabled` while another thread
+  reconfigures it can give you a torn view; use `GetChannelsSnapshot()` for a consistent one.
+- Two `DaqifiDevice` instances pointed at the *same* physical unit over two transports are two
+  independent locks and will fight. Use `DaqifiDeviceRegistry`, which detects that duplicate.
+
+### Reference implementation
+
+`src/Daqifi.Mcp/DaqifiAgent.cs` is the worked example of a fully concurrent consumer: the MCP
+transport dispatches tool calls in parallel, and every multi-command tool goes through
+`RunExclusiveAsync`. Its remaining `SemaphoreSlim` guards only its own connection registry, not the
+devices.
 
 ## Delivery Failures
 
@@ -966,6 +1035,10 @@ device.SendFailed += (_, e) =>
 
 A single failed write does not stop the queue: the producer keeps draining the remaining
 messages regardless of whether anything observes the failure.
+
+`Send()` also never blocks — including when another thread holds the device (see Thread Safety
+above), where the message is held back and queued as soon as that finishes. So "returned" has always
+meant "accepted", never "delivered", and now it can also mean "delivered a little later".
 
 ## Error Surface
 

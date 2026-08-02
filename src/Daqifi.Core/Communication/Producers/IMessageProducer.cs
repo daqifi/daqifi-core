@@ -53,6 +53,27 @@ public interface IMessageProducer<T> : IDisposable
     int QueuedMessageCount { get; }
 
     /// <summary>
+    /// Gets a value indicating whether nothing is queued <b>and</b> no write is part-way through
+    /// reaching the stream.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="QueuedMessageCount"/> is not a substitute for this. A message is taken off the
+    /// queue <i>before</i> it is written, so the count reads zero while the producer thread is
+    /// still inside a blocking write. Anything that needs "the wire is quiet before I take the
+    /// stream" — the device's text exchange, which swaps the stream's reader — has to ask this
+    /// instead, or it can swap while a command is still going out and collect that command's reply
+    /// as part of its own (issue #342).
+    /// </para>
+    /// <para>
+    /// The default implementation is the weaker queue-only answer, so existing implementations keep
+    /// compiling and behave exactly as they did. Implementations that write on a background thread
+    /// should override it — <see cref="MessageProducer{T}"/> does.
+    /// </para>
+    /// </remarks>
+    bool IsIdle => QueuedMessageCount == 0;
+
+    /// <summary>
     /// Gets a value indicating whether the producer is currently running.
     /// </summary>
     bool IsRunning { get; }
