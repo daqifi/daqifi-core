@@ -141,6 +141,91 @@ public class SerialStreamTransportTests
         Assert.False(transport.IsConnected);
     }
 
+    /// <summary>
+    /// A port name that resolves nowhere on the running platform, so the connect fails for the one
+    /// reason the test cares about.
+    /// </summary>
+    private static string NonexistentPort =>
+        OperatingSystem.IsWindows() ? "COM254" : "/dev/tty.daqifi-core-nonexistent-424";
+
+    [Fact]
+    public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_ReportsPortNotFound()
+    {
+        // #424: SerialPort.Open reports a port that does not exist as "Access to the port '...' is
+        // denied.", sending users after a permissions problem for what is almost always a typo or
+        // a stale name (USB device nodes are renumbered across replugs).
+        using var transport = new SerialStreamTransport(NonexistentPort);
+
+        var ex = await Assert.ThrowsAsync<SerialPortConnectException>(() => transport.ConnectAsync());
+
+        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
+        Assert.Equal(NonexistentPort, ex.PortName);
+        Assert.Contains(NonexistentPort, ex.Message);
+        Assert.Contains("was not found", ex.Message);
+        Assert.DoesNotContain("denied", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
+    public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_KeepsThePlatformException()
+    {
+        // The translation adds a name for the failure; it must not throw the diagnosis away.
+        using var transport = new SerialStreamTransport(NonexistentPort);
+
+        var ex = await Assert.ThrowsAsync<SerialPortConnectException>(() => transport.ConnectAsync());
+
+        Assert.NotNull(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_StillCatchableAsIoException()
+    {
+        // The chosen base type: a caller bracketing a connect with catch (IOException) keeps working.
+        using var transport = new SerialStreamTransport(NonexistentPort);
+
+        var ex = await Assert.ThrowsAnyAsync<IOException>(() => transport.ConnectAsync());
+
+        Assert.IsType<SerialPortConnectException>(ex);
+    }
+
+    [Fact]
+    public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_ReportsTheTypedErrorOnStatusChanged()
+    {
+        // The status event carries the same translated exception, so a subscriber classifying a
+        // failed connect sees the reason rather than the platform's guess.
+        using var transport = new SerialStreamTransport(NonexistentPort);
+        Exception? reported = null;
+        transport.StatusChanged += (_, e) => reported ??= e.Error;
+
+        await Assert.ThrowsAsync<SerialPortConnectException>(() => transport.ConnectAsync());
+
+        var typed = Assert.IsType<SerialPortConnectException>(reported);
+        Assert.Equal(SerialPortConnectFailure.NotFound, typed.Reason);
+    }
+
+    [Fact]
+    public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_StillHonorsRetryPolicy()
+    {
+        // Translation happens inside a connect attempt, so it is still just a failed attempt: the
+        // retry loop runs the configured number of times and surfaces the typed exception at the end.
+        using var transport = new SerialStreamTransport(NonexistentPort);
+        var options = new ConnectionRetryOptions
+        {
+            Enabled = true,
+            MaxAttempts = 3,
+            InitialDelay = TimeSpan.Zero,
+            MaxDelay = TimeSpan.Zero
+        };
+        var failures = 0;
+        transport.StatusChanged += (_, e) => { if (!e.IsConnected) failures++; };
+
+        var ex = await Assert.ThrowsAsync<SerialPortConnectException>(
+            () => transport.ConnectAsync(options));
+
+        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
+        Assert.Equal(3, failures);
+    }
+
     [Fact]
     public void SerialStreamTransport_Disconnect_WhenNotConnected_ShouldNotThrow()
     {

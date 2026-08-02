@@ -226,6 +226,10 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// Establishes the serial connection asynchronously.
     /// </summary>
     /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="SerialPortConnectException">
+    /// Thrown when the port cannot be opened, with <see cref="SerialPortConnectException.Reason"/>
+    /// naming the cause.
+    /// </exception>
     public async Task ConnectAsync()
     {
         await ConnectAsync(null);
@@ -236,6 +240,10 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </summary>
     /// <param name="retryOptions">Configuration for retry behavior. If null, uses default single attempt.</param>
     /// <returns>A task representing the asynchronous connect operation.</returns>
+    /// <exception cref="SerialPortConnectException">
+    /// Thrown when the final attempt cannot open the port, with
+    /// <see cref="SerialPortConnectException.Reason"/> naming the cause.
+    /// </exception>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
     {
         await ConnectAsync(retryOptions, CancellationToken.None);
@@ -249,12 +257,28 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 
     /// <inheritdoc />
     /// <remarks>
+    /// <para>
     /// Cancellation is observed between attempts and while waiting out a backoff delay, and is
     /// checked immediately before each <see cref="SerialPort.Open"/>. It cannot interrupt the
     /// <c>Open</c> call itself — the framework offers no cancellable form of it — so on a port that
     /// hangs open, cancellation takes effect when that call returns. In practice opening a serial
     /// port either succeeds or fails quickly; the long wait worth cancelling is the retry loop.
+    /// </para>
+    /// <para>
+    /// A failed <see cref="SerialPort.Open"/> is reported as a
+    /// <see cref="SerialPortConnectException"/> naming the port and why it could not be opened,
+    /// rather than the platform's own exception, which on macOS and Linux calls every failure —
+    /// including a port that simply does not exist — an access denial (#424). The original is kept
+    /// as the inner exception. The reason is decided from what can be observed at the moment of
+    /// the failure: whether the port is still present, and whether the platform could be applying
+    /// a permission gate at all. Retry behavior is unchanged; a translated failure is still one
+    /// failed attempt.
+    /// </para>
     /// </remarks>
+    /// <exception cref="SerialPortConnectException">
+    /// Thrown when the final attempt cannot open the port, with
+    /// <see cref="SerialPortConnectException.Reason"/> naming the cause.
+    /// </exception>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
@@ -280,7 +304,21 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                 // honor a cancel that arrived while the previous attempt was backing off.
                 attemptToken.ThrowIfCancellationRequested();
 
-                _serialPort.Open();
+                try
+                {
+                    _serialPort.Open();
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+                {
+                    // Name the failure instead of forwarding the platform's guess at it (#424).
+                    // The evidence is gathered here, immediately after the failed open, because it
+                    // is only meaningful in that moment; the classification itself lives in
+                    // SerialPortConnectException.Classify. Argument and state exceptions are left
+                    // alone — a bad baud rate or an already-open port is a caller bug, not a port
+                    // that could not be opened.
+                    throw SerialPortConnectException.FromOpenFailure(
+                        _portName, ex, TryObservePortPresence(), TryRuleOutPermissionGate());
+                }
 
                 // After a successful open, swap the connect timeouts for the (shorter)
                 // operational ones — both directions, not just reads (#399).
@@ -439,6 +477,60 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             IsPortPresent,
             $"Serial port {_portName} is no longer present; the device appears to have been disconnected.",
             _livenessCheckInterval);
+    }
+
+    /// <summary>
+    /// Observes whether the port exists, for classifying a failed open. Returns <c>null</c> when
+    /// the probe could not answer — a failure to observe is not evidence of absence, and reporting
+    /// it as absence would turn an unrelated connect failure into a bogus "port was not found".
+    /// </summary>
+    private bool? TryObservePortPresence()
+    {
+        try
+        {
+            return IsPortPresent();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reports whether the platform can be ruled out as the source of an access-denied failure,
+    /// which is what separates a port held by another process from one the caller may not open.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> when no per-user permission gate can apply, <c>false</c> when one could,
+    /// <c>null</c> when it could not be determined.
+    /// </returns>
+    /// <remarks>
+    /// A Unix device node that grants read and write to every user cannot produce a permission
+    /// failure for anybody, so a denial on such a node is exclusivity — the case macOS reports with
+    /// the same exception it uses for every other open failure, and <c>/dev/cu.*</c> nodes there are
+    /// <c>crw-rw-rw-</c>. A node that does not grant that (a Linux <c>dialout</c>-owned port at
+    /// <c>crw-rw----</c>, say) keeps the access-denied reading, so the genuine permission case is
+    /// still reported as one. Windows COM ports have no comparable gate: a port that exists and
+    /// refuses to open is one another process holds.
+    /// </remarks>
+    private bool? TryRuleOutPermissionGate()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return true;
+        }
+
+        try
+        {
+            var mode = File.GetUnixFileMode(_portName);
+            return mode.HasFlag(UnixFileMode.OtherRead) && mode.HasFlag(UnixFileMode.OtherWrite);
+        }
+        catch (Exception)
+        {
+            // No stat (the port is gone, the name is not a path, or the platform will not say).
+            // Unknown, never a guess: the caller falls back to the access-denied wording.
+            return null;
+        }
     }
 
     /// <summary>
