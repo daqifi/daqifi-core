@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 
 #nullable enable
 
@@ -49,6 +51,42 @@ namespace Daqifi.Core.Device
             var trimmed = line.Trim();
             return MatchesStrictScpiErrorPrefix(trimmed, "**ERROR")
                    || MatchesStrictScpiErrorPrefix(trimmed, "ERROR");
+        }
+
+        /// <summary>
+        /// Returns true when any line in the response is a genuine SCPI error line. These can
+        /// appear transiently — e.g. while the firmware is still switching the shared SPI bus —
+        /// which is why several callers retry on this rather than failing outright.
+        /// </summary>
+        internal static bool ContainsScpiError(IReadOnlyList<string> lines)
+        {
+            return lines.Any(IsScpiErrorLine);
+        }
+
+        /// <summary>
+        /// Returns true when the response contains at least one non-empty line and every non-empty
+        /// line is an error/status line per <see cref="IsErrorResponseLine"/> — i.e. the device
+        /// answered, and had nothing but a complaint to say. A response with no lines at all is not
+        /// error-only, so callers can still tell "the log is empty" from "the command failed".
+        /// </summary>
+        internal static bool IsErrorOnlyResponse(IReadOnlyList<string> lines)
+        {
+            var sawContent = false;
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                sawContent = true;
+                if (!IsErrorResponseLine(line))
+                {
+                    return false;
+                }
+            }
+
+            return sawContent;
         }
 
         /// <summary>
