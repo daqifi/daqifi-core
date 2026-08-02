@@ -30,6 +30,27 @@ public sealed class SdCardLogSession
     public IAsyncEnumerable<SdCardLogEntry> Samples { get; }
 
     /// <summary>
+    /// Gets the timestamp clock frequency in Hz that was actually used to convert this log's
+    /// raw tick counts into times, or <c>0</c> when no conversion was possible.
+    /// </summary>
+    /// <remarks>
+    /// Read this together with <see cref="TimestampFrequencySource"/>. A frequency that does
+    /// not match the recording device rescales every timestamp in the session by a constant
+    /// factor, and nothing in the sample data reveals it.
+    /// </remarks>
+    public uint TimestampFrequency { get; init; }
+
+    /// <summary>
+    /// Gets where <see cref="TimestampFrequency"/> came from.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SdCardTimestampSource.Fallback"/> means the frequency was a guess supplied by
+    /// the caller rather than a figure reported by the file or the device, so the timestamps
+    /// should not be trusted as absolute elapsed time.
+    /// </remarks>
+    public SdCardTimestampSource TimestampFrequencySource { get; init; }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="SdCardLogSession"/> class.
     /// </summary>
     /// <param name="fileName">The source file name.</param>

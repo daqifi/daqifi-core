@@ -73,6 +73,13 @@ public sealed class SdCardCsvFileParser
         var (headerConfig, columnLayout) = ParseHeader(lines, options);
         var config = MergeConfiguration(headerConfig, options.ConfigurationOverride);
 
+        var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
+            headerConfig.TimestampFrequency,
+            options.ConfigurationOverride?.TimestampFrequency ?? 0u,
+            options.FallbackTimestampFrequency);
+
+        config = config with { TimestampFrequency = timestampFrequency };
+
         // Find the index of the first data row (after comments and column header)
         var dataStartIndex = FindDataStartIndex(lines);
 
@@ -83,7 +90,11 @@ public sealed class SdCardCsvFileParser
                 fileName,
                 fileCreatedDate,
                 config,
-                EmptySamples());
+                EmptySamples())
+            {
+                TimestampFrequency = timestampFrequency,
+                TimestampFrequencySource = timestampSource
+            };
         }
 
         var samples = ParseCsvLines(
@@ -94,7 +105,11 @@ public sealed class SdCardCsvFileParser
             fileCreatedDate,
             options);
 
-        return new SdCardLogSession(fileName, fileCreatedDate, config, samples);
+        return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
+        {
+            TimestampFrequency = timestampFrequency,
+            TimestampFrequencySource = timestampSource
+        };
     }
 
     /// <summary>
@@ -138,7 +153,11 @@ public sealed class SdCardCsvFileParser
     {
         string? deviceName = null;
         string? serialNumber = null;
-        var timestampFreq = options.FallbackTimestampFrequency;
+
+        // File-stated frequency only. The device override and the caller's fallback are
+        // applied afterwards, in that order, so that a connected device's real clock beats a
+        // fallback guess instead of losing to it.
+        var timestampFreq = 0u;
         var analogChannelCount = 0;
         var digitalChannelCount = 0;
         var hasDigitalPair = false;
