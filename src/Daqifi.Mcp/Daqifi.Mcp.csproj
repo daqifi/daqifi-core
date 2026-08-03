@@ -28,7 +28,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
-    <PackageReference Include="ModelContextProtocol" Version="2.0.0-rc.1" />
+    <PackageReference Include="ModelContextProtocol" Version="2.0.0" />
   </ItemGroup>
 
   <!-- ModelContextProtocol + Microsoft.Extensions.Hosting are added via `dotnet add package`
