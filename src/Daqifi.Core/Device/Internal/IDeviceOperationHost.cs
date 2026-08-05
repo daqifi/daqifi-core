@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.SdCard;
 
@@ -54,6 +55,16 @@ namespace Daqifi.Core.Device.Internal
 
         /// <inheritdoc cref="DaqifiDevice.Send{T}"/>
         void Send<T>(IOutboundMessage<T> message);
+
+        /// <inheritdoc cref="DaqifiDevice.GetChannelsSnapshot"/>
+        IReadOnlyList<IChannel> SnapshotChannels();
+
+        /// <summary>
+        /// Runs <paramref name="action"/> under the device's channels lock, so a collaborator that
+        /// mutates <see cref="IChannel.IsEnabled"/> and derives outbound state from it does both in
+        /// one critical section (#409). Blocking I/O — <see cref="Send{T}"/> — must stay outside it.
+        /// </summary>
+        void WithChannelsLock(Action action);
 
         /// <inheritdoc cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
 #pragma warning disable CA1068 // Matches the seam it forwards to, which orders these for source compatibility.
