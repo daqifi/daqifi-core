@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Capabilities;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.Protocol;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging;
@@ -393,6 +394,10 @@ namespace Daqifi.Core.Device
         // snapshot via SnapshotChannels for the device-level channel-management API.
         private readonly object _channelsLock = new();
 
+        // Translates a status frame's channel description into channel instances. Stateless, so
+        // it is built once per device and reused for every population.
+        private readonly StatusChannelPopulator _channelPopulator;
+
         /// <summary>
         /// Default time <see cref="InitializeAsync"/> waits for the device to report its
         /// channel configuration (via the <see cref="ChannelsPopulated"/> event) before
@@ -599,6 +604,7 @@ namespace Daqifi.Core.Device
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
             _logger = logger ?? NullLogger.Instance;
+            _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
         }
 
         /// <summary>
@@ -614,6 +620,7 @@ namespace Daqifi.Core.Device
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
             _logger = logger ?? NullLogger.Instance;
+            _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
             _messageProducer = new MessageProducer<string>(stream);
             _messageProducer.SendFailed += OnMessageSendFailed;
             _directStream = stream;
@@ -630,6 +637,7 @@ namespace Daqifi.Core.Device
             Name = name;
             _status = ConnectionStatus.Disconnected;
             _logger = logger ?? NullLogger.Instance;
+            _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
             _transport = transport;
 
             // Subscribe to transport status changes
@@ -4118,41 +4126,19 @@ namespace Daqifi.Core.Device
                 TimestampFrequency = message.TimestampFreq;
             }
 
-            var analogCount = 0;
-            var digitalCount = 0;
+            int analogCount;
+            int digitalCount;
             IChannel[] channelsSnapshot;
 
             // Repopulate under the channels lock so a caller folding over a snapshot on
             // another thread (the device-level channel-management API) never observes a
-            // half-cleared or torn list.
+            // half-cleared or torn list. The mapping itself runs inside the lock exactly as it
+            // did before the extraction — it reads the current channels to reuse them in place.
             lock (_channelsLock)
             {
-                // Index existing channels by identity (type, number). Channels whose identity
-                // is unchanged are updated in place rather than replaced below, so consumer-held
-                // IChannel references — and the configuration on them (direction/output/PWM
-                // state) — survive a routine status re-population untouched. IsEnabled is the
-                // exception: analog channels resync it from the device-reported enabled mask
-                // (field 22) whenever the device sends one, so Core's view cannot silently drift
-                // from the device's (#409).
-                var existingByKey = new Dictionary<(ChannelType, int), IChannel>();
-                foreach (var existing in _channels)
-                {
-                    existingByKey[(existing.Type, existing.ChannelNumber)] = existing;
-                }
-
                 var updatedChannels = new List<IChannel>();
 
-                // Populate analog input channels
-                if (message.AnalogInPortNum > 0)
-                {
-                    analogCount = PopulateAnalogChannels(message, existingByKey, updatedChannels);
-                }
-
-                // Populate digital channels
-                if (message.DigitalPortNum > 0)
-                {
-                    digitalCount = PopulateDigitalChannels(message, existingByKey, updatedChannels);
-                }
+                (analogCount, digitalCount) = _channelPopulator.Populate(message, _channels, updatedChannels);
 
                 _channels.Clear();
                 _channels.AddRange(updatedChannels);
@@ -4167,197 +4153,6 @@ namespace Daqifi.Core.Device
                 Array.AsReadOnly(channelsSnapshot),
                 analogCount,
                 digitalCount));
-        }
-
-        /// <summary>
-        /// Populates analog channels from the protobuf message, updating existing channel
-        /// instances in place where their identity (type, number) is unchanged.
-        /// </summary>
-        /// <param name="message">The protobuf message containing analog channel data.</param>
-        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
-        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
-        /// <returns>The number of analog channels populated.</returns>
-        private int PopulateAnalogChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
-        {
-            var analogInPortRanges = message.AnalogInPortRange;
-            var analogInCalibrationBValues = message.AnalogInCalB;
-            var analogInCalibrationMValues = message.AnalogInCalM;
-            var analogInInternalScaleMValues = message.AnalogInIntScaleM;
-            var analogInResolution = message.AnalogInRes;
-            var analogInPortEnabled = message.AnalogInPortEnabled;
-
-            // Firmware before v3.5.0 never populates this field, so an empty byte string is
-            // ambiguous between "no channels enabled" and "not reported". Only trust it as the
-            // source of truth for IsEnabled when the device actually sent something.
-            var enabledIsReported = analogInPortEnabled.Length > 0;
-
-            var count = (int)message.AnalogInPortNum;
-
-            // Treat both a missing (0) and a physically-implausible out-of-range resolution as
-            // "assumed": the AnalogChannel constructor/setters now reject anything outside
-            // [MinResolution, MaxResolution], so passing a corrupt non-zero value straight through
-            // would throw and abort channel population mid-stream. Fall back to a safe default and
-            // log instead, so a corrupted status frame can neither crash population nor silently
-            // corrupt every scaled sample on the reuse path (UpdateScalingFromStatus below).
-            var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinResolution or > AnalogChannel.MaxResolution;
-            var resolution = resolutionIsAssumed ? 65535u : analogInResolution;
-
-            if (resolutionIsAssumed && count > 0)
-            {
-                SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported no usable ADC resolution (analog_in_res={Resolution}) for {ChannelCount} analog channel(s); assuming {AssumedResolution}. Scaled samples on this device may be systematically wrong.", Name, analogInResolution, count, resolution));
-            }
-
-            for (var i = 0; i < count; i++)
-            {
-                var calibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f);
-                var calibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f);
-                var internalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f);
-                var portRange = GetWithDefault(analogInPortRanges, i, 1.0f);
-
-                // A corrupted device response can carry NaN/Infinity or physically nonsensical
-                // scaling coefficients. Feeding those into AnalogChannel would either throw from its
-                // validating setters (killing channel population mid-stream) or silently propagate
-                // garbage into every scaled sample. Fall back to safe defaults and log instead —
-                // mirroring the analog_in_res=0 handling above.
-                calibrationB = (float)SanitizeScalingValue(calibrationB, 0.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationB));
-                calibrationM = (float)SanitizeScalingValue(calibrationM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationM));
-                internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
-                portRange = (float)SanitizePortRange(portRange, i);
-
-                if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
-                {
-                    existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange, resolutionIsAssumed);
-                    if (enabledIsReported)
-                    {
-                        existingAnalog.IsEnabled = IsChannelBitSet(analogInPortEnabled, i);
-                    }
-                    destination.Add(existingAnalog);
-                    continue;
-                }
-
-                var channel = new AnalogChannel(i, resolution, resolutionIsAssumed)
-                {
-                    Name = $"AI{i}",
-                    Direction = ChannelDirection.Input,
-                    IsEnabled = enabledIsReported && IsChannelBitSet(analogInPortEnabled, i),
-                    CalibrationB = calibrationB,
-                    CalibrationM = calibrationM,
-                    InternalScaleM = internalScaleM,
-                    PortRange = portRange
-                };
-
-                destination.Add(channel);
-            }
-
-            return count;
-        }
-
-        /// <summary>
-        /// Clamps a device-reported calibration/scale coefficient to a value <see cref="AnalogChannel"/>
-        /// will accept, substituting <paramref name="fallback"/> and logging when the reported value is
-        /// non-finite, out of magnitude range, or (when <paramref name="requireNonZero"/>) zero.
-        /// </summary>
-        private double SanitizeScalingValue(double value, double fallback, double maxMagnitude, bool requireNonZero, int channelIndex, string fieldName)
-        {
-            var invalid = !double.IsFinite(value)
-                || Math.Abs(value) > maxMagnitude
-                || (requireNonZero && value == 0.0);
-
-            if (invalid)
-            {
-                SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid {FieldName}={Value} for analog channel {ChannelIndex}; substituting {Fallback}. Scaled samples on this channel may be affected.", Name, fieldName, value, channelIndex, fallback));
-                return fallback;
-            }
-
-            return value;
-        }
-
-        /// <summary>
-        /// Clamps a device-reported port range to a value <see cref="AnalogChannel"/> will accept,
-        /// substituting the 1.0 default and logging when the reported value is non-finite, non-positive,
-        /// or beyond <see cref="AnalogChannel.MaxPortRangeVolts"/>.
-        /// </summary>
-        private double SanitizePortRange(double value, int channelIndex)
-        {
-            if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaxPortRangeVolts)
-            {
-                SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid portRange={Value} for analog channel {ChannelIndex}; substituting 1.0. Scaled samples on this channel may be affected.", Name, value, channelIndex));
-                return 1.0;
-            }
-
-            return value;
-        }
-
-        /// <summary>
-        /// Bitmask of digital channels whose hardware supports PWM output (bit n = channel n).
-        /// Channels 0, 3, 4, 5, 6 and 7 route to output-compare modules; the mask comes from the
-        /// firmware's board configuration and is identical across Nyquist variants.
-        /// </summary>
-        private const int PwmCapableChannelMask = 0x00F9;
-
-        /// <summary>
-        /// Populates digital channels from the protobuf message, updating existing channel
-        /// instances in place where their identity (type, number) is unchanged.
-        /// </summary>
-        /// <param name="message">The protobuf message containing digital channel data.</param>
-        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
-        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
-        /// <returns>The number of digital channels populated.</returns>
-        private int PopulateDigitalChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
-        {
-            var count = (int)message.DigitalPortNum;
-
-            for (var i = 0; i < count; i++)
-            {
-                var isPwmCapable = i < 32 && (PwmCapableChannelMask & (1 << i)) != 0;
-
-                if (existingByKey.TryGetValue((ChannelType.Digital, i), out var existing) && existing is DigitalChannel existingDigital)
-                {
-                    existingDigital.IsPwmCapable = isPwmCapable;
-                    destination.Add(existingDigital);
-                    continue;
-                }
-
-                var channel = new DigitalChannel(i, isPwmCapable)
-                {
-                    Name = $"DIO{i}",
-                    Direction = ChannelDirection.Input,
-                    IsEnabled = false
-                };
-
-                destination.Add(channel);
-            }
-
-            return count;
-        }
-
-        /// <summary>
-        /// Reads bit <paramref name="channelNumber"/> from a device-reported per-channel enable
-        /// bitmask (analog_in_port_enabled, field 22 — confirmed bit-packed on the bench: 2 bytes
-        /// for 16 channels, little-endian, bit <c>n</c> = channel <c>n</c> — the same layout Core
-        /// sends outbound via <see cref="Communication.Producers.ScpiMessageProducer.EnableAdcChannels"/>).
-        /// Returns false when the channel number falls outside the bytes actually sent.
-        /// </summary>
-        private static bool IsChannelBitSet(Google.Protobuf.ByteString mask, int channelNumber)
-        {
-            var byteIndex = channelNumber / 8;
-            return byteIndex < mask.Length && (mask[byteIndex] & (1 << (channelNumber % 8))) != 0;
-        }
-
-        /// <summary>
-        /// Gets a value from a list with a default fallback if the index is out of range.
-        /// </summary>
-        /// <param name="list">The list to get the value from.</param>
-        /// <param name="index">The index to retrieve.</param>
-        /// <param name="defaultValue">The default value if the index is out of range.</param>
-        /// <returns>The value at the index or the default value.</returns>
-        private static T GetWithDefault<T>(IList<T> list, int index, T defaultValue)
-        {
-            if (list.Count > index)
-            {
-                return list[index];
-            }
-            return defaultValue;
         }
 
         /// <summary>
