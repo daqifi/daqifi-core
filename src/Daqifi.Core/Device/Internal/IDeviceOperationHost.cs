@@ -110,5 +110,43 @@ namespace Daqifi.Core.Device.Internal
         /// a silent, compile-clean behavior change.
         /// </remarks>
         void RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e);
+
+        /// <summary>
+        /// Raises the device's <see cref="DaqifiStreamingDevice.StreamFrameDiscarded"/> event,
+        /// isolating a throwing subscriber.
+        /// </summary>
+        /// <remarks>
+        /// Same reasoning as <see cref="RaiseLowSdSpaceWarning"/>: the event is part of the device's
+        /// public surface, so its <c>sender</c> must stay the device.
+        /// </remarks>
+        void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e);
+
+        /// <summary>
+        /// Raises the device's <see cref="DaqifiStreamingDevice.GapDetected"/> event, isolating a
+        /// throwing subscriber so it cannot skip the rest of the frame's decode.
+        /// </summary>
+        void RaiseGapDetected(TimestampGapEventArgs e);
+
+        /// <summary>
+        /// Re-raises a streaming frame for raw-frame consumers, through the device's base
+        /// <see cref="DaqifiDevice.OnStreamMessageReceived"/>.
+        /// </summary>
+        /// <remarks>
+        /// This is the <c>MessageReceived</c> path most callers actually use. It has to run through
+        /// the device rather than from a collaborator so the base implementation — and any subclass
+        /// sitting between it and the streaming device — still sees the frame.
+        /// </remarks>
+        void RaiseRawStreamFrame(DaqifiOutMessage message);
+
+        /// <summary>
+        /// Reports a frame whose decode threw through the device's
+        /// <see cref="DaqifiDevice.ErrorOccurred"/> surface as
+        /// <see cref="DeviceErrorSource.StreamDecode"/> (issue #378).
+        /// </summary>
+        /// <remarks>
+        /// Observation only — the frame is dropped either way, and the device's throttling decides
+        /// whether the event is actually raised.
+        /// </remarks>
+        void RaiseStreamDecodeFailure(Exception error);
     }
 }
