@@ -173,12 +173,23 @@ internal sealed class WifiModuleUpdater
         IStreamingDevice device,
         CancellationToken cancellationToken)
     {
+        // Resolved up front so every return path below can state the bar it judged
+        // against, including the ones that never get to read the device. Parsed
+        // defensively rather than trusting Validate(): the options object stays mutable
+        // after the service is constructed, and an unparseable minimum must degrade to
+        // "no minimum opinion" (null) instead of throwing out of a read-only probe.
+        FirmwareVersion? minimumSupported =
+            FirmwareVersion.TryParse(Options.MinimumSupportedWifiFirmwareVersion, out var parsedMinimum)
+                ? parsedMinimum
+                : null;
+
         if (device is not ILanChipInfoProvider lanChipInfoProvider)
         {
             return new WifiFirmwareStatus
             {
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery,
+                MinimumSupportedVersion = minimumSupported,
             };
         }
 
@@ -233,8 +244,16 @@ internal sealed class WifiModuleUpdater
                 Reason = wasLanNotInitialized
                     ? WifiFirmwareStatusReason.LanNotInitialized
                     : WifiFirmwareStatusReason.ChipInfoUnavailable,
+                MinimumSupportedVersion = minimumSupported,
             };
         }
+
+        // Parsed once here, before the release lookup, because the minimum-supported
+        // answer must survive that lookup failing — that is the whole point of it.
+        var deviceVersionParsed = FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion);
+        bool? meetsMinimum = deviceVersionParsed && minimumSupported is { } minimum
+            ? deviceVersion >= minimum
+            : null;
 
         FirmwareReleaseInfo? latestWifi;
         try
@@ -251,6 +270,8 @@ internal sealed class WifiModuleUpdater
                 CurrentChipInfo = chipInfo,
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+                MinimumSupportedVersion = minimumSupported,
+                MeetsMinimumSupportedVersion = meetsMinimum,
             };
         }
 
@@ -261,6 +282,8 @@ internal sealed class WifiModuleUpdater
                 CurrentChipInfo = chipInfo,
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+                MinimumSupportedVersion = minimumSupported,
+                MeetsMinimumSupportedVersion = meetsMinimum,
             };
         }
 
@@ -268,7 +291,7 @@ internal sealed class WifiModuleUpdater
         // is already a strongly-typed FirmwareVersion from FirmwareDownloadService.
         // Re-parsing TagName would risk divergence from the canonical Version
         // (different tag prefix conventions, etc.) and cost an extra parse.
-        if (!FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion))
+        if (!deviceVersionParsed)
         {
             return new WifiFirmwareStatus
             {
@@ -276,6 +299,8 @@ internal sealed class WifiModuleUpdater
                 LatestRelease = latestWifi,
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.VersionUnparseable,
+                MinimumSupportedVersion = minimumSupported,
+                MeetsMinimumSupportedVersion = meetsMinimum,
             };
         }
 
@@ -286,6 +311,8 @@ internal sealed class WifiModuleUpdater
             LatestRelease = latestWifi,
             IsUpToDate = isCurrent,
             Reason = isCurrent ? WifiFirmwareStatusReason.UpToDate : WifiFirmwareStatusReason.UpdateAvailable,
+            MinimumSupportedVersion = minimumSupported,
+            MeetsMinimumSupportedVersion = meetsMinimum,
         };
     }
 
@@ -321,7 +348,31 @@ internal sealed class WifiModuleUpdater
             default:
                 // DeviceDoesNotSupportLanQuery, ChipInfoUnavailable,
                 // LanNotInitialized, LatestReleaseUnavailable,
-                // VersionUnparseable — proceed with the flash conservatively.
+                // VersionUnparseable — no latest-release verdict is available.
+                //
+                // "Conservative" here used to mean "flash", but a WINC reflash is a
+                // multi-minute, destructive operation, so flashing on a *network*
+                // failure is the expensive guess, not the safe one. When the device
+                // itself answered and its reported version meets the minimum Core
+                // supports, that is a real verdict reached without the network, so
+                // honor it and skip the flash. Only LatestReleaseUnavailable can
+                // reach here with a non-null answer: every other default reason
+                // means the device version is unknown or unparseable, which leaves
+                // MeetsMinimumSupportedVersion null and still falls through to the
+                // flash. A caller that wants to reflash regardless already has
+                // skipVersionCheck: true.
+                if (status.MeetsMinimumSupportedVersion == true)
+                {
+                    var minimumMessage =
+                        $"WiFi firmware meets the minimum supported version (device: {status.CurrentChipInfo!.FwVersion}, "
+                        + $"minimum: {status.MinimumSupportedVersion}); latest-release lookup was unavailable ({status.Reason}), "
+                        + "so skipping the flash rather than reflashing a supported module.";
+                    Logger.LogInformation(minimumMessage);
+                    _context.TransitionToState(FirmwareUpdateState.Complete, minimumMessage);
+                    _context.ReportProgress(progress, FirmwareUpdateState.Complete, 100, minimumMessage, 100, 100);
+                    return true;
+                }
+
                 return false;
         }
     }
