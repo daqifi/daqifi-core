@@ -191,12 +191,21 @@ namespace Daqifi.Core.Device.Internal
         /// See <see cref="ContentionWait"/> for the per-policy semantics.
         /// </summary>
         /// <returns><c>true</c> if the operation ran; <c>false</c> if the wait was abandoned.</returns>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="operation"/> is <c>null</c>.
+        /// </exception>
         /// <exception cref="TimeoutException">
         /// Thrown when <paramref name="onContention"/> is <see cref="LifecycleContention.Fail"/> and
         /// another lifecycle operation held the gate for the whole timeout.
         /// </exception>
         internal bool Run(Action operation, LifecycleContention onContention)
         {
+            // Validated before anything else so a null delegate is reported as misuse rather than
+            // as a NullReferenceException from one of the three call sites below, and so it can
+            // never take the gate on its way to failing. Matches the constructor's guards and the
+            // entry-point guards on the sibling collaborators.
+            ArgumentNullException.ThrowIfNull(operation);
+
             // Re-entry from inside the critical section (a StatusChanged handler calling back in)
             // proceeds without acquiring, exactly as a reentrant monitor would.
             if (_isInsideLifecycleOperation.Value)
@@ -244,11 +253,18 @@ namespace Daqifi.Core.Device.Internal
         }
 
         /// <inheritdoc cref="Run"/>
+        /// <remarks>
+        /// Being an <c>async</c> method, the <see cref="ArgumentNullException"/> surfaces on the
+        /// returned task rather than at the call, which is the framework's own convention for
+        /// async argument validation and is what every call site here observes anyway.
+        /// </remarks>
         internal async Task<bool> RunAsync(
             Func<Task> operation,
             LifecycleContention onContention,
             CancellationToken cancellationToken)
         {
+            ArgumentNullException.ThrowIfNull(operation);
+
             if (_isInsideLifecycleOperation.Value)
             {
                 await operation().ConfigureAwait(false);

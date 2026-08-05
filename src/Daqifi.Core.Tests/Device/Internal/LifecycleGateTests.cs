@@ -88,6 +88,60 @@ public class LifecycleGateTests
             NullLogger.Instance, () => "Nq1", () => TimeSpan.Zero, null!));
     }
 
+    [Fact]
+    public void Run_WithNullOperation_ThrowsArgumentNullExceptionAndLeavesTheGateFree()
+    {
+        var gate = Create();
+
+        Assert.Throws<ArgumentNullException>(() => gate.Run(null!, LifecycleContention.Fail));
+
+        // The guard has to run before the gate is taken, not just before the invocation: a null
+        // delegate that acquired on its way to failing would leave the next caller contended.
+        Assert.True(gate.Run(() => { }, LifecycleContention.Fail));
+    }
+
+    [Fact]
+    public async Task RunAsync_WithNullOperation_ThrowsArgumentNullExceptionAndLeavesTheGateFree()
+    {
+        var gate = Create();
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => gate.RunAsync(
+            null!, LifecycleContention.Fail, CancellationToken.None));
+
+        Assert.True(await gate.RunAsync(
+            () => Task.CompletedTask, LifecycleContention.Fail, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Run_WithNullOperationOnTheReentrantPath_StillThrowsArgumentNullException()
+    {
+        // The re-entry branch invokes the delegate without acquiring anything, so a guard placed
+        // after it would leave exactly this path throwing NullReferenceException instead.
+        var gate = Create();
+        Exception? inner = null;
+
+        gate.Run(
+            () => inner = Record.Exception(() => gate.Run(null!, LifecycleContention.Abandon)),
+            LifecycleContention.Fail);
+
+        Assert.IsType<ArgumentNullException>(inner);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithNullOperationOnTheReentrantPath_StillThrowsArgumentNullException()
+    {
+        var gate = Create();
+        Exception? inner = null;
+
+        await gate.RunAsync(
+            async () => inner = await Record.ExceptionAsync(() => gate.RunAsync(
+                null!, LifecycleContention.Abandon, CancellationToken.None)),
+            LifecycleContention.Fail,
+            CancellationToken.None);
+
+        Assert.IsType<ArgumentNullException>(inner);
+    }
+
     #endregion
 
     #region Uncontended
