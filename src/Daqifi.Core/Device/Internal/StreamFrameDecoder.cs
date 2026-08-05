@@ -31,11 +31,27 @@ namespace Daqifi.Core.Device.Internal
     /// still intercepts it.
     /// </para>
     /// <para>
-    /// Not thread-safe by design, matching the code it was moved from: frames arrive on the single
-    /// message-consumer thread, which is also the thread that repopulates channels, so the
-    /// unsynchronized session fields are only ever touched from there. The two counters are
-    /// interlocked because they are read from arbitrary threads through the device's public
-    /// properties.
+    /// Not thread-safe, matching the code it was moved from. The decode path —
+    /// <see cref="ProcessFrame"/> and everything under it — runs solely on the single
+    /// message-consumer thread, which is also the thread that repopulates channels.
+    /// <see cref="BeginSession"/> is the exception, and the reason this is stated rather than
+    /// assumed: it runs on whichever thread called <see cref="DaqifiStreamingDevice.StartStreaming"/>
+    /// or sent a raw start-streaming command through <c>Send</c>, and it writes the session fields
+    /// with no synchronization against the consumer thread reading them.
+    /// </para>
+    /// <para>
+    /// What makes that sound is the session boundary, not synchronization: a session's frames only
+    /// exist once the device has been told to start, and the two starts bracket the reset so that
+    /// no frame is decoded as part of a session whose reset has not run. <c>StartStreaming</c>
+    /// resets before it sends the command. The raw-<c>Send</c> path can only reset after the
+    /// command has gone out, but it leaves <see cref="IDeviceOperationHost.IsStreaming"/> false
+    /// until the reset completes, so a frame landing in that window is re-raised as a stray frame
+    /// and never decoded. Starting a stream concurrently with another thread's in-flight session is
+    /// outside the device's contract, exactly as it was before this was extracted.
+    /// </para>
+    /// <para>
+    /// The two counters are interlocked because they are read from arbitrary threads through the
+    /// device's public properties.
     /// </para>
     /// </remarks>
     internal sealed class StreamFrameDecoder
