@@ -259,6 +259,7 @@ namespace Daqifi.Core.Device
             // Built here rather than in field initializers because each needs `this` as its host,
             // which a field initializer cannot reference. Every constructor routes through this
             // method, so they are always in place before the device is handed to a caller.
+            _channelControl = new ChannelControlOperations(this);
             _networkOperations = new NetworkConfigurationOperations(this);
             _sdCardOperations = new SdCardOperations(this);
             _lanChipInfoOperations = new LanChipInfoOperations(this);
@@ -275,7 +276,7 @@ namespace Daqifi.Core.Device
             {
                 if (e.Status != ConnectionStatus.Connected)
                 {
-                    _lastSentPwmFrequencyHz = null;
+                    _channelControl.ResetSentPwmFrequency();
                 }
             };
         }
@@ -651,7 +652,7 @@ namespace Daqifi.Core.Device
             {
                 foreach (var channel in SnapshotChannels())
                 {
-                    if (channel.Type != ChannelType.Analog || channel.ChannelNumber > MaxAdcBitmaskChannel)
+                    if (channel.Type != ChannelType.Analog || channel.ChannelNumber > ChannelControlOperations.MaxAdcBitmaskChannel)
                     {
                         continue;
                     }
@@ -1268,128 +1269,24 @@ namespace Daqifi.Core.Device
             }
         }
 
-        /// <summary>
-        /// The maximum analog channel number that can be encoded in the ADC enable bitmask.
-        /// The mask is a 32-bit value (<c>1u &lt;&lt; ChannelNumber</c>), so channel numbers must be 0-31.
-        /// </summary>
-        private const int MaxAdcBitmaskChannel = 31;
+        /// <inheritdoc />
+        public void EnableChannel(IChannel channel) => _channelControl.EnableChannel(channel);
 
         /// <inheritdoc />
-        public void EnableChannel(IChannel channel)
-        {
-            ArgumentNullException.ThrowIfNull(channel);
-            SetChannelsEnabled(new[] { channel }, enabled: true);
-        }
+        public void EnableChannels(IEnumerable<IChannel> channels) => _channelControl.EnableChannels(channels);
 
         /// <inheritdoc />
-        public void EnableChannels(IEnumerable<IChannel> channels)
-        {
-            ArgumentNullException.ThrowIfNull(channels);
-            SetChannelsEnabled(channels as IReadOnlyList<IChannel> ?? channels.ToList(), enabled: true);
-        }
+        public void DisableChannel(IChannel channel) => _channelControl.DisableChannel(channel);
 
         /// <inheritdoc />
-        public void DisableChannel(IChannel channel)
-        {
-            ArgumentNullException.ThrowIfNull(channel);
-            SetChannelsEnabled(new[] { channel }, enabled: false);
-        }
-
-        /// <inheritdoc />
-        public void DisableAllChannels()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            (bool HasChannels, uint Mask) adcMask = default;
-            (bool HasChannels, bool AnyEnabled) dioState = default;
-
-            // Mutate and derive the outbound masks in one critical section — see the matching
-            // comment in SetChannelsEnabled (#409) for why the gap matters.
-            WithChannelsLock(() =>
-            {
-                foreach (var channel in SnapshotChannels())
-                {
-                    channel.IsEnabled = false;
-                }
-
-                adcMask = ComputeAdcEnableMask();
-                dioState = ComputeDioEnableState();
-            });
-
-            // Push the cleared state for whichever channel types this device actually has.
-            if (adcMask.HasChannels)
-            {
-                Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
-            }
-
-            if (dioState.HasChannels)
-            {
-                Send(dioState.AnyEnabled
-                    ? ScpiMessageProducer.EnableDioPorts()
-                    : ScpiMessageProducer.DisableDioPorts());
-            }
-        }
+        public void DisableAllChannels() => _channelControl.DisableAllChannels();
 
         /// <inheritdoc />
         public void SetDioDirection(IChannel channel, ChannelDirection direction)
-        {
-            // Argument validation precedes the connection (state) check so misuse surfaces
-            // the same exception type regardless of connection state.
-            ArgumentNullException.ThrowIfNull(channel);
-
-            if (channel.Type != ChannelType.Digital)
-            {
-                throw new ArgumentException("Direction can only be set on digital channels.", nameof(channel));
-            }
-
-            if (direction != ChannelDirection.Input && direction != ChannelDirection.Output)
-            {
-                throw new ArgumentOutOfRangeException(nameof(direction), direction, "Direction must be Input or Output.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            EnsureChannelBelongs(channel);
-
-            channel.Direction = direction;
-            Send(ScpiMessageProducer.SetDioPortDirection(
-                channel.ChannelNumber,
-                direction == ChannelDirection.Output ? 1 : 0));
-        }
+            => _channelControl.SetDioDirection(channel, direction);
 
         /// <inheritdoc />
-        public void SetDioValue(IChannel channel, bool value)
-        {
-            ArgumentNullException.ThrowIfNull(channel);
-
-            // Gate on Type (matching SetDioDirection) rather than the IDigitalChannel interface,
-            // so both DIO methods accept the same set of channels. The SCPI command only needs
-            // the channel number; OutputValue mirroring is best-effort local bookkeeping.
-            if (channel.Type != ChannelType.Digital)
-            {
-                throw new ArgumentException("A digital output value can only be set on digital channels.", nameof(channel));
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            EnsureChannelBelongs(channel);
-
-            if (channel is IDigitalChannel digitalChannel)
-            {
-                digitalChannel.OutputValue = value;
-            }
-
-            Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
-        }
+        public void SetDioValue(IChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
 
         /// <summary>
         /// The lowest PWM frequency the firmware reproduces correctly. Below this the firmware's
@@ -1414,133 +1311,17 @@ namespace Daqifi.Core.Device
         /// mirroring <see cref="SetPwmFrequency"/>; defaults to <see cref="DefaultPwmFrequencyHz"/>
         /// (a commandable value) until a frequency has been set this session.
         /// </summary>
-        public int PwmFrequencyHz { get; private set; } = DefaultPwmFrequencyHz;
-
-        /// <summary>
-        /// The PWM frequency actually sent to the device this connection, or <c>null</c> if none has
-        /// been sent yet (also reset to <c>null</c> on disconnect). Distinct from
-        /// <see cref="PwmFrequencyHz"/>, which carries a session default before anything is sent —
-        /// this drives the skip-if-unchanged guard so a fresh connection always sends. See #345.
-        /// </summary>
-        private int? _lastSentPwmFrequencyHz;
+        public int PwmFrequencyHz => _channelControl.PwmFrequencyHz;
 
         /// <inheritdoc />
-        public void SetPwmEnabled(IChannel channel, bool enabled)
-        {
-            ArgumentNullException.ThrowIfNull(channel);
-
-            if (channel.Type != ChannelType.Digital)
-            {
-                throw new ArgumentException("PWM can only be controlled on digital channels.", nameof(channel));
-            }
-
-            // Enabling PWM on a non-capable channel must be blocked here: the firmware flags the
-            // channel PWM-active before its capability check fails and never rolls that back,
-            // leaving the channel dead to digital writes. Disabling is that state's only recovery
-            // command, so it is accepted on any digital channel.
-            if (enabled && channel is not IDigitalChannel { IsPwmCapable: true })
-            {
-                throw new ArgumentException(
-                    $"Channel {channel.ChannelNumber} does not support PWM. PWM-capable channels: {PwmCapableChannelList}.",
-                    nameof(channel));
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            EnsureChannelBelongs(channel);
-
-            if (channel is IDigitalChannel digitalChannel)
-            {
-                digitalChannel.IsPwmEnabled = enabled;
-                if (!enabled)
-                {
-                    // Disabling PWM leaves the pin high-impedance and the firmware zeroes its
-                    // stored output value; mirror that so local state doesn't claim a driven level.
-                    // Direction is intentionally left as-is: the firmware keeps the channel's
-                    // stored direction and re-applies it (resuming driving) on the next state or
-                    // direction write, or on the next streaming tick — verified on hardware.
-                    digitalChannel.OutputValue = false;
-                }
-            }
-
-            Send(ScpiMessageProducer.SetPwmChannelEnabled(channel.ChannelNumber, enabled));
-        }
+        public void SetPwmEnabled(IChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
 
         /// <inheritdoc />
         public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
-        {
-            ArgumentNullException.ThrowIfNull(channel);
-
-            if (channel.Type != ChannelType.Digital)
-            {
-                throw new ArgumentException("PWM can only be controlled on digital channels.", nameof(channel));
-            }
-
-            if (channel is not IDigitalChannel { IsPwmCapable: true })
-            {
-                throw new ArgumentException(
-                    $"Channel {channel.ChannelNumber} does not support PWM. PWM-capable channels: {PwmCapableChannelList}.",
-                    nameof(channel));
-            }
-
-            // Duty 0 is rejected rather than forwarded: the firmware stores it but never writes
-            // the compare register, so the output keeps toggling at the previous duty while the
-            // stored value claims 0. Stopping the output is SetPwmEnabled(channel, false).
-            if (dutyCyclePercent is < 1 or > 100)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(dutyCyclePercent), dutyCyclePercent,
-                    "Duty cycle must be 1-100 percent. To stop the output, use SetPwmEnabled(channel, false).");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            EnsureChannelBelongs(channel);
-
-            if (channel is IDigitalChannel digitalChannel)
-            {
-                digitalChannel.PwmDutyCyclePercent = dutyCyclePercent;
-            }
-
-            Send(ScpiMessageProducer.SetPwmChannelDutyCycle(channel.ChannelNumber, dutyCyclePercent));
-        }
+            => _channelControl.SetPwmDutyCycle(channel, dutyCyclePercent);
 
         /// <inheritdoc />
-        public void SetPwmFrequency(int frequencyHz)
-        {
-            if (frequencyHz is < MinPwmFrequencyHz or > MaxPwmFrequencyHz)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(frequencyHz), frequencyHz,
-                    $"PWM frequency must be {MinPwmFrequencyHz}-{MaxPwmFrequencyHz} Hz.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            // Skip the redundant round-trip when the device already has this frequency (from a
-            // send earlier this connection). The cache is cleared on disconnect so a fresh
-            // connection always sends. PwmFrequencyHz still reflects the commanded value. See #345.
-            if (frequencyHz == _lastSentPwmFrequencyHz)
-            {
-                return;
-            }
-
-            // The SCPI command is addressed to a channel, but the firmware drives all PWM from
-            // one shared timer and applies the frequency to every channel. Channel 0 is used as
-            // the address because it is PWM-capable on all supported hardware.
-            Send(ScpiMessageProducer.SetPwmChannelFrequency(0, frequencyHz));
-            _lastSentPwmFrequencyHz = frequencyHz;
-            PwmFrequencyHz = frequencyHz;
-        }
+        public void SetPwmFrequency(int frequencyHz) => _channelControl.SetPwmFrequency(frequencyHz);
 
         /// <summary>
         /// Sets and persists the device's user-defined friendly name to NVM, then optimistically
@@ -1597,46 +1378,9 @@ namespace Daqifi.Core.Device
             return Task.CompletedTask;
         }
 
-        /// <summary>
-        /// Comma-separated PWM-capable channel numbers for error messages, derived from this
-        /// device's channel collection.
-        /// </summary>
-        private string PwmCapableChannelList
-        {
-            get
-            {
-                var capable = new List<int>();
-                foreach (var ch in SnapshotChannels())
-                {
-                    if (ch is IDigitalChannel { IsPwmCapable: true })
-                    {
-                        capable.Add(ch.ChannelNumber);
-                    }
-                }
-                capable.Sort();
-                return capable.Count > 0 ? string.Join(", ", capable) : "none on this device";
-            }
-        }
-
         /// <inheritdoc />
         public void SetAnalogOutput(int channelNumber, double voltage)
-        {
-            if (channelNumber < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            // Analog-output (DAC) channels are addressed by number; they are not part of the
-            // populated Channels collection (PopulateChannelsFromStatus creates analog *input*
-            // channels only). Stage the level, then latch it.
-            Send(ScpiMessageProducer.SetAnalogOutputVoltage(channelNumber, voltage));
-            Send(ScpiMessageProducer.UpdateDacOutputs);
-        }
+            => _channelControl.SetAnalogOutput(channelNumber, voltage);
 
         /// <inheritdoc />
         public void Reboot()
@@ -1767,190 +1511,6 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.LoadVoltagePrecision);
         }
 
-        /// <summary>
-        /// Sets the enabled state for a set of channels, then sends one device command per affected
-        /// channel type (the ADC enable bitmask for analog, the global DIO enable for digital).
-        /// Validation runs before any mutation so an invalid entry leaves device state untouched.
-        /// </summary>
-        private void SetChannelsEnabled(IReadOnlyList<IChannel> channels, bool enabled)
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            // Validate everything up front so a bad entry can't leave a partially-applied state.
-            foreach (var channel in channels)
-            {
-                if (channel is null)
-                {
-                    throw new ArgumentException("The channel collection contains a null entry.", nameof(channels));
-                }
-
-                EnsureChannelBelongs(channel);
-            }
-
-            var touchedAnalog = false;
-            var touchedDigital = false;
-            var adcMask = (HasChannels: false, Mask: 0u);
-            var dioState = (HasChannels: false, AnyEnabled: false);
-
-            // Mutate IsEnabled and derive the outbound masks from it in one critical section, so
-            // a status frame resyncing analog IsEnabled from the device (#409) on the consumer
-            // thread cannot interleave between the mutation and the read that computes the mask —
-            // which would otherwise send a mask reflecting a value the status frame is about to
-            // overwrite, silently failing to apply the requested enable/disable on the device.
-            WithChannelsLock(() =>
-            {
-                foreach (var channel in channels)
-                {
-                    channel.IsEnabled = enabled;
-
-                    if (channel.Type == ChannelType.Analog)
-                    {
-                        touchedAnalog = true;
-                    }
-                    else if (channel.Type == ChannelType.Digital)
-                    {
-                        touchedDigital = true;
-                    }
-                }
-
-                if (touchedAnalog)
-                {
-                    adcMask = ComputeAdcEnableMask();
-                }
-
-                if (touchedDigital)
-                {
-                    dioState = ComputeDioEnableState();
-                }
-            });
-
-            if (touchedAnalog && adcMask.HasChannels)
-            {
-                Send(ScpiMessageProducer.EnableAdcChannels(adcMask.Mask.ToString(CultureInfo.InvariantCulture)));
-            }
-
-            if (touchedDigital && dioState.HasChannels)
-            {
-                Send(dioState.AnyEnabled
-                    ? ScpiMessageProducer.EnableDioPorts()
-                    : ScpiMessageProducer.DisableDioPorts());
-            }
-        }
-
-        /// <summary>
-        /// Computes the ADC enable bitmask over all currently-enabled analog channels. Must be
-        /// called under <see cref="DaqifiDevice.WithChannelsLock{T}"/> alongside any IsEnabled
-        /// mutation it should reflect (#409) — see <see cref="SetChannelsEnabled"/>.
-        /// </summary>
-        private (bool HasChannels, uint Mask) ComputeAdcEnableMask()
-        {
-            uint mask = 0;
-            var hasAnalogChannels = false;
-
-            foreach (var channel in SnapshotChannels())
-            {
-                if (channel.Type != ChannelType.Analog)
-                {
-                    continue;
-                }
-
-                hasAnalogChannels = true;
-
-                if (!channel.IsEnabled)
-                {
-                    continue;
-                }
-
-                if (channel.ChannelNumber > MaxAdcBitmaskChannel)
-                {
-                    throw new InvalidOperationException(
-                        $"Analog channel number {channel.ChannelNumber} exceeds the maximum ({MaxAdcBitmaskChannel}) that can be encoded in the ADC enable bitmask.");
-                }
-
-                mask |= 1u << channel.ChannelNumber;
-            }
-
-            return (hasAnalogChannels, mask);
-        }
-
-        /// <summary>
-        /// Recomputes the ADC enable bitmask over all currently-enabled analog channels and sends it.
-        /// Does nothing when the device has no analog channels. The firmware treats the value as a
-        /// set-replace, so the full mask of enabled analog channels is sent every time.
-        /// </summary>
-        private void SendAdcEnableMask()
-        {
-            var (hasAnalogChannels, mask) = WithChannelsLock(ComputeAdcEnableMask);
-
-            if (!hasAnalogChannels)
-            {
-                return;
-            }
-
-            Send(ScpiMessageProducer.EnableAdcChannels(mask.ToString(CultureInfo.InvariantCulture)));
-        }
-
-        /// <summary>
-        /// Computes whether any digital channel is enabled. Must be called under
-        /// <see cref="DaqifiDevice.WithChannelsLock{T}"/> alongside any IsEnabled mutation it
-        /// should reflect — see <see cref="SetChannelsEnabled"/>.
-        /// </summary>
-        private (bool HasChannels, bool AnyEnabled) ComputeDioEnableState()
-        {
-            var hasDigitalChannels = false;
-            var anyEnabled = false;
-
-            foreach (var channel in SnapshotChannels())
-            {
-                if (channel.Type != ChannelType.Digital)
-                {
-                    continue;
-                }
-
-                hasDigitalChannels = true;
-
-                if (channel.IsEnabled)
-                {
-                    anyEnabled = true;
-                }
-            }
-
-            return (hasDigitalChannels, anyEnabled);
-        }
-
-        /// <summary>
-        /// Sends the global DIO enable command reflecting whether any digital channel is enabled.
-        /// Does nothing when the device has no digital channels. The firmware exposes only a global
-        /// DIO enable, so per-channel digital enabling is collapsed to this aggregate state.
-        /// </summary>
-        private void SendDioEnableState()
-        {
-            var (hasDigitalChannels, anyEnabled) = WithChannelsLock(ComputeDioEnableState);
-
-            if (!hasDigitalChannels)
-            {
-                return;
-            }
-
-            Send(anyEnabled
-                ? ScpiMessageProducer.EnableDioPorts()
-                : ScpiMessageProducer.DisableDioPorts());
-        }
-
-        /// <summary>
-        /// Throws when the supplied channel is not part of this device's populated channel collection,
-        /// which would mean mutating it could not affect the device-level enable state.
-        /// </summary>
-        private void EnsureChannelBelongs(IChannel channel)
-        {
-            if (!SnapshotChannels().Contains(channel))
-            {
-                throw new ArgumentException("The specified channel does not belong to this device.", nameof(channel));
-            }
-        }
 
         // -----------------------------------------------------------------
         // Delegation to the operation collaborators.
@@ -1962,6 +1522,9 @@ namespace Daqifi.Core.Device
         // this file, so every call still passes through this device's own
         // virtual members and any subclass override of them.
         // -----------------------------------------------------------------
+
+        /// <summary>Channel enable/disable, DIO, PWM and analog output (<see cref="IStreamingDevice"/>).</summary>
+        private ChannelControlOperations _channelControl = null!;
 
         /// <summary>WiFi/LAN configuration (<see cref="INetworkConfigurable"/>).</summary>
         private NetworkConfigurationOperations _networkOperations = null!;
@@ -2155,6 +1718,10 @@ namespace Daqifi.Core.Device
         void IDeviceOperationHost.StopStreaming() => StopStreaming();
 
         void IDeviceOperationHost.Send<T>(IOutboundMessage<T> message) => Send(message);
+
+        IReadOnlyList<IChannel> IDeviceOperationHost.SnapshotChannels() => SnapshotChannels();
+
+        void IDeviceOperationHost.WithChannelsLock(Action action) => WithChannelsLock(action);
 
 #pragma warning disable CA1068 // Matches the seam it forwards to.
         Task<IReadOnlyList<string>> IDeviceOperationHost.ExecuteTextCommandAsync(
