@@ -35,6 +35,15 @@ namespace Daqifi.Core.Tests.Device.Internal;
 /// </remarks>
 public class LiveSampleStreamTests
 {
+    /// <summary>
+    /// Upper bound on every await in this file. The collaborator's reads are unbounded by design —
+    /// a live stream waits for the next sample — so a regression in cancellation, in delivery, or
+    /// in argument validation would otherwise park a test forever and stall the whole run. Every
+    /// wait here is bounded so such a regression surfaces as a fast <see cref="TimeoutException"/>
+    /// instead. Generous enough not to flake on a loaded CI agent.
+    /// </summary>
+    private static readonly TimeSpan MoveNextTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public void Constructor_NullHost_Throws()
     {
@@ -54,7 +63,7 @@ public class LiveSampleStreamTests
 
         // Every subscribed channel must reach the same buffer, not just the first.
         host.Channels[1].RaiseSample(2.5);
-        Assert.True(await moveNext.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
         Assert.Same(host.Channels[1], e.Current.Channel);
         Assert.Equal(2.5, e.Current.Sample.Value);
     }
@@ -68,7 +77,7 @@ public class LiveSampleStreamTests
         var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         host.Channels[0].RaiseSample(1.0);
-        Assert.True(await moveNext.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
 
         await e.DisposeAsync();
 
@@ -87,7 +96,12 @@ public class LiveSampleStreamTests
         var e = stream.StreamSamplesAsync(cts.Token).GetAsyncEnumerator();
         var moveNext = e.MoveNextAsync();
         cts.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await moveNext);
+
+        // Bounded on purpose: if cancellation ever stops ending the read, an unbounded await here
+        // would park forever and hang the whole run. The timeout turns that into a fast, named
+        // failure (TimeoutException instead of the expected OperationCanceledException).
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => moveNext.AsTask().WaitAsync(MoveNextTimeout));
         await e.DisposeAsync();
 
         // The unsubscribe lives in a finally, so the throwing exit path has to clean up too.
@@ -114,7 +128,7 @@ public class LiveSampleStreamTests
         Assert.Equal(0, late.SubscriberCount);
 
         host.Channels[0].RaiseSample(1.0);
-        Assert.True(await moveNext.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
         Assert.Equal(1.0, e.Current.Sample.Value);
         Assert.Equal(1, host.SnapshotCalls);
     }
@@ -135,8 +149,8 @@ public class LiveSampleStreamTests
         host.Channels[0].RaiseSample(4.0);
 
         // One sample, delivered to both consumers — neither steals it from the other.
-        Assert.True(await firstMove.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.True(await secondMove.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await firstMove.AsTask().WaitAsync(MoveNextTimeout));
+        Assert.True(await secondMove.AsTask().WaitAsync(MoveNextTimeout));
         Assert.Equal(4.0, first.Current.Sample.Value);
         Assert.Equal(4.0, second.Current.Sample.Value);
     }
@@ -170,11 +184,17 @@ public class LiveSampleStreamTests
         var enumerable = stream.StreamSamplesAsync(CancellationToken.None, bufferCapacity: 0);
         Assert.Equal(0, host.SnapshotCalls);
 
-        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
+        // Bounded on purpose: were the validation to stop throwing, this enumeration would block
+        // on an empty buffer that nothing ever writes to, so an unbounded await would hang the run
+        // rather than fail it.
+        var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => ConsumeAsync().WaitAsync(MoveNextTimeout));
+        Assert.Equal("bufferCapacity", ex.ParamName);
+
+        async Task ConsumeAsync()
         {
             await foreach (var _ in enumerable) { }
-        });
-        Assert.Equal("bufferCapacity", ex.ParamName);
+        }
     }
 
     #region Helpers
@@ -192,7 +212,7 @@ public class LiveSampleStreamTests
             host.Channels[0].RaiseSample(i);
         }
 
-        Assert.True(await moveNext.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
         await e.DisposeAsync();
         return stream.DroppedSampleCount;
     }
