@@ -90,6 +90,20 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostWifiReconnectDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// Delay after the post-flash recovery sequence sends
+    /// <see cref="Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode"/> <c>0</c>
+    /// and before the LAN restore commands that follow it. Leaving the USB-to-WINC transparent
+    /// bridge is a device-side mode transition, not an instantaneous one: until the SCPI console
+    /// path is re-established, bytes arriving on the port are still forwarded to the WINC as raw
+    /// data, so a LAN command sent too soon is swallowed by the bridge and the configuration
+    /// silently fails to restore. <see cref="WifiBridgeActivator.Deactivate(string, System.Threading.CancellationToken)"/>
+    /// already paces the same transition by the same amount over a raw serial port; this is the
+    /// managed-connection equivalent. Set to <see cref="TimeSpan.Zero"/> to skip the wait (e.g.
+    /// unit tests).
+    /// </summary>
+    public TimeSpan PostUsbTransparentModeExitDelay { get; set; } = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
     /// Delay observed at the WINC "Power cycle WINC and set to bootloader mode" prompt before the
     /// empty continue line is sent to the flash tool. Gives the WiFi firmware time to finish its
     /// bridge-mode initialization — especially after <see cref="WifiBridgeActivationCallback"/>
@@ -391,9 +405,10 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
         ValidatePositive(WifiFlashRetryDelay, nameof(WifiFlashRetryDelay));
 
-        // These two permit Zero (= "skip the wait"); only reject negatives.
+        // These three permit Zero (= "skip the wait"); only reject negatives.
         ValidateNonNegative(PostLanDisconnectPortReleaseDelay, nameof(PostLanDisconnectPortReleaseDelay));
         ValidateNonNegative(WincBootPromptResponseDelay, nameof(WincBootPromptResponseDelay));
+        ValidateNonNegative(PostUsbTransparentModeExitDelay, nameof(PostUsbTransparentModeExitDelay));
 
         if (WifiFlashAttempts < 1)
         {

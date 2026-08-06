@@ -1668,6 +1668,155 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledDuringTransparentModeExitSettle_LeavesLanRestoreUnsent()
+    {
+        // Pins that the settle genuinely sits BETWEEN the transparent-mode exit and the LAN
+        // restore, not before the exit or after the whole recovery block: cancellation is raised
+        // from inside the transparent-mode Send, so only a wait positioned between the two can
+        // stop LAN:ENAbled/APPLY/SAVE from going out. Also proves the wait observes the caller's
+        // token rather than sleeping through a cancel.
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM33");
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:USB:SetTransparentMode 0")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        // Long enough that a missing wait would let the LAN restore slip out before the cancel
+        // is seen. The cancel is already raised by the time the wait starts, so it ends at once
+        // rather than actually costing 30s.
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0"
+            ],
+            device.SentCommands);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenTransparentModeExitDelayIsZero_StillSendsFullRecoverySequence()
+    {
+        // Zero means "skip the wait", not "skip the step". A consumer that collapses the delay
+        // (or a transport that needs no pacing) must still get the whole recovery sequence.
+        var device = new FakeStreamingDevice("COM34");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        options.PostUsbTransparentModeExitDelay = TimeSpan.Zero;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:COMMunicate:LAN:SAVE"
+            ],
+            device.SentCommands);
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_PostUsbTransparentModeExitDelay_DefaultsToBridgeDeactivationPace()
+    {
+        // The default is the behavior: a consumer that upgrades without touching options gets
+        // the pacing. 100ms is not arbitrary — it is the same inter-command wait
+        // WifiBridgeActivator.Deactivate already uses for this exact mode transition over a raw
+        // serial port, so the managed-connection path is paced identically. Pinned so the two
+        // cannot silently drift apart.
+        var options = new FirmwareUpdateServiceOptions();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(100), options.PostUsbTransparentModeExitDelay);
+        options.Validate();
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_Validate_RejectsNegativeTransparentModeExitDelayButAllowsZero()
+    {
+        // Zero is the documented "skip the wait" escape hatch and must stay legal; a negative
+        // value is a misconfiguration that would otherwise reach Task.Delay.
+        var options = new FirmwareUpdateServiceOptions { PostUsbTransparentModeExitDelay = TimeSpan.Zero };
+        options.Validate();
+
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromMilliseconds(-1);
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+        Assert.Equal(nameof(FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay), exception.ParamName);
+    }
+
+    [Fact]
     public async Task UpdateWifiModuleAsync_WhenCanceledDuringPowerOnSettle_NeverEntersLanUpdateMode()
     {
         // Pins that the settle delay is genuinely awaited BETWEEN the power-on and the
@@ -4381,7 +4530,10 @@ public class FirmwareUpdateServiceTests
             // Skip the WINC power-on settle wait — fakes don't model power state,
             // so the delay is pure latency here. Individual tests re-enable it
             // where the power-on behavior itself is under test.
-            PowerOnWifiModuleSettleDelay = TimeSpan.Zero
+            PowerOnWifiModuleSettleDelay = TimeSpan.Zero,
+            // Same reasoning for the transparent-mode exit settle: the fake device has no
+            // bridge to leave. Tests that exercise the wait itself set it explicitly.
+            PostUsbTransparentModeExitDelay = TimeSpan.Zero
         };
     }
 

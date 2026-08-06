@@ -170,6 +170,19 @@ internal sealed class WifiModuleUpdater
                     // and restoring the pre-flash state is the entire job of this step. Completes
                     // the recovery half of daqifi-desktop's ResetLanAfterUpdate (part of #269).
                     device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+
+                    // Leaving the bridge is a device-side mode transition, not an instantaneous
+                    // one. Until the SCPI console path is back, bytes on the port are still
+                    // forwarded to the WINC as raw data, so a LAN command sent immediately after
+                    // can be swallowed by the bridge and the restore silently does nothing —
+                    // the same intermittent failure the exit itself exists to prevent.
+                    // WifiBridgeActivator.Deactivate already paces this exact transition by the
+                    // same amount over a raw serial port; this is the managed-connection twin.
+                    if (Options.PostUsbTransparentModeExitDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(Options.PostUsbTransparentModeExitDelay, stateToken).ConfigureAwait(false);
+                    }
+
                     device.Send(ScpiMessageProducer.EnableNetworkLan);
                     device.Send(ScpiMessageProducer.ApplyNetworkLan);
                     device.Send(ScpiMessageProducer.SaveNetworkLan);
