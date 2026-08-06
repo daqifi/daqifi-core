@@ -82,9 +82,29 @@ internal sealed class WifiModuleUpdater
                 {
                     FirmwareUpdateContext.EnsureDeviceConnected(device);
 
+                    // Observe cancellation before the first state-changing Send below: a
+                    // prep step that is already canceled must not still power the module on
+                    // or flip the device into LAN firmware-update mode.
+                    stateToken.ThrowIfCancellationRequested();
+
                     if (device.IsStreaming)
                     {
                         device.StopStreaming();
+                    }
+
+                    // The WINC is powered off in standby and right after a PIC32 reflash, and LAN
+                    // commands are rejected (-200) in that state — so LAN:FWUpdate would silently
+                    // fail to take effect and the flash tool would find no bridge. Power it on and
+                    // let it settle first. This is the prep order daqifi-desktop hand-rolls today
+                    // (EnableLanUpdateMode: POWer:STATe 1 → settle → LAN:FWUpdate); owning it here
+                    // is what lets a consumer drop that workaround (part of #269).
+                    if (Options.PowerOnWifiModuleBeforeLanUpdateMode)
+                    {
+                        device.Send(ScpiMessageProducer.TurnDeviceOn);
+                        if (Options.PowerOnWifiModuleSettleDelay > TimeSpan.Zero)
+                        {
+                            await Task.Delay(Options.PowerOnWifiModuleSettleDelay, stateToken).ConfigureAwait(false);
+                        }
                     }
 
                     device.Send(ScpiMessageProducer.SetLanFirmwareUpdateMode);
@@ -163,6 +183,28 @@ internal sealed class WifiModuleUpdater
                 {
                     await Task.Delay(Options.PostWifiReconnectDelay, stateToken).ConfigureAwait(false);
                     await _context.WaitForSerialReconnectAsync(device, stateToken).ConfigureAwait(false);
+
+                    // Leave the USB-to-WINC transparent bridge FIRST. While transparent mode is on
+                    // the SCPI console layer is bypassed, so the LAN commands below would be
+                    // forwarded to the WINC as raw bytes instead of being interpreted by the
+                    // device — the LAN configuration would silently not be restored. Sent
+                    // unconditionally: it is a no-op when the device is not in transparent mode,
+                    // and restoring the pre-flash state is the entire job of this step. Completes
+                    // the recovery half of daqifi-desktop's ResetLanAfterUpdate (part of #269).
+                    device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+
+                    // Leaving the bridge is a device-side mode transition, not an instantaneous
+                    // one. Until the SCPI console path is back, bytes on the port are still
+                    // forwarded to the WINC as raw data, so a LAN command sent immediately after
+                    // can be swallowed by the bridge and the restore silently does nothing —
+                    // the same intermittent failure the exit itself exists to prevent.
+                    // WifiBridgeActivator.Deactivate already paces this exact transition by the
+                    // same amount over a raw serial port; this is the managed-connection twin.
+                    if (Options.PostUsbTransparentModeExitDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(Options.PostUsbTransparentModeExitDelay, stateToken).ConfigureAwait(false);
+                    }
+
                     device.Send(ScpiMessageProducer.EnableNetworkLan);
                     device.Send(ScpiMessageProducer.ApplyNetworkLan);
                     device.Send(ScpiMessageProducer.SaveNetworkLan);
