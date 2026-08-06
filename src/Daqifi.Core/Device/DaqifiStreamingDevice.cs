@@ -199,6 +199,7 @@ namespace Daqifi.Core.Device
             // method, so they are always in place before the device is handed to a caller.
             _frameDecoder = new StreamFrameDecoder(this);
             _channelControl = new ChannelControlOperations(this);
+            _administration = new DeviceAdministrationOperations(this);
             _networkOperations = new NetworkConfigurationOperations(this);
             _sdCardOperations = new SdCardOperations(this);
             _lanChipInfoOperations = new LanChipInfoOperations(this);
@@ -888,165 +889,43 @@ namespace Daqifi.Core.Device
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
         public Task SetFriendlyNameAsync(string name, CancellationToken cancellationToken = default)
-        {
-            if (name is null)
-            {
-                throw new ArgumentNullException(nameof(name));
-            }
-
-            if (!ScpiMessageProducer.IsFriendlyNameValid(name))
-            {
-                throw new ArgumentException(
-                    $"Device name must be 1-{ScpiMessageProducer.MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
-                    nameof(name));
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            Send(ScpiMessageProducer.SetDeviceName(name));
-            Send(ScpiMessageProducer.SaveDeviceName);
-            Metadata.FriendlyName = name;
-
-            return Task.CompletedTask;
-        }
+            => _administration.SetFriendlyNameAsync(name, cancellationToken);
 
         /// <inheritdoc />
         public void SetAnalogOutput(int channelNumber, double voltage)
             => _channelControl.SetAnalogOutput(channelNumber, voltage);
 
         /// <inheritdoc />
-        public void Reboot()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.RebootDevice);
-
-            // The device drops its link while restarting, so tear down the local
-            // connection rather than leaving a stale one that reports Connected.
-            Disconnect();
-        }
+        public void Reboot() => _administration.Reboot();
 
         /// <inheritdoc />
-        public void SaveAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SaveAdcCalibration);
-        }
+        public void SaveAdcCalibration() => _administration.SaveAdcCalibration();
 
         /// <inheritdoc />
-        public void LoadAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.LoadAdcCalibration);
-        }
+        public void LoadAdcCalibration() => _administration.LoadAdcCalibration();
 
         /// <inheritdoc />
         public void SetAdcCalibrationSlope(int channelNumber, double calM)
-        {
-            if (channelNumber < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM));
-        }
+            => _administration.SetAdcCalibrationSlope(channelNumber, calM);
 
         /// <inheritdoc />
         public void SetAdcCalibrationOffset(int channelNumber, double calB)
-        {
-            if (channelNumber < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB));
-        }
+            => _administration.SetAdcCalibrationOffset(channelNumber, calB);
 
         /// <inheritdoc />
-        public void SaveFactoryAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
-        }
+        public void SaveFactoryAdcCalibration() => _administration.SaveFactoryAdcCalibration();
 
         /// <inheritdoc />
-        public void LoadFactoryAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
-        }
+        public void LoadFactoryAdcCalibration() => _administration.LoadFactoryAdcCalibration();
 
         /// <inheritdoc />
-        public void UseAdcCalibration(int bank)
-        {
-            if (bank is < 0 or > 1)
-            {
-                throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.UseAdcCalibration(bank));
-        }
+        public void UseAdcCalibration(int bank) => _administration.UseAdcCalibration(bank);
 
         /// <inheritdoc />
-        public void SaveVoltagePrecision()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SaveVoltagePrecision);
-        }
+        public void SaveVoltagePrecision() => _administration.SaveVoltagePrecision();
 
         /// <inheritdoc />
-        public void LoadVoltagePrecision()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.LoadVoltagePrecision);
-        }
+        public void LoadVoltagePrecision() => _administration.LoadVoltagePrecision();
 
 
         // -----------------------------------------------------------------
@@ -1065,6 +944,9 @@ namespace Daqifi.Core.Device
 
         /// <summary>Channel enable/disable, DIO, PWM and analog output (<see cref="IStreamingDevice"/>).</summary>
         private ChannelControlOperations _channelControl = null!;
+
+        /// <summary>Reboot, ADC calibration banks, voltage precision and the friendly-name write.</summary>
+        private DeviceAdministrationOperations _administration = null!;
 
         /// <summary>WiFi/LAN configuration (<see cref="INetworkConfigurable"/>).</summary>
         private NetworkConfigurationOperations _networkOperations = null!;
@@ -1258,6 +1140,10 @@ namespace Daqifi.Core.Device
         void IDeviceOperationHost.StopStreaming() => StopStreaming();
 
         void IDeviceOperationHost.Send<T>(IOutboundMessage<T> message) => Send(message);
+
+        DeviceMetadata IDeviceOperationHost.Metadata => Metadata;
+
+        void IDeviceOperationHost.Disconnect() => Disconnect();
 
         IReadOnlyList<IChannel> IDeviceOperationHost.SnapshotChannels() => SnapshotChannels();
 

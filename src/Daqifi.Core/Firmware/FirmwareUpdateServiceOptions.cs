@@ -300,6 +300,33 @@ public sealed class FirmwareUpdateServiceOptions
     public bool KickLanApplyOnNotInitialized { get; set; } = true;
 
     /// <summary>
+    /// The minimum WINC1500 firmware version DAQiFi supports. This is a firmware-contract
+    /// fact rather than a tuning knob, so Core owns the value instead of leaving every
+    /// consumer to hard-code its own copy.
+    /// </summary>
+    public const string DefaultMinimumSupportedWifiFirmwareVersion = "19.7.7";
+
+    /// <summary>
+    /// Minimum WINC firmware version treated as supported, used to populate
+    /// <see cref="WifiFirmwareStatus.MeetsMinimumSupportedVersion"/>. Defaults to
+    /// <see cref="DefaultMinimumSupportedWifiFirmwareVersion"/>.
+    /// </summary>
+    /// <remarks>
+    /// This exists because "is the module supported" and "is the module newest" are
+    /// different questions, and only the first can be answered without a network. The
+    /// latest-release comparison behind <see cref="WifiFirmwareStatus.IsUpToDate"/> needs a
+    /// GitHub lookup; when that lookup fails (offline bench, rate limit, blocked egress)
+    /// Core previously had no version opinion at all and callers defaulted to "needs
+    /// flash", reflashing modules whose reported version was already fine. Comparing
+    /// against this minimum keeps the check answerable offline.
+    ///
+    /// Raising this rejects modules Core would otherwise accept, so it is a policy
+    /// decision; it is settable so a manufacturing line can raise the bar without waiting
+    /// on a Core release. Must parse as a <see cref="FirmwareVersion"/>.
+    /// </remarks>
+    public string MinimumSupportedWifiFirmwareVersion { get; set; } = DefaultMinimumSupportedWifiFirmwareVersion;
+
+    /// <summary>
     /// Gets the configured timeout for a given firmware update state.
     /// </summary>
     /// <param name="state">The target state.</param>
@@ -420,6 +447,16 @@ public sealed class FirmwareUpdateServiceOptions
         // unconditionally so a misconfiguration surfaces even if the flag is
         // toggled on later without re-touching this value.
         ValidateNonNegative(PowerOnWifiModuleSettleDelay, nameof(PowerOnWifiModuleSettleDelay));
+
+        // Rejected here rather than silently ignored at compare time: a typo'd minimum
+        // would otherwise degrade the check back to "no version opinion" invisibly, which
+        // is precisely the failure this option exists to remove.
+        if (!FirmwareVersion.TryParse(MinimumSupportedWifiFirmwareVersion, out _))
+        {
+            throw new ArgumentException(
+                $"Minimum supported WiFi firmware version '{MinimumSupportedWifiFirmwareVersion}' is not a parseable version.",
+                nameof(MinimumSupportedWifiFirmwareVersion));
+        }
 
         if (BootloaderVendorId < 0 || BootloaderVendorId > 0xFFFF)
         {
