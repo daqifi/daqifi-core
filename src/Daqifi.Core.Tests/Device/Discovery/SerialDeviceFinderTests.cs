@@ -283,6 +283,18 @@ public class SerialDeviceFinderTests
 
     // --- #294: hang immunity -------------------------------------------------
 
+    // Choosing hardTimeoutMs: a sweep waits roughly this long for its hung port, so a
+    // small value keeps the test quick — but every probe, healthy ones included, is
+    // dispatched through Task.Run and must be given a thread-pool thread before it can
+    // complete. That handoff races Task.Delay(PortProbeHardTimeoutMs), and a probe still
+    // waiting for a thread when the ceiling expires is abandoned rather than reported.
+    // Under a saturated pool, thread injection is throttled to roughly one new thread per
+    // second, so the handoff alone can outlast a few-hundred-ms ceiling.
+    //
+    // So: a test that asserts a healthy device IS discovered needs a ceiling well clear of
+    // that scheduling latency — use ~2000ms, and expect the test to cost about that. A test
+    // that only asserts how often a wedged port was probed can stay short, since it is not
+    // depending on any probe winning the race.
     private static SerialDeviceFinder CreateFinderWithProbes(
         string[] ports,
         Func<string, CancellationToken, Task<IDeviceInfo?>> probe,
@@ -323,7 +335,15 @@ public class SerialDeviceFinderTests
             (port, _) => port == "COM_HUNG"
                 ? hungForever.Task
                 : Task.FromResult<IDeviceInfo?>(FakeDevice(port)),
-            hardTimeoutMs: 300);
+            // 2000, not 300: the healthy probe is dispatched with Task.Run, so it has to be
+            // handed a thread-pool thread before it can complete, and it races
+            // Task.Delay(PortProbeHardTimeoutMs) to do it. Once the pool is saturated,
+            // thread injection is throttled to roughly one new thread per second, so a
+            // few-hundred-ms ceiling can expire before COM_OK's probe delegate ever starts
+            // — and an unstarted probe is abandoned, leaving this assertion looking at an
+            // empty collection. 300ms lost that race on CI. See the matching comment on
+            // CreateFinderWithProbes.
+            hardTimeoutMs: 2000);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var devices = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
@@ -412,7 +432,10 @@ public class SerialDeviceFinderTests
                 }
                 return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
             },
-            hardTimeoutMs: 200);
+            // 2000: the Assert.Single calls below need COM_OK's probe to win its race
+            // against the hard timeout. Only the first sweep pays the wait — the second
+            // finds the port quarantined and skips it.
+            hardTimeoutMs: 2000);
 
         var firstSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
         var secondSweep = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
@@ -448,13 +471,16 @@ public class SerialDeviceFinderTests
             return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
         };
 
-        using (var first = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 200))
+        // 2000 on both: each Assert.Single needs COM_OK_X's probe to be scheduled before the
+        // hard timeout fires. Only the first instance actually waits it out; the second finds
+        // COM_HUNG_X quarantined and skips it.
+        using (var first = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 2000))
         {
             Assert.Equal("COM_OK_X", Assert.Single(await first.DiscoverAsync(CancellationToken.None)).PortName);
         }
 
         // Fresh instance, same process: the wedged port must stay quarantined.
-        using (var second = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 200))
+        using (var second = CreateFinderWithProbes(new[] { "COM_HUNG_X", "COM_OK_X" }, probe, hardTimeoutMs: 2000))
         {
             Assert.Equal("COM_OK_X", Assert.Single(await second.DiscoverAsync(CancellationToken.None)).PortName);
         }
@@ -523,8 +549,11 @@ public class SerialDeviceFinderTests
             return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
         };
 
-        using var finderA = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 400);
-        using var finderB = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 400);
+        // 2000: the Assert.Contains below needs at least one sweep to actually report
+        // COM_OK_CONC, which means its probe has to be scheduled before that sweep's hard
+        // timeout. Two concurrent sweeps make the pool contention worse, not better.
+        using var finderA = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 2000);
+        using var finderB = CreateFinderWithProbes(new[] { "COM_HUNG_CONC", "COM_OK_CONC" }, probe, hardTimeoutMs: 2000);
 
         var results = await Task.WhenAll(
             Task.Run(() => finderA.DiscoverAsync(CancellationToken.None)),
