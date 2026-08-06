@@ -2912,8 +2912,14 @@ public class FirmwareUpdateServiceTests
         // probes away inside the second, and the timeout fired one probe short. The
         // readiness budget still stays strictly below JumpingToApplicationTimeout, which
         // FirmwareUpdateServiceOptions.Validate requires whenever a probe is set.
-        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(60);
-        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(30);
+        //
+        // 10s/15s rather than something enormous: these also bound how long a real
+        // regression in the JumpingToApp state takes to surface, so the aim is comfortably
+        // clear of a stalled runner without going so far that a genuine hang is slow to
+        // diagnose. 10s is an order of magnitude past the ~1s stall that broke the 1s
+        // budget, and ~300x what the probe actually needs.
+        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(15);
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(10);
         options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
 
         var service = new FirmwareUpdateService(
@@ -3028,8 +3034,8 @@ public class FirmwareUpdateServiceTests
         // assertion is that the retry happens and the update still completes, not that
         // it completes inside a deadline. Leaving a 1s budget here makes a behavioural
         // test fail whenever the runner stalls long enough to eat the third probe.
-        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(60);
-        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(30);
+        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(15);
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(10);
         options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
 
         var service = new FirmwareUpdateService(
