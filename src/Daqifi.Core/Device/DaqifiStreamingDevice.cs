@@ -29,17 +29,10 @@ namespace Daqifi.Core.Device
     public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
     {
         /// <summary>
-        /// Maximum number of retry attempts for the USB stream-interface command sent during
-        /// <see cref="OnDeviceInitializingAsync"/> when the device returns a transient SCPI error
-        /// (e.g. because the firmware still has the interface set from a prior WiFi session).
+        /// Response window allowed for the USB stream-interface command sent during
+        /// <see cref="OnDeviceInitializingAsync"/>.
         /// </summary>
-        private const int UsbStreamInterfaceMaxRetries = 1;
-
-        /// <summary>
-        /// Delay in milliseconds before retrying the USB stream-interface command after a
-        /// transient SCPI error.
-        /// </summary>
-        private const int UsbStreamInterfaceRetryDelayMs = 150;
+        private const int UsbStreamInterfaceResponseTimeoutMs = 500;
 
         /// <summary>
         /// Raised when a stream frame was withheld from consumers because the device should not have
@@ -226,20 +219,17 @@ namespace Daqifi.Core.Device
         /// <see cref="DaqifiDevice.InitializeAsync"/> after the standard SCPI sequence.
         /// </summary>
         /// <remarks>
-        /// The DAQiFi firmware persists the last configured stream interface across sessions.
-        /// If the device was previously set to stream to WiFi (<c>SYSTem:STReam:INTerface 1</c>),
-        /// it will continue sending data over WiFi even when connected via USB — causing the serial
-        /// consumer to receive nothing. Sending <c>SYSTem:STReam:INTerface 0</c> during USB
-        /// initialization ensures data flows to the serial port.
+        /// Whether to route at all, and how hard to retry a transient rejection, is
+        /// <see cref="UsbStreamInterfaceInitializer"/>'s decision; this hook supplies the effect —
+        /// the actual command send — and the connection facts the decision needs.
+        ///
+        /// The send goes through <c>DaqifiDevice.ExecuteTextCommandAsync</c> so the command is sent
+        /// in text mode (protobuf consumer temporarily stopped) and any SCPI error response is
+        /// captured rather than garbling the protobuf stream.
         ///
         /// This runs inside the base <see cref="DaqifiDevice.InitializeAsync"/> exception handling
         /// (before the device is marked initialized/ready), so a cancellation or SCPI error here
         /// leaves the device in a consistent state and re-initializable, rather than falsely Ready.
-        ///
-        /// The routing command is global device state: it takes the stream away from whatever
-        /// interface it was going to, so a second session running it steals another session's data
-        /// (#385). It is therefore skipped entirely when <paramref name="preserveActiveStream"/>
-        /// is set.
         /// </remarks>
         /// <param name="preserveActiveStream">
         /// When <c>true</c>, this initialization must leave a stream another session is already
@@ -253,59 +243,17 @@ namespace Daqifi.Core.Device
         /// command because it still has the interface set from a prior WiFi-streaming session,
         /// within the tight response window right after connect.
         /// </exception>
-        protected override async Task OnDeviceInitializingAsync(
+        protected override Task OnDeviceInitializingAsync(
             bool preserveActiveStream,
-            CancellationToken cancellationToken)
-        {
-            if (!IsUsbConnection)
-            {
-                return;
-            }
-
-            // An observe-only session must not re-route the device's single global stream: doing so
-            // would take the data away from the session that is already receiving it (#385). The
-            // interface is left exactly as the owning session configured it.
-            //
-            // Returning without observing the token is deliberate: there is no work to abandon, and
-            // InitializeAsync re-checks cancellation before it marks the device Ready, so a token
-            // cancelled during this hook is still honored.
-            if (preserveActiveStream)
-            {
-                return;
-            }
-
-            // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
-            // command is sent in text mode (protobuf consumer temporarily stopped) and any
-            // SCPI error response is captured rather than garbling the protobuf stream.
-            //
-            // The firmware persists the last-used stream interface across sessions, so this can
-            // transiently reject with a -200 "Execution error" right after connect. Retry with a
-            // settle delay before treating it as a hard failure (mirrors the SD card retry).
-            IReadOnlyList<string> lines = Array.Empty<string>();
-            for (var attempt = 0; attempt <= UsbStreamInterfaceMaxRetries; attempt++)
-            {
-                if (attempt > 0)
-                {
-                    await Task.Delay(UsbStreamInterfaceRetryDelayMs, cancellationToken).ConfigureAwait(false);
-                }
-
-                lines = await ExecuteTextCommandAsync(
+            CancellationToken cancellationToken) =>
+            UsbStreamInterfaceInitializer.RouteStreamToUsbAsync(
+                IsUsbConnection,
+                preserveActiveStream,
+                ct => ExecuteTextCommandAsync(
                     () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
-                    responseTimeoutMs: 500,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                if (!ScpiResponseClassifier.ContainsScpiError(lines))
-                {
-                    return;
-                }
-            }
-
-            var lastScpiError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
-            throw new ScpiInitializationErrorException(
-                "Device returned a SCPI error while setting stream interface to USB.",
-                lines,
-                lastScpiError);
-        }
+                    responseTimeoutMs: UsbStreamInterfaceResponseTimeoutMs,
+                    cancellationToken: ct),
+                cancellationToken);
 
         /// <summary>
         /// Starts streaming data from the device at the configured frequency.
