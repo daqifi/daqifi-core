@@ -12,7 +12,6 @@ using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -360,15 +359,6 @@ namespace Daqifi.Core.Device
 
         #region Session state tracking for commands sent directly (issue #379)
 
-        /// <summary>The command <see cref="ScpiMessageProducer.StartStreaming"/> emits.</summary>
-        private const string StartStreamingCommand = "SYSTem:StartStreamData";
-
-        /// <summary>The command <see cref="ScpiMessageProducer.StopStreaming"/> emits.</summary>
-        private const string StopStreamingCommand = "SYSTem:StopStreamData";
-
-        /// <summary>The command <see cref="ScpiMessageProducer.EnableAdcChannels"/> emits.</summary>
-        private const string EnableAdcChannelsCommand = "ENAble:VOLTage:DC";
-
         /// <summary>
         /// Sends a command, and keeps this device's view of the streaming session in step with it.
         /// </summary>
@@ -378,21 +368,13 @@ namespace Daqifi.Core.Device
         /// example CLI does the whole job that way — but a session driven through it used to be
         /// completely invisible to this class: <see cref="IsStreaming"/> stayed <c>false</c> while
         /// data poured in, and the enabled-channel set stayed empty. That mattered once reconnect
-        /// arrived (issue #379). A physical cable pull on the bench recovered the link and then
-        /// reported <c>StreamingResumed: false</c>, because as far as Core was concerned nothing had
-        /// ever been streaming — while re-initialization had in fact just stopped the stream that
-        /// was running. The session looked restored and was not.
+        /// arrived (issue #379). <see cref="SessionCommandInterpreter"/> reads the commands that
+        /// define a session; this method applies what they imply, so the same state is updated that
+        /// <see cref="StartStreaming"/> / <see cref="StopStreaming"/> and <see cref="EnableChannel"/>
+        /// would have set.
         /// </para>
         /// <para>
-        /// So the two commands that define a streaming session are recognized here regardless of
-        /// which API produced them, and the same state is updated that
-        /// <see cref="StartStreaming"/> / <see cref="StopStreaming"/> and
-        /// <see cref="EnableChannel"/> would have set. This is the same principle as #409, where
-        /// analog <c>IsEnabled</c> is resynced from the device's own reported mask: what Core
-        /// believes about a session has to track what is actually true of it.
-        /// </para>
-        /// <para>
-        /// Only these commands are interpreted, and only after the send itself has succeeded.
+        /// Only those commands are interpreted, and only after the send itself has succeeded.
         /// Everything else passes through untouched.
         /// </para>
         /// <para>
@@ -420,13 +402,6 @@ namespace Daqifi.Core.Device
         /// </description></item>
         /// </list>
         /// <para>
-        /// <b>Deliberately outside it.</b> The global DIO enable is one switch for the whole port
-        /// rather than a per-channel mask, so a raw <c>DIO:PORt:ENAble</c> carries no information
-        /// about <i>which</i> digital channels were wanted and none is inferred. Argument validation
-        /// is not replayed either: by the time a command is seen here it has already gone to the
-        /// device, and the device is the authority on whether it accepted it.
-        /// </para>
-        /// <para>
         /// Running after the send is safe rather than merely convenient. A string command is handed
         /// to the background producer, so it has not reached the wire when this runs, and the device
         /// cannot answer a command it has not received; on the producer-less path that writes
@@ -451,100 +426,55 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Updates the streaming-session view from a command that has just been sent.
         /// </summary>
+        /// <remarks>
+        /// The sampling ceiling is read exactly once and handed to the interpreter, which validates
+        /// the rate against it; the value that comes back is then assigned to the backing field
+        /// rather than through the validating <see cref="StreamingFrequency"/> setter. That setter
+        /// re-reads <see cref="DeviceCapabilities.MaxSamplingRate"/>, which is a mutable public
+        /// property — so validating against one read and assigning through a setter that takes
+        /// another would let a concurrent capabilities update throw out of a <see cref="Send{T}"/>
+        /// whose command has already gone to the device. Tracking a command must never be able to
+        /// fail the send that carried it.
+        /// </remarks>
         private void TrackSessionCommand(string? command)
         {
-            if (string.IsNullOrWhiteSpace(command))
+            var effect = SessionCommandInterpreter.Interpret(command, Metadata.Capabilities.MaxSamplingRate);
+
+            switch (effect.Kind)
             {
-                return;
+                case SessionCommandEffectKind.StopStreaming:
+                    IsStreaming = false;
+                    break;
+
+                case SessionCommandEffectKind.StartStreaming:
+                    // Frequency first: anything observing IsStreaming must never catch it true next
+                    // to a rate belonging to a previous session.
+                    _streamingFrequency = effect.StreamingFrequency;
+
+                    // A restart while already streaming is not a session boundary — the typed API
+                    // cannot even express it (StartStreaming returns early) — so there is nothing to
+                    // re-anchor and recording the new rate is all that is warranted.
+                    if (!IsStreaming)
+                    {
+                        // A session is beginning, so it gets exactly the preparation StartStreaming
+                        // would have given it. Ordering matches too: the state is ready before the
+                        // flag flips.
+                        BeginStreamingSession();
+                        IsStreaming = true;
+                    }
+
+                    break;
+
+                case SessionCommandEffectKind.UnusableStreamingStart:
+                    SafeTrace(
+                        $"[{nameof(TrackSessionCommand)}] Ignoring a start-streaming command with an unusable rate "
+                        + $"('{effect.RejectedRate}'); the session state is unchanged.");
+                    break;
+
+                case SessionCommandEffectKind.SetAdcEnableMask:
+                    ApplyAdcEnableMask(effect.AdcEnableMask);
+                    break;
             }
-
-            var trimmed = command.Trim();
-
-            if (trimmed.StartsWith(StopStreamingCommand, StringComparison.OrdinalIgnoreCase))
-            {
-                IsStreaming = false;
-                return;
-            }
-
-            if (trimmed.StartsWith(StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
-            {
-                TrackStreamingStart(trimmed.AsSpan(StartStreamingCommand.Length));
-                return;
-            }
-
-            if (trimmed.StartsWith(EnableAdcChannelsCommand, StringComparison.OrdinalIgnoreCase))
-            {
-                TrackAdcEnableMask(trimmed.AsSpan(EnableAdcChannelsCommand.Length));
-            }
-        }
-
-        /// <summary>
-        /// Records a start-streaming command, but only one carrying a rate this device can model.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// A command whose argument is missing, unparseable, or outside the device's sampling range
-        /// is <b>not</b> treated as the start of a session. Marking one as streaming anyway would be
-        /// wrong three times over: the firmware rejects such a command and does not start streaming,
-        /// so the flag would not describe the device; <see cref="StreamingFrequency"/> would be left
-        /// holding a rate from some earlier session, which a reconnect would then faithfully restore
-        /// — resuming at a rate nobody asked for is the silent-wrong-data failure this whole feature
-        /// exists to prevent; and a stale <see cref="IsStreaming"/> makes the next legitimate
-        /// <see cref="StartStreaming"/> a silent no-op, which is the same stale-flag trap that
-        /// issue #118 and the defensive stops scattered through the SD paths already guard against.
-        /// </para>
-        /// <para>
-        /// The existing state is left alone rather than cleared. A device already streaming at a
-        /// good rate goes on doing exactly that when the firmware rejects a malformed start, so
-        /// <see cref="IsStreaming"/> and <see cref="StreamingFrequency"/> both remain true of it;
-        /// forcing them off would swap one inaccuracy for another.
-        /// </para>
-        /// <para>
-        /// Because of this, <see cref="IsStreaming"/> is never <c>true</c> alongside a rate that was
-        /// not validated — so session restore has no "streaming at an unknown rate" case to decide
-        /// what to do about. The state it replays is always one that was really commanded.
-        /// </para>
-        /// </remarks>
-        private void TrackStreamingStart(ReadOnlySpan<char> argument)
-        {
-            var rate = argument.Trim();
-
-            // One read of the ceiling, used for both the check and the assignment below. The public
-            // StreamingFrequency setter re-reads it and throws when it does not like the value, and
-            // MaxSamplingRate is a mutable public property — so validating against one read and
-            // then assigning through a setter that takes another would let a concurrent
-            // capabilities update throw out of a Send whose command has already gone to the device.
-            // Tracking a command must never be able to fail the send that carried it.
-            var maxSamplingRate = Math.Max(1, Metadata.Capabilities.MaxSamplingRate);
-
-            if (!int.TryParse(rate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency)
-                || frequency < 1
-                || frequency > maxSamplingRate)
-            {
-                SafeTrace(
-                    $"[{nameof(TrackStreamingStart)}] Ignoring a start-streaming command with an unusable rate "
-                    + $"('{rate.ToString()}'); the session state is unchanged.");
-                return;
-            }
-
-            // Frequency first: anything observing IsStreaming must never catch it true next to a
-            // rate belonging to a previous session. Assigned to the backing field, not through the
-            // validating setter, for the reason above — the value has just been validated against
-            // the same rule.
-            _streamingFrequency = frequency;
-
-            if (IsStreaming)
-            {
-                // A restart while already streaming. The typed API cannot even express this
-                // (StartStreaming returns early), so there is no session boundary to re-anchor at
-                // and no equivalence to preserve; recording the new rate is all that is warranted.
-                return;
-            }
-
-            // A session is beginning, so it gets exactly the preparation StartStreaming would have
-            // given it. Ordering matches too: the state is ready before the flag flips.
-            BeginStreamingSession();
-            IsStreaming = true;
         }
 
         /// <summary>
@@ -558,13 +488,8 @@ namespace Daqifi.Core.Device
         /// next status frame (#409) — that is the device's own view, and it outranks what was asked
         /// for.
         /// </remarks>
-        private void TrackAdcEnableMask(ReadOnlySpan<char> argument)
+        private void ApplyAdcEnableMask(uint mask)
         {
-            if (!uint.TryParse(argument.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var mask))
-            {
-                return;
-            }
-
             WithChannelsLock(() =>
             {
                 foreach (var channel in SnapshotChannels())
