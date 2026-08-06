@@ -2013,6 +2013,140 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateWifiModuleAsync_WhenLatestReleaseUnavailableButDeviceMeetsMinimum_SkipsFlash()
+    {
+        // The defect this closes: a release lookup failure is a *network* failure, but it
+        // used to fall through to "flash conservatively" — erasing and reprogramming a WINC
+        // module whose own reported version was already supported, for eight minutes, because
+        // GitHub was unreachable. The device answered; that answer is enough.
+        var downloadService = new FakeFirmwareDownloadService
+        {
+            LatestWifiReleaseException = new HttpRequestException("no route to host")
+        };
+        var processRunner = new FakeExternalProcessRunner();
+        var device = new FakeLanChipInfoStreamingDevice("COM47", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            processRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var progressEvents = new List<FirmwareUpdateProgress>();
+        var progress = new CapturingProgress<FirmwareUpdateProgress>(progressEvents);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        // The strongest assertion available: the flash tool was never launched at all.
+        Assert.Equal(0, processRunner.RunCount);
+        Assert.DoesNotContain("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        var completeEvent = Assert.Single(progressEvents, p => p.State == FirmwareUpdateState.Complete);
+        Assert.Equal(100, completeEvent.PercentComplete);
+        Assert.Contains("minimum supported version", completeEvent.CurrentOperation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenLatestReleaseUnavailableAndDeviceBelowMinimum_ProceedsWithFlash()
+    {
+        // The guard on the skip above: it is a verdict, not a blanket "give up and assume
+        // fine". A module genuinely below the supported minimum still gets flashed even
+        // though the release lookup failed.
+        var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = null };
+        var processRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0, false, TimeSpan.Zero, ["Operation completed successfully"], [])
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM48", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            processRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.True(processRunner.RunCount > 0);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenChipInfoUnavailable_StillProceedsWithFlash()
+    {
+        // Regression guard for the null case: "could not read the device" must never be
+        // mistaken for "meets the minimum". This is the path that would silently stop
+        // flashing broken modules if the three-state verdict were collapsed to a bool.
+        var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = null };
+        var processRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0, false, TimeSpan.Zero, ["Operation completed successfully"], [])
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM49", chipInfo: null);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            processRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.True(processRunner.RunCount > 0);
+    }
+
+    [Fact]
     public async Task UpdateWifiModuleAsync_WhenDeviceVersionIsOlder_ProceedsWithFlash()
     {
         var wifiRelease = new FirmwareReleaseInfo
@@ -2606,6 +2740,258 @@ public class FirmwareUpdateServiceTests
         Assert.Equal(WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery, status.Reason);
         Assert.Null(status.CurrentChipInfo);
         Assert.Null(status.LatestRelease);
+
+        // The bar is a property of Core's policy, not of the device, so it is reported
+        // even when no device version was ever read. The verdict is not.
+        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+        Assert.Null(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public void MinimumSupportedWifiFirmwareVersion_DefaultsToTheFirmwareContractValue()
+    {
+        // 19.7.7 is a firmware-contract fact (#269), not a tuning default. Pinned here so a
+        // change to it is a deliberate edit to this assertion rather than a silent drift that
+        // would start accepting or rejecting modules in the field.
+        Assert.Equal("19.7.7", FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion);
+        Assert.Equal(
+            FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion,
+            new FirmwareUpdateServiceOptions().MinimumSupportedWifiFirmwareVersion);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-version")]
+    public void Constructor_WithUnparseableMinimumSupportedWifiFirmwareVersion_Throws(string minimum)
+    {
+        // A typo'd minimum must fail loudly at construction. If it were ignored at compare
+        // time instead, the check would silently degrade to "no version opinion" — exactly
+        // the state this option exists to remove — and the degradation would be invisible.
+        var options = CreateFastOptions();
+        options.MinimumSupportedWifiFirmwareVersion = minimum;
+
+        var ex = Assert.Throws<ArgumentException>(() => new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]),
+            options));
+
+        Assert.Equal(nameof(FirmwareUpdateServiceOptions.MinimumSupportedWifiFirmwareVersion), ex.ParamName);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLatestReleaseLookupReturnsNull_StillAnswersMinimumSupported()
+    {
+        // The point of the minimum: a release lookup that fails (offline bench, blocked
+        // egress, rate limit) leaves IsUpToDate unanswerable, but the device already told
+        // us its version, so "is this module supported" is still answerable — with no
+        // network at all.
+        var device = new FakeLanChipInfoStreamingDevice("COM40", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        // Unchanged: IsUpToDate stays a strictly latest-release answer and stays false.
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.LatestReleaseUnavailable, status.Reason);
+        Assert.Null(status.LatestRelease);
+
+        // New: the network-independent verdict.
+        Assert.True(status.MeetsMinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLatestReleaseLookupThrows_StillAnswersMinimumSupported()
+    {
+        // The throwing half of the same failure — a different catch block in the
+        // implementation, so it needs its own coverage.
+        var device = new FakeLanChipInfoStreamingDevice("COM41", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.8.0",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService
+            {
+                LatestWifiReleaseException = new HttpRequestException("no route to host")
+            },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(WifiFirmwareStatusReason.LatestReleaseUnavailable, status.Reason);
+        Assert.False(status.IsUpToDate);
+        Assert.True(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenDeviceIsBelowMinimum_ReportsFalseNotNull()
+    {
+        // "Below the minimum" and "could not tell" must stay distinguishable — collapsing
+        // them is the conflation the three-state property exists to prevent.
+        var device = new FakeLanChipInfoStreamingDevice("COM42", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.False(status.MeetsMinimumSupportedVersion);
+        Assert.NotNull(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenChipInfoUnavailable_LeavesMinimumVerdictUnknown()
+    {
+        var device = new FakeLanChipInfoStreamingDevice("COM43", chipInfo: null);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
+        Assert.Null(status.MeetsMinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenDeviceVersionUnparseable_LeavesMinimumVerdictUnknown()
+    {
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 7, 7, null, 0),
+            TagName = "19.7.7",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM44", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "garbage",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(WifiFirmwareStatusReason.VersionUnparseable, status.Reason);
+        Assert.Null(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_UsesTheConfiguredMinimum_NotOnlyTheDefault()
+    {
+        // A manufacturing line raising the bar must actually move the verdict; a device that
+        // passes the shipped default has to fail a higher configured minimum.
+        var options = CreateFastOptions();
+        options.MinimumSupportedWifiFirmwareVersion = "19.9.0";
+
+        var device = new FakeLanChipInfoStreamingDevice("COM45", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(new FirmwareVersion(19, 9, 0, null, 0), status.MinimumSupportedVersion);
+        Assert.False(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLatestReleaseIsKnown_StillReportsTheMinimumVerdict()
+    {
+        // The minimum is reported on the happy path too, so a caller can use one property
+        // consistently instead of switching on Reason to know whether it is populated.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 8, 0, null, 0),
+            TagName = "19.8.0",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM46", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        // Supported, but not the newest — the two questions genuinely disagree here, which
+        // is the case that motivated modeling them separately.
+        Assert.Equal(WifiFirmwareStatusReason.UpdateAvailable, status.Reason);
+        Assert.False(status.IsUpToDate);
+        Assert.True(status.MeetsMinimumSupportedVersion);
     }
 
     [Fact]
@@ -4383,6 +4769,14 @@ public class FirmwareUpdateServiceTests
     {
         public FirmwareReleaseInfo? LatestWifiRelease { get; set; }
 
+        /// <summary>
+        /// When set, <see cref="GetLatestWifiReleaseAsync"/> faults with this instead of
+        /// returning <see cref="LatestWifiRelease"/>. Models the *throwing* half of the
+        /// release-lookup failure (offline / DNS / rate limit), which reaches a different
+        /// catch block than the null-return half.
+        /// </summary>
+        public Exception? LatestWifiReleaseException { get; set; }
+
         public Task<FirmwareReleaseInfo?> GetLatestReleaseAsync(bool includePreRelease = false, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<FirmwareReleaseInfo?>(null);
@@ -4413,7 +4807,9 @@ public class FirmwareUpdateServiceTests
 
         public Task<FirmwareReleaseInfo?> GetLatestWifiReleaseAsync(CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(LatestWifiRelease);
+            return LatestWifiReleaseException is not null
+                ? Task.FromException<FirmwareReleaseInfo?>(LatestWifiReleaseException)
+                : Task.FromResult(LatestWifiRelease);
         }
 
         public void InvalidateCache()
