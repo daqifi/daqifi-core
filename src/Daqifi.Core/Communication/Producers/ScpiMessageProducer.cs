@@ -1183,8 +1183,10 @@ public class ScpiMessageProducer
     /// Creates a query message to read the device's recent SCPI command history.
     /// </summary>
     /// <remarks>
-    /// Returns the most recent commands seen on the USB interface, newest first, prefixed with a
-    /// <c>Last N commands:</c> header (or <c>No command history</c> when empty).
+    /// Returns the most recent commands seen on the USB interface, oldest first, prefixed with a
+    /// <c>Last N commands:</c> header (or <c>No command history</c> when empty). Each command line
+    /// carries an <c>&lt;n&gt;:</c> prefix counting backwards from the present — <c>1:</c> is the most
+    /// recent command — so the newest entry is printed last.
     /// Command: SYSTem:LOG:CMDHistory?
     /// Example: messageProducer.Send(ScpiMessageProducer.GetCommandHistory);
     /// </remarks>
