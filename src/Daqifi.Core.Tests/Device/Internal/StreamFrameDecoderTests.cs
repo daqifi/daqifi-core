@@ -435,9 +435,11 @@ public class StreamFrameDecoderTests
         public bool IsConnected => throw new NotSupportedException();
         public bool IsUsbConnection => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
+        public DeviceMetadata Metadata => throw new NotSupportedException();
         public TimeSpan SdCardDownloadTimeout => throw new NotSupportedException();
         public TimeSpan SdCardTransferIdleTimeout => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
+        public void Disconnect() => throw new NotSupportedException();
         public void Send<T>(IOutboundMessage<T> message) => throw new NotSupportedException();
         public void WithChannelsLock(Action action) => throw new NotSupportedException();
         public Task<IReadOnlyList<string>> ExecuteTextCommandAsync(

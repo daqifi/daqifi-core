@@ -56,6 +56,23 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="DaqifiDevice.Send{T}"/>
         void Send<T>(IOutboundMessage<T> message);
 
+        /// <inheritdoc cref="DaqifiDevice.Metadata"/>
+        /// <remarks>
+        /// The device's own metadata object, not a copy: the friendly-name write updates
+        /// <see cref="DeviceMetadata.FriendlyName"/> optimistically on it, because the firmware does
+        /// not echo the new name back and may not stream another status frame for a while.
+        /// </remarks>
+        DeviceMetadata Metadata { get; }
+
+        /// <inheritdoc cref="DaqifiDevice.Disconnect"/>
+        /// <remarks>
+        /// Needed by the reboot command, which has to tear the local connection down after the
+        /// device drops its link. Routed through the device so the whole disconnect path — lifecycle
+        /// lock, message pumps, status event — runs exactly as it does for a caller-issued
+        /// <see cref="DaqifiDevice.Disconnect"/>.
+        /// </remarks>
+        void Disconnect();
+
         /// <inheritdoc cref="DaqifiDevice.GetChannelsSnapshot"/>
         IReadOnlyList<IChannel> SnapshotChannels();
 
