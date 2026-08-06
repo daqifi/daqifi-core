@@ -15,9 +15,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 #nullable enable
@@ -191,6 +189,7 @@ namespace Daqifi.Core.Device
             // which a field initializer cannot reference. Every constructor routes through this
             // method, so they are always in place before the device is handed to a caller.
             _frameDecoder = new StreamFrameDecoder(this);
+            _liveSampleStream = new LiveSampleStream(this);
             _channelControl = new ChannelControlOperations(this);
             _administration = new DeviceAdministrationOperations(this);
             _networkOperations = new NetworkConfigurationOperations(this);
@@ -463,42 +462,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         private volatile StreamingSessionSnapshot? _sessionSnapshot;
 
-        /// <summary>
-        /// The subset of a streaming session that Core owns and can therefore put back: which
-        /// channels were enabled, and whether data was flowing.
-        /// </summary>
-        private sealed class StreamingSessionSnapshot
-        {
-            public StreamingSessionSnapshot(HashSet<(ChannelType Type, int Number)> enabledChannels, bool wasStreaming)
-            {
-                EnabledChannels = enabledChannels;
-                WasStreaming = wasStreaming;
-            }
-
-            /// <summary>
-            /// The enabled channels, held by identity rather than by reference: a reconnect can
-            /// replace the channel objects, and a device that came back with a different channel
-            /// count should restore the intersection rather than fail.
-            /// </summary>
-            public HashSet<(ChannelType Type, int Number)> EnabledChannels { get; }
-
-            public bool WasStreaming { get; }
-        }
-
         /// <inheritdoc />
-        protected override void CaptureSessionSnapshot()
-        {
-            var enabled = new HashSet<(ChannelType, int)>();
-            foreach (var channel in GetChannelsSnapshot())
-            {
-                if (channel.IsEnabled)
-                {
-                    enabled.Add((channel.Type, channel.ChannelNumber));
-                }
-            }
-
-            _sessionSnapshot = new StreamingSessionSnapshot(enabled, IsStreaming);
-        }
+        protected override void CaptureSessionSnapshot() =>
+            _sessionSnapshot = StreamingSessionSnapshot.Capture(GetChannelsSnapshot(), IsStreaming);
 
         /// <summary>
         /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
@@ -506,16 +472,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// <para>
-        /// The enable set has to be replayed from the snapshot rather than read back off the
-        /// channel objects: <see cref="DaqifiDevice.PopulateChannelsFromStatus"/> resyncs analog
-        /// <c>IsEnabled</c> from the device's own enabled mask on every status message (#409), so by
-        /// the time re-initialization is done the in-memory view reflects the freshly reconnected
-        /// device, not the session that was lost.
-        /// </para>
-        /// <para>
-        /// The streaming frequency needs no replay — it is a host-side setting that the drop never
-        /// touched — but it does have to reach the device again, which is what the resumed
-        /// <see cref="StartStreaming"/> does.
+        /// What to restore is <see cref="StreamingSessionSnapshot.PlanRestore"/>'s decision; this
+        /// method owns the effects, and their order is the part that matters. See that method for
+        /// why the enable set is replayed from the snapshot rather than read back off the channels.
         /// </para>
         /// <para>
         /// A resumed stream is a genuinely new session: timestamp reconstruction re-anchors and the
@@ -546,32 +505,24 @@ namespace Daqifi.Core.Device
             cancellationToken.ThrowIfCancellationRequested();
 
             // Normalize to a known state before re-applying: whatever the device came back with is
-            // not necessarily what it had, and the enable commands are set-replace anyway.
+            // not necessarily what it had, and the enable commands are set-replace anyway. The
+            // channel list is read afterwards so the plan is built against the post-reset objects.
             DisableAllChannels();
 
-            var toEnable = new List<IChannel>();
-            foreach (var channel in GetChannelsSnapshot())
+            var plan = snapshot.PlanRestore(GetChannelsSnapshot(), options);
+            if (plan.ChannelsToEnable.Count > 0)
             {
-                if (snapshot.EnabledChannels.Contains((channel.Type, channel.ChannelNumber)))
-                {
-                    toEnable.Add(channel);
-                }
-            }
-
-            if (toEnable.Count > 0)
-            {
-                EnableChannels(toEnable);
+                EnableChannels(plan.ChannelsToEnable);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var resumeStreaming = snapshot.WasStreaming && options.ResumeStreaming;
-            if (resumeStreaming)
+            if (plan.ResumeStreaming)
             {
                 StartStreaming();
             }
 
-            return Task.FromResult(resumeStreaming);
+            return Task.FromResult(plan.ResumeStreaming);
         }
 
         #endregion
@@ -581,14 +532,12 @@ namespace Daqifi.Core.Device
         /// </summary>
         public const int DefaultLiveSampleBufferCapacity = 4096;
 
-        private long _droppedLiveSampleCount;
-
         /// <summary>
         /// Gets the cumulative number of live samples dropped across all <see cref="StreamSamplesAsync"/>
         /// enumerations because a consumer could not keep up with the incoming rate (drop-oldest policy).
         /// A non-zero and growing value means a live consumer is too slow for the current stream rate.
         /// </summary>
-        public long DroppedLiveSampleCount => Interlocked.Read(ref _droppedLiveSampleCount);
+        public long DroppedLiveSampleCount => _liveSampleStream.DroppedSampleCount;
 
         /// <summary>
         /// Exposes decoded live samples as an <see cref="IAsyncEnumerable{T}"/> for pull-based
@@ -597,6 +546,7 @@ namespace Daqifi.Core.Device
         /// per-channel <see cref="IChannel.SampleReceived"/> and raw-frame events are unaffected.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Samples are buffered in a bounded channel with a <b>drop-oldest</b> overflow policy: if the
         /// consumer falls behind, the oldest buffered samples are discarded (memory never grows
         /// unbounded) and <see cref="DroppedLiveSampleCount"/> is incremented — the decode thread that
@@ -604,6 +554,14 @@ namespace Daqifi.Core.Device
         /// cancelling <paramref name="cancellationToken"/> ends it promptly (surfaced as
         /// <see cref="OperationCanceledException"/>) and unsubscribes, but does <b>not</b> stop the
         /// device's stream — call <see cref="StopStreaming"/> for that.
+        /// </para>
+        /// <para>
+        /// This returns <see cref="LiveSampleStream"/>'s async iterator directly rather than wrapping
+        /// it in one of its own, which is what keeps the two deferred behaviors a caller can observe
+        /// exactly as they were: <c>WithCancellation</c> still reaches the iterator's own
+        /// <c>[EnumeratorCancellation]</c> parameter, and an invalid <paramref name="bufferCapacity"/>
+        /// still throws on the first <c>MoveNextAsync</c> rather than at the call.
+        /// </para>
         /// </remarks>
         /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
         /// <param name="bufferCapacity">
@@ -611,51 +569,10 @@ namespace Daqifi.Core.Device
         /// </param>
         /// <returns>An async stream of <see cref="LiveSample"/> (channel + decoded sample).</returns>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 1.</exception>
-        public async IAsyncEnumerable<LiveSample> StreamSamplesAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        public IAsyncEnumerable<LiveSample> StreamSamplesAsync(
+            CancellationToken cancellationToken = default,
             int? bufferCapacity = null)
-        {
-            var capacity = bufferCapacity ?? DefaultLiveSampleBufferCapacity;
-            if (capacity < 1)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(bufferCapacity), capacity, "Buffer capacity must be at least 1.");
-            }
-
-            var buffer = System.Threading.Channels.Channel.CreateBounded<LiveSample>(
-                new BoundedChannelOptions(capacity)
-                {
-                    FullMode = BoundedChannelFullMode.DropOldest,
-                    SingleReader = true,
-                    SingleWriter = false,
-                },
-                _ => Interlocked.Increment(ref _droppedLiveSampleCount));
-
-            void OnSample(object? sender, SampleReceivedEventArgs e) =>
-                buffer.Writer.TryWrite(new LiveSample(e.Channel, e.Sample));
-
-            var channels = SnapshotChannels();
-            foreach (var channel in channels)
-            {
-                channel.SampleReceived += OnSample;
-            }
-
-            try
-            {
-                await foreach (var sample in buffer.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    yield return sample;
-                }
-            }
-            finally
-            {
-                foreach (var channel in channels)
-                {
-                    channel.SampleReceived -= OnSample;
-                }
-                buffer.Writer.TryComplete();
-            }
-        }
+            => _liveSampleStream.StreamSamplesAsync(cancellationToken, bufferCapacity);
 
         /// <summary>
         /// Handles a streaming data frame by handing it to <see cref="StreamFrameDecoder"/>, which
@@ -889,6 +806,9 @@ namespace Daqifi.Core.Device
 
         /// <summary>The streaming hot path: frame screening, timestamps, gaps, per-channel decode.</summary>
         private StreamFrameDecoder _frameDecoder = null!;
+
+        /// <summary>The pull-based live-sample view: bounded buffer, drop-oldest, drop counter.</summary>
+        private LiveSampleStream _liveSampleStream = null!;
 
         /// <summary>Channel enable/disable, DIO, PWM and analog output (<see cref="IStreamingDevice"/>).</summary>
         private ChannelControlOperations _channelControl = null!;
