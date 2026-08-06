@@ -1673,8 +1673,8 @@ public class FirmwareUpdateServiceTests
         // Pins that the settle genuinely sits BETWEEN the transparent-mode exit and the LAN
         // restore, not before the exit or after the whole recovery block: cancellation is raised
         // from inside the transparent-mode Send, so only a wait positioned between the two can
-        // stop the LAN:ENAbled/SAVE restore from going out. Also proves the wait observes the
-        // caller's token rather than sleeping through a cancel.
+        // stop LAN:ENAbled/APPLY/SAVE from going out. Also proves the wait observes the caller's
+        // token rather than sleeping through a cancel.
         using var cts = new CancellationTokenSource();
         var device = new FakeStreamingDevice("COM33");
         device.OnCommandSent = command =>
@@ -1725,11 +1725,12 @@ public class FirmwareUpdateServiceTests
             Directory.Delete(firmwareDir, recursive: true);
         }
 
-        // The restore is what the settle holds back, and the restore is LAN:ENAbled + LAN:SAVE —
-        // neither appears. The trailing pair is not the restore resuming: it is the failure
-        // recovery, which the cancel itself arms and which walks the device out of bridge mode
-        // with its own transparent-mode exit and a LAN:APPLY kick. It deliberately persists
-        // nothing, so a canceled flash still cannot write a network configuration.
+        // The restore is LAN:ENAbled -> APPLY -> SAVE, and the settle holds back all three: not one
+        // of them is here. The APPLY below is a different command with a different job — the
+        // failure recovery's bridge-exit kick, which the cancel itself arms. Two things tell it
+        // apart from a restore that leaked half way out: it re-sends the transparent-mode exit
+        // ahead of itself, and it is never accompanied by ENAbled or SAVE. It persists nothing,
+        // so a canceled flash still cannot write a network configuration.
         Assert.Equal(
             [
                 "SYSTem:POWer:STATe 1",
