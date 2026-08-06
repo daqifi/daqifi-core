@@ -278,9 +278,25 @@ public sealed class FirmwareUpdateServiceOptions
     public bool PowerOnWifiModuleBeforeProbe { get; set; } = true;
 
     /// <summary>
-    /// Delay after sending the WINC power-on command, before the first chip-info probe.
-    /// Only consulted when <see cref="PowerOnWifiModuleBeforeProbe"/> is <c>true</c>. Gives the
-    /// module time to power up and start responding to <c>GETChipInfo?</c> queries.
+    /// When true, the WiFi-update prep sequence sends
+    /// <see cref="Communication.Producers.ScpiMessageProducer.TurnDeviceOn"/> and waits
+    /// <see cref="PowerOnWifiModuleSettleDelay"/> before
+    /// <see cref="Communication.Producers.ScpiMessageProducer.SetLanFirmwareUpdateMode"/>.
+    /// The WINC module is powered off in standby and right after a PIC32 reflash, and LAN
+    /// commands issued in that state are rejected (SCPI <c>-200</c>), so the update-mode flag
+    /// never takes effect and the external flash tool then finds no bridge to talk to. Powering
+    /// the module on first — the same order <c>daqifi-desktop</c> hand-rolls today — closes that
+    /// gap. Defaults to <c>true</c>; set to <c>false</c> for consumers that have already powered
+    /// the module on themselves and want the legacy prep sequence.
+    /// </summary>
+    public bool PowerOnWifiModuleBeforeLanUpdateMode { get; set; } = true;
+
+    /// <summary>
+    /// Delay after sending the WINC power-on command, giving the module time to power up before
+    /// the next command reaches it. Consulted in both places Core powers the module on: before
+    /// the first chip-info probe (see <see cref="PowerOnWifiModuleBeforeProbe"/>) and before the
+    /// LAN firmware-update mode command (see <see cref="PowerOnWifiModuleBeforeLanUpdateMode"/>).
+    /// Set to <see cref="TimeSpan.Zero"/> to skip the wait.
     /// </summary>
     public TimeSpan PowerOnWifiModuleSettleDelay { get; set; } = TimeSpan.FromSeconds(1);
 
@@ -443,8 +459,9 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(LanChipInfoRetryDelay, nameof(LanChipInfoRetryDelay));
         ValidatePositive(LanChipInfoTotalTimeout, nameof(LanChipInfoTotalTimeout));
 
-        // Only consulted when PowerOnWifiModuleBeforeProbe is true, but validated
-        // unconditionally so a misconfiguration surfaces even if the flag is
+        // Only consulted when PowerOnWifiModuleBeforeProbe or
+        // PowerOnWifiModuleBeforeLanUpdateMode is true, but validated
+        // unconditionally so a misconfiguration surfaces even if a flag is
         // toggled on later without re-touching this value.
         ValidateNonNegative(PowerOnWifiModuleSettleDelay, nameof(PowerOnWifiModuleSettleDelay));
 
