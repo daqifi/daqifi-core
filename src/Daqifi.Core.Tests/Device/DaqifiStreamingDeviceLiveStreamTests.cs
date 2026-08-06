@@ -85,6 +85,31 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public async Task StreamSamplesAsync_WithCancellation_EndsEnumeration_ButNotDeviceStream()
+        {
+            var device = CreateStreaming(analogCount: 1);
+            AnalogChannel(device, 0).IsEnabled = true;
+            device.StartStreaming();
+
+            using var cts = new CancellationTokenSource();
+
+            // The token supplied by WithCancellation rather than by the argument. This device method
+            // hands back LiveSampleStream's async iterator as-is, so the token has to reach that
+            // iterator's [EnumeratorCancellation] parameter; re-wrapping the forward in another
+            // iterator without the attribute would drop it silently and hang here instead.
+            var enumeration = Task.Run(async () =>
+            {
+                await foreach (var _ in device.StreamSamplesAsync().WithCancellation(cts.Token)) { }
+            });
+
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => enumeration.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.True(device.IsStreaming);
+        }
+
+        [Fact]
         public async Task StreamSamplesAsync_InvalidBufferCapacity_Throws()
         {
             var device = CreateStreaming(analogCount: 1);
