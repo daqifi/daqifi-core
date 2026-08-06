@@ -1725,11 +1725,19 @@ public class FirmwareUpdateServiceTests
             Directory.Delete(firmwareDir, recursive: true);
         }
 
+        // The restore is LAN:ENAbled -> APPLY -> SAVE, and the settle holds back all three: not one
+        // of them is here. The APPLY below is a different command with a different job — the
+        // failure recovery's bridge-exit kick, which the cancel itself arms. Two things tell it
+        // apart from a restore that leaked half way out: it re-sends the transparent-mode exit
+        // ahead of itself, and it is never accompanied by ENAbled or SAVE. It persists nothing,
+        // so a canceled flash still cannot write a network configuration.
         Assert.Equal(
             [
                 "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
-                "SYSTem:USB:SetTransparentMode 0"
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:APPLY"
             ],
             device.SentCommands);
     }
@@ -2086,8 +2094,11 @@ public class FirmwareUpdateServiceTests
             // twin: hand the port back to the SCPI console, then kick the WiFi manager out of its
             // bridge-mode state machine. Deliberately no LAN:ENAbled/SAVE — persisting a network
             // configuration off the back of a flash that did not complete is not this step's job.
+            // The leading power-on is prep's, not the recovery's: LAN commands are rejected while
+            // the WINC is unpowered, so LAN:FWUpdate has to be preceded by it.
             Assert.Equal(
                 [
+                    "SYSTem:POWer:STATe 1",
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
                     "SYSTem:USB:SetTransparentMode 0",
                     "SYSTem:COMMunicate:LAN:APPLY"
@@ -2142,6 +2153,7 @@ public class FirmwareUpdateServiceTests
 
             Assert.Equal(
                 [
+                    "SYSTem:POWer:STATe 1",
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
                     "SYSTem:USB:SetTransparentMode 0",
                     "SYSTem:COMMunicate:LAN:APPLY"
@@ -2198,6 +2210,7 @@ public class FirmwareUpdateServiceTests
 
             Assert.Equal(
                 [
+                    "SYSTem:POWer:STATe 1",
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
                     "SYSTem:USB:SetTransparentMode 0",
                     "SYSTem:COMMunicate:LAN:APPLY"
@@ -2260,7 +2273,14 @@ public class FirmwareUpdateServiceTests
             // The flash failure, not the recovery's timeout, is what the caller sees.
             Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
 
-            Assert.Equal(["SYSTem:COMMUnicate:LAN:FWUpdate"], device.SentCommands);
+            // Prep's power-on and LAN:FWUpdate, and nothing after them: the recovery gave up in the
+            // reconnect wait, so neither half of the bridge exit was sent down a dead transport.
+            Assert.Equal(
+                [
+                    "SYSTem:POWer:STATe 1",
+                    "SYSTem:COMMUnicate:LAN:FWUpdate"
+                ],
+                device.SentCommands);
             Assert.True(device.ConnectAttempts >= 1);
         }
         finally
