@@ -140,6 +140,28 @@ namespace Daqifi.Core.Device
                    && trimmed[trimmed.Length - 1] == '"';
         }
 
+        /// <summary>
+        /// Parses the numeric code out of a <c>SYSTem:ERRor?</c> reply — <c>0</c> from
+        /// <c>0,"No error"</c>, <c>-200</c> from <c>-200,"Execution error"</c>. Pair it with
+        /// <see cref="IsSystemErrorReplyLine"/>, which decides whether a line is such a reply at all;
+        /// this only reads the code out of one that is.
+        /// </summary>
+        /// <remarks>
+        /// Distinct from <see cref="TryExtractErrorCode"/>, which parses the <c>**ERROR: -200,...</c>
+        /// form the device volunteers alongside a command's output: that one requires the <c>ERROR</c>
+        /// token, and the error-queue reply carries the bare code.
+        /// </remarks>
+        /// <param name="line">The candidate <c>SYSTem:ERRor?</c> reply line.</param>
+        /// <param name="code">The parsed code when the method returns <c>true</c>; otherwise 0.</param>
+        /// <returns><c>true</c> if a numeric code was read; otherwise <c>false</c>.</returns>
+        internal static bool TryParseSystemErrorReplyCode(string line, out int code)
+        {
+            var trimmed = line.Trim();
+            var commaIndex = trimmed.IndexOf(',');
+            var codeSpan = (commaIndex >= 0 ? trimmed[..commaIndex] : trimmed).Trim();
+            return int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
+        }
+
         private static int SkipSpaces(string value, int index)
         {
             while (index < value.Length && (value[index] == ' ' || value[index] == '\t'))

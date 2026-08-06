@@ -145,6 +145,15 @@ namespace Daqifi.Core.Tests.Device
             yield return Site("GetStreamStatsAsync", d => d.GetStreamStatsAsync());
             yield return Site("GetMemoryDiagnosticsAsync", d => d.GetMemoryDiagnosticsAsync());
             yield return Site("SetFriendlyNameAsync", d => d.SetFriendlyNameAsync("Lab Nq1"));
+            yield return Site("SaveAdcCalibrationAsync", d => d.SaveAdcCalibrationAsync());
+            yield return Site("LoadAdcCalibrationAsync", d => d.LoadAdcCalibrationAsync());
+            yield return Site("SaveFactoryAdcCalibrationAsync", d => d.SaveFactoryAdcCalibrationAsync());
+            yield return Site("LoadFactoryAdcCalibrationAsync", d => d.LoadFactoryAdcCalibrationAsync());
+            yield return Site("UseAdcCalibrationAsync", d => d.UseAdcCalibrationAsync(1));
+            yield return Site("SetAdcCalibrationSlopeAsync", d => d.SetAdcCalibrationSlopeAsync(0, 1.0));
+            yield return Site("SetAdcCalibrationOffsetAsync", d => d.SetAdcCalibrationOffsetAsync(0, 0.0));
+            yield return Site("SaveVoltagePrecisionAsync", d => d.SaveVoltagePrecisionAsync());
+            yield return Site("LoadVoltagePrecisionAsync", d => d.LoadVoltagePrecisionAsync());
 
             static object[] Site(string name, Func<DaqifiStreamingDevice, Task> call) => [name, call];
         }

@@ -1,5 +1,8 @@
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,6 +23,13 @@ namespace Daqifi.Core.Device.Internal
     /// state — the two exceptions being <see cref="Reboot"/>'s local teardown and
     /// <see cref="SetFriendlyNameAsync"/>'s optimistic metadata write, both of which go back through
     /// the host rather than being done here.
+    /// </para>
+    /// <para>
+    /// Each of those commands also has a confirming <c>...Async</c> twin here, which sends the same
+    /// primitive and then reads the device's SCPI error queue so a refusal cannot pass for a success
+    /// (see <see cref="SendConfirmedAsync"/>). The two shapes are kept side by side deliberately: the
+    /// <c>void</c> ones stay usable mid-stream and cost one write, while the confirming ones need
+    /// text exchanges and the device's full attention.
     /// </para>
     /// <para>
     /// Everything reaches the device through <see cref="IDeviceOperationHost"/>, so each command
@@ -104,10 +114,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.SetAdcCalibrationSlope" />
         internal void SetAdcCalibrationSlope(int channelNumber, double calM)
         {
-            if (channelNumber < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-            }
+            ValidateChannelNumber(channelNumber);
 
             if (!_host.IsConnected)
             {
@@ -120,10 +127,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.SetAdcCalibrationOffset" />
         internal void SetAdcCalibrationOffset(int channelNumber, double calB)
         {
-            if (channelNumber < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-            }
+            ValidateChannelNumber(channelNumber);
 
             if (!_host.IsConnected)
             {
@@ -158,10 +162,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.UseAdcCalibration" />
         internal void UseAdcCalibration(int bank)
         {
-            if (bank is < 0 or > 1)
-            {
-                throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
-            }
+            ValidateBank(bank);
 
             if (!_host.IsConnected)
             {
@@ -191,6 +192,173 @@ namespace Daqifi.Core.Device.Internal
             }
 
             _host.Send(ScpiMessageProducer.LoadVoltagePrecision);
+        }
+
+        #region Confirming variants
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.SaveAdcCalibrationAsync" />
+        internal Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => SendConfirmedAsync(ScpiMessageProducer.SaveAdcCalibration, cancellationToken);
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.LoadAdcCalibrationAsync" />
+        internal Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => SendConfirmedAsync(ScpiMessageProducer.LoadAdcCalibration, cancellationToken);
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.SetAdcCalibrationSlopeAsync" />
+        internal Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
+        {
+            ValidateChannelNumber(channelNumber);
+
+            return SendConfirmedAsync(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM), cancellationToken);
+        }
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.SetAdcCalibrationOffsetAsync" />
+        internal Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
+        {
+            ValidateChannelNumber(channelNumber);
+
+            return SendConfirmedAsync(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB), cancellationToken);
+        }
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.SaveFactoryAdcCalibrationAsync" />
+        internal Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => SendConfirmedAsync(ScpiMessageProducer.SaveFactoryAdcCalibration, cancellationToken);
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.LoadFactoryAdcCalibrationAsync" />
+        internal Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => SendConfirmedAsync(ScpiMessageProducer.LoadFactoryAdcCalibration, cancellationToken);
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.UseAdcCalibrationAsync" />
+        internal Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
+        {
+            ValidateBank(bank);
+
+            return SendConfirmedAsync(ScpiMessageProducer.UseAdcCalibration(bank), cancellationToken);
+        }
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.SaveVoltagePrecisionAsync" />
+        internal Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default)
+            => SendConfirmedAsync(ScpiMessageProducer.SaveVoltagePrecision, cancellationToken);
+
+        /// <inheritdoc cref="IConfirmingDeviceAdministration.LoadVoltagePrecisionAsync" />
+        internal Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default)
+            => SendConfirmedAsync(ScpiMessageProducer.LoadVoltagePrecision, cancellationToken);
+
+        /// <summary>
+        /// Sends one administration command and reads the device's verdict on it, throwing
+        /// <see cref="DeviceCommandFailedException"/> unless the device confirms it accepted the
+        /// command.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Two steps, and the first is what makes the second mean anything. The device's SCPI error
+        /// queue is FIFO and can already hold entries left by earlier commands or by the connect
+        /// sequence, so a single <c>SYSTem:ERRor?</c> after the command could just as easily pop
+        /// somebody else's failure — the same trap documented on the SD listing's terminator, which
+        /// is why that one is read as a liveness marker and never classified. Draining the queue
+        /// first removes the ambiguity: the entry popped afterwards is this command's own, or the
+        /// queue is clean and the command was accepted.
+        /// </para>
+        /// <para>
+        /// The command and its <c>SYSTem:ERRor?</c> query go out in one text exchange, so no other
+        /// exchange can interleave between them. The drain necessarily runs in exchanges of its own
+        /// beforehand, so a caller driving the same device from another thread can still slip a
+        /// command into that gap; these are administration operations that already assume one caller
+        /// at a time.
+        /// </para>
+        /// <para>
+        /// Side effect worth knowing about: the drain discards whatever the queue held. A caller who
+        /// wants those entries should read them with
+        /// <see cref="DaqifiDevice.DrainErrorQueueAsync"/> before calling this.
+        /// </para>
+        /// </remarks>
+        private async Task SendConfirmedAsync(IOutboundMessage<string> command, CancellationToken cancellationToken)
+        {
+            if (!_host.IsConnected)
+            {
+                throw new DeviceNotConnectedException();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await _host.DrainErrorQueueAsync(ErrorQueueDrainCap, cancellationToken).ConfigureAwait(false);
+
+            var lines = await _host.ExecuteTextCommandAsync(
+                () =>
+                {
+                    _host.Send(command);
+                    _host.Send(ScpiMessageProducer.GetSystemError);
+                },
+                responseTimeoutMs: ConfirmationResponseTimeoutMs,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            ThrowIfNotAccepted(command.Data, lines);
+        }
+
+        /// <summary>
+        /// Reads the device's verdict out of a confirming exchange's response and throws unless it is
+        /// an accepted command.
+        /// </summary>
+        /// <remarks>
+        /// Three outcomes, and only one of them returns. A volunteered <c>**ERROR: ...</c> line is the
+        /// device complaining about the command as it processed it; the <c>SYSTem:ERRor?</c> reply is
+        /// the queue's verdict, authoritative because the drain left the queue empty; and no readable
+        /// reply at all means the command's outcome is simply unknown, which is not a success and must
+        /// not be reported as one.
+        /// </remarks>
+        private static void ThrowIfNotAccepted(string command, IReadOnlyList<string> lines)
+        {
+            var volunteeredError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
+            if (volunteeredError != null)
+            {
+                ScpiResponseClassifier.TryExtractErrorCode(volunteeredError, out var volunteeredCode);
+                throw new DeviceCommandFailedException(command, volunteeredCode, volunteeredError);
+            }
+
+            var reply = lines.LastOrDefault(ScpiResponseClassifier.IsSystemErrorReplyLine)?.Trim();
+            if (reply == null || !ScpiResponseClassifier.TryParseSystemErrorReplyCode(reply, out var code))
+            {
+                throw new DeviceCommandFailedException(command, reply);
+            }
+
+            if (code != 0)
+            {
+                throw new DeviceCommandFailedException(command, code, reply);
+            }
+        }
+
+        /// <summary>
+        /// Cap on the pre-send drain. Far smaller than
+        /// <see cref="DaqifiDevice.DrainErrorQueueAsync"/>'s own default because each iteration is a
+        /// full text exchange and a healthy device converges on the first one; a queue deeper than
+        /// this is a device with bigger problems than the command about to be sent, and the
+        /// confirmation below will say so rather than wait it out.
+        /// </summary>
+        private const int ErrorQueueDrainCap = 16;
+
+        /// <summary>
+        /// Time allowed for the first line of a confirming exchange's response. Generous because the
+        /// commands being confirmed include NVM writes (<c>SAVEcal</c>, <c>SAVEFcal</c>,
+        /// <c>VOLTage:SAVE</c>), which the device does not answer until the write is done.
+        /// </summary>
+        private const int ConfirmationResponseTimeoutMs = 3000;
+
+        #endregion
+
+        private static void ValidateChannelNumber(int channelNumber)
+        {
+            if (channelNumber < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
+            }
+        }
+
+        private static void ValidateBank(int bank)
+        {
+            if (bank is < 0 or > 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
+            }
         }
     }
 }

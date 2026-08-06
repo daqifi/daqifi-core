@@ -26,7 +26,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IConfirmingDeviceAdministration, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
     {
         /// <summary>
         /// Response window allowed for the USB stream-interface command sent during
@@ -792,6 +792,42 @@ namespace Daqifi.Core.Device
         /// <inheritdoc />
         public void LoadVoltagePrecision() => _administration.LoadVoltagePrecision();
 
+        /// <inheritdoc />
+        public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.SaveAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.LoadAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
+            => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, cancellationToken);
+
+        /// <inheritdoc />
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
+            => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, cancellationToken);
+
+        /// <inheritdoc />
+        public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.SaveFactoryAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.LoadFactoryAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
+            => _administration.UseAdcCalibrationAsync(bank, cancellationToken);
+
+        /// <inheritdoc />
+        public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default)
+            => _administration.SaveVoltagePrecisionAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default)
+            => _administration.LoadVoltagePrecisionAsync(cancellationToken);
+
 
         // -----------------------------------------------------------------
         // Delegation to the operation collaborators.
@@ -1028,6 +1064,11 @@ namespace Daqifi.Core.Device
             => ExecuteTextCommandAsync(
                 setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync, finalizeAsync);
 #pragma warning restore CA1068
+
+        Task<IReadOnlyList<string>> IDeviceOperationHost.DrainErrorQueueAsync(
+            int maxIterations,
+            CancellationToken cancellationToken)
+            => DrainErrorQueueAsync(maxIterations, cancellationToken);
 
         Task IDeviceOperationHost.ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,

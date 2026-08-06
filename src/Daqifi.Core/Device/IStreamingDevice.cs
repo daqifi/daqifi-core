@@ -150,6 +150,25 @@ namespace Daqifi.Core.Device
         /// </remarks>
         void Reboot();
 
+        // -----------------------------------------------------------------
+        // ADC calibration and voltage precision.
+        //
+        // Every command in this block exists in two shapes. The void one is
+        // fire-and-forget: it puts the SCPI primitive on the wire and parses no
+        // reply, so a device that refuses the command is indistinguishable from
+        // one that carried it out. That is not hypothetical — a Nyquist running
+        // firmware 3.7.2 answers CONFigure:ADC:LOADcal with -200,"Execution
+        // error" when its user bank was never written, and LoadAdcCalibration()
+        // returns as though the bank had loaded.
+        //
+        // The confirming twin, on IConfirmingDeviceAdministration, sends the same
+        // primitive and then reads the device's SCPI error queue, throwing
+        // DeviceCommandFailedException unless the device confirms it accepted
+        // the command. It costs text exchanges and the device's full attention;
+        // the void one costs a single write and stays usable mid-stream. Pick by
+        // whether a silent no-op is acceptable.
+        // -----------------------------------------------------------------
+
         /// <summary>
         /// Persists the device's current ADC calibration coefficients to the <b>user</b> NVM bank so they survive a reboot.
         /// </summary>
@@ -157,6 +176,8 @@ namespace Daqifi.Core.Device
         /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:ADC:SAVEcal</c>). Pair with
         /// <see cref="LoadAdcCalibration"/> to restore them. Use <see cref="SaveFactoryAdcCalibration"/> to write the
         /// <b>factory</b> bank instead, and <see cref="UseAdcCalibration"/> to choose which bank the device applies.
+        /// Fire-and-forget: a device that refuses this reports nothing — use
+        /// <see cref="IConfirmingDeviceAdministration.SaveAdcCalibrationAsync"/> when that matters.
         /// </remarks>
         void SaveAdcCalibration();
 
@@ -165,6 +186,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// The inverse of <see cref="SaveAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADcal</c>).
+        /// Fire-and-forget: on a unit whose user bank was never written the device answers
+        /// <c>-200,"Execution error"</c> and this method still returns normally — use
+        /// <see cref="IConfirmingDeviceAdministration.LoadAdcCalibrationAsync"/> when that matters.
         /// </remarks>
         void LoadAdcCalibration();
 
@@ -176,7 +200,8 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// <b>RAM only</b> (firmware primitive <c>CONFigure:ADC:chanCALM</c>). The value is lost on reboot unless
         /// persisted with <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/>
-        /// (factory bank).
+        /// (factory bank). Fire-and-forget: a device that refuses this reports nothing — use
+        /// <see cref="IConfirmingDeviceAdministration.SetAdcCalibrationSlopeAsync"/> when that matters.
         /// </remarks>
         void SetAdcCalibrationSlope(int channelNumber, double calM);
 
@@ -188,7 +213,8 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// <b>RAM only</b> (firmware primitive <c>CONFigure:ADC:chanCALB</c>). The value is lost on reboot unless
         /// persisted with <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/>
-        /// (factory bank).
+        /// (factory bank). Fire-and-forget: a device that refuses this reports nothing — use
+        /// <see cref="IConfirmingDeviceAdministration.SetAdcCalibrationOffsetAsync"/> when that matters.
         /// </remarks>
         void SetAdcCalibrationOffset(int channelNumber, double calB);
 
@@ -198,6 +224,8 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// Firmware primitive <c>CONFigure:ADC:SAVEFcal</c>. Contrast with <see cref="SaveAdcCalibration"/>, which
         /// writes the user bank. Which bank the device applies is chosen with <see cref="UseAdcCalibration"/>.
+        /// Fire-and-forget: a device that refuses this reports nothing — use
+        /// <see cref="IConfirmingDeviceAdministration.SaveFactoryAdcCalibrationAsync"/> when that matters.
         /// </remarks>
         void SaveFactoryAdcCalibration();
 
@@ -206,6 +234,8 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// The inverse of <see cref="SaveFactoryAdcCalibration"/> (firmware primitive <c>CONFigure:ADC:LOADFcal</c>).
+        /// Fire-and-forget: a device that refuses this reports nothing — use
+        /// <see cref="IConfirmingDeviceAdministration.LoadFactoryAdcCalibrationAsync"/> when that matters.
         /// </remarks>
         void LoadFactoryAdcCalibration();
 
@@ -216,7 +246,8 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// <b>Persisted</b> (firmware primitive <c>CONFigure:ADC:USECal</c>). The choice is written to NVM, the
         /// runtime coefficients are immediately reloaded from the selected bank, and that bank is loaded on every
-        /// subsequent boot. Values other than 0 or 1 are rejected.
+        /// subsequent boot. Values other than 0 or 1 are rejected. Fire-and-forget: a device that refuses this
+        /// reports nothing — use <see cref="IConfirmingDeviceAdministration.UseAdcCalibrationAsync"/> when that matters.
         /// </remarks>
         void UseAdcCalibration(int bank);
 
@@ -225,7 +256,8 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// A thin wrapper over the firmware NVM primitive (<c>CONFigure:VOLTage:SAVE</c>). Pair with
-        /// <see cref="LoadVoltagePrecision"/> to restore it.
+        /// <see cref="LoadVoltagePrecision"/> to restore it. Fire-and-forget: a device that refuses this
+        /// reports nothing — use <see cref="IConfirmingDeviceAdministration.SaveVoltagePrecisionAsync"/> when that matters.
         /// </remarks>
         void SaveVoltagePrecision();
 
@@ -234,6 +266,8 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// The inverse of <see cref="SaveVoltagePrecision"/> (firmware primitive <c>CONFigure:VOLTage:LOAD</c>).
+        /// Fire-and-forget: a device that refuses this reports nothing — use
+        /// <see cref="IConfirmingDeviceAdministration.LoadVoltagePrecisionAsync"/> when that matters.
         /// </remarks>
         void LoadVoltagePrecision();
     }
