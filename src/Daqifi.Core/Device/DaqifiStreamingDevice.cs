@@ -515,42 +515,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         private volatile StreamingSessionSnapshot? _sessionSnapshot;
 
-        /// <summary>
-        /// The subset of a streaming session that Core owns and can therefore put back: which
-        /// channels were enabled, and whether data was flowing.
-        /// </summary>
-        private sealed class StreamingSessionSnapshot
-        {
-            public StreamingSessionSnapshot(HashSet<(ChannelType Type, int Number)> enabledChannels, bool wasStreaming)
-            {
-                EnabledChannels = enabledChannels;
-                WasStreaming = wasStreaming;
-            }
-
-            /// <summary>
-            /// The enabled channels, held by identity rather than by reference: a reconnect can
-            /// replace the channel objects, and a device that came back with a different channel
-            /// count should restore the intersection rather than fail.
-            /// </summary>
-            public HashSet<(ChannelType Type, int Number)> EnabledChannels { get; }
-
-            public bool WasStreaming { get; }
-        }
-
         /// <inheritdoc />
-        protected override void CaptureSessionSnapshot()
-        {
-            var enabled = new HashSet<(ChannelType, int)>();
-            foreach (var channel in GetChannelsSnapshot())
-            {
-                if (channel.IsEnabled)
-                {
-                    enabled.Add((channel.Type, channel.ChannelNumber));
-                }
-            }
-
-            _sessionSnapshot = new StreamingSessionSnapshot(enabled, IsStreaming);
-        }
+        protected override void CaptureSessionSnapshot() =>
+            _sessionSnapshot = StreamingSessionSnapshot.Capture(GetChannelsSnapshot(), IsStreaming);
 
         /// <summary>
         /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
@@ -558,16 +525,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// <para>
-        /// The enable set has to be replayed from the snapshot rather than read back off the
-        /// channel objects: <see cref="DaqifiDevice.PopulateChannelsFromStatus"/> resyncs analog
-        /// <c>IsEnabled</c> from the device's own enabled mask on every status message (#409), so by
-        /// the time re-initialization is done the in-memory view reflects the freshly reconnected
-        /// device, not the session that was lost.
-        /// </para>
-        /// <para>
-        /// The streaming frequency needs no replay — it is a host-side setting that the drop never
-        /// touched — but it does have to reach the device again, which is what the resumed
-        /// <see cref="StartStreaming"/> does.
+        /// What to restore is <see cref="StreamingSessionSnapshot.PlanRestore"/>'s decision; this
+        /// method owns the effects, and their order is the part that matters. See that method for
+        /// why the enable set is replayed from the snapshot rather than read back off the channels.
         /// </para>
         /// <para>
         /// A resumed stream is a genuinely new session: timestamp reconstruction re-anchors and the
@@ -598,32 +558,24 @@ namespace Daqifi.Core.Device
             cancellationToken.ThrowIfCancellationRequested();
 
             // Normalize to a known state before re-applying: whatever the device came back with is
-            // not necessarily what it had, and the enable commands are set-replace anyway.
+            // not necessarily what it had, and the enable commands are set-replace anyway. The
+            // channel list is read afterwards so the plan is built against the post-reset objects.
             DisableAllChannels();
 
-            var toEnable = new List<IChannel>();
-            foreach (var channel in GetChannelsSnapshot())
+            var plan = snapshot.PlanRestore(GetChannelsSnapshot(), options);
+            if (plan.ChannelsToEnable.Count > 0)
             {
-                if (snapshot.EnabledChannels.Contains((channel.Type, channel.ChannelNumber)))
-                {
-                    toEnable.Add(channel);
-                }
-            }
-
-            if (toEnable.Count > 0)
-            {
-                EnableChannels(toEnable);
+                EnableChannels(plan.ChannelsToEnable);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var resumeStreaming = snapshot.WasStreaming && options.ResumeStreaming;
-            if (resumeStreaming)
+            if (plan.ResumeStreaming)
             {
                 StartStreaming();
             }
 
-            return Task.FromResult(resumeStreaming);
+            return Task.FromResult(plan.ResumeStreaming);
         }
 
         #endregion
