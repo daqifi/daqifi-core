@@ -288,6 +288,96 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTotalTimeoutIsNegative_MakesNoAttemptWithoutThrowing()
+    {
+        // A budget of "less than nothing" is the same as no budget, which the option documents as
+        // "no attempt is made". Handing it straight to CancellationTokenSource would instead throw
+        // ArgumentOutOfRangeException out of a probe whose whole contract is that failures come back
+        // as an unavailable result.
+        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+        var options = new LanChipInfoRetryOptions
+        {
+            MaxAttempts = 3,
+            RetryDelay = TimeSpan.FromMilliseconds(5),
+            TotalTimeout = TimeSpan.FromSeconds(-5),
+        };
+
+        var result = await device.GetLanChipInfoWithRetryAsync(options);
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.WasLanNotInitialized);
+        Assert.Equal(0, device.GetLanChipInfoCallCount);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTotalTimeoutIsInfinite_SpendsEveryAttempt()
+    {
+        // Timeout.InfiniteTimeSpan is negative, but it is how .NET spells "no ceiling" and must keep
+        // meaning that — collapsing it into the no-budget case would silently turn an unbounded
+        // probe into one that never queries at all.
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new LanChipInfoRetryOptions
+        {
+            MaxAttempts = 3,
+            RetryDelay = TimeSpan.FromMilliseconds(5),
+            TotalTimeout = Timeout.InfiniteTimeSpan,
+        };
+
+        var result = await device.GetLanChipInfoWithRetryAsync(options);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenRetryDelayIsNegative_KeepsRetryingWithoutThrowing()
+    {
+        // Same reasoning as the budget: a negative pause is a misconfiguration, not a reason to
+        // throw ArgumentOutOfRangeException out of Task.Delay midway through the loop.
+        var device = new ScriptedLanChipInfoDevice(
+            new InvalidOperationException("transient"),
+            new InvalidOperationException("transient"),
+            SampleChipInfo);
+        var options = new LanChipInfoRetryOptions
+        {
+            MaxAttempts = 3,
+            RetryDelay = TimeSpan.FromSeconds(-1),
+            TotalTimeout = TimeSpan.FromSeconds(30),
+        };
+
+        var result = await device.GetLanChipInfoWithRetryAsync(options);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenRetryDelayIsInfinite_DoesNotHangBetweenAttempts()
+    {
+        // An infinite *pause* inside a bounded retry has no meaning, and with an equally unbounded
+        // budget nothing would ever release it — the probe would hang on the caller's thread
+        // forever. The guard token bounds a regression here to 10s instead of wedging the suite.
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new LanChipInfoRetryOptions
+        {
+            MaxAttempts = 2,
+            RetryDelay = Timeout.InfiniteTimeSpan,
+            TotalTimeout = Timeout.InfiniteTimeSpan,
+        };
+
+        var stopwatch = Stopwatch.StartNew();
+        var result = await device.GetLanChipInfoWithRetryAsync(options, cancellationToken: guard.Token);
+        stopwatch.Stop();
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(2, device.GetLanChipInfoCallCount);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+            $"An infinite retry delay stalled the probe for {stopwatch.Elapsed}.");
+    }
+
+    [Fact]
     public async Task GetLanChipInfoWithRetryAsync_WithoutOptions_UsesCoreDefaults()
     {
         var device = new ScriptedLanChipInfoDevice(SampleChipInfo);

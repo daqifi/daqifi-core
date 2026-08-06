@@ -23,8 +23,15 @@ public sealed record LanChipInfoRetryOptions
     public int MaxAttempts { get; init; } = 3;
 
     /// <summary>
-    /// Gets the pause between attempts. Not applied after the final attempt.
+    /// Gets the pause between attempts. Not applied after the final attempt. Negative values —
+    /// including <see cref="Timeout.InfiniteTimeSpan"/> — are treated as no pause at all.
     /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="TotalTimeout"/>, <see cref="Timeout.InfiniteTimeSpan"/> is not honored
+    /// here: an infinite <i>pause</i> inside a bounded retry has no meaning, and with an equally
+    /// unbounded budget nothing would ever release it. Use <see cref="MaxAttempts"/> = 1 to say
+    /// "don't retry".
+    /// </remarks>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
@@ -37,7 +44,8 @@ public sealed record LanChipInfoRetryOptions
     /// while an operation lock is held. Expiry ends the probe with the same "unavailable"
     /// result as an exhausted attempt count rather than throwing; only the caller's own
     /// cancellation surfaces as <see cref="OperationCanceledException"/>.
-    /// A non-positive value leaves no budget at all, so no attempt is made.
+    /// A non-positive value leaves no budget at all, so no attempt is made — with the single
+    /// exception of <see cref="Timeout.InfiniteTimeSpan"/>, which means the opposite: no ceiling.
     /// </remarks>
     public TimeSpan TotalTimeout { get; init; } = TimeSpan.FromSeconds(8);
 
@@ -98,7 +106,9 @@ public static class LanChipInfoProviderExtensions
     /// Failures are absorbed: an exhausted budget comes back as a result with a null
     /// <see cref="LanChipInfoProbeResult.ChipInfo"/>, not an exception — the caller decides what an
     /// unreadable module means. The one exception that does propagate is the caller's own
-    /// cancellation.
+    /// cancellation. That extends to a misconfigured budget: out-of-range option values are
+    /// normalized to their documented meaning (see <see cref="LanChipInfoRetryOptions"/>) rather
+    /// than thrown back at the caller from partway through the loop.
     /// </para>
     /// </remarks>
     /// <param name="provider">The device to query. When it is also an <see cref="IStreamingDevice"/>, it is what the <c>LAN:APPLY</c> kick is sent through.</param>
@@ -122,9 +132,13 @@ public static class LanChipInfoProviderExtensions
         // — DaqifiStreamingDevice implements both — and when it isn't, there is simply no kick.
         var device = provider as IStreamingDevice;
 
+        // The options are a plain settable record a consumer can get wrong, so every value is
+        // normalized into something the loop can spend rather than passed straight to a BCL call
+        // that would throw — this probe's contract is that failures come back as an unavailable
+        // result, and that has to hold for a misconfigured budget too.
         var maxAttempts = Math.Max(1, effectiveOptions.MaxAttempts);
-        var retryDelay = effectiveOptions.RetryDelay;
-        var totalTimeout = effectiveOptions.TotalTimeout;
+        var retryDelay = NormalizeRetryDelay(effectiveOptions.RetryDelay);
+        var totalTimeout = NormalizeTotalTimeout(effectiveOptions.TotalTimeout);
 
         // Tracks the most recent failure's classification (reset on any non-LanNotInitialized
         // outcome) so the caller can report the specific not-initialized condition only when that
@@ -250,4 +264,34 @@ public static class LanChipInfoProviderExtensions
             lastFailureWasLanNotInitialized);
         return new LanChipInfoProbeResult(null, lastFailureWasLanNotInitialized);
     }
+
+    /// <summary>
+    /// Clamps the retry pause to something <see cref="Task.Delay(TimeSpan, CancellationToken)"/>
+    /// accepts.
+    /// </summary>
+    /// <remarks>
+    /// Every negative value collapses to "no pause", <see cref="Timeout.InfiniteTimeSpan"/>
+    /// included. Other negatives would throw <see cref="ArgumentOutOfRangeException"/> partway
+    /// through a probe documented to absorb failures, and the infinite sentinel would stall the
+    /// caller between attempts until something else cancelled — forever, when
+    /// <see cref="LanChipInfoRetryOptions.TotalTimeout"/> is unbounded too. Both are
+    /// misconfigurations, and retrying immediately is the bounded reading of them.
+    /// </remarks>
+    private static TimeSpan NormalizeRetryDelay(TimeSpan retryDelay) =>
+        retryDelay < TimeSpan.Zero ? TimeSpan.Zero : retryDelay;
+
+    /// <summary>
+    /// Clamps the wall-clock budget to something <see cref="CancellationTokenSource"/> accepts.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Timeout.InfiniteTimeSpan"/> is kept as the one meaningful negative: it is how
+    /// .NET spells "no ceiling" and <see cref="CancellationTokenSource"/> already reads it that
+    /// way. Any other negative becomes <see cref="TimeSpan.Zero"/> — the "no budget, so no
+    /// attempt" outcome the option documents — instead of the
+    /// <see cref="ArgumentOutOfRangeException"/> the constructor would throw.
+    /// </remarks>
+    private static TimeSpan NormalizeTotalTimeout(TimeSpan totalTimeout) =>
+        totalTimeout < TimeSpan.Zero && totalTimeout != Timeout.InfiniteTimeSpan
+            ? TimeSpan.Zero
+            : totalTimeout;
 }
