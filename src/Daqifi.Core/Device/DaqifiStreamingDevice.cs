@@ -15,9 +15,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 #nullable enable
@@ -198,6 +196,7 @@ namespace Daqifi.Core.Device
             // which a field initializer cannot reference. Every constructor routes through this
             // method, so they are always in place before the device is handed to a caller.
             _frameDecoder = new StreamFrameDecoder(this);
+            _liveSampleStream = new LiveSampleStream(this);
             _channelControl = new ChannelControlOperations(this);
             _administration = new DeviceAdministrationOperations(this);
             _networkOperations = new NetworkConfigurationOperations(this);
@@ -585,14 +584,12 @@ namespace Daqifi.Core.Device
         /// </summary>
         public const int DefaultLiveSampleBufferCapacity = 4096;
 
-        private long _droppedLiveSampleCount;
-
         /// <summary>
         /// Gets the cumulative number of live samples dropped across all <see cref="StreamSamplesAsync"/>
         /// enumerations because a consumer could not keep up with the incoming rate (drop-oldest policy).
         /// A non-zero and growing value means a live consumer is too slow for the current stream rate.
         /// </summary>
-        public long DroppedLiveSampleCount => Interlocked.Read(ref _droppedLiveSampleCount);
+        public long DroppedLiveSampleCount => _liveSampleStream.DroppedSampleCount;
 
         /// <summary>
         /// Exposes decoded live samples as an <see cref="IAsyncEnumerable{T}"/> for pull-based
@@ -601,6 +598,7 @@ namespace Daqifi.Core.Device
         /// per-channel <see cref="IChannel.SampleReceived"/> and raw-frame events are unaffected.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Samples are buffered in a bounded channel with a <b>drop-oldest</b> overflow policy: if the
         /// consumer falls behind, the oldest buffered samples are discarded (memory never grows
         /// unbounded) and <see cref="DroppedLiveSampleCount"/> is incremented — the decode thread that
@@ -608,6 +606,14 @@ namespace Daqifi.Core.Device
         /// cancelling <paramref name="cancellationToken"/> ends it promptly (surfaced as
         /// <see cref="OperationCanceledException"/>) and unsubscribes, but does <b>not</b> stop the
         /// device's stream — call <see cref="StopStreaming"/> for that.
+        /// </para>
+        /// <para>
+        /// This returns <see cref="LiveSampleStream"/>'s async iterator directly rather than wrapping
+        /// it in one of its own, which is what keeps the two deferred behaviors a caller can observe
+        /// exactly as they were: <c>WithCancellation</c> still reaches the iterator's own
+        /// <c>[EnumeratorCancellation]</c> parameter, and an invalid <paramref name="bufferCapacity"/>
+        /// still throws on the first <c>MoveNextAsync</c> rather than at the call.
+        /// </para>
         /// </remarks>
         /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
         /// <param name="bufferCapacity">
@@ -615,51 +621,10 @@ namespace Daqifi.Core.Device
         /// </param>
         /// <returns>An async stream of <see cref="LiveSample"/> (channel + decoded sample).</returns>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 1.</exception>
-        public async IAsyncEnumerable<LiveSample> StreamSamplesAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        public IAsyncEnumerable<LiveSample> StreamSamplesAsync(
+            CancellationToken cancellationToken = default,
             int? bufferCapacity = null)
-        {
-            var capacity = bufferCapacity ?? DefaultLiveSampleBufferCapacity;
-            if (capacity < 1)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(bufferCapacity), capacity, "Buffer capacity must be at least 1.");
-            }
-
-            var buffer = System.Threading.Channels.Channel.CreateBounded<LiveSample>(
-                new BoundedChannelOptions(capacity)
-                {
-                    FullMode = BoundedChannelFullMode.DropOldest,
-                    SingleReader = true,
-                    SingleWriter = false,
-                },
-                _ => Interlocked.Increment(ref _droppedLiveSampleCount));
-
-            void OnSample(object? sender, SampleReceivedEventArgs e) =>
-                buffer.Writer.TryWrite(new LiveSample(e.Channel, e.Sample));
-
-            var channels = SnapshotChannels();
-            foreach (var channel in channels)
-            {
-                channel.SampleReceived += OnSample;
-            }
-
-            try
-            {
-                await foreach (var sample in buffer.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    yield return sample;
-                }
-            }
-            finally
-            {
-                foreach (var channel in channels)
-                {
-                    channel.SampleReceived -= OnSample;
-                }
-                buffer.Writer.TryComplete();
-            }
-        }
+            => _liveSampleStream.StreamSamplesAsync(cancellationToken, bufferCapacity);
 
         /// <summary>
         /// Handles a streaming data frame by handing it to <see cref="StreamFrameDecoder"/>, which
@@ -893,6 +858,9 @@ namespace Daqifi.Core.Device
 
         /// <summary>The streaming hot path: frame screening, timestamps, gaps, per-channel decode.</summary>
         private StreamFrameDecoder _frameDecoder = null!;
+
+        /// <summary>The pull-based live-sample view: bounded buffer, drop-oldest, drop counter.</summary>
+        private LiveSampleStream _liveSampleStream = null!;
 
         /// <summary>Channel enable/disable, DIO, PWM and analog output (<see cref="IStreamingDevice"/>).</summary>
         private ChannelControlOperations _channelControl = null!;
