@@ -55,12 +55,13 @@ internal sealed class WifiModuleUpdater
     {
         const long totalBytes = 100;
 
-        // Read only by the failure paths at the bottom of this method. Once the prepare step is
-        // entered the device may be sitting in LAN firmware-update / USB-transparent bridge mode,
-        // where the SCPI console is bypassed and the module stays unusable until something takes
-        // it back out — a power cycle, or the bridge-exit below. Today only the *successful* path
-        // restores it, so a failed or canceled flash strands the device; that is exactly why
+        // Read only by the failure paths at the bottom of this method. Once the update-mode command
+        // is on the wire the device may be sitting in LAN firmware-update / USB-transparent bridge
+        // mode, where the SCPI console is bypassed and the module stays unusable until something
+        // takes it back out — a power cycle, or the bridge-exit below. Today only the *successful*
+        // path restores it, so a failed or canceled flash strands the device; that is exactly why
         // daqifi-desktop still wraps this call in its own recovery finally (part of #269).
+        // Armed inside the prepare step, at the one point where "may be bridged" becomes true.
         var mayBeInLanUpdateMode = false;
 
         try
@@ -73,13 +74,6 @@ internal sealed class WifiModuleUpdater
 
             _context.TransitionToState(FirmwareUpdateState.PreparingDevice, "Preparing device for WiFi module update.");
             _context.ReportProgress(progress, FirmwareUpdateState.PreparingDevice, 0, _context.CurrentOperation, 0, totalBytes);
-
-            // Armed *before* the prepare step rather than after the update-mode command inside it,
-            // deliberately: a cancellation or state timeout can land between the command reaching
-            // the device and this method regaining control, so Core cannot know how far prep got.
-            // A redundant bridge-exit on a device that never entered update mode is a no-op; a
-            // skipped one leaves a bridged device needing a power cycle. Bias to the harmless side.
-            mayBeInLanUpdateMode = true;
 
             await _context.ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.PreparingDevice,
@@ -94,6 +88,19 @@ internal sealed class WifiModuleUpdater
                     }
 
                     device.Send(ScpiMessageProducer.SetLanFirmwareUpdateMode);
+
+                    // Armed here rather than before the whole prepare step. Everything above this
+                    // line fails with the update-mode command definitively un-sent, and arming for
+                    // those turns an immediate "device must be connected" failure into a full
+                    // ReconnectingAfterFlash wait for a transport that was never gone. Immediately
+                    // *after* the Send is as early as it can honestly be: Send is synchronous and
+                    // no await separates it from this line, so nothing can interleave between them.
+                    // From here on Core must assume the mode took — a cancel or state timeout can
+                    // land while the device is still acting on a command it already received. A
+                    // redundant bridge-exit on a device that never entered update mode is a no-op;
+                    // a skipped one leaves a bridged device needing a power cycle.
+                    mayBeInLanUpdateMode = true;
+
                     await Task.Delay(Options.PostLanFirmwareModeDelay, stateToken).ConfigureAwait(false);
                     device.Disconnect();
 
@@ -918,9 +925,10 @@ internal sealed class WifiModuleUpdater
         {
             // A fresh token, never the caller's: on the cancellation path the caller's token is
             // already canceled, and that is precisely the case where the device most needs the
-            // exit. Bounded by the post-flash reconnect budget because that is the same physical
-            // operation — waiting for the serial transport to come back — and a host that tuned
-            // it for slow re-enumeration should get that tuning here too. The worst case (the
+            // exit. It bounds the reconnect wait and nothing else, because waiting for a serial
+            // transport to come back is the only step here that can take unbounded time. The
+            // post-flash reconnect budget is the natural size for it — the same physical operation,
+            // already tunable by a host that knows its re-enumeration is slow. The worst case (the
             // device never returns) costs that budget once, which is the right price for not
             // stranding a bridged module.
             using var restoreCts = new CancellationTokenSource(
@@ -930,12 +938,17 @@ internal sealed class WifiModuleUpdater
             // come back before anything can be sent. Returns immediately when still connected.
             await _context.WaitForSerialReconnectAsync(device, restoreCts.Token).ConfigureAwait(false);
 
+            // Past the reconnect the two-command exit runs to completion instead of re-observing
+            // the budget. Half of it is the one outcome worse than not starting: the console is
+            // handed back but the WiFi manager is left in its bridge-mode state machine, so the
+            // device looks answerable while its module still is not. The un-cancelled tail is a
+            // fixed pause plus two synchronous writes, so the helper stays bounded either way.
             device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
 
             // Leaving the bridge is a device-side mode transition, not an instantaneous one:
             // until the SCPI console path is back, bytes on the port are still forwarded raw to
             // the WINC, so a command sent immediately after can be swallowed by the bridge.
-            await Task.Delay(WifiBridgeActivator.InterCommandDelay, restoreCts.Token).ConfigureAwait(false);
+            await Task.Delay(WifiBridgeActivator.InterCommandDelay).ConfigureAwait(false);
 
             device.Send(ScpiMessageProducer.ApplyNetworkLan);
 

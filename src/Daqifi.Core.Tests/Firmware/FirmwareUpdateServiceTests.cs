@@ -1831,12 +1831,13 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresMidSequence_StillSurfacesTheOriginalFailure()
+    public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresAfterReconnect_StillFinishesTheBridgeExit()
     {
-        // The recovery is bounded by the post-flash reconnect budget and is best-effort: running
-        // out of it part-way must cost the caller nothing but the un-sent tail of the sequence.
-        // Here the budget is shorter than the pause the bridge exit needs, so the transparent-mode
-        // exit goes out and the LAN:APPLY that follows it does not.
+        // The recovery budget bounds the wait for the transport to come back, not the two-command
+        // exit that follows it. Here the budget (50ms) is already spent by the time the pause
+        // between the two commands elapses, and the LAN:APPLY still goes out: stopping half way
+        // would hand the console back while leaving the WiFi manager in its bridge-mode state
+        // machine, which is a worse place to leave the device than either end of the sequence.
         var device = new FakeStreamingDevice("COM13");
 
         var options = CreateFastOptions();
@@ -1861,19 +1862,131 @@ public class FirmwareUpdateServiceTests
 
         try
         {
-            // The original cancellation still surfaces — a recovery that ran out of budget must
-            // not turn into the exception the caller sees.
+            // The original cancellation still surfaces — the recovery must never turn into the
+            // exception the caller sees.
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
 
             Assert.Equal(
                 [
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
-                    "SYSTem:USB:SetTransparentMode 0"
+                    "SYSTem:USB:SetTransparentMode 0",
+                    "SYSTem:COMMunicate:LAN:APPLY"
                 ],
                 device.SentCommands);
 
             Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresWaitingForReconnect_SendsNoBridgeExit()
+    {
+        // The one thing the budget does bound: a transport that never comes back. Prep hands the
+        // port to the flash tool, the flash fails, and the device then refuses every reconnect —
+        // the recovery must give up after the budget instead of waiting forever, and must not
+        // pretend to send commands down a transport that is not there.
+        var device = new FakeStreamingDevice("COM14")
+        {
+            // Consumed one per Connect() attempt; far more than the budget allows, so the
+            // reconnect loop never succeeds.
+            ConnectFailuresBeforeSuccess = int.MaxValue
+        };
+
+        var options = CreateFastOptions();
+        // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
+        options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                1,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["some output"],
+                ["fatal"])
+        };
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            // The flash failure, not the recovery's timeout, is what the caller sees.
+            Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+
+            Assert.Equal(["SYSTem:COMMUnicate:LAN:FWUpdate"], device.SentCommands);
+            Assert.True(device.ConnectAttempts >= 1);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenDeviceIsNotConnected_DoesNotAttemptTheBridgeExit()
+    {
+        // The connectivity precondition fails with the update-mode command definitively un-sent,
+        // so there is no bridge to leave. Arming the recovery for it would turn an immediate
+        // "device must be connected" failure into a full ReconnectingAfterFlash wait (45s by
+        // default) for a transport that was never gone.
+        var device = new FakeStreamingDevice("COM15");
+        device.Disconnect();
+
+        var options = CreateFastOptions();
+        // Deliberately generous: if the recovery were armed here, its reconnect loop would run for
+        // this long and the assertion on elapsed time below would catch it.
+        options.VerifyingTimeout = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            stopwatch.Stop();
+
+            Assert.Equal(FirmwareUpdateState.PreparingDevice, exception.FailedState);
+
+            // Nothing was sent, and — the point of the test — nothing was retried either. The
+            // device this fake models is one that would reconnect on the very first attempt, so a
+            // single Connect() call would be enough to mask the regression; assert zero.
+            Assert.Empty(device.SentCommands);
+            Assert.Equal(0, device.ConnectAttempts);
+
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+                $"Expected an immediate failure, took {stopwatch.Elapsed}.");
         }
         finally
         {
