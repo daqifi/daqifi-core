@@ -90,6 +90,20 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostWifiReconnectDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// Delay after the post-flash recovery sequence sends
+    /// <see cref="Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode"/> <c>0</c>
+    /// and before the LAN restore commands that follow it. Leaving the USB-to-WINC transparent
+    /// bridge is a device-side mode transition, not an instantaneous one: until the SCPI console
+    /// path is re-established, bytes arriving on the port are still forwarded to the WINC as raw
+    /// data, so a LAN command sent too soon is swallowed by the bridge and the configuration
+    /// silently fails to restore. <see cref="WifiBridgeActivator.Deactivate(string, System.Threading.CancellationToken)"/>
+    /// already paces the same transition by the same amount over a raw serial port; this is the
+    /// managed-connection equivalent. Set to <see cref="TimeSpan.Zero"/> to skip the wait (e.g.
+    /// unit tests).
+    /// </summary>
+    public TimeSpan PostUsbTransparentModeExitDelay { get; set; } = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
     /// Delay observed at the WINC "Power cycle WINC and set to bootloader mode" prompt before the
     /// empty continue line is sent to the flash tool. Gives the WiFi firmware time to finish its
     /// bridge-mode initialization — especially after <see cref="WifiBridgeActivationCallback"/>
@@ -278,9 +292,25 @@ public sealed class FirmwareUpdateServiceOptions
     public bool PowerOnWifiModuleBeforeProbe { get; set; } = true;
 
     /// <summary>
-    /// Delay after sending the WINC power-on command, before the first chip-info probe.
-    /// Only consulted when <see cref="PowerOnWifiModuleBeforeProbe"/> is <c>true</c>. Gives the
-    /// module time to power up and start responding to <c>GETChipInfo?</c> queries.
+    /// When true, the WiFi-update prep sequence sends
+    /// <see cref="Communication.Producers.ScpiMessageProducer.TurnDeviceOn"/> and waits
+    /// <see cref="PowerOnWifiModuleSettleDelay"/> before
+    /// <see cref="Communication.Producers.ScpiMessageProducer.SetLanFirmwareUpdateMode"/>.
+    /// The WINC module is powered off in standby and right after a PIC32 reflash, and LAN
+    /// commands issued in that state are rejected (SCPI <c>-200</c>), so the update-mode flag
+    /// never takes effect and the external flash tool then finds no bridge to talk to. Powering
+    /// the module on first — the same order <c>daqifi-desktop</c> hand-rolls today — closes that
+    /// gap. Defaults to <c>true</c>; set to <c>false</c> for consumers that have already powered
+    /// the module on themselves and want the legacy prep sequence.
+    /// </summary>
+    public bool PowerOnWifiModuleBeforeLanUpdateMode { get; set; } = true;
+
+    /// <summary>
+    /// Delay after sending the WINC power-on command, giving the module time to power up before
+    /// the next command reaches it. Consulted in both places Core powers the module on: before
+    /// the first chip-info probe (see <see cref="PowerOnWifiModuleBeforeProbe"/>) and before the
+    /// LAN firmware-update mode command (see <see cref="PowerOnWifiModuleBeforeLanUpdateMode"/>).
+    /// Set to <see cref="TimeSpan.Zero"/> to skip the wait.
     /// </summary>
     public TimeSpan PowerOnWifiModuleSettleDelay { get; set; } = TimeSpan.FromSeconds(1);
 
@@ -375,9 +405,10 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
         ValidatePositive(WifiFlashRetryDelay, nameof(WifiFlashRetryDelay));
 
-        // These two permit Zero (= "skip the wait"); only reject negatives.
+        // These three permit Zero (= "skip the wait"); only reject negatives.
         ValidateNonNegative(PostLanDisconnectPortReleaseDelay, nameof(PostLanDisconnectPortReleaseDelay));
         ValidateNonNegative(WincBootPromptResponseDelay, nameof(WincBootPromptResponseDelay));
+        ValidateNonNegative(PostUsbTransparentModeExitDelay, nameof(PostUsbTransparentModeExitDelay));
 
         if (WifiFlashAttempts < 1)
         {
@@ -443,8 +474,9 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(LanChipInfoRetryDelay, nameof(LanChipInfoRetryDelay));
         ValidatePositive(LanChipInfoTotalTimeout, nameof(LanChipInfoTotalTimeout));
 
-        // Only consulted when PowerOnWifiModuleBeforeProbe is true, but validated
-        // unconditionally so a misconfiguration surfaces even if the flag is
+        // Only consulted when PowerOnWifiModuleBeforeProbe or
+        // PowerOnWifiModuleBeforeLanUpdateMode is true, but validated
+        // unconditionally so a misconfiguration surfaces even if a flag is
         // toggled on later without re-touching this value.
         ValidateNonNegative(PowerOnWifiModuleSettleDelay, nameof(PowerOnWifiModuleSettleDelay));
 

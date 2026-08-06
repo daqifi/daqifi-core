@@ -1583,9 +1583,16 @@ public class FirmwareUpdateServiceTests
         }
 
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+
+        // The canonical WiFi-update prep and post-flash recovery sequences Core now owns end to
+        // end (part of #269). The power-on leads the prep because LAN commands are rejected while
+        // the WINC is unpowered, and the transparent-mode exit leads the recovery because the LAN
+        // commands after it would otherwise be forwarded to the WINC instead of interpreted.
         Assert.Equal(
             [
+                "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:COMMunicate:LAN:ENAbled 1",
                 "SYSTem:COMMunicate:LAN:APPLY",
                 "SYSTem:COMMunicate:LAN:SAVE"
@@ -1603,6 +1610,328 @@ public class FirmwareUpdateServiceTests
         // means only the PIC32 CRC check (a genuine flash failure) is ever reported as Verifying.
         Assert.Contains(progressEvents, p => p.State == FirmwareUpdateState.ReconnectingAfterFlash);
         Assert.DoesNotContain(progressEvents, p => p.State == FirmwareUpdateState.Verifying);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenPowerOnBeforeLanUpdateModeDisabled_SkipsPowerOnButStillRestoresTransparentMode()
+    {
+        // The opt-out exists for consumers that already powered the module on themselves. It must
+        // affect the prep half ONLY — the post-flash transparent-mode exit is recovery of state
+        // the flash disturbed and is not conditional on it.
+        var device = new FakeStreamingDevice("COM31");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        options.PowerOnWifiModuleBeforeLanUpdateMode = false;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(
+            [
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:COMMunicate:LAN:SAVE"
+            ],
+            device.SentCommands);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledDuringTransparentModeExitSettle_LeavesLanRestoreUnsent()
+    {
+        // Pins that the settle genuinely sits BETWEEN the transparent-mode exit and the LAN
+        // restore, not before the exit or after the whole recovery block: cancellation is raised
+        // from inside the transparent-mode Send, so only a wait positioned between the two can
+        // stop LAN:ENAbled/APPLY/SAVE from going out. Also proves the wait observes the caller's
+        // token rather than sleeping through a cancel.
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM33");
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:USB:SetTransparentMode 0")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        // Long enough that a missing wait would let the LAN restore slip out before the cancel
+        // is seen. The cancel is already raised by the time the wait starts, so it ends at once
+        // rather than actually costing 30s.
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0"
+            ],
+            device.SentCommands);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenTransparentModeExitDelayIsZero_StillSendsFullRecoverySequence()
+    {
+        // Zero means "skip the wait", not "skip the step". A consumer that collapses the delay
+        // (or a transport that needs no pacing) must still get the whole recovery sequence.
+        var device = new FakeStreamingDevice("COM34");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        options.PostUsbTransparentModeExitDelay = TimeSpan.Zero;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:COMMunicate:LAN:SAVE"
+            ],
+            device.SentCommands);
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_PostUsbTransparentModeExitDelay_DefaultsToBridgeDeactivationPace()
+    {
+        // The default is the behavior: a consumer that upgrades without touching options gets
+        // the pacing. 100ms is not arbitrary — it is the same inter-command wait
+        // WifiBridgeActivator.Deactivate already uses for this exact mode transition over a raw
+        // serial port, so the managed-connection path is paced identically. Pinned so the two
+        // cannot silently drift apart.
+        var options = new FirmwareUpdateServiceOptions();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(100), options.PostUsbTransparentModeExitDelay);
+        options.Validate();
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_Validate_RejectsNegativeTransparentModeExitDelayButAllowsZero()
+    {
+        // Zero is the documented "skip the wait" escape hatch and must stay legal; a negative
+        // value is a misconfiguration that would otherwise reach Task.Delay.
+        var options = new FirmwareUpdateServiceOptions { PostUsbTransparentModeExitDelay = TimeSpan.Zero };
+        options.Validate();
+
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromMilliseconds(-1);
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+        Assert.Equal(nameof(FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay), exception.ParamName);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledDuringPowerOnSettle_NeverEntersLanUpdateMode()
+    {
+        // Pins that the settle delay is genuinely awaited BETWEEN the power-on and the
+        // update-mode command, not before both or after both: cancellation is raised from
+        // inside the power-on Send, so only a wait sitting between the two sends can stop
+        // LAN:FWUpdate from going out. Also proves the wait observes the caller's token
+        // instead of sleeping the device into update mode after a cancel.
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM32");
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:POWer:STATe 1")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var options = CreateFastOptions();
+        // Long enough that the cancel, not the elapsed time, is what ends the wait — and long
+        // enough that a missing wait would let LAN:FWUpdate slip out before the cancel is seen.
+        options.PowerOnWifiModuleSettleDelay = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(["SYSTem:POWer:STATe 1"], device.SentCommands);
+        Assert.Equal(0, device.DisconnectCalls);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledDuringVersionCheck_SendsNoPreparationCommands()
+    {
+        // A cancel that lands after the operation lock is taken but before device prep must not
+        // still power the module on or flip the device into LAN firmware-update mode — update
+        // mode leaves the device unusable until it is taken back out of it, which a canceled
+        // caller will not be around to do. The version check is the real window for this: it
+        // returns a status object rather than observing the token itself, so without an explicit
+        // check the prep step runs both Sends before its first await notices the cancellation.
+        using var cts = new CancellationTokenSource();
+
+        var downloadService = new FakeFirmwareDownloadService
+        {
+            // Cancel from inside the check, then return normally: the check completes, decides a
+            // flash is needed (19.5.4 is below the supported minimum), and hands control to prep.
+            OnGetLatestWifiRelease = cts.Cancel
+        };
+
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM33",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            });
+
+        var options = CreateFastOptions();
+        // Keeps SentCommands to just the prep commands under test — the probe's own power-on is
+        // a different code path with its own coverage.
+        options.PowerOnWifiModuleBeforeProbe = false;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Empty(device.SentCommands);
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_PowerOnWifiModuleBeforeLanUpdateMode_DefaultsToTrue()
+    {
+        // The default is the behavior change: a consumer that upgrades without touching options
+        // gets the power-on prep. Pinned so it cannot be flipped off silently.
+        var options = new FirmwareUpdateServiceOptions();
+
+        Assert.True(options.PowerOnWifiModuleBeforeLanUpdateMode);
+        Assert.Equal(TimeSpan.FromSeconds(1), options.PowerOnWifiModuleSettleDelay);
+        options.Validate();
     }
 
     [Fact]
@@ -1707,6 +2036,286 @@ public class FirmwareUpdateServiceTests
 
             Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
             Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenFlashToolFails_TakesDeviceBackOutOfLanUpdateMode()
+    {
+        // Once LAN:FWUpdate lands the device bypasses its SCPI console and bridges USB straight
+        // to the WINC. Only the success path used to walk it back out, so a failed flash left the
+        // module unreachable until someone power-cycled it — which is why daqifi-desktop still
+        // wraps this call in its own recovery finally (#269 item 2).
+        var device = new FakeStreamingDevice("COM11");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                1,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["some output"],
+                ["fatal"])
+        };
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            // The recovery must not swallow or reshape the real failure.
+            Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+
+            // Same two commands, in the same order, as the raw-serial WifiBridgeActivator.Deactivate
+            // twin: hand the port back to the SCPI console, then kick the WiFi manager out of its
+            // bridge-mode state machine. Deliberately no LAN:ENAbled/SAVE — persisting a network
+            // configuration off the back of a flash that did not complete is not this step's job.
+            Assert.Equal(
+                [
+                    "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:USB:SetTransparentMode 0",
+                    "SYSTem:COMMunicate:LAN:APPLY"
+                ],
+                device.SentCommands);
+
+            // Prep disconnected the device to hand the port to the flash tool, so the recovery had
+            // to bring the transport back before it could send anything.
+            Assert.Equal(1, device.DisconnectCalls);
+            Assert.True(device.ConnectAttempts >= 1);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledAfterEnteringUpdateMode_StillTakesDeviceBackOut()
+    {
+        // The worst stranding case: LAN:FWUpdate is already on the wire and the caller cancels
+        // before prep even gets to the disconnect. The caller's token is canceled by definition
+        // here, so the recovery has to run on a token of its own or it would never send anything.
+        var device = new FakeStreamingDevice("COM12");
+
+        var options = CreateFastOptions();
+        // Long enough that cancellation lands inside it, and inside the 2s PreparingDeviceTimeout
+        // so the state timeout is not what ends the wait.
+        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+
+            Assert.Equal(
+                [
+                    "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:USB:SetTransparentMode 0",
+                    "SYSTem:COMMunicate:LAN:APPLY"
+                ],
+                device.SentCommands);
+
+            // Cancellation landed before prep reached the disconnect, so the recovery found the
+            // transport already up — the exit is not conditional on having been disconnected.
+            Assert.Equal(0, device.DisconnectCalls);
+            Assert.Equal(0, device.ConnectAttempts);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresAfterReconnect_StillFinishesTheBridgeExit()
+    {
+        // The recovery budget bounds the wait for the transport to come back, not the two-command
+        // exit that follows it. Here the budget (50ms) is already spent by the time the pause
+        // between the two commands elapses, and the LAN:APPLY still goes out: stopping half way
+        // would hand the console back while leaving the WiFi manager in its bridge-mode state
+        // machine, which is a worse place to leave the device than either end of the sequence.
+        var device = new FakeStreamingDevice("COM13");
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
+        // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
+        options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            // The original cancellation still surfaces — the recovery must never turn into the
+            // exception the caller sees.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+
+            Assert.Equal(
+                [
+                    "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:USB:SetTransparentMode 0",
+                    "SYSTem:COMMunicate:LAN:APPLY"
+                ],
+                device.SentCommands);
+
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresWaitingForReconnect_SendsNoBridgeExit()
+    {
+        // The one thing the budget does bound: a transport that never comes back. Prep hands the
+        // port to the flash tool, the flash fails, and the device then refuses every reconnect —
+        // the recovery must give up after the budget instead of waiting forever, and must not
+        // pretend to send commands down a transport that is not there.
+        var device = new FakeStreamingDevice("COM14")
+        {
+            // Consumed one per Connect() attempt; far more than the budget allows, so the
+            // reconnect loop never succeeds.
+            ConnectFailuresBeforeSuccess = int.MaxValue
+        };
+
+        var options = CreateFastOptions();
+        // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
+        options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                1,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["some output"],
+                ["fatal"])
+        };
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            // The flash failure, not the recovery's timeout, is what the caller sees.
+            Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+
+            Assert.Equal(["SYSTem:COMMUnicate:LAN:FWUpdate"], device.SentCommands);
+            Assert.True(device.ConnectAttempts >= 1);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenDeviceIsNotConnected_DoesNotAttemptTheBridgeExit()
+    {
+        // The connectivity precondition fails with the update-mode command definitively un-sent,
+        // so there is no bridge to leave. Arming the recovery for it would turn an immediate
+        // "device must be connected" failure into a full ReconnectingAfterFlash wait (45s by
+        // default) for a transport that was never gone.
+        var device = new FakeStreamingDevice("COM15");
+        device.Disconnect();
+
+        var options = CreateFastOptions();
+        // Deliberately generous: if the recovery were armed here, its reconnect loop would run for
+        // this long and the assertion on elapsed time below would catch it.
+        options.VerifyingTimeout = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            stopwatch.Stop();
+
+            Assert.Equal(FirmwareUpdateState.PreparingDevice, exception.FailedState);
+
+            // Nothing was sent, and — the point of the test — nothing was retried either. The
+            // device this fake models is one that would reconnect on the very first attempt, so a
+            // single Connect() call would be enough to mask the regression; assert zero.
+            Assert.Empty(device.SentCommands);
+            Assert.Equal(0, device.ConnectAttempts);
+
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+                $"Expected an immediate failure, took {stopwatch.Elapsed}.");
         }
         finally
         {
@@ -4201,7 +4810,10 @@ public class FirmwareUpdateServiceTests
             // Skip the WINC power-on settle wait — fakes don't model power state,
             // so the delay is pure latency here. Individual tests re-enable it
             // where the power-on behavior itself is under test.
-            PowerOnWifiModuleSettleDelay = TimeSpan.Zero
+            PowerOnWifiModuleSettleDelay = TimeSpan.Zero,
+            // Same reasoning for the transparent-mode exit settle: the fake device has no
+            // bridge to leave. Tests that exercise the wait itself set it explicitly.
+            PostUsbTransparentModeExitDelay = TimeSpan.Zero
         };
     }
 
@@ -4241,6 +4853,12 @@ public class FirmwareUpdateServiceTests
 
         public int ConnectFailuresBeforeSuccess { get; set; }
         public List<string> SentCommands { get; } = [];
+
+        /// <summary>
+        /// Invoked synchronously after each text command is recorded, so a test can react to a
+        /// specific command (e.g. cancel the operation) at the exact point the device sees it.
+        /// </summary>
+        public Action<string>? OnCommandSent { get; set; }
 
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived
@@ -4282,6 +4900,7 @@ public class FirmwareUpdateServiceTests
             if (message is IOutboundMessage<string> textMessage)
             {
                 SentCommands.Add(textMessage.Data);
+                OnCommandSent?.Invoke(textMessage.Data);
             }
         }
 
@@ -4805,8 +5424,17 @@ public class FirmwareUpdateServiceTests
             return Task.FromResult<(string ExtractedPath, string Version)?>(null);
         }
 
+        /// <summary>
+        /// Invoked at the start of <see cref="GetLatestWifiReleaseAsync"/>. Gives a test a hook
+        /// inside the WiFi version check — the last thing that runs before the update's device-prep
+        /// step — so it can, for example, cancel the operation at exactly that point.
+        /// </summary>
+        public Action? OnGetLatestWifiRelease { get; set; }
+
         public Task<FirmwareReleaseInfo?> GetLatestWifiReleaseAsync(CancellationToken cancellationToken = default)
         {
+            OnGetLatestWifiRelease?.Invoke();
+
             return LatestWifiReleaseException is not null
                 ? Task.FromException<FirmwareReleaseInfo?>(LatestWifiReleaseException)
                 : Task.FromResult(LatestWifiRelease);
