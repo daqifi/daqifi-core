@@ -300,16 +300,15 @@ internal sealed class WifiModuleUpdater
             }
         }
 
-        // Bounded retry for the LAN chip-info probe (closes #144). Right
-        // after a PIC32 firmware update the application is up while WiFi
-        // is still finishing startup, so the first chip-info query can
-        // transiently fail; without retry, the WiFi version decision
-        // would short-circuit to ChipInfoUnavailable and flow on to a
-        // multi-minute reflash of already-current WiFi firmware. The
-        // retry budget is bounded (LanChipInfoMaxAttempts × RetryDelay)
-        // and observes cancellation between attempts.
-        var (chipInfo, wasLanNotInitialized) = await TryGetLanChipInfoWithRetryAsync(
-            device, lanChipInfoProvider, cancellationToken).ConfigureAwait(false);
+        // Bounded retry for the LAN chip-info probe (closes #144, #203): without it the WiFi
+        // version decision short-circuits to ChipInfoUnavailable on a module that is merely
+        // still starting up, and flows on to a multi-minute reflash of already-current
+        // firmware. The loop itself is public API (issue #269) so consumers share one
+        // implementation of it rather than each hand-rolling their own; see
+        // GetLanChipInfoWithRetryAsync for what it does and why.
+        var (chipInfo, wasLanNotInitialized) = await lanChipInfoProvider
+            .GetLanChipInfoWithRetryAsync(BuildLanChipInfoRetryOptions(), Logger, cancellationToken)
+            .ConfigureAwait(false);
         if (chipInfo == null)
         {
             return new WifiFirmwareStatus
@@ -451,148 +450,21 @@ internal sealed class WifiModuleUpdater
         }
     }
 
-    private async Task<(LanChipInfo? ChipInfo, bool WasLanNotInitialized)> TryGetLanChipInfoWithRetryAsync(
-        IStreamingDevice device,
-        ILanChipInfoProvider lanChipInfoProvider,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Projects this service's chip-info retry settings onto the shared probe's options.
+    /// </summary>
+    /// <remarks>
+    /// Read fresh on every probe rather than cached: <see cref="FirmwareUpdateServiceOptions"/>
+    /// stays mutable after the service is constructed, so a caller that adjusts the budget between
+    /// calls gets the budget it asked for.
+    /// </remarks>
+    private LanChipInfoRetryOptions BuildLanChipInfoRetryOptions() => new()
     {
-        var maxAttempts = Math.Max(1, Options.LanChipInfoMaxAttempts);
-        var retryDelay = Options.LanChipInfoRetryDelay;
-        var totalTimeout = Options.LanChipInfoTotalTimeout;
-
-        // Tracks the most recent failure's classification (reset on any
-        // non-LanNotInitialized outcome) so the caller can report the
-        // specific WifiFirmwareStatusReason.LanNotInitialized only when
-        // that was genuinely the terminal condition, not stale from an
-        // earlier attempt. Sent at most once per probe (closes #203) —
-        // repeatedly kicking APPLY would tear down and re-init the WINC
-        // on every failed attempt, risking disruption of an already-
-        // associated WiFi link for no additional benefit.
-        var lastFailureWasLanNotInitialized = false;
-        var hasSentLanApply = false;
-
-        // Wall-clock budget guards against the pathological case where
-        // attempt-count × per-attempt-timeout + retry-delay sum vastly
-        // exceeds the configured retry budget (e.g., 3 × 2s device timeout
-        // + 2 × 2s delay = ~10s while the operation lock is held). Linking
-        // the caller's CT preserves cancellation semantics; the timeout
-        // CTS just adds a deadline.
-        using var timeoutCts = new CancellationTokenSource(totalTimeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, timeoutCts.Token);
-        var linkedToken = linkedCts.Token;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
-            {
-                linkedToken.ThrowIfCancellationRequested();
-            }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                Logger.LogDebug(
-                    "LAN chip-info probe hit total timeout ({Timeout}) before attempt {Attempt}/{Max}.",
-                    totalTimeout,
-                    attempt,
-                    maxAttempts);
-                return (null, lastFailureWasLanNotInitialized);
-            }
-
-            try
-            {
-                var chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(linkedToken).ConfigureAwait(false);
-                if (chipInfo != null)
-                {
-                    if (attempt > 1)
-                    {
-                        Logger.LogDebug(
-                            "LAN chip-info query succeeded on attempt {Attempt}/{Max}.",
-                            attempt,
-                            maxAttempts);
-                    }
-                    return (chipInfo, false);
-                }
-                lastFailureWasLanNotInitialized = false;
-                Logger.LogDebug(
-                    "LAN chip-info query returned null on attempt {Attempt}/{Max}.",
-                    attempt,
-                    maxAttempts);
-            }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                Logger.LogDebug(
-                    "LAN chip-info probe hit total timeout ({Timeout}) during attempt {Attempt}/{Max}.",
-                    totalTimeout,
-                    attempt,
-                    maxAttempts);
-                return (null, lastFailureWasLanNotInitialized);
-            }
-            catch (LanNotInitializedException ex)
-            {
-                lastFailureWasLanNotInitialized = true;
-                Logger.LogDebug(
-                    ex,
-                    "LAN chip-info query on attempt {Attempt}/{Max} reported the WINC state machine is not initialized.",
-                    attempt,
-                    maxAttempts);
-
-                if (Options.KickLanApplyOnNotInitialized && !hasSentLanApply && device.IsConnected)
-                {
-                    // Observe cancellation before this state-changing Send, mirroring
-                    // the WINC power-on guard above: a cancelled probe must not still
-                    // kick APPLY on the device. Uses the caller's token (not the
-                    // linked timeout token) so a total-timeout expiry alone doesn't
-                    // suppress a kick the caller never actually asked to cancel.
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    hasSentLanApply = true;
-                    try
-                    {
-                        device.Send(ScpiMessageProducer.ApplyNetworkLan);
-                        Logger.LogDebug("Sent LAN:APPLY to initialize the WINC state machine after a not-initialized chip-info response.");
-                    }
-                    catch (Exception sendEx) when (sendEx is not OperationCanceledException)
-                    {
-                        // Best-effort: falling through to the normal retry delay/loop
-                        // below still gives the device a chance to recover on its own.
-                        Logger.LogDebug(sendEx, "Failed to send LAN:APPLY after a not-initialized chip-info response; continuing retry loop without it.");
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                lastFailureWasLanNotInitialized = false;
-                Logger.LogDebug(
-                    ex,
-                    "LAN chip-info query failed on attempt {Attempt}/{Max}.",
-                    attempt,
-                    maxAttempts);
-            }
-
-            if (attempt < maxAttempts)
-            {
-                try
-                {
-                    await Task.Delay(retryDelay, linkedToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                {
-                    Logger.LogDebug(
-                        "LAN chip-info probe hit total timeout ({Timeout}) during retry delay after attempt {Attempt}/{Max}.",
-                        totalTimeout,
-                        attempt,
-                        maxAttempts);
-                    return (null, lastFailureWasLanNotInitialized);
-                }
-            }
-        }
-
-        Logger.LogDebug(
-            "LAN chip-info query exhausted {Max} attempts; reporting status as {Reason}.",
-            maxAttempts,
-            lastFailureWasLanNotInitialized ? WifiFirmwareStatusReason.LanNotInitialized : WifiFirmwareStatusReason.ChipInfoUnavailable);
-        return (null, lastFailureWasLanNotInitialized);
-    }
+        MaxAttempts = Options.LanChipInfoMaxAttempts,
+        RetryDelay = Options.LanChipInfoRetryDelay,
+        TotalTimeout = Options.LanChipInfoTotalTimeout,
+        KickLanApplyOnNotInitialized = Options.KickLanApplyOnNotInitialized,
+    };
 
     private ExternalProcessRequest BuildWifiProcessRequest(
         IStreamingDevice device,
