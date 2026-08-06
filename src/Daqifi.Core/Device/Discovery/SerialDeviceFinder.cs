@@ -18,6 +18,22 @@ namespace Daqifi.Core.Device.Discovery;
 /// Discovers DAQiFi devices connected via USB/Serial ports.
 /// Probes each port by sending SCPI commands and validating protobuf responses.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Port probes are claimed process-wide so a wedged USB CDC device can block at
+/// most one thread per port (see issues #294 / #295). A pass that ends by timeout
+/// or cancellation abandons its in-flight probe and leaves the claim behind while
+/// that probe unwinds — bench-measured at ~490ms on a real Nq1.
+/// </para>
+/// <para>
+/// A pass that starts inside that drain window waits (bounded by both the window
+/// and the caller's own timeout / token) for the claim to clear before probing, so
+/// a prompt retry after a timed-out pass finds the device instead of silently
+/// reporting none. Callers therefore do not need to hand-roll a backoff, but they
+/// should still allow a realistic timeout: a retry given less budget than the drain
+/// needs will report nothing, exactly as it would have before.
+/// </para>
+/// </remarks>
 public class SerialDeviceFinder : DeviceFinderBase
 {
     #region Constants
@@ -78,6 +94,10 @@ public class SerialDeviceFinder : DeviceFinderBase
     // attempt replace a still-stuck claim per TTL window, so a recovered port
     // re-appears without a process restart at a bounded leak rate).
     //
+    // A claim abandoned by a timed-out / cancelled pass is usually NOT wedged; it
+    // drains in ~490ms. Within AbandonedClaimDrainWaitMs a fresh pass waits for it
+    // rather than reporting the port absent — see ProbeSafelyAsync.
+    //
     // STATIC on purpose: a wedged COM port is machine-global state, not finder
     // state.
     private static readonly ConcurrentDictionary<string, PortProbeClaim> PortClaims = new();
@@ -109,6 +129,24 @@ public class SerialDeviceFinder : DeviceFinderBase
 
     // Internal so tests can exercise the TTL retry without waiting 30s.
     internal static int QuarantineRetryTtlMs { get; set; } = DefaultQuarantineRetryTtlMs;
+
+    // How long AFTER abandonment a claim is still treated as "probably draining"
+    // rather than "wedged". A pass that ends by timeout or caller cancellation
+    // abandons its in-flight probe, but that probe is usually NOT wedged — it is
+    // unwinding TryGetDeviceInfoAsync's cleanup (consumer/producer StopSafely, DTR
+    // drop + 50ms settle, port close). Bench-measured on a real Nq1 (fw 3.7.2, USB,
+    // macOS): the claim was held 488/490/491ms across three runs, then auto-released
+    // by the abandonment continuation.
+    //
+    // Within this window a fresh pass WAITS for the claim to clear instead of
+    // skipping the port; past it, the port is presumed genuinely wedged and skipped
+    // immediately as before. 1s is ~2x the measured drain — enough headroom for a
+    // loaded thread pool, still short enough that a truly wedged port costs at most
+    // one sub-second wait before ageing out of the window entirely.
+    private const int DefaultAbandonedClaimDrainWaitMs = 1000;
+
+    // Internal so tests can shrink the drain wait instead of burning ~1s per case.
+    internal int AbandonedClaimDrainWaitMs { get; set; } = DefaultAbandonedClaimDrainWaitMs;
 
     /// <summary>
     /// Test seam: clears the process-wide port quarantine so hang-simulation
@@ -303,9 +341,10 @@ public class SerialDeviceFinder : DeviceFinderBase
     /// </summary>
     /// <param name="portName">The serial port name.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Device info if a DAQiFi device responds, null otherwise. Swallows
-    /// non-cancellation exceptions so a single failing port doesn't tear down the
-    /// whole concurrent probe pass; cancellation propagates so Task.WhenAll
+    /// <returns>Device info if a DAQiFi device responds, null otherwise — including
+    /// when the port is claimed by a probe that is still genuinely in flight.
+    /// Swallows non-cancellation exceptions so a single failing port doesn't tear
+    /// down the whole concurrent probe pass; cancellation propagates so Task.WhenAll
     /// short-circuits when the caller's token is canceled.</returns>
     private async Task<IDeviceInfo?> ProbeSafelyAsync(string portName, CancellationToken cancellationToken)
     {
@@ -319,12 +358,15 @@ public class SerialDeviceFinder : DeviceFinderBase
             // instances sweep concurrently.
             claim = new PortProbeClaim();
             var claimed = false;
-            // Two attempts: the second handles exactly one stale-completed claim
-            // (its release continuation raced us) by clearing it and re-claiming
-            // immediately, so an available port isn't skipped for a whole sweep —
-            // that miss is invisible to the 2-3s desktop sweeps but real for
-            // one-shot MCP discovery calls (Qodo pass 5 #3).
-            for (var attempt = 0; attempt < 2 && !claimed; attempt++)
+            var drainWaited = false;
+            // Up to three attempts. Attempt 2 handles exactly one stale-completed
+            // claim (its release continuation raced us) by clearing it and
+            // re-claiming immediately, so an available port isn't skipped for a
+            // whole sweep — that miss is invisible to the 2-3s desktop sweeps but
+            // real for one-shot MCP discovery calls (Qodo pass 5 #3). Attempt 3
+            // covers the drain wait below, whose worst path is
+            // wait -> observe completed claim -> clear -> claim.
+            for (var attempt = 0; attempt < 3 && !claimed; attempt++)
             {
                 var existing = PortClaims.GetOrAdd(portName, claim);
                 if (ReferenceEquals(existing, claim))
@@ -341,17 +383,66 @@ public class SerialDeviceFinder : DeviceFinderBase
                 }
 
                 var abandonedAt = existing.AbandonedAtTicks;
-                if (abandonedAt >= 0
-                    && Environment.TickCount64 - abandonedAt >= QuarantineRetryTtlMs
-                    && PortClaims.TryUpdate(portName, claim, existing))
+                if (abandonedAt >= 0)
                 {
-                    // TTL elapsed on a still-stuck claim — we won the retry.
-                    claimed = true;
-                    break;
+                    var abandonedForMs = Environment.TickCount64 - abandonedAt;
+                    if (abandonedForMs >= QuarantineRetryTtlMs
+                        && PortClaims.TryUpdate(portName, claim, existing))
+                    {
+                        // TTL elapsed on a still-stuck claim — we won the retry.
+                        claimed = true;
+                        break;
+                    }
+
+                    // Freshly abandoned: the PREVIOUS pass ended by timeout or
+                    // caller cancellation and left this claim behind while its
+                    // probe unwinds — measured ~490ms, not wedged. The
+                    // skip below costs ~1ms, so a caller that retries promptly
+                    // (the MCP DaqifiAgent builds a fresh finder per call) would
+                    // burn every retry inside the drain window and conclude no
+                    // device exists. Wait for the claim to clear instead, bounded
+                    // by both the drain window and the caller's own budget.
+                    //
+                    // This starts NO new probe and blocks NO new thread — we await
+                    // the EXISTING probe task — so the one-blocked-thread-per-port
+                    // bound from #294/#295 is untouched. A genuinely wedged port
+                    // just burns the remaining window once and then ages out of it.
+                    var pending = existing.Probe;
+                    // Long arithmetic on purpose: abandonedForMs is unbounded (a
+                    // claim whose TTL retry lost the race can be arbitrarily old),
+                    // so narrowing it first could overflow into a large positive
+                    // budget. Computed this way the result is always
+                    // <= AbandonedClaimDrainWaitMs, making the cast below safe.
+                    var drainBudgetMs = AbandonedClaimDrainWaitMs - abandonedForMs;
+                    if (!drainWaited && pending != null && drainBudgetMs > 0
+                        && !cancellationToken.IsCancellationRequested)
+                    {
+                        drainWaited = true;
+                        using (var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                        {
+                            drainCts.CancelAfter((int)drainBudgetMs);
+                            try
+                            {
+                                await pending.WaitAsync(drainCts.Token).ConfigureAwait(false);
+                            }
+                            catch
+                            {
+                                // Drain window elapsed, caller cancelled, or the
+                                // abandoned probe faulted. Its own continuation
+                                // already observed any fault; all we needed was the
+                                // "no longer in flight" edge. Re-check below.
+                            }
+                        }
+
+                        // Surface caller cancellation rather than reporting the port
+                        // as absent (mirrors the hard-timeout path below).
+                        cancellationToken.ThrowIfCancellationRequested();
+                        continue;
+                    }
                 }
 
-                // In flight elsewhere, inside the TTL window, or another instance
-                // won the race — the port is spoken for.
+                // In flight elsewhere, still wedged past the drain window but inside
+                // the TTL, or another instance won the race — the port is spoken for.
                 return null;
             }
             if (!claimed)
