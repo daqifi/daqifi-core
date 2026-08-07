@@ -261,6 +261,9 @@ namespace Daqifi.Core.Tests.Device
 
             await Assert.ThrowsAsync<OperationCanceledException>(
                 () => device.RebootAsync(CanceledToken()));
+
+            Assert.False(device.IsConnected);
+            Assert.Empty(device.SentMessages);
         }
 
         #endregion
