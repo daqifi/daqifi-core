@@ -386,6 +386,32 @@ public class DeviceAdministrationOperationsTests
     }
 
     /// <summary>
+    /// The never-zero contract holds at the API boundary too, not just on the paths this collaborator
+    /// happens to take: constructing the exception directly with <c>0</c> records "no readable code"
+    /// rather than a refusal under SCPI's "no error" value. Normalised rather than rejected, because a
+    /// constructor that threw would swap a diagnosable device failure for an argument error.
+    /// </summary>
+    [Fact]
+    public void DeviceCommandFailedException_ConstructedWithCodeZero_ReportsNoCodeAndKeepsTheLine()
+    {
+        var ex = new DeviceCommandFailedException("CONFigure:ADC:LOADcal", 0, "**ERROR: 0,\"No error\"");
+
+        Assert.Null(ex.ErrorCode);
+        Assert.Equal("**ERROR: 0,\"No error\"", ex.DeviceResponse);
+        Assert.Equal("CONFigure:ADC:LOADcal", ex.Command);
+        Assert.DoesNotContain("rejected", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DeviceCommandFailedException_ConstructedWithARealCode_KeepsIt()
+    {
+        var ex = new DeviceCommandFailedException("CONFigure:ADC:LOADcal", -200, "-200,\"Execution error\"");
+
+        Assert.Equal(-200, ex.ErrorCode);
+        Assert.Contains("rejected", ex.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The guard behind the assertion above: these lines really do classify as SCPI errors while
     /// yielding no code, so the null-code path is reachable rather than theoretical.
     /// </summary>

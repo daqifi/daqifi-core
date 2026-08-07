@@ -65,17 +65,35 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Initializes a new instance reporting that the device <em>refused</em> the command.
         /// </summary>
+        /// <remarks>
+        /// Passing <c>0</c> is not a refusal — SCPI reserves it for "no error" — so it is recorded as
+        /// <see cref="ErrorCode"/> <c>null</c> ("no readable code") rather than stored as-is, and the
+        /// message says so. That keeps the never-<c>0</c> contract true no matter who calls this,
+        /// which is what lets consumers branch on <see cref="ErrorCode"/> at all.
+        /// <para>
+        /// Deliberately normalised rather than rejected with an <see cref="ArgumentOutOfRangeException"/>.
+        /// Exceptions are constructed on failure paths, and a constructor that throws would replace a
+        /// diagnosable device failure with an argument error — losing the diagnosis, which is the very
+        /// failure mode this type exists to prevent. <see cref="DeviceResponse"/> is preserved either
+        /// way, so nothing the device said is lost.
+        /// </para>
+        /// </remarks>
         /// <param name="command">The SCPI command that was sent.</param>
-        /// <param name="errorCode">The SCPI error code the device reported.</param>
+        /// <param name="errorCode">The SCPI error code the device reported. <c>0</c> is normalised to <c>null</c> — see the remarks.</param>
         /// <param name="deviceResponse">The raw device line the code was read from.</param>
         public DeviceCommandFailedException(string command, int errorCode, string deviceResponse)
-            : base($"The device rejected '{command}' with SCPI error {errorCode} ({deviceResponse}). "
-                   + "The command did not take effect.")
+            : base(BuildRefusalMessage(command, errorCode, deviceResponse))
         {
             Command = command;
-            ErrorCode = errorCode;
+            ErrorCode = errorCode == 0 ? null : errorCode;
             DeviceResponse = deviceResponse;
         }
+
+        private static string BuildRefusalMessage(string command, int errorCode, string deviceResponse)
+            => errorCode == 0
+                ? BuildUnreadableVerdictMessage(command, deviceResponse)
+                : $"The device rejected '{command}' with SCPI error {errorCode} ({deviceResponse}). "
+                  + "The command did not take effect.";
 
         /// <summary>
         /// Initializes a new instance reporting that no SCPI error code could be read — either the
