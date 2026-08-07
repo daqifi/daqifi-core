@@ -402,7 +402,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="FeatureNotSupportedException">
@@ -422,7 +422,7 @@ namespace Daqifi.Core.Device.SdCard
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot query SD card storage while logging to SD card.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             // The storage-space query drives the SD card through the same transport-aware
@@ -707,7 +707,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal async Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
@@ -719,7 +719,7 @@ namespace Daqifi.Core.Device.SdCard
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot delete files while logging to SD card.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             EnsureSdFileTransferSupportedOnTransport();
@@ -790,7 +790,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal Task FormatSdCardAsync(CancellationToken cancellationToken = default)
         {
@@ -801,7 +801,7 @@ namespace Daqifi.Core.Device.SdCard
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot format SD card while logging.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -827,6 +827,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="SdCardEmptyTransferException">
         /// Thrown when the device serves a marker-only (0-byte) transfer across all retry attempts
         /// for a file the last <see cref="GetSdCardFilesAsync"/> listing reported as non-empty (or
@@ -898,7 +899,7 @@ namespace Daqifi.Core.Device.SdCard
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot download files while logging to SD card.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
@@ -1057,6 +1058,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         internal async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             IProgress<SdCardTransferProgress>? progress = null,

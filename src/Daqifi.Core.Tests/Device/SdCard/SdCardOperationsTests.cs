@@ -718,7 +718,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task DeleteSdCardFileAsync_WhenLogging_Throws()
+        public async Task DeleteSdCardFileAsync_WhenLogging_ThrowsSdCardBusyException()
         {
             // Arrange
             var device = new TestableSdCardStreamingDevice("TestDevice");
@@ -726,7 +726,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             await device.StartSdCardLoggingAsync("test.bin");
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<SdCardBusyException>(
                 () => device.DeleteSdCardFileAsync("data.bin"));
         }
 
@@ -1184,7 +1184,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task FormatSdCardAsync_WhenLogging_Throws()
+        public async Task FormatSdCardAsync_WhenLogging_ThrowsSdCardBusyException()
         {
             // Arrange
             var device = new TestableSdCardStreamingDevice("TestDevice");
@@ -1192,7 +1192,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
             await device.StartSdCardLoggingAsync("test.bin");
 
             // Act & Assert
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<SdCardBusyException>(
                 () => device.FormatSdCardAsync());
         }
 
@@ -1457,13 +1457,13 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task GetSdCardStorageAsync_WhenLogging_Throws()
+        public async Task GetSdCardStorageAsync_WhenLogging_ThrowsSdCardBusyException()
         {
             var device = new TestableSdCardStreamingDevice("TestDevice");
             device.Connect();
             await device.StartSdCardLoggingAsync("test.bin");
 
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<SdCardBusyException>(
                 () => device.GetSdCardStorageAsync());
         }
 
@@ -1912,7 +1912,7 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
-        public async Task DownloadSdCardFileAsync_WhenLogging_Throws()
+        public async Task DownloadSdCardFileAsync_WhenLogging_ThrowsSdCardBusyException()
         {
             // Arrange
             var device = new TestableDownloadDevice("TestDevice");
@@ -1921,9 +1921,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
             using var stream = new MemoryStream();
 
             // Act & Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAsync<SdCardBusyException>(
                 () => device.DownloadSdCardFileAsync("data.bin", stream));
-            Assert.Contains("logging", ex.Message);
         }
 
         [Fact]
