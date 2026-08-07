@@ -87,6 +87,61 @@ public class DeviceIdentityTests
     }
 
     [Fact]
+    public void Matches_SameSerial_DecimalAndHex_AreTheSamePhysicalDevice()
+    {
+        // The value Core's protobuf-sourced paths report (DeviceMetadata.SerialNumber, base-10)
+        // and the value the device's own capability document reports (identity.serial, base-16,
+        // uppercase) for one real 64-bit serial — see #446.
+        var protobufSourced = DeviceIdentity.Create("16045690984833335023");
+        var capabilityDocumentSourced = DeviceIdentity.Create("DEADBEEFDEADBEEF");
+
+        Assert.True(protobufSourced.Matches(capabilityDocumentSourced));
+        Assert.True(capabilityDocumentSourced.Matches(protobufSourced));
+    }
+
+    [Fact]
+    public void Matches_SameSerial_HexIsCaseInsensitive()
+    {
+        var upper = DeviceIdentity.Create("DEADBEEFDEADBEEF");
+        var lower = DeviceIdentity.Create("deadbeefdeadbeef");
+
+        Assert.True(upper.Matches(lower));
+    }
+
+    [Fact]
+    public void Matches_DifferentSerials_DecimalAndHex_DoNotMatch()
+    {
+        var protobufSourced = DeviceIdentity.Create("16045690984833335023");
+        var unrelatedHex = DeviceIdentity.Create("FEEDFACEFEEDFACE");
+
+        Assert.False(protobufSourced.Matches(unrelatedHex));
+    }
+
+    [Fact]
+    public void Matches_NonNumericSerials_StillFallBackToCaseInsensitiveStringCompare()
+    {
+        // A serial that parses as neither base (e.g. a USB HID serial descriptor) keeps the
+        // pre-existing string-comparison behavior.
+        var first = DeviceIdentity.Create("DAQ-NOT-NUMERIC");
+        var second = DeviceIdentity.Create("daq-not-numeric");
+
+        Assert.True(first.Matches(second));
+    }
+
+    [Fact]
+    public void Key_SameSerial_DecimalAndHex_ProduceTheSameKey()
+    {
+        // Key is used as the connected-device registry's dictionary key (DaqifiDeviceRegistry), so
+        // it must stay in lock-step with Matches: the same physical device must file under one key
+        // regardless of which representation populated it.
+        var protobufSourced = DeviceIdentity.Create("16045690984833335023");
+        var capabilityDocumentSourced = DeviceIdentity.Create("DEADBEEFDEADBEEF");
+
+        Assert.Equal(protobufSourced.Key, capabilityDocumentSourced.Key);
+        Assert.Equal("sn:16045690984833335023", capabilityDocumentSourced.Key);
+    }
+
+    [Fact]
     public void Matches_DifferentSerials_DoNotMatch_EvenWhenAWeakerDiscriminatorAgrees()
     {
         // A serial-number mismatch is decisive: two units that both answered with a serial number
