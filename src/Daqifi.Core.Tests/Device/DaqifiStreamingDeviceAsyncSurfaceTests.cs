@@ -250,6 +250,19 @@ namespace Daqifi.Core.Tests.Device
             Assert.Empty(device.SentMessages);
         }
 
+        [Fact]
+        public async Task RebootAsync_CanceledToken_OnDisconnectedDevice_ThrowsOperationCanceled_NotDeviceNotConnected()
+        {
+            // Cancellation must win over connection validation — matching every other ...Async
+            // member — so a caller can tell "this call was cancelled" apart from "the device
+            // wasn't connected" even when both are true at once.
+            var device = new TestableDaqifiStreamingDevice("TestDevice");
+            Assert.False(device.IsConnected);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => device.RebootAsync(CanceledToken()));
+        }
+
         #endregion
 
         #region IDevice.ConnectAsync / DisconnectAsync are genuine members, not DIM shims

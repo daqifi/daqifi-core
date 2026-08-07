@@ -874,12 +874,15 @@ namespace Daqifi.Core.Device
         /// <inheritdoc cref="IStreamingDevice.RebootAsync" path="/param|/returns|/exception" />
         public async Task RebootAsync(CancellationToken cancellationToken = default)
         {
+            // Cancellation is checked before validation, matching every other ...Async member on
+            // this class: a pre-cancelled token must surface as OperationCanceledException even on
+            // a disconnected device, not be masked by DeviceNotConnectedException.
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (!IsConnected)
             {
                 throw new DeviceNotConnectedException();
             }
-
-            cancellationToken.ThrowIfCancellationRequested();
 
             Send(ScpiMessageProducer.RebootDevice);
 
