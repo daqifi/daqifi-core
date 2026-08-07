@@ -193,6 +193,10 @@ if (device is IStreamingDevice streamingDevice)
 }
 ```
 
+Every `IStreamingDevice` method above (and the rest of the channel/PWM/analog-output/reboot surface)
+has a cancellable `...Async` twin declared on the interface — see
+[IStreamingDevice](docs/DEVICE_INTERFACES.md#istreamingdevice) for the full list.
+
 ### PWM output
 
 PWM runs on capable DIO pins (`IDigitalChannel.IsPwmCapable` — channels 0, 3, 4, 5, 6 and 7 on

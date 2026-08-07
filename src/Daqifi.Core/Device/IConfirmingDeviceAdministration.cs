@@ -22,12 +22,14 @@ namespace Daqifi.Core.Device
     /// owes the caller is a way to find out.
     /// </para>
     /// <para>
-    /// This is a separate interface rather than more members on <see cref="IStreamingDevice"/> so
-    /// existing implementers of that interface keep compiling, and it follows the same shape as the
-    /// other capability slices this device exposes
+    /// <see cref="IStreamingDevice"/> extends this interface, so any implementer of it gets the
+    /// confirming calibration calls directly — no cast needed. It remains a separate interface
+    /// (rather than folding the members straight into <see cref="IStreamingDevice"/>) because it
+    /// follows the same shape as the other capability slices this device exposes
     /// (<see cref="Network.INetworkConfigurable"/>, <see cref="SdCard.ISdCardOperations"/>,
-    /// <see cref="Firmware.ILanChipInfoProvider"/>, <see cref="Diagnostics.IDeviceDiagnostics"/>) — test for it
-    /// before use:
+    /// <see cref="Firmware.ILanChipInfoProvider"/>, <see cref="Diagnostics.IDeviceDiagnostics"/>), some
+    /// of which are implemented independently of <see cref="IStreamingDevice"/>. A caller holding only
+    /// a bare <see cref="IDevice"/> still needs the type test before use:
     /// </para>
     /// <code>
     /// if (device is IConfirmingDeviceAdministration admin)

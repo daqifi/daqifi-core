@@ -46,7 +46,13 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 - `IpAddress` - Network address (for WiFi devices)
 - `IsConnected` - Connection status
 - `Status` - Detailed connection status (Disconnected, Connecting, Connected, Lost)
-- `Connect()` / `Disconnect()` - Connection management
+- `Connect()` / `Disconnect()` - Blocking connection management
+- `ConnectAsync(CancellationToken)` / `DisconnectAsync(CancellationToken)` - Non-blocking, cancellable
+  connection management. These are genuine interface members, not default-interface-method shims over
+  the blocking calls — every implementer honors the token.
+- `IAsyncDisposable.DisposeAsync()` - `IDevice` extends `IAsyncDisposable`, so any consumer coding
+  against the interface (not just the concrete `DaqifiDevice`) can tear a device down with
+  `await using`/`await device.DisposeAsync()` — no cast required.
 - `Send<T>(IOutboundMessage<T>)` - Send commands to device
 - `StatusChanged` event - Connection status notifications
 - `MessageReceived` event - Incoming data notifications
@@ -58,6 +64,29 @@ Extends `IDevice` with data streaming functionality for devices that support con
 starting/stopping a stream, per-channel enable/disable, digital I/O, PWM, and analog output.
 `DaqifiStreamingDevice` implements it in this library — see [DaqifiStreamingDevice](#daqifistreamingdevice)
 below.
+
+Every one of those operations — plus `Reboot()` — has an `...Async(CancellationToken)` twin declared
+directly on the interface, so a consumer holding only an `IStreamingDevice` reference gets the same
+cancellable API surface as one holding the concrete `DaqifiStreamingDevice`:
+
+```csharp
+if (device is IStreamingDevice streamingDevice)
+{
+    await streamingDevice.EnableChannelAsync(channel, cancellationToken);
+    await streamingDevice.StartStreamingAsync(cancellationToken);
+}
+```
+
+The synchronous methods (`StartStreaming()`, `EnableChannel()`, etc.) remain, unchanged, for existing
+callers — the `Async` members are additive, not a replacement. Unlike `Connect`/`Disconnect`, most of
+this surface has no genuine async machinery underneath: `DaqifiStreamingDevice`'s streaming/channel/DIO
+/PWM/output/reboot commands are fire-and-forget writes with nothing to await, so the `Async` twin is a
+thin, cancellable wrapper around the same single write.
+
+`IStreamingDevice` also extends `IConfirmingDeviceAdministration`, so the confirming calibration calls
+(`SaveAdcCalibrationAsync`, `LoadAdcCalibrationAsync`, `SetAdcCalibrationSlopeAsync`, and the rest —
+each sends the same firmware primitive as its `void` counterpart and then confirms the device accepted
+it) are reachable directly off an `IStreamingDevice` reference too, with no separate cast needed.
 
 ## Implementation Classes
 
@@ -434,6 +463,16 @@ never throws `OperationCanceledException`, because a teardown abandoned part-way
 device in an indeterminate state. On return the device is always disconnected.
 
 The synchronous `Connect`, `Disconnect` and `Dispose` remain, unchanged, for existing callers.
+
+`ConnectAsync` and `DisconnectAsync` are declared directly on `IDevice` (not default-interface-method
+shims over `Connect`/`Disconnect`), and `IDevice` extends `IAsyncDisposable`, so all three are reachable
+through the interface with no cast to `DaqifiDevice`:
+
+```csharp
+IDevice device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await device.DisconnectAsync(cancellationToken);
+await device.DisposeAsync();
+```
 
 ### Error Handling
 
@@ -860,6 +899,16 @@ if (device is IStreamingDevice streamingDevice)
 > Channel objects passed to the enable/disable and DIO methods must belong to the device's
 > `Channels` collection (so the internal state and bitmask stay in sync). Analog-output (DAC)
 > channels are not part of `Channels`, so `SetAnalogOutput` takes a channel number directly.
+
+Every method above has a cancellable `...Async` twin (`EnableChannelsAsync`, `DisableChannelAsync`,
+`SetDioValueAsync`, `SetPwmEnabledAsync`, `SetAnalogOutputAsync`, `RebootAsync`, and the rest), declared
+directly on `IStreamingDevice`:
+
+```csharp
+await streamingDevice.EnableChannelsAsync(new[] { ai0, ai2 }, cancellationToken);
+await streamingDevice.SetDioValueAsync(dio1, true, cancellationToken);
+await streamingDevice.RebootAsync(cancellationToken);
+```
 
 ## SCPI Commands
 
