@@ -342,11 +342,13 @@ public sealed class DaqifiAgent
 
     /// <summary>
     /// Stops PWM output on a digital channel. The pin is left high-impedance; use
-    /// set_digital_direction / set_digital_output to drive it digitally again. A no-op on the wire
-    /// for a channel that is not <see cref="IDigitalChannel.IsPwmCapable"/>: such a channel can
-    /// never have had PWM armed (the half-armed state this recovers from is only reachable on
-    /// capable channels), so sending the command would only cost the device a spurious execution
-    /// error (#450) for no effect.
+    /// set_digital_direction / set_digital_output to drive it digitally again. Deliberately sent
+    /// for every digital channel, including one that is not <see cref="IDigitalChannel.IsPwmCapable"/>:
+    /// that is Core's only recovery command for a channel the firmware flagged PWM-active before
+    /// failing its capability check (e.g. via a raw command outside Core's guard), so skipping the
+    /// send here would remove the one MCP-level way to clear that wedge. It costs a device-side
+    /// execution error on a channel that was never actually armed, which is the tradeoff Core's own
+    /// contract accepts (#450).
     /// </summary>
     public async Task<PwmResult> DisablePwmAsync(string deviceId, int channel)
     {
@@ -356,10 +358,7 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(_ =>
         {
-            if (ch is IDigitalChannel { IsPwmCapable: true })
-            {
-                streaming.SetPwmEnabled(ch, false);
-            }
+            streaming.SetPwmEnabled(ch, false);
 
             var dutyCommanded = _pwmDutyCommanded.TryGetValue(ch, out var dutyMarker);
             var frequencyCommanded = _pwmFrequencyCommanded.TryGetValue(streaming, out var frequencyMarker);
