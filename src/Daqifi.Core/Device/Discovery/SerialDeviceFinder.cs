@@ -56,7 +56,11 @@ public class SerialDeviceFinder : DeviceFinderBase
     // pass. Most OS serial stacks tolerate 4-8 simultaneous opens cleanly;
     // beyond that, IO failures and slow opens stack up. Common case (with
     // VID/PID classifier) leaves 0-1 candidates so this cap rarely engages.
-    private const int MaxParallelProbes = 4;
+    //
+    // Internal so the slot-contention test can size its port list from the cap
+    // instead of hard-coding it — a raised cap would otherwise leave that test
+    // silently under-subscribed and no longer testing contention at all.
+    internal const int MaxParallelProbes = 4;
     // Hard ceiling on a single port probe. A wedged USB CDC device can hang
     // SerialPort.Open() inside native GetCommState indefinitely — no exception,
     // no cancellation (Open is uncancellable blocking I/O) — observed live on a

@@ -804,12 +804,13 @@ public class SerialDeviceFinderTests
         // therefore park every slot on drain waits and starve a healthy port for the
         // full window. The gate is now taken around the port open only.
         //
-        // Five draining ports guarantees contention against the cap of four.
+        // Sized from the cap rather than hard-coded, so raising MaxParallelProbes
+        // can't quietly leave this test under-subscribed and no longer contending.
         SerialDeviceFinder.ResetPortQuarantineForTests();
-        var drainPorts = new[]
-        {
-            "COM_SLOT_1", "COM_SLOT_2", "COM_SLOT_3", "COM_SLOT_4", "COM_SLOT_5"
-        };
+        var drainPorts = Enumerable
+            .Range(1, SerialDeviceFinder.MaxParallelProbes + 1)
+            .Select(i => $"COM_SLOT_{i}")
+            .ToArray();
         const string healthy = "COM_SLOT_OK";
         var probes = new MultiDrainProbe(drainPorts);
 
