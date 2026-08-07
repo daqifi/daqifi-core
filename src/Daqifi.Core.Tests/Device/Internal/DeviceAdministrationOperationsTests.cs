@@ -350,6 +350,42 @@ public class DeviceAdministrationOperationsTests
     }
 
     /// <summary>
+    /// An <c>ERROR</c>-shaped line whose code is <c>0</c> says "no error", so it is not evidence of a
+    /// refusal — a device that answers the queue read in that shape rather than the bare one must not
+    /// be reported as having rejected a command it accepted. The bare verdict alongside it decides.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmingOperation_WhenAnErrorShapedLineSaysCodeZero_DoesNotTreatItAsARefusal()
+    {
+        var host = new FakeHost
+        {
+            IsConnected = true,
+            ExchangeResponse = new[] { "**ERROR: 0,\"No error\"", NoError },
+        };
+
+        await new DeviceAdministrationOperations(host).LoadAdcCalibrationAsync();
+    }
+
+    /// <summary>
+    /// Code 0 never reaches <see cref="DeviceCommandFailedException.ErrorCode"/> from any path, which
+    /// is what lets callers branch on it: a non-null code always means a real refusal.
+    /// </summary>
+    [Theory]
+    [InlineData("**ERROR: 0,\"No error\"")]
+    [InlineData("ERROR: 0,\"No error\"")]
+    public async Task ConfirmingOperation_NeverReportsErrorCodeZero(string errorLine)
+    {
+        var host = new FakeHost { IsConnected = true, ExchangeResponse = new[] { errorLine } };
+
+        // No bare verdict accompanies it, so this is unconfirmed rather than refused — but either
+        // way the one thing it must not be is a reported error code of 0.
+        var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(
+            () => new DeviceAdministrationOperations(host).LoadAdcCalibrationAsync());
+
+        Assert.NotEqual(0, ex.ErrorCode ?? -1);
+    }
+
+    /// <summary>
     /// The guard behind the assertion above: these lines really do classify as SCPI errors while
     /// yielding no code, so the null-code path is reachable rather than theoretical.
     /// </summary>

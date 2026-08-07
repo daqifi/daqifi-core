@@ -309,11 +309,14 @@ namespace Daqifi.Core.Device.Internal
         /// not be reported as one.
         /// </para>
         /// <para>
-        /// A code is only ever reported when one was actually parsed. <c>ERROR</c> lines that carry no
-        /// readable code — a bare <c>ERROR</c>, or <c>ERROR: something non-numeric</c>, both of which
+        /// A code is only ever reported when one was actually parsed <i>and</i> is non-zero, which is
+        /// what makes <see cref="DeviceCommandFailedException.ErrorCode"/> safe to branch on. Two cases
+        /// keep it that way: <c>ERROR</c> lines carrying no readable code — a bare <c>ERROR</c>, or
+        /// <c>ERROR: something non-numeric</c>, both of which
         /// <see cref="ScpiResponseClassifier.IsScpiErrorLine"/> matches — are a refusal whose code is
-        /// unknown, so they take the null-code path. Reporting them as code <c>0</c> would name the one
-        /// value SCPI reserves for "no error".
+        /// unknown, so they take the null-code path rather than being reported under the one value SCPI
+        /// reserves for "no error"; and an <c>ERROR</c>-shaped line that does say <c>0</c> is not
+        /// treated as a refusal at all.
         /// </para>
         /// </remarks>
         private static void ThrowIfNotAccepted(string command, IReadOnlyList<string> lines)
@@ -321,9 +324,21 @@ namespace Daqifi.Core.Device.Internal
             var volunteeredError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
             if (volunteeredError != null)
             {
-                throw ScpiResponseClassifier.TryExtractErrorCode(volunteeredError, out var volunteeredCode)
-                    ? new DeviceCommandFailedException(command, volunteeredCode, volunteeredError)
-                    : new DeviceCommandFailedException(command, volunteeredError);
+                if (!ScpiResponseClassifier.TryExtractErrorCode(volunteeredError, out var volunteeredCode))
+                {
+                    // A refusal whose code cannot be read is still a refusal.
+                    throw new DeviceCommandFailedException(command, volunteeredError);
+                }
+
+                if (volunteeredCode != 0)
+                {
+                    throw new DeviceCommandFailedException(command, volunteeredCode, volunteeredError);
+                }
+
+                // Code 0 is "no error" — a line that says so is not evidence of a refusal, whatever
+                // shape it arrived in. A device that answers the queue read as `**ERROR: 0,"No error"`
+                // rather than the bare form would otherwise be reported as having rejected a command
+                // it accepted. Fall through and let the queue verdict decide.
             }
 
             var reply = lines.LastOrDefault(ScpiResponseClassifier.IsSystemErrorReplyLine)?.Trim();
