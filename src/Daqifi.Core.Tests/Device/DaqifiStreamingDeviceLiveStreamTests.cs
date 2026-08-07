@@ -69,10 +69,17 @@ namespace Daqifi.Core.Tests.Device
 
             using var cts = new CancellationTokenSource();
 
-            // Disposed explicitly below rather than by `await using`: a regression here leaves the
-            // read parked, and disposing an async iterator whose MoveNextAsync is still in flight
-            // throws NotSupportedException from the finally, masking the TimeoutException that
-            // actually names the problem.
+            // Disposed explicitly below rather than by `await using`. A regression here leaves the
+            // read parked, and DisposeAsync on an async iterator whose MoveNextAsync is still in
+            // flight throws NotSupportedException from its own guard — before the iterator body's
+            // finally runs — which would mask the TimeoutException that actually names the problem.
+            //
+            // That also means the enumerator is deliberately abandoned on the failure path: the
+            // unsubscribe is unreachable there by construction, since making dispose legal would
+            // require awaiting the very read that is never going to complete. Harmless — `device`
+            // is created per-test and reachable from nothing else, the leaked handler only writes
+            // into a bounded drop-oldest buffer, and the whole graph is garbage once the test
+            // returns. The happy path below disposes normally.
             var e = device.StreamSamplesAsync(cts.Token).GetAsyncEnumerator();
             var moveNext = e.MoveNextAsync();
             cts.Cancel();
