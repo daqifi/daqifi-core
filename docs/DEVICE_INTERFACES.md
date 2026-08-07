@@ -908,7 +908,8 @@ if (device is IDeviceDiagnostics diagnostics)
     LogLevelSetting applied = await diagnostics.SetLogLevelAsync("STREAM", 2);
     Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
 
-    // SCPI command history (newest first) and error-queue depth (non-destructive).
+    // SCPI command history (oldest first — the device numbers lines backwards from
+    // the present, so the newest command is last) and error-queue depth (non-destructive).
     IReadOnlyList<string> history = await diagnostics.GetCommandHistoryAsync();
     int queuedErrors = await diagnostics.GetSystemErrorCountAsync();
 

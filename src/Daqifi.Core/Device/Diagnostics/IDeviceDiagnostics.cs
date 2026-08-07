@@ -51,8 +51,14 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <summary>
         /// Reads the device's recent SCPI command history (<c>SYSTem:LOG:CMDHistory?</c>).
         /// </summary>
+        /// <remarks>
+        /// The device numbers its history lines backwards from the present — <c>1:</c> is the most recent
+        /// command — and prints them in descending order, so the newest command arrives last. That numeric
+        /// prefix is stripped, and the device's order is preserved: the result reads as a chronological
+        /// transcript. The history query itself is the last entry in its own reply.
+        /// </remarks>
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>The remembered commands, newest first; empty when there is no history.</returns>
+        /// <returns>The remembered commands, oldest first; empty when there is no history.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         Task<IReadOnlyList<string>> GetCommandHistoryAsync(CancellationToken cancellationToken = default);
 
