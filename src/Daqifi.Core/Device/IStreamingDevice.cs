@@ -1,12 +1,28 @@
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Daqifi.Core.Channel;
+
+#nullable enable
 
 namespace Daqifi.Core.Device
 {
     /// <summary>
     /// Represents a device that supports data streaming.
     /// </summary>
-    public interface IStreamingDevice : IDevice
+    /// <remarks>
+    /// Extends <see cref="IConfirmingDeviceAdministration"/> so the calibration operations are
+    /// available with a <see cref="CancellationToken"/> directly on this interface, with no cast
+    /// needed — see that interface for why the confirming calibration calls exist alongside the
+    /// <c>void</c> ones declared here. The streaming/channel/DIO/PWM/output/reboot operations below
+    /// each carry an <c>...Async</c> twin for the same reason. Most of them have no genuine async
+    /// machinery underneath today, so the default implementation is a thin, cancellable wrapper over
+    /// the synchronous call — see the remarks on <see cref="StartStreamingAsync"/>. Reboot is the
+    /// exception: its teardown is a real, potentially-blocking wait, so
+    /// <see cref="DaqifiStreamingDevice.RebootAsync"/> overrides the default to await
+    /// <see cref="IDevice.DisconnectAsync"/> instead of calling <see cref="Reboot"/>.
+    /// </remarks>
+    public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     {
         /// <summary>
         /// Gets or sets the streaming frequency in Hz.
@@ -24,9 +40,42 @@ namespace Daqifi.Core.Device
         void StartStreaming();
 
         /// <summary>
+        /// Starts streaming data from the device without blocking the calling thread.
+        /// </summary>
+        /// <remarks>
+        /// The default implementation is a thin, cancellable wrapper over <see cref="StartStreaming"/>:
+        /// it checks <paramref name="cancellationToken"/> once and then performs the same single,
+        /// fire-and-forget write — there is no underlying text exchange to await. Implementers whose
+        /// transport genuinely awaits (e.g. a confirming variant) should override it.
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe before starting.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task StartStreamingAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StartStreaming();
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Stops streaming data from the device.
         /// </summary>
         void StopStreaming();
+
+        /// <summary>
+        /// Stops streaming data from the device without blocking the calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="cancellationToken">A cancellation token to observe before stopping.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task StopStreamingAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StopStreaming();
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Enables a single channel and reconfigures the device accordingly.
@@ -40,6 +89,22 @@ namespace Daqifi.Core.Device
         void EnableChannel(IChannel channel);
 
         /// <summary>
+        /// Enables a single channel and reconfigures the device accordingly, without blocking the
+        /// calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channel">The channel to enable. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task EnableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnableChannel(channel);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Enables multiple channels in a single operation, sending at most one command per channel type.
         /// </summary>
         /// <param name="channels">The channels to enable. Each must belong to this device's <c>Channels</c> collection.</param>
@@ -49,6 +114,21 @@ namespace Daqifi.Core.Device
         /// analog channels and the global DIO enable for digital channels. The input is enumerated once.
         /// </remarks>
         void EnableChannels(IEnumerable<IChannel> channels);
+
+        /// <summary>
+        /// Enables multiple channels in a single operation, without blocking the calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channels">The channels to enable. Each must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task EnableChannelsAsync(IEnumerable<IChannel> channels, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnableChannels(channels);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Disables a single channel and reconfigures the device accordingly.
@@ -62,9 +142,39 @@ namespace Daqifi.Core.Device
         void DisableChannel(IChannel channel);
 
         /// <summary>
+        /// Disables a single channel and reconfigures the device accordingly, without blocking the
+        /// calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channel">The channel to disable. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task DisableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisableChannel(channel);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Disables all channels on the device.
         /// </summary>
         void DisableAllChannels();
+
+        /// <summary>
+        /// Disables all channels on the device, without blocking the calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task DisableAllChannelsAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisableAllChannels();
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Sets the direction (input or output) of a digital I/O channel.
@@ -74,11 +184,45 @@ namespace Daqifi.Core.Device
         void SetDioDirection(IChannel channel, ChannelDirection direction);
 
         /// <summary>
+        /// Sets the direction (input or output) of a digital I/O channel, without blocking the
+        /// calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="direction">The direction to apply. Must be <see cref="ChannelDirection.Input"/> or <see cref="ChannelDirection.Output"/>.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task SetDioDirectionAsync(IChannel channel, ChannelDirection direction, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetDioDirection(channel, direction);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Sets the output state (high or low) of a digital I/O channel.
         /// </summary>
         /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.</param>
         /// <param name="value"><c>true</c> to drive the output high; <c>false</c> to drive it low.</param>
         void SetDioValue(IChannel channel, bool value);
+
+        /// <summary>
+        /// Sets the output state (high or low) of a digital I/O channel, without blocking the
+        /// calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="value"><c>true</c> to drive the output high; <c>false</c> to drive it low.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task SetDioValueAsync(IChannel channel, bool value, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetDioValue(channel, value);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Enables or disables PWM output on a PWM-capable digital channel.
@@ -99,6 +243,25 @@ namespace Daqifi.Core.Device
         void SetPwmEnabled(IChannel channel, bool enabled);
 
         /// <summary>
+        /// Enables or disables PWM output on a PWM-capable digital channel, without blocking the
+        /// calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
+        /// Enabling requires <see cref="Channel.IDigitalChannel.IsPwmCapable"/>; disabling is accepted on any
+        /// digital channel.</param>
+        /// <param name="enabled"><c>true</c> to start PWM output; <c>false</c> to stop it.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task SetPwmEnabledAsync(IChannel channel, bool enabled, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmEnabled(channel, enabled);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Sets the PWM duty cycle of a PWM-capable digital channel.
         /// </summary>
         /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection
@@ -107,6 +270,25 @@ namespace Daqifi.Core.Device
         /// because the firmware stores but never applies it (the old duty keeps toggling); stop the output
         /// with <see cref="SetPwmEnabled"/> instead.</param>
         void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent);
+
+        /// <summary>
+        /// Sets the PWM duty cycle of a PWM-capable digital channel, without blocking the calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection
+        /// and be <see cref="Channel.IDigitalChannel.IsPwmCapable"/>.</param>
+        /// <param name="dutyCyclePercent">The duty cycle in whole percent, 1-100. A duty of 0 is rejected
+        /// because the firmware stores but never applies it (the old duty keeps toggling); stop the output
+        /// with <see cref="SetPwmEnabled"/> instead.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task SetPwmDutyCycleAsync(IChannel channel, int dutyCyclePercent, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmDutyCycle(channel, dutyCyclePercent);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Sets the PWM frequency, in hertz, for the whole device.
@@ -119,6 +301,22 @@ namespace Daqifi.Core.Device
         /// each enabled channel's duty cycle.
         /// </remarks>
         void SetPwmFrequency(int frequencyHz);
+
+        /// <summary>
+        /// Sets the PWM frequency, in hertz, for the whole device, without blocking the calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="frequencyHz">The frequency in hertz, 6-50000. Values below 6 Hz are rejected because
+        /// the firmware's 16-bit period register silently wraps for them, producing a kilohertz-range output.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task SetPwmFrequencyAsync(int frequencyHz, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmFrequency(frequencyHz);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Gets the last PWM frequency commanded through <see cref="SetPwmFrequency"/> this
@@ -142,6 +340,24 @@ namespace Daqifi.Core.Device
         void SetAnalogOutput(int channelNumber, double voltage);
 
         /// <summary>
+        /// Sets the analog output (DAC) voltage of a channel and applies it immediately, without
+        /// blocking the calling thread.
+        /// </summary>
+        /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
+        /// <param name="channelNumber">The analog output channel number. DAC channels are addressed by
+        /// number; they are not part of the <c>Channels</c> collection (which holds analog inputs).</param>
+        /// <param name="voltage">The output voltage, in volts. Must be a finite number.</param>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task SetAnalogOutputAsync(int channelNumber, double voltage, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetAnalogOutput(channelNumber, voltage);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Reboots the device and disconnects from it.
         /// </summary>
         /// <remarks>
@@ -149,6 +365,26 @@ namespace Daqifi.Core.Device
         /// drops its link while restarting. Reconnect once the device is back online.
         /// </remarks>
         void Reboot();
+
+        /// <summary>
+        /// Reboots the device and disconnects from it, without blocking the calling thread.
+        /// </summary>
+        /// <remarks>
+        /// The default implementation is a thin, cancellable wrapper over <see cref="Reboot"/>: it
+        /// checks <paramref name="cancellationToken"/> once and then performs the same fire-and-forget
+        /// reboot command followed by a synchronous local teardown. Implementers whose disconnect is
+        /// itself genuinely asynchronous (see <see cref="IDevice.DisconnectAsync"/>) should override
+        /// this to await it instead.
+        /// </remarks>
+        /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        Task RebootAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Reboot();
+            return Task.CompletedTask;
+        }
 
         // -----------------------------------------------------------------
         // ADC calibration and voltage precision.

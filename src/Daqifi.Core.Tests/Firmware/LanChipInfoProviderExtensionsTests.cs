@@ -489,6 +489,25 @@ public class LanChipInfoProviderExtensionsTests
 
         public void Disconnect() => IsConnected = false;
 
+        public Task ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Connect();
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            Disconnect();
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disconnect();
+            return ValueTask.CompletedTask;
+        }
+
         public void Send<T>(IOutboundMessage<T> message)
         {
             if (ThrowOnSend)
@@ -529,5 +548,15 @@ public class LanChipInfoProviderExtensionsTests
         public void SaveFactoryAdcCalibration() { }
         public void LoadFactoryAdcCalibration() { }
         public void UseAdcCalibration(int bank) { }
+
+        public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadAdcCalibration(); return Task.CompletedTask; }
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) { SetAdcCalibrationSlope(channelNumber, calM); return Task.CompletedTask; }
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) { SetAdcCalibrationOffset(channelNumber, calB); return Task.CompletedTask; }
+        public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) { UseAdcCalibration(bank); return Task.CompletedTask; }
+        public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) { SaveVoltagePrecision(); return Task.CompletedTask; }
+        public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) { LoadVoltagePrecision(); return Task.CompletedTask; }
     }
 }

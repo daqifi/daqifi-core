@@ -26,7 +26,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, IConfirmingDeviceAdministration, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
     {
         /// <summary>
         /// Response window allowed for the USB stream-interface command sent during
@@ -303,6 +303,22 @@ namespace Daqifi.Core.Device
 
             IsStreaming = false;
             Send(ScpiMessageProducer.StopStreaming);
+        }
+
+        /// <inheritdoc cref="IStreamingDevice.StartStreamingAsync" />
+        public Task StartStreamingAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StartStreaming();
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc cref="IStreamingDevice.StopStreamingAsync" />
+        public Task StopStreamingAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StopStreaming();
+            return Task.CompletedTask;
         }
 
         #region Session state tracking for commands sent directly (issue #379)
@@ -675,21 +691,69 @@ namespace Daqifi.Core.Device
         /// <inheritdoc />
         public void EnableChannel(IChannel channel) => _channelControl.EnableChannel(channel);
 
+        /// <inheritdoc cref="IStreamingDevice.EnableChannelAsync" />
+        public Task EnableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnableChannel(channel);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void EnableChannels(IEnumerable<IChannel> channels) => _channelControl.EnableChannels(channels);
+
+        /// <inheritdoc cref="IStreamingDevice.EnableChannelsAsync" />
+        public Task EnableChannelsAsync(IEnumerable<IChannel> channels, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnableChannels(channels);
+            return Task.CompletedTask;
+        }
 
         /// <inheritdoc />
         public void DisableChannel(IChannel channel) => _channelControl.DisableChannel(channel);
 
+        /// <inheritdoc cref="IStreamingDevice.DisableChannelAsync" />
+        public Task DisableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisableChannel(channel);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void DisableAllChannels() => _channelControl.DisableAllChannels();
+
+        /// <inheritdoc cref="IStreamingDevice.DisableAllChannelsAsync" />
+        public Task DisableAllChannelsAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisableAllChannels();
+            return Task.CompletedTask;
+        }
 
         /// <inheritdoc />
         public void SetDioDirection(IChannel channel, ChannelDirection direction)
             => _channelControl.SetDioDirection(channel, direction);
 
+        /// <inheritdoc cref="IStreamingDevice.SetDioDirectionAsync" />
+        public Task SetDioDirectionAsync(IChannel channel, ChannelDirection direction, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetDioDirection(channel, direction);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void SetDioValue(IChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
+
+        /// <inheritdoc cref="IStreamingDevice.SetDioValueAsync" />
+        public Task SetDioValueAsync(IChannel channel, bool value, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetDioValue(channel, value);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// The lowest PWM frequency the firmware reproduces correctly. Below this the firmware's
@@ -719,12 +783,36 @@ namespace Daqifi.Core.Device
         /// <inheritdoc />
         public void SetPwmEnabled(IChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
 
+        /// <inheritdoc cref="IStreamingDevice.SetPwmEnabledAsync" />
+        public Task SetPwmEnabledAsync(IChannel channel, bool enabled, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmEnabled(channel, enabled);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
             => _channelControl.SetPwmDutyCycle(channel, dutyCyclePercent);
 
+        /// <inheritdoc cref="IStreamingDevice.SetPwmDutyCycleAsync" />
+        public Task SetPwmDutyCycleAsync(IChannel channel, int dutyCyclePercent, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmDutyCycle(channel, dutyCyclePercent);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void SetPwmFrequency(int frequencyHz) => _channelControl.SetPwmFrequency(frequencyHz);
+
+        /// <inheritdoc cref="IStreamingDevice.SetPwmFrequencyAsync" />
+        public Task SetPwmFrequencyAsync(int frequencyHz, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmFrequency(frequencyHz);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Sets and persists the device's user-defined friendly name to NVM, then optimistically
@@ -760,8 +848,48 @@ namespace Daqifi.Core.Device
         public void SetAnalogOutput(int channelNumber, double voltage)
             => _channelControl.SetAnalogOutput(channelNumber, voltage);
 
+        /// <inheritdoc cref="IStreamingDevice.SetAnalogOutputAsync" />
+        public Task SetAnalogOutputAsync(int channelNumber, double voltage, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetAnalogOutput(channelNumber, voltage);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void Reboot() => _administration.Reboot();
+
+        /// <summary>
+        /// Reboots the device and disconnects from it, without blocking the calling thread.
+        /// </summary>
+        /// <remarks>
+        /// Unlike <see cref="IStreamingDevice.RebootAsync"/>'s default implementation, this override
+        /// does not call the blocking <see cref="Reboot"/>: that path tears down through
+        /// <see cref="DaqifiDevice.Disconnect"/>, which can stall the caller for the full teardown
+        /// wait (up to <see cref="DaqifiDevice.TextExchangeTeardownWait"/>) — exactly the freeze the
+        /// async surface exists to avoid. This sends the same reboot command and then awaits
+        /// <see cref="DaqifiDevice.DisconnectAsync"/> instead, so the local teardown is genuinely
+        /// asynchronous.
+        /// </remarks>
+        /// <inheritdoc cref="IStreamingDevice.RebootAsync" path="/param|/returns|/exception" />
+        public async Task RebootAsync(CancellationToken cancellationToken = default)
+        {
+            // Cancellation is checked before validation, matching every other ...Async member on
+            // this class: a pre-cancelled token must surface as OperationCanceledException even on
+            // a disconnected device, not be masked by DeviceNotConnectedException.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!IsConnected)
+            {
+                throw new DeviceNotConnectedException();
+            }
+
+            Send(ScpiMessageProducer.RebootDevice);
+
+            // The device drops its link while restarting, so tear down the local connection —
+            // without blocking the caller, unlike Reboot()'s synchronous Disconnect().
+            await DisconnectAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         /// <inheritdoc />
         public void SaveAdcCalibration() => _administration.SaveAdcCalibration();
