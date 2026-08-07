@@ -49,7 +49,7 @@ internal static class SdCardAnalogScaling
     /// </summary>
     /// <param name="rawValues">The per-channel raw ADC counts for one sample.</param>
     /// <param name="config">Same as the <see cref="IReadOnlyList{Double}"/> overload.</param>
-    /// <returns>The scaled values, in volts, or <paramref name="rawValues"/> converted to <c>double</c> as-is if no config is available.</returns>
+    /// <returns>The scaled values, in volts, or <paramref name="rawValues"/> converted to <c>double</c> unscaled if no config is available.</returns>
     internal static IReadOnlyList<double> ScaleRawAnalogValues(
         IReadOnlyList<int> rawValues,
         SdCardDeviceConfiguration? config)
@@ -58,7 +58,7 @@ internal static class SdCardAnalogScaling
 
         if (config == null || config.Resolution == 0)
         {
-            // No config or resolution available — return raw values as-is
+            // No config or resolution available — copy the raw int counts through unscaled
             for (var ch = 0; ch < rawValues.Count; ch++)
             {
                 result[ch] = rawValues[ch];
