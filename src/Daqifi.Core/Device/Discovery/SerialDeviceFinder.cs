@@ -267,30 +267,29 @@ public class SerialDeviceFinder : DeviceFinderBase
             // Cap concurrency at MaxParallelProbes so a 20-port system with
             // a missing descriptor provider doesn't open 20 serial handles at
             // once — most platforms throttle quietly above ~8 concurrent opens.
+            //
+            // The gate is taken INSIDE ProbeSafelyAsync, around the port open only.
+            // Holding it across the whole call would let the abandoned-claim drain
+            // wait — which opens nothing and merely awaits an already-running task —
+            // occupy a slot, so a pass whose predecessor timed out with every slot
+            // busy could park all MaxParallelProbes slots on drain waits and delay a
+            // healthy port behind them (Qodo #454 pass 1 #2).
             var maxConcurrency = Math.Max(1, Math.Min(MaxParallelProbes, availablePorts.Count));
             using var probeGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
 
             var probeTasks = availablePorts.Select(async portName =>
             {
-                await probeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                try
+                var deviceInfo = await ProbeSafelyAsync(portName, probeGate, cancellationToken).ConfigureAwait(false);
+                if (deviceInfo != null)
                 {
-                    var deviceInfo = await ProbeSafelyAsync(portName, cancellationToken).ConfigureAwait(false);
-                    if (deviceInfo != null)
-                    {
-                        // Raise per-probe rather than after Task.WhenAll: one hung port
-                        // must not silence every healthy device on the system (#294).
-                        // Fires on a worker thread, possibly concurrently with other
-                        // probes' events — handlers own their thread marshaling (both
-                        // desktop apps already dispatch to their UI thread).
-                        OnDeviceDiscovered(deviceInfo);
-                    }
-                    return deviceInfo;
+                    // Raise per-probe rather than after Task.WhenAll: one hung port
+                    // must not silence every healthy device on the system (#294).
+                    // Fires on a worker thread, possibly concurrently with other
+                    // probes' events — handlers own their thread marshaling (both
+                    // desktop apps already dispatch to their UI thread).
+                    OnDeviceDiscovered(deviceInfo);
                 }
-                finally
-                {
-                    probeGate.Release();
-                }
+                return deviceInfo;
             }).ToList();
 
             // Catch OCE here so the DiscoveryCompleted event always fires
@@ -340,13 +339,20 @@ public class SerialDeviceFinder : DeviceFinderBase
     /// Opens the port, sends GetDeviceInfo command, and waits for a status response.
     /// </summary>
     /// <param name="portName">The serial port name.</param>
+    /// <param name="probeGate">
+    /// Caps concurrent port opens for the sweep. Held only around the probe itself,
+    /// never around claim acquisition or the abandoned-claim drain wait — neither
+    /// opens a port, and holding a slot through them would throttle healthy ports
+    /// behind ports that are merely draining.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Device info if a DAQiFi device responds, null otherwise — including
     /// when the port is claimed by a probe that is still genuinely in flight.
     /// Swallows non-cancellation exceptions so a single failing port doesn't tear
     /// down the whole concurrent probe pass; cancellation propagates so Task.WhenAll
     /// short-circuits when the caller's token is canceled.</returns>
-    private async Task<IDeviceInfo?> ProbeSafelyAsync(string portName, CancellationToken cancellationToken)
+    private async Task<IDeviceInfo?> ProbeSafelyAsync(
+        string portName, SemaphoreSlim probeGate, CancellationToken cancellationToken)
     {
         PortProbeClaim? claim = null;
         var claimHandedToContinuation = false;
@@ -452,64 +458,76 @@ public class SerialDeviceFinder : DeviceFinderBase
 
             var probe = _probeOverride ?? TryGetDeviceInfoAsync;
 
-            // Task.Run: SerialPort.Open() (and DiscardInBuffer etc.) are synchronous
-            // blocking I/O that would otherwise run on the CALLING thread up to the
-            // probe's first await — in the desktop apps that thread is the UI thread,
-            // and a slow or stuck open froze the whole window (#294). Pass
-            // CancellationToken.None to Task.Run itself: the inner token still
-            // cancels the probe's delays; we never want "cancelled before start"
-            // to look like a probe fault.
-            var probeTask = Task.Run(() => probe(portName, cancellationToken), CancellationToken.None);
-            claim.Probe = probeTask;
-
-            // Hard per-port ceiling: a wedged CDC device hangs Open() inside native
-            // GetCommState with no exception, so the catch below never fires and,
-            // pre-#294, Task.WhenAll in DiscoverAsync never settled. Open() is
-            // uncancellable, so on timeout the stuck task is ABANDONED — its own
-            // finally block closes the port if the kernel ever completes the I/O.
-            var winner = await Task.WhenAny(
-                probeTask,
-                Task.Delay(PortProbeHardTimeoutMs, cancellationToken)).ConfigureAwait(false);
-
-            if (winner != probeTask)
+            // Take a probe slot only now. Claim acquisition and the drain wait above
+            // open no port, so gating them would just throttle healthy ports behind
+            // ports that are draining. Released the moment this probe settles or is
+            // abandoned — an abandoned probe holds no slot on later sweeps either.
+            await probeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                if (probeTask.IsCompletedSuccessfully)
+                // Task.Run: SerialPort.Open() (and DiscardInBuffer etc.) are synchronous
+                // blocking I/O that would otherwise run on the CALLING thread up to the
+                // probe's first await — in the desktop apps that thread is the UI thread,
+                // and a slow or stuck open froze the whole window (#294). Pass
+                // CancellationToken.None to Task.Run itself: the inner token still
+                // cancels the probe's delays; we never want "cancelled before start"
+                // to look like a probe fault.
+                var probeTask = Task.Run(() => probe(portName, cancellationToken), CancellationToken.None);
+                claim.Probe = probeTask;
+
+                // Hard per-port ceiling: a wedged CDC device hangs Open() inside native
+                // GetCommState with no exception, so the catch below never fires and,
+                // pre-#294, Task.WhenAll in DiscoverAsync never settled. Open() is
+                // uncancellable, so on timeout the stuck task is ABANDONED — its own
+                // finally block closes the port if the kernel ever completes the I/O.
+                var winner = await Task.WhenAny(
+                    probeTask,
+                    Task.Delay(PortProbeHardTimeoutMs, cancellationToken)).ConfigureAwait(false);
+
+                if (winner != probeTask)
                 {
-                    // The probe finished right at the timeout/cancellation boundary —
-                    // honor DiscoverAsync's "settle for whatever probes already
-                    // finished cleanly" contract instead of discarding a completed
-                    // result (Qodo pass 5 #4). The finally releases our claim.
-                    return await probeTask.ConfigureAwait(false);
+                    if (probeTask.IsCompletedSuccessfully)
+                    {
+                        // The probe finished right at the timeout/cancellation boundary —
+                        // honor DiscoverAsync's "settle for whatever probes already
+                        // finished cleanly" contract instead of discarding a completed
+                        // result (Qodo pass 5 #4). The finally releases our claim.
+                        return await probeTask.ConfigureAwait(false);
+                    }
+
+                    // Whether the wait ended by timeout or by caller cancellation, the
+                    // uncancellable probe may still be blocked in native I/O — mark the
+                    // claim abandoned BEFORE surfacing cancellation, so a cancelled sweep
+                    // can't walk away from an untracked probe (Qodo PR #295 pass 2 #1).
+                    claim.AbandonedAtTicks = Environment.TickCount64;
+                    claimHandedToContinuation = true;
+
+                    // When the abandoned I/O finally completes (any way), observe its
+                    // fault so it can't surface as an UnobservedTaskException, and release
+                    // the claim — atomically only if it's still ours (a TTL retry may have
+                    // replaced it with a newer attempt that must survive).
+                    var abandonedClaim = claim;
+                    _ = probeTask.ContinueWith(
+                        t =>
+                        {
+                            _ = t.Exception;
+                            ReleaseClaimIfOwned(portName, abandonedClaim);
+                        },
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+
+                    // Surface caller cancellation only after tracking the abandoned probe.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return null;
                 }
 
-                // Whether the wait ended by timeout or by caller cancellation, the
-                // uncancellable probe may still be blocked in native I/O — mark the
-                // claim abandoned BEFORE surfacing cancellation, so a cancelled sweep
-                // can't walk away from an untracked probe (Qodo PR #295 pass 2 #1).
-                claim.AbandonedAtTicks = Environment.TickCount64;
-                claimHandedToContinuation = true;
-
-                // When the abandoned I/O finally completes (any way), observe its
-                // fault so it can't surface as an UnobservedTaskException, and release
-                // the claim — atomically only if it's still ours (a TTL retry may have
-                // replaced it with a newer attempt that must survive).
-                var abandonedClaim = claim;
-                _ = probeTask.ContinueWith(
-                    t =>
-                    {
-                        _ = t.Exception;
-                        ReleaseClaimIfOwned(portName, abandonedClaim);
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-
-                // Surface caller cancellation only after tracking the abandoned probe.
-                cancellationToken.ThrowIfCancellationRequested();
-                return null;
+                return await probeTask.ConfigureAwait(false);
             }
-
-            return await probeTask.ConfigureAwait(false);
+            finally
+            {
+                probeGate.Release();
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

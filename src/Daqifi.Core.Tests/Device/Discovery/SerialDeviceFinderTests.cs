@@ -558,6 +558,12 @@ public class SerialDeviceFinderTests
     // probe hangs until the test releases it, standing in for the uncancellable
     // native I/O that TryGetDeviceInfoAsync is unwinding.
 
+    // Every discovery await in these tests is bounded: a regression that stops
+    // DiscoverAsync from settling must fail the test, not hang CI (Qodo #454 pass 1
+    // #1). Generous relative to the drain windows under test so it never fires on
+    // timing jitter.
+    private static readonly TimeSpan SweepGuard = TimeSpan.FromSeconds(30);
+
     private sealed class DrainProbe
     {
         private readonly TaskCompletionSource<IDeviceInfo?> _firstProbeGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -597,7 +603,7 @@ public class SerialDeviceFinderTests
 
         using (var first = CreateFinderWithProbes(new[] { port }, drainProbe.Probe, hardTimeoutMs: 150))
         {
-            Assert.Empty(await first.DiscoverAsync(CancellationToken.None));
+            Assert.Empty(await first.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard));
         }
 
         // The claim is only interesting if the probe really started and is stuck.
@@ -621,7 +627,7 @@ public class SerialDeviceFinderTests
         await Task.Delay(150);
         drainProbe.ReleaseFirstProbe();
 
-        var devices = (await sweep).ToList();
+        var devices = (await sweep.WaitAsync(SweepGuard)).ToList();
 
         Assert.Equal(port, Assert.Single(devices).PortName);
         Assert.Equal(2, drainProbe.Calls);
@@ -640,7 +646,7 @@ public class SerialDeviceFinderTests
         using (var first = CreateFinderWithProbes(new[] { port }, drainProbe.Probe, hardTimeoutMs: 60_000))
         using (var cts = new CancellationTokenSource(150))
         {
-            Assert.Empty(await first.DiscoverAsync(cts.Token));
+            Assert.Empty(await first.DiscoverAsync(cts.Token).WaitAsync(SweepGuard));
         }
 
         await drainProbe.FirstProbeStarted.WaitAsync(TimeSpan.FromSeconds(10));
@@ -652,7 +658,7 @@ public class SerialDeviceFinderTests
         await Task.Delay(150);
         drainProbe.ReleaseFirstProbe();
 
-        Assert.Equal(port, Assert.Single(await sweep).PortName);
+        Assert.Equal(port, Assert.Single(await sweep.WaitAsync(SweepGuard)).PortName);
     }
 
     [Fact]
@@ -668,7 +674,7 @@ public class SerialDeviceFinderTests
             new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 0);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = await second.DiscoverAsync(CancellationToken.None);
+        var devices = await second.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard);
         stopwatch.Stop();
 
         Assert.Empty(devices);
@@ -693,7 +699,7 @@ public class SerialDeviceFinderTests
             new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 300);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = await second.DiscoverAsync(CancellationToken.None);
+        var devices = await second.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard);
         stopwatch.Stop();
 
         Assert.Empty(devices);
@@ -717,7 +723,7 @@ public class SerialDeviceFinderTests
             new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 10_000);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = await second.DiscoverAsync(TimeSpan.FromMilliseconds(250));
+        var devices = await second.DiscoverAsync(TimeSpan.FromMilliseconds(250)).WaitAsync(SweepGuard);
         stopwatch.Stop();
 
         Assert.Empty(devices);
@@ -733,6 +739,8 @@ public class SerialDeviceFinderTests
         // One draining port must not hold up the rest of the sweep: probes run
         // concurrently and DeviceDiscovered fires per-probe (#294), so a healthy
         // port on the same pass reports while the drain wait is still pending.
+        // This is the UNDER-capacity case (2 ports, MaxParallelProbes is 4) — see
+        // MoreDrainingPortsThanProbeSlots for the case that actually contends.
         const string draining = "COM_DRAIN_MIXED";
         const string healthy = "COM_OK_MIXED";
         var drainProbe = await AbandonProbeViaTimedOutPassAsync(draining);
@@ -757,7 +765,82 @@ public class SerialDeviceFinderTests
         Assert.Same(reported.Task, winner);
 
         drainProbe.ReleaseFirstProbe();
-        Assert.Contains(await sweep, d => d.PortName == healthy);
+        Assert.Contains(await sweep.WaitAsync(SweepGuard), d => d.PortName == healthy);
+    }
+
+    /// <summary>
+    /// Multi-port variant of <see cref="DrainProbe"/>: the FIRST probe of each named
+    /// port hangs on a shared gate, so a whole sweep's worth of ports can be left
+    /// abandoned-and-draining at once. Any later probe of the same port succeeds.
+    /// </summary>
+    private sealed class MultiDrainProbe
+    {
+        private readonly TaskCompletionSource<IDeviceInfo?> _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _firstProbeSeen = new();
+        private readonly string[] _drainPorts;
+
+        public MultiDrainProbe(string[] drainPorts) => _drainPorts = drainPorts;
+
+        public void ReleaseAll() => _gate.TrySetResult(null);
+
+        public Task<IDeviceInfo?> Probe(string portName, CancellationToken cancellationToken)
+        {
+            if (Array.IndexOf(_drainPorts, portName) >= 0 && _firstProbeSeen.TryAdd(portName, 0))
+            {
+                return _gate.Task;
+            }
+
+            return Task.FromResult<IDeviceInfo?>(FakeDevice(portName));
+        }
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_MoreDrainingPortsThanProbeSlots_StillProbesHealthyPortPromptly()
+    {
+        // Qodo #454 pass 1 #2: DiscoverAsync used to hold a probeGate slot across the
+        // WHOLE ProbeSafelyAsync call, so a drain wait — which opens no port and only
+        // awaits an already-running task — still consumed one of the MaxParallelProbes
+        // (4) slots. A pass whose predecessor timed out with every slot busy could
+        // therefore park every slot on drain waits and starve a healthy port for the
+        // full window. The gate is now taken around the port open only.
+        //
+        // Five draining ports guarantees contention against the cap of four.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        var drainPorts = new[]
+        {
+            "COM_SLOT_1", "COM_SLOT_2", "COM_SLOT_3", "COM_SLOT_4", "COM_SLOT_5"
+        };
+        const string healthy = "COM_SLOT_OK";
+        var probes = new MultiDrainProbe(drainPorts);
+
+        // Pass 1: every drain port hangs and is abandoned by the hard timeout.
+        using (var first = CreateFinderWithProbes(drainPorts, probes.Probe, hardTimeoutMs: 200))
+        {
+            Assert.Empty(await first.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard));
+        }
+
+        // Pass 2: all five are inside a deliberately long drain window, and the
+        // healthy port is last in the port list — worst case for slot starvation.
+        using var second = CreateFinderWithProbes(
+            [.. drainPorts, healthy], probes.Probe, hardTimeoutMs: 5000, drainWaitMs: 10_000);
+
+        var reported = new TaskCompletionSource<IDeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        second.DeviceDiscovered += (_, args) =>
+        {
+            if (args.DeviceInfo.PortName == healthy)
+            {
+                reported.TrySetResult(args.DeviceInfo);
+            }
+        };
+
+        var sweep = second.DiscoverAsync(CancellationToken.None);
+
+        // Pre-fix this waited out the 10s drain window; now it needs only a slot.
+        var winner = await Task.WhenAny(reported.Task, Task.Delay(3000));
+        Assert.Same(reported.Task, winner);
+
+        probes.ReleaseAll();
+        Assert.Contains(await sweep.WaitAsync(SweepGuard), d => d.PortName == healthy);
     }
 
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
