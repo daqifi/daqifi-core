@@ -118,6 +118,21 @@ public class DeviceIdentityTests
     }
 
     [Fact]
+    public void Matches_ShortHexLookingSerial_DoesNotNormalizeToDecimal()
+    {
+        // The hex fallback must not fire for anything shorter than the capability document's
+        // fixed 16-digit width — otherwise a short, coincidentally-hex serial (e.g. a USB HID
+        // descriptor, which is not guaranteed to be numeric at all) would silently collide with an
+        // unrelated device that reports that same value in decimal. "FACE" is 0xFACE = 64206.
+        var shortHex = DeviceIdentity.Create("FACE");
+        var decimalLookalike = DeviceIdentity.Create("64206");
+
+        Assert.False(shortHex.Matches(decimalLookalike));
+        Assert.NotEqual(shortHex.Key, decimalLookalike.Key);
+        Assert.Equal("sn:face", shortHex.Key);
+    }
+
+    [Fact]
     public void Matches_NonNumericSerials_StillFallBackToCaseInsensitiveStringCompare()
     {
         // A serial that parses as neither base (e.g. a USB HID serial descriptor) keeps the
