@@ -298,7 +298,8 @@ public class SerialDeviceFinderTests
     private static SerialDeviceFinder CreateFinderWithProbes(
         string[] ports,
         Func<string, CancellationToken, Task<IDeviceInfo?>> probe,
-        int hardTimeoutMs)
+        int hardTimeoutMs,
+        int? drainWaitMs = null)
     {
         var daqifiProvider = new RecordingUsbPortDescriptorProvider(_ =>
             new UsbPortDescriptor(DaqifiUsbIds.VendorId, DaqifiUsbIds.CdcProductId));
@@ -308,6 +309,10 @@ public class SerialDeviceFinderTests
             portNameProvider: () => ports,
             probeOverride: probe);
         finder.PortProbeHardTimeoutMs = hardTimeoutMs;
+        if (drainWaitMs.HasValue)
+        {
+            finder.AbandonedClaimDrainWaitMs = drainWaitMs.Value;
+        }
         return finder;
     }
 
@@ -565,6 +570,307 @@ public class SerialDeviceFinderTests
         // The healthy port is reported by at least one sweep (the loser of a
         // healthy-port claim race skips it for that sweep by design).
         Assert.Contains(results, r => r.Any(d => d.PortName == "COM_OK_CONC"));
+    }
+
+    // --- abandoned-claim drain wait -----------------------------------------
+    //
+    // Bench-measured on a real Nq1 (fw 3.7.2, USB, macOS): a pass that ends by
+    // TIMEOUT or CALLER CANCELLATION abandons its in-flight probe but leaves the
+    // PortClaims entry behind with Probe.IsCompleted == false. Pre-fix, every
+    // subsequent pass took the `return null` path in ~1ms (proof the port was never
+    // opened — a real pass costs ~800ms) until the probe finally unwound ~490ms
+    // later. A caller that retries promptly — Daqifi.Mcp's DaqifiAgent builds a
+    // fresh SerialDeviceFinder per DiscoverAsync call — burned every retry inside
+    // that window and concluded no device was attached.
+    //
+    // These tests drive the same state machine with a gated fake probe: the first
+    // probe hangs until the test releases it, standing in for the uncancellable
+    // native I/O that TryGetDeviceInfoAsync is unwinding.
+
+    // Every discovery await in these tests is bounded: a regression that stops
+    // DiscoverAsync from settling must fail the test, not hang CI (Qodo #454 pass 1
+    // #1). Generous relative to the drain windows under test so it never fires on
+    // timing jitter.
+    private static readonly TimeSpan SweepGuard = TimeSpan.FromSeconds(30);
+
+    private sealed class DrainProbe
+    {
+        private readonly TaskCompletionSource<IDeviceInfo?> _firstProbeGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _firstProbeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+
+        /// <summary>Completes once the abandoned first probe is genuinely in flight.</summary>
+        public Task FirstProbeStarted => _firstProbeStarted.Task;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        /// <summary>Simulates the stuck I/O finally unwinding and releasing the claim.</summary>
+        public void ReleaseFirstProbe() => _firstProbeGate.TrySetResult(null);
+
+        public Task<IDeviceInfo?> Probe(string portName, CancellationToken cancellationToken)
+        {
+            // First call hangs on the gate — abandoned by the caller's pass, but
+            // still holding the claim. Every later call is a healthy ~instant probe.
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                _firstProbeStarted.TrySetResult(true);
+                return _firstProbeGate.Task;
+            }
+
+            return Task.FromResult<IDeviceInfo?>(FakeDevice(portName));
+        }
+    }
+
+    /// <summary>
+    /// Runs a pass that abandons its probe the way the bench runs did, and returns
+    /// once that probe is confirmed in flight with its claim left behind.
+    /// </summary>
+    private static async Task<DrainProbe> AbandonProbeViaTimedOutPassAsync(string port)
+    {
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        var drainProbe = new DrainProbe();
+
+        using (var first = CreateFinderWithProbes(new[] { port }, drainProbe.Probe, hardTimeoutMs: 150))
+        {
+            Assert.Empty(await first.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard));
+        }
+
+        // The claim is only interesting if the probe really started and is stuck.
+        await drainProbe.FirstProbeStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        return drainProbe;
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_AfterTimedOutPass_WaitsForAbandonedClaimAndFindsDevice()
+    {
+        const string port = "COM_DRAIN_TIMEOUT";
+        var drainProbe = await AbandonProbeViaTimedOutPassAsync(port);
+
+        // Fresh finder immediately after — the one-shot MCP DaqifiAgent shape.
+        using var second = CreateFinderWithProbes(
+            new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 2000);
+
+        // The abandoned probe unwinds partway through the second pass's drain wait,
+        // mirroring the measured ~490ms claim hold.
+        var sweep = second.DiscoverAsync(CancellationToken.None);
+        await Task.Delay(150);
+        drainProbe.ReleaseFirstProbe();
+
+        var devices = (await sweep.WaitAsync(SweepGuard)).ToList();
+
+        Assert.Equal(port, Assert.Single(devices).PortName);
+        Assert.Equal(2, drainProbe.Calls);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_AfterCancelledPass_WaitsForAbandonedClaimAndFindsDevice()
+    {
+        // Same failure, reached the other way: the bench's 200ms caller-cancellation
+        // row. ProbeSafelyAsync abandons the claim before rethrowing the OCE, so the
+        // next pass hits the identical stale-claim state.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        const string port = "COM_DRAIN_CANCEL";
+        var drainProbe = new DrainProbe();
+
+        using (var first = CreateFinderWithProbes(new[] { port }, drainProbe.Probe, hardTimeoutMs: 60_000))
+        using (var cts = new CancellationTokenSource(150))
+        {
+            Assert.Empty(await first.DiscoverAsync(cts.Token).WaitAsync(SweepGuard));
+        }
+
+        await drainProbe.FirstProbeStarted.WaitAsync(TimeSpan.FromSeconds(10));
+
+        using var second = CreateFinderWithProbes(
+            new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 2000);
+
+        var sweep = second.DiscoverAsync(CancellationToken.None);
+        await Task.Delay(150);
+        drainProbe.ReleaseFirstProbe();
+
+        Assert.Equal(port, Assert.Single(await sweep.WaitAsync(SweepGuard)).PortName);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_AfterTimedOutPass_WithoutDrainWait_SilentlyReportsNoDevices()
+    {
+        // Pins the exact regression the drain wait removes: with the wait disabled
+        // the follow-up pass reports "no devices" without ever reopening the port,
+        // even though the device is present and the claim is about to clear.
+        const string port = "COM_DRAIN_DISABLED";
+        var drainProbe = await AbandonProbeViaTimedOutPassAsync(port);
+
+        using var second = CreateFinderWithProbes(
+            new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 0);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var devices = await second.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard);
+        stopwatch.Stop();
+
+        Assert.Empty(devices);
+        Assert.Equal(1, drainProbe.Calls); // port never reopened — the silent miss
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromMilliseconds(500),
+            $"Skip took {stopwatch.ElapsedMilliseconds}ms — expected the immediate ~1ms bail-out.");
+
+        drainProbe.ReleaseFirstProbe();
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_WedgedPort_DrainWaitExpiresWithoutReProbing()
+    {
+        // The drain wait must not weaken the #294/#295 thread-leak bound: a probe
+        // that never completes is still only ever started ONCE, and the waiting pass
+        // gives up at the window rather than hanging. Nothing new is spawned — the
+        // pass awaits the EXISTING probe task — so no second thread can be blocked.
+        const string port = "COM_DRAIN_WEDGED";
+        var drainProbe = await AbandonProbeViaTimedOutPassAsync(port);
+
+        using var second = CreateFinderWithProbes(
+            new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 300);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var devices = await second.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard);
+        stopwatch.Stop();
+
+        Assert.Empty(devices);
+        Assert.Equal(1, drainProbe.Calls);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3),
+            $"Wedged port held the pass for {stopwatch.ElapsedMilliseconds}ms — the drain wait is not bounded.");
+
+        drainProbe.ReleaseFirstProbe();
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_DrainWait_IsBoundedByCallerTimeout()
+    {
+        // The wait is capped by the caller's own budget as well as the window, so a
+        // caller asking for a fast answer still gets one (empty, as documented on
+        // IDeviceFinder.DiscoverAsync) instead of blocking for the full window.
+        const string port = "COM_DRAIN_BUDGET";
+        var drainProbe = await AbandonProbeViaTimedOutPassAsync(port);
+
+        using var second = CreateFinderWithProbes(
+            new[] { port }, drainProbe.Probe, hardTimeoutMs: 5000, drainWaitMs: 10_000);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var devices = await second.DiscoverAsync(TimeSpan.FromMilliseconds(250)).WaitAsync(SweepGuard);
+        stopwatch.Stop();
+
+        Assert.Empty(devices);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3),
+            $"Caller timeout of 250ms was overrun by {stopwatch.ElapsedMilliseconds}ms — the drain wait ignores the caller's budget.");
+
+        drainProbe.ReleaseFirstProbe();
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_DrainWait_DoesNotDelayOtherPortsOnTheSameSweep()
+    {
+        // One draining port must not hold up the rest of the sweep: probes run
+        // concurrently and DeviceDiscovered fires per-probe (#294), so a healthy
+        // port on the same pass reports while the drain wait is still pending.
+        // This is the UNDER-capacity case (2 ports, MaxParallelProbes is 4) — see
+        // MoreDrainingPortsThanProbeSlots for the case that actually contends.
+        const string draining = "COM_DRAIN_MIXED";
+        const string healthy = "COM_OK_MIXED";
+        var drainProbe = await AbandonProbeViaTimedOutPassAsync(draining);
+
+        using var second = CreateFinderWithProbes(
+            new[] { draining, healthy },
+            (p, ct) => p == draining ? drainProbe.Probe(p, ct) : Task.FromResult<IDeviceInfo?>(FakeDevice(p)),
+            hardTimeoutMs: 5000,
+            drainWaitMs: 3000);
+
+        var reported = new TaskCompletionSource<IDeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        second.DeviceDiscovered += (_, args) =>
+        {
+            if (args.DeviceInfo.PortName == healthy)
+            {
+                reported.TrySetResult(args.DeviceInfo);
+            }
+        };
+
+        var sweep = second.DiscoverAsync(CancellationToken.None);
+        var winner = await Task.WhenAny(reported.Task, Task.Delay(2000));
+        Assert.Same(reported.Task, winner);
+
+        drainProbe.ReleaseFirstProbe();
+        Assert.Contains(await sweep.WaitAsync(SweepGuard), d => d.PortName == healthy);
+    }
+
+    /// <summary>
+    /// Multi-port variant of <see cref="DrainProbe"/>: the FIRST probe of each named
+    /// port hangs on a shared gate, so a whole sweep's worth of ports can be left
+    /// abandoned-and-draining at once. Any later probe of the same port succeeds.
+    /// </summary>
+    private sealed class MultiDrainProbe
+    {
+        private readonly TaskCompletionSource<IDeviceInfo?> _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _firstProbeSeen = new();
+        private readonly string[] _drainPorts;
+
+        public MultiDrainProbe(string[] drainPorts) => _drainPorts = drainPorts;
+
+        public void ReleaseAll() => _gate.TrySetResult(null);
+
+        public Task<IDeviceInfo?> Probe(string portName, CancellationToken cancellationToken)
+        {
+            if (Array.IndexOf(_drainPorts, portName) >= 0 && _firstProbeSeen.TryAdd(portName, 0))
+            {
+                return _gate.Task;
+            }
+
+            return Task.FromResult<IDeviceInfo?>(FakeDevice(portName));
+        }
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_MoreDrainingPortsThanProbeSlots_StillProbesHealthyPortPromptly()
+    {
+        // Qodo #454 pass 1 #2: DiscoverAsync used to hold a probeGate slot across the
+        // WHOLE ProbeSafelyAsync call, so a drain wait — which opens no port and only
+        // awaits an already-running task — still consumed one of the MaxParallelProbes
+        // (4) slots. A pass whose predecessor timed out with every slot busy could
+        // therefore park every slot on drain waits and starve a healthy port for the
+        // full window. The gate is now taken around the port open only.
+        //
+        // Sized from the cap rather than hard-coded, so raising MaxParallelProbes
+        // can't quietly leave this test under-subscribed and no longer contending.
+        SerialDeviceFinder.ResetPortQuarantineForTests();
+        var drainPorts = Enumerable
+            .Range(1, SerialDeviceFinder.MaxParallelProbes + 1)
+            .Select(i => $"COM_SLOT_{i}")
+            .ToArray();
+        const string healthy = "COM_SLOT_OK";
+        var probes = new MultiDrainProbe(drainPorts);
+
+        // Pass 1: every drain port hangs and is abandoned by the hard timeout.
+        using (var first = CreateFinderWithProbes(drainPorts, probes.Probe, hardTimeoutMs: 200))
+        {
+            Assert.Empty(await first.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard));
+        }
+
+        // Pass 2: all five are inside a deliberately long drain window, and the
+        // healthy port is last in the port list — worst case for slot starvation.
+        using var second = CreateFinderWithProbes(
+            [.. drainPorts, healthy], probes.Probe, hardTimeoutMs: 5000, drainWaitMs: 10_000);
+
+        var reported = new TaskCompletionSource<IDeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        second.DeviceDiscovered += (_, args) =>
+        {
+            if (args.DeviceInfo.PortName == healthy)
+            {
+                reported.TrySetResult(args.DeviceInfo);
+            }
+        };
+
+        var sweep = second.DiscoverAsync(CancellationToken.None);
+
+        // Pre-fix this waited out the 10s drain window; now it needs only a slot.
+        var winner = await Task.WhenAny(reported.Task, Task.Delay(3000));
+        Assert.Same(reported.Task, winner);
+
+        probes.ReleaseAll();
+        Assert.Contains(await sweep.WaitAsync(SweepGuard), d => d.PortName == healthy);
     }
 
     private sealed class RecordingUsbPortDescriptorProvider : IUsbPortDescriptorProvider
