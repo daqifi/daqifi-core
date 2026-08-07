@@ -311,8 +311,7 @@ public sealed class SdCardFileParser
             }
             else if (msg.AnalogInData.Count > 0)
             {
-                analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(
-                    msg.AnalogInData.Select(v => (double)v).ToArray(), config);
+                analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(msg.AnalogInData, config);
             }
             else
             {
