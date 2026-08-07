@@ -621,8 +621,8 @@ namespace Daqifi.Core.Device.SdCard
 
             ValidateSdCardFileName(logFileName);
 
-            // SdCardLogFormat integer values map 1:1 to SYSTem:STReam:FORmat SCPI arguments
-            var formatCommand = new ScpiMessage($"SYSTem:STReam:FORmat {(int)format}");
+            // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
+            var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
 
             // SD card and LAN share the SPI bus on the hardware, so LAN must be
             // disabled before the SD card can be used.
