@@ -290,6 +290,23 @@ public class DeviceAdministrationOperationsTests
     }
 
     /// <summary>
+    /// The verdict trails the command, so the exchange must not be allowed to close on the default
+    /// 250ms inactivity window: on a device that echoes, the echo starts that clock and a merely-slow
+    /// verdict would read as a missing one, failing a command the device had accepted. Same reason the
+    /// SD listing raises its own completion window — its terminator is this same query.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmingOperation_AsksForAWindowLongEnoughForTheVerdictToTrailAnEcho()
+    {
+        var host = new FakeHost { IsConnected = true, ExchangeResponse = new[] { NoError } };
+
+        await new DeviceAdministrationOperations(host).SaveAdcCalibrationAsync();
+
+        Assert.Equal(3000, host.LastResponseTimeoutMs);
+        Assert.Equal(1000, host.LastCompletionTimeoutMs);
+    }
+
+    /// <summary>
     /// A device that volunteers <c>**ERROR: ...</c> alongside the command is complaining about that
     /// command directly, so it is classified from the line itself rather than from the queue reply.
     /// </summary>
@@ -307,6 +324,43 @@ public class DeviceAdministrationOperationsTests
 
         Assert.Equal(-113, ex.ErrorCode);
         Assert.Equal("**ERROR: -113,\"Undefined header\"", ex.DeviceResponse);
+    }
+
+    /// <summary>
+    /// <c>ERROR</c> lines the classifier matches but that carry no readable code — a bare token, or a
+    /// non-numeric one. These are still refusals, so they must throw; what they must not do is report
+    /// a code of <c>0</c>, the one value SCPI reserves for "no error". The raw line survives, since it
+    /// is the only diagnostic there is.
+    /// </summary>
+    [Theory]
+    [InlineData("ERROR")]
+    [InlineData("**ERROR")]
+    [InlineData("ERROR: something went wrong")]
+    public async Task ConfirmingOperation_WhenAVolunteeredErrorLineCarriesNoCode_ThrowsWithoutClaimingCodeZero(
+        string errorLine)
+    {
+        var host = new FakeHost { IsConnected = true, ExchangeResponse = new[] { errorLine } };
+
+        var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(
+            () => new DeviceAdministrationOperations(host).LoadAdcCalibrationAsync());
+
+        Assert.Null(ex.ErrorCode);
+        Assert.Equal(errorLine, ex.DeviceResponse);
+        Assert.Contains(errorLine, ex.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The guard behind the assertion above: these lines really do classify as SCPI errors while
+    /// yielding no code, so the null-code path is reachable rather than theoretical.
+    /// </summary>
+    [Theory]
+    [InlineData("ERROR")]
+    [InlineData("**ERROR")]
+    [InlineData("ERROR: something went wrong")]
+    public void CodelessErrorLines_ClassifyAsScpiErrorsButYieldNoCode(string errorLine)
+    {
+        Assert.True(ScpiResponseClassifier.IsScpiErrorLine(errorLine));
+        Assert.False(ScpiResponseClassifier.TryExtractErrorCode(errorLine, out _));
     }
 
     public static IEnumerable<object[]> UnreadableVerdicts()
@@ -448,6 +502,12 @@ public class DeviceAdministrationOperationsTests
         /// <summary>What a text exchange hands back — the device's side of a confirming command.</summary>
         public IReadOnlyList<string> ExchangeResponse { get; set; } = Array.Empty<string>();
 
+        /// <summary>The response timeout the last exchange asked for.</summary>
+        public int? LastResponseTimeoutMs { get; private set; }
+
+        /// <summary>The completion timeout the last exchange asked for.</summary>
+        public int? LastCompletionTimeoutMs { get; private set; }
+
         public void Send<T>(IOutboundMessage<T> message)
         {
             if (++_sendCount == FailSendAt)
@@ -484,6 +544,9 @@ public class DeviceAdministrationOperationsTests
         {
             Assert.Null(prepareAsync);
             Assert.Null(finalizeAsync);
+
+            LastResponseTimeoutMs = responseTimeoutMs;
+            LastCompletionTimeoutMs = completionTimeoutMs;
 
             Calls.Add("exchange");
             setupAction();

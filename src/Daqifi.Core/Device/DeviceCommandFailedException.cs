@@ -19,13 +19,25 @@ namespace Daqifi.Core.Device
     /// raising this exception rather than reporting a success the device never gave.
     /// </para>
     /// <para>
-    /// <see cref="ErrorCode"/> separates the two conditions this covers. A non-null code is the
-    /// device's own verdict: it answered, and the answer was a refusal — the command did not take
-    /// effect. A <c>null</c> code means the outcome is <em>unknown</em>: the verification query went
-    /// unanswered, so the command may or may not have been applied. Neither is a success, which is
-    /// why both surface as an exception, but a caller that retries should treat them differently —
-    /// a refusal will be refused again, whereas an unanswered query usually means the link or the
-    /// device needs attention first.
+    /// <see cref="ErrorCode"/> and <see cref="DeviceResponse"/> together say how much is known:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <b>Code present</b> — the device answered and the answer was a refusal. The command did not
+    /// take effect, and retrying it unchanged will be refused again.
+    /// </description></item>
+    /// <item><description>
+    /// <b>No code, but a <see cref="DeviceResponse"/></b> — the device answered, but with nothing
+    /// carrying a readable code: a bare <c>ERROR</c>, or a queue reply whose code would not parse.
+    /// The command is not confirmed, and the raw line is all there is to go on.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Neither</b> — nothing readable came back at all, so whether the command was applied is
+    /// <em>unknown</em>. Usually the link or the device needs attention before a retry is meaningful.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// None of the three is a success, which is why all of them throw.
     /// </para>
     /// </remarks>
     public class DeviceCommandFailedException : Exception
@@ -37,13 +49,16 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// The SCPI error code the device reported, e.g. <c>-200</c> for an execution error; <c>null</c>
-        /// when the device never answered the verification query and the command's outcome is therefore
-        /// unknown rather than known-bad.
+        /// when no code could be read — either because nothing came back or because what did carried no
+        /// readable code. Never <c>0</c>: that is the value SCPI reserves for "no error", so a refusal
+        /// is never reported under it. Pair with <see cref="DeviceResponse"/> to tell an unreadable
+        /// refusal from silence.
         /// </summary>
         public int? ErrorCode { get; }
 
         /// <summary>
-        /// The raw device line this verdict was read from, when there was one.
+        /// The raw device line this verdict was read from; <c>null</c> when the device said nothing
+        /// readable at all.
         /// </summary>
         public string? DeviceResponse { get; }
 
@@ -63,18 +78,25 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Initializes a new instance reporting that the command's outcome could <em>not be
-        /// confirmed</em> — the device did not answer the verification query.
+        /// Initializes a new instance reporting that no SCPI error code could be read — either the
+        /// device said nothing readable (outcome unknown), or it complained in a form carrying no code
+        /// (a refusal whose reason is only in the raw line).
         /// </summary>
         /// <param name="command">The SCPI command that was sent.</param>
-        /// <param name="deviceResponse">The raw device line that was expected to carry the verdict, if any.</param>
+        /// <param name="deviceResponse">The raw device line, when there was one; <c>null</c> when nothing readable came back.</param>
         public DeviceCommandFailedException(string command, string? deviceResponse = null)
-            : base($"The device did not confirm '{command}': its error queue was not readable after the "
-                   + "command, so whether it was applied is unknown. Check the connection and retry.")
+            : base(BuildUnreadableVerdictMessage(command, deviceResponse))
         {
             Command = command;
             ErrorCode = null;
             DeviceResponse = deviceResponse;
         }
+
+        private static string BuildUnreadableVerdictMessage(string command, string? deviceResponse)
+            => deviceResponse == null
+                ? $"The device did not confirm '{command}': its error queue was not readable after the "
+                  + "command, so whether it was applied is unknown. Check the connection and retry."
+                : $"The device did not confirm '{command}': it answered {deviceResponse}, which carries no "
+                  + "readable SCPI error code. The command was not confirmed to have taken effect.";
     }
 }

@@ -290,6 +290,7 @@ namespace Daqifi.Core.Device.Internal
                     _host.Send(ScpiMessageProducer.GetSystemError);
                 },
                 responseTimeoutMs: ConfirmationResponseTimeoutMs,
+                completionTimeoutMs: ConfirmationCompletionTimeoutMs,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
             ThrowIfNotAccepted(command.Data, lines);
@@ -300,19 +301,29 @@ namespace Daqifi.Core.Device.Internal
         /// an accepted command.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Three outcomes, and only one of them returns. A volunteered <c>**ERROR: ...</c> line is the
         /// device complaining about the command as it processed it; the <c>SYSTem:ERRor?</c> reply is
         /// the queue's verdict, authoritative because the drain left the queue empty; and no readable
         /// reply at all means the command's outcome is simply unknown, which is not a success and must
         /// not be reported as one.
+        /// </para>
+        /// <para>
+        /// A code is only ever reported when one was actually parsed. <c>ERROR</c> lines that carry no
+        /// readable code — a bare <c>ERROR</c>, or <c>ERROR: something non-numeric</c>, both of which
+        /// <see cref="ScpiResponseClassifier.IsScpiErrorLine"/> matches — are a refusal whose code is
+        /// unknown, so they take the null-code path. Reporting them as code <c>0</c> would name the one
+        /// value SCPI reserves for "no error".
+        /// </para>
         /// </remarks>
         private static void ThrowIfNotAccepted(string command, IReadOnlyList<string> lines)
         {
             var volunteeredError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
             if (volunteeredError != null)
             {
-                ScpiResponseClassifier.TryExtractErrorCode(volunteeredError, out var volunteeredCode);
-                throw new DeviceCommandFailedException(command, volunteeredCode, volunteeredError);
+                throw ScpiResponseClassifier.TryExtractErrorCode(volunteeredError, out var volunteeredCode)
+                    ? new DeviceCommandFailedException(command, volunteeredCode, volunteeredError)
+                    : new DeviceCommandFailedException(command, volunteeredError);
             }
 
             var reply = lines.LastOrDefault(ScpiResponseClassifier.IsSystemErrorReplyLine)?.Trim();
@@ -342,6 +353,31 @@ namespace Daqifi.Core.Device.Internal
         /// <c>VOLTage:SAVE</c>), which the device does not answer until the write is done.
         /// </summary>
         private const int ConfirmationResponseTimeoutMs = 3000;
+
+        /// <summary>
+        /// Inactivity window that ends a confirming exchange, in milliseconds.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Deliberately longer than the 250ms default, and set for the same reason the SD listing
+        /// raises its own (<c>SD_LIST_COMPLETION_TIMEOUT_MS</c>): both exchanges are only complete once
+        /// a trailing <c>SYSTem:ERRor?</c> reply has been seen, and the exchange switches from
+        /// <see cref="ConfirmationResponseTimeoutMs"/> to this window as soon as <i>any</i> line
+        /// arrives. On a device that echoes commands, that first line is the echo, so this window — not
+        /// the response timeout — is what has to cover the gap between the echo and the verdict. With
+        /// the 250ms default, a merely-slow verdict would read as a missing one and fail a command the
+        /// device had accepted.
+        /// </para>
+        /// <para>
+        /// It does not have to cover an NVM write on its own: a device that says nothing until the
+        /// write finishes is still in the first phase, which
+        /// <see cref="ConfirmationResponseTimeoutMs"/> covers. Should a device ever both echo and then
+        /// take longer than this to answer, the result is a spurious "not confirmed" — loud and
+        /// retryable, which is the failure direction this whole surface is built to prefer over a
+        /// silent false success.
+        /// </para>
+        /// </remarks>
+        private const int ConfirmationCompletionTimeoutMs = 1000;
 
         #endregion
 
