@@ -84,5 +84,28 @@ namespace Daqifi.Core.Tests.Device
         {
             Assert.False(ScpiResponseClassifier.IsSystemErrorReplyLine(line));
         }
+
+        [Theory]
+        [InlineData("0,\"No error\"", 0)]
+        [InlineData("+0,\"No error\"", 0)]
+        [InlineData("-200,\"Execution error\"", -200)]
+        [InlineData("-420, \"Query UNTERMINATED\"", -420)]
+        [InlineData("  -113,\"Undefined header\"  \r\n", -113)]
+        public void TryParseSystemErrorReplyCode_ReadsTheCode(string line, int expected)
+        {
+            Assert.True(ScpiResponseClassifier.TryParseSystemErrorReplyCode(line, out var code));
+            Assert.Equal(expected, code);
+        }
+
+        [Theory]
+        [InlineData("**ERROR: -200,\"Execution error\"")]  // the volunteered form, not a queue reply
+        [InlineData("Error !! No SD Card Detected")]
+        [InlineData("99999999999999,\"Overflows an int\"")]
+        [InlineData("")]
+        public void TryParseSystemErrorReplyCode_RejectsWhatIsNotACode(string line)
+        {
+            Assert.False(ScpiResponseClassifier.TryParseSystemErrorReplyCode(line, out var code));
+            Assert.Equal(0, code);
+        }
     }
 }

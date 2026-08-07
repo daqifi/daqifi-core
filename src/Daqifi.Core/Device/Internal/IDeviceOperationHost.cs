@@ -94,6 +94,15 @@ namespace Daqifi.Core.Device.Internal
             Func<Task>? finalizeAsync = null);
 #pragma warning restore CA1068
 
+        /// <inheritdoc cref="DaqifiDevice.DrainErrorQueueAsync"/>
+        /// <remarks>
+        /// Needed by the confirming administration commands, which drain the queue before they send so
+        /// the entry they pop afterwards is their own command's and not an older one's.
+        /// </remarks>
+        Task<IReadOnlyList<string>> DrainErrorQueueAsync(
+            int maxIterations = 256,
+            CancellationToken cancellationToken = default);
+
         /// <inheritdoc cref="DaqifiDevice.ExecuteRawCaptureAsync"/>
         Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
