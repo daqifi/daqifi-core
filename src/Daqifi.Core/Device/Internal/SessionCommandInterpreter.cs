@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using Daqifi.Core.Communication.Producers;
 
 #nullable enable
 
@@ -132,15 +133,6 @@ namespace Daqifi.Core.Device.Internal
     /// </remarks>
     internal static class SessionCommandInterpreter
     {
-        /// <summary>The command <see cref="Communication.Producers.ScpiMessageProducer.StartStreaming"/> emits.</summary>
-        internal const string StartStreamingCommand = "SYSTem:StartStreamData";
-
-        /// <summary>The command <see cref="Communication.Producers.ScpiMessageProducer.StopStreaming"/> emits.</summary>
-        internal const string StopStreamingCommand = "SYSTem:StopStreamData";
-
-        /// <summary>The command <see cref="Communication.Producers.ScpiMessageProducer.EnableAdcChannels"/> emits.</summary>
-        internal const string EnableAdcChannelsCommand = "ENAble:VOLTage:DC";
-
         /// <summary>
         /// Decides what <paramref name="command"/> means for the streaming session.
         /// </summary>
@@ -184,19 +176,19 @@ namespace Daqifi.Core.Device.Internal
 
             var trimmed = command!.Trim();
 
-            if (trimmed.StartsWith(StopStreamingCommand, StringComparison.OrdinalIgnoreCase))
+            if (trimmed.StartsWith(ScpiMessageProducer.StopStreamingCommand, StringComparison.OrdinalIgnoreCase))
             {
                 return SessionCommandEffect.StopStreaming;
             }
 
-            if (trimmed.StartsWith(StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
+            if (trimmed.StartsWith(ScpiMessageProducer.StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
             {
-                return InterpretStreamingStart(trimmed.AsSpan(StartStreamingCommand.Length), maxSamplingRate);
+                return InterpretStreamingStart(trimmed.AsSpan(ScpiMessageProducer.StartStreamingCommand.Length), maxSamplingRate);
             }
 
-            if (trimmed.StartsWith(EnableAdcChannelsCommand, StringComparison.OrdinalIgnoreCase))
+            if (trimmed.StartsWith(ScpiMessageProducer.EnableAdcChannelsCommand, StringComparison.OrdinalIgnoreCase))
             {
-                return InterpretAdcEnableMask(trimmed.AsSpan(EnableAdcChannelsCommand.Length));
+                return InterpretAdcEnableMask(trimmed.AsSpan(ScpiMessageProducer.EnableAdcChannelsCommand.Length));
             }
 
             return SessionCommandEffect.None;
