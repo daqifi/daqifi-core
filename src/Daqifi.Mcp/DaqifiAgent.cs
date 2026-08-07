@@ -346,9 +346,10 @@ public sealed class DaqifiAgent
     /// for every digital channel, including one that is not <see cref="IDigitalChannel.IsPwmCapable"/>:
     /// that is Core's only recovery command for a channel the firmware flagged PWM-active before
     /// failing its capability check (e.g. via a raw command outside Core's guard), so skipping the
-    /// send here would remove the one MCP-level way to clear that wedge. It costs a device-side
-    /// execution error on a channel that was never actually armed, which is the tradeoff Core's own
-    /// contract accepts (#450).
+    /// send here would remove the one MCP-level way to clear that wedge. On a channel that was never
+    /// actually armed the firmware rejects the command, but that send is fire-and-forget — Core does
+    /// not read the device's error queue back, so this call still succeeds and neither throws nor
+    /// reports the rejection in its <see cref="PwmResult"/> (#450).
     /// </summary>
     public async Task<PwmResult> DisablePwmAsync(string deviceId, int channel)
     {
