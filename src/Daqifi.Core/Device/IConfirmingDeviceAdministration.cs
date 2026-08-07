@@ -38,7 +38,10 @@ namespace Daqifi.Core.Device
     /// <para>
     /// Confirmation is not free: it needs text exchanges rather than a single write, so the
     /// <c>void</c> commands remain the right choice while streaming or when a silent no-op is
-    /// acceptable. Nothing here changes what goes on the wire for those.
+    /// acceptable. Nothing here changes what goes on the wire for those. Measured on the bench
+    /// Nyquist (fw 3.7.2, USB CDC), one confirming command costs about <b>3 seconds</b> — a drain
+    /// exchange plus the confirming exchange, each of which pauses the protobuf consumer and holds
+    /// the device's operation lock. Budget for that before putting one in a loop over 16 channels.
     /// </para>
     /// </remarks>
     public interface IConfirmingDeviceAdministration

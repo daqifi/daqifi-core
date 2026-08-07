@@ -407,6 +407,17 @@ namespace Daqifi.Core.Device.Internal
         /// retryable, which is the failure direction this whole surface is built to prefer over a
         /// silent false success.
         /// </para>
+        /// <para>
+        /// <b>Measured on the bench Nyquist (fw 3.7.2, USB CDC):</b> this firmware does <i>not</i> echo
+        /// commands, and every line it has to say arrives within ~20 ms of the first — a refusal's two
+        /// lines land essentially together. So on that path the window is pure trailing latency and
+        /// 250 ms would have sufficed. It is kept at 1000 ms as headroom for the cases the bench could
+        /// not cover: WiFi, whose gaps are the documented reason the SD listing raised its own window,
+        /// and the NVM writers (<c>SAVEcal</c> and friends), which are destructive to a calibrated
+        /// unit and so were never sent. Tightening this is a reasonable future change once one of
+        /// those has evidence behind it — the cost it buys is quantified on
+        /// <see cref="IConfirmingDeviceAdministration"/>.
+        /// </para>
         /// </remarks>
         private const int ConfirmationCompletionTimeoutMs = 1000;
 
