@@ -1058,6 +1058,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         internal async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             IProgress<SdCardTransferProgress>? progress = null,
