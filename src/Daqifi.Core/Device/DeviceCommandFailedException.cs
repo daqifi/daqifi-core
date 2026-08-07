@@ -91,7 +91,12 @@ namespace Daqifi.Core.Device
 
         private static string BuildRefusalMessage(string command, int errorCode, string deviceResponse)
             => errorCode == 0
-                ? BuildUnreadableVerdictMessage(command, deviceResponse)
+                // Not the "unreadable code" wording: the code here is perfectly readable, it just
+                // says "no error", which cannot describe a refusal. Saying it is unreadable would be
+                // factually wrong about a line the reader can see for themselves.
+                ? $"The device did not confirm '{command}': it answered {deviceResponse}, which reports "
+                  + "SCPI code 0 (\"no error\") and so does not describe a refusal. No usable verdict "
+                  + "was returned, so whether the command was applied is unknown."
                 : $"The device rejected '{command}' with SCPI error {errorCode} ({deviceResponse}). "
                   + "The command did not take effect.";
 

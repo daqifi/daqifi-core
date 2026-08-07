@@ -370,10 +370,17 @@ public class DeviceAdministrationOperationsTests
     /// Code 0 never reaches <see cref="DeviceCommandFailedException.ErrorCode"/> from any path, which
     /// is what lets callers branch on it: a non-null code always means a real refusal.
     /// </summary>
+    /// <remarks>
+    /// The line itself must survive. Dropping it would leave the failure reporting silence from a
+    /// device that plainly answered — the diagnostic a reader needs most when a device is speaking a
+    /// dialect this classifier does not expect. And the message must not call that code unreadable:
+    /// it is right there, it just says "no error", which cannot describe a refusal.
+    /// </remarks>
     [Theory]
     [InlineData("**ERROR: 0,\"No error\"")]
     [InlineData("ERROR: 0,\"No error\"")]
-    public async Task ConfirmingOperation_NeverReportsErrorCodeZero(string errorLine)
+    public async Task ConfirmingOperation_NeverReportsErrorCodeZero_ButKeepsTheLineAndDescribesItHonestly(
+        string errorLine)
     {
         var host = new FakeHost { IsConnected = true, ExchangeResponse = new[] { errorLine } };
 
@@ -383,6 +390,10 @@ public class DeviceAdministrationOperationsTests
             () => new DeviceAdministrationOperations(host).LoadAdcCalibrationAsync());
 
         Assert.NotEqual(0, ex.ErrorCode ?? -1);
+        Assert.Equal(errorLine, ex.DeviceResponse);
+        Assert.Contains(errorLine, ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("not readable", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("no readable", ex.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -400,6 +411,11 @@ public class DeviceAdministrationOperationsTests
         Assert.Equal("**ERROR: 0,\"No error\"", ex.DeviceResponse);
         Assert.Equal("CONFigure:ADC:LOADcal", ex.Command);
         Assert.DoesNotContain("rejected", ex.Message, StringComparison.Ordinal);
+
+        // The code is readable — it just says "no error". Claiming otherwise would contradict the
+        // line quoted alongside it in the same message.
+        Assert.DoesNotContain("no readable", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("no error", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

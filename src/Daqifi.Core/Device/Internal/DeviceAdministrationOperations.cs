@@ -321,6 +321,11 @@ namespace Daqifi.Core.Device.Internal
         /// </remarks>
         private static void ThrowIfNotAccepted(string command, IReadOnlyList<string> lines)
         {
+            // An error-shaped line that reports code 0 is not a refusal, but it is still something the
+            // device said. Held onto so that if no bare verdict turns up either, the failure can carry
+            // it rather than claim the device was silent.
+            string? codeZeroLine = null;
+
             var volunteeredError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
             if (volunteeredError != null)
             {
@@ -339,10 +344,21 @@ namespace Daqifi.Core.Device.Internal
                 // shape it arrived in. A device that answers the queue read as `**ERROR: 0,"No error"`
                 // rather than the bare form would otherwise be reported as having rejected a command
                 // it accepted. Fall through and let the queue verdict decide.
+                codeZeroLine = volunteeredError;
             }
 
             var reply = lines.LastOrDefault(ScpiResponseClassifier.IsSystemErrorReplyLine)?.Trim();
-            if (reply == null || !ScpiResponseClassifier.TryParseSystemErrorReplyCode(reply, out var code))
+            if (reply == null)
+            {
+                // Nothing in the bare verdict shape. Report what the device did say, if anything: the
+                // code-0 constructor normalises the code away but keeps the line, which is the whole
+                // point of carrying it this far.
+                throw codeZeroLine != null
+                    ? new DeviceCommandFailedException(command, 0, codeZeroLine)
+                    : new DeviceCommandFailedException(command);
+            }
+
+            if (!ScpiResponseClassifier.TryParseSystemErrorReplyCode(reply, out var code))
             {
                 throw new DeviceCommandFailedException(command, reply);
             }
