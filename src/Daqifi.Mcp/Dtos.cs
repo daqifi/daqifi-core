@@ -121,21 +121,24 @@ public sealed record DigitalPinResult(string DeviceId, int Channel, string Direc
 }
 
 /// <summary>
-/// Result of a PWM operation, reflecting the channel's state after it. <see cref="FrequencyHz"/>
-/// is the device-wide PWM frequency last commanded this session (0 when none was set; all PWM
-/// channels share one frequency).
+/// Result of a PWM operation, reflecting the channel's state after it. <see cref="DutyCyclePercent"/>
+/// and <see cref="FrequencyHz"/> are <c>null</c> until a value has actually been commanded this
+/// session — Core seeds both with session defaults (not device state) that are indistinguishable
+/// from a real command, so a caller cannot otherwise tell "this is what the device is doing" from
+/// "this is a constant Core made up" (#450). <see cref="FrequencyHz"/> is device-wide; all PWM
+/// channels share one frequency.
 /// </summary>
-public sealed record PwmResult(string DeviceId, int Channel, bool Enabled, int DutyCyclePercent, int FrequencyHz)
+public sealed record PwmResult(string DeviceId, int Channel, bool Enabled, int? DutyCyclePercent, int? FrequencyHz)
 {
-    public static PwmResult From(string deviceId, IStreamingDevice device, IChannel ch)
+    public static PwmResult From(string deviceId, IStreamingDevice device, IChannel ch, bool dutyCommanded, bool frequencyCommanded)
     {
         var digital = ch as IDigitalChannel;
         return new(
             deviceId,
             ch.ChannelNumber,
             digital?.IsPwmEnabled ?? false,
-            digital?.PwmDutyCyclePercent ?? 0,
-            device.PwmFrequencyHz);
+            dutyCommanded ? digital?.PwmDutyCyclePercent : null,
+            frequencyCommanded ? device.PwmFrequencyHz : null);
     }
 }
 

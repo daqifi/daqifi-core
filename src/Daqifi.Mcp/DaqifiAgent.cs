@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
@@ -49,6 +50,24 @@ public sealed class DaqifiAgent
     /// two tool calls that touch different devices.
     /// </summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// Which digital channels have had a PWM duty cycle actually commanded through
+    /// <see cref="SetPwmOutputAsync"/> this session, as opposed to Core's uncommanded
+    /// <see cref="DigitalChannel"/> default (#450). Keyed by channel identity so a fresh
+    /// connection — which gets fresh channel instances — starts clean without explicit eviction.
+    /// </summary>
+    private readonly ConditionalWeakTable<IChannel, object> _pwmDutyCommanded = new();
+
+    /// <summary>
+    /// Which devices have had a PWM frequency actually commanded through
+    /// <see cref="SetPwmOutputAsync"/> this session, as opposed to Core's uncommanded session
+    /// default (#450). Keyed by device identity for the same reason as <see cref="_pwmDutyCommanded"/>.
+    /// </summary>
+    private readonly ConditionalWeakTable<IStreamingDevice, object> _pwmFrequencyCommanded = new();
+
+    /// <summary>Presence-only marker value for the two "commanded" tables above.</summary>
+    private static readonly object PwmCommandedMarker = new();
 
     public DaqifiAgent(ServerOptions options, ILogger<DaqifiAgent>? logger = null)
     {
@@ -307,21 +326,27 @@ public sealed class DaqifiAgent
             var desiredFrequencyHz = frequencyHz != 0 ? frequencyHz : streaming.PwmFrequencyHz;
 
             streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
+            _pwmDutyCommanded.AddOrUpdate(ch, PwmCommandedMarker);
 
             // Reprogram the shared device-wide timer. Core skips the SCPI round-trip when the
             // frequency is unchanged from what it last sent this connection (#345), so a duty-only
             // update or re-enable no longer costs an extra round-trip and needs no agent-side cache.
             streaming.SetPwmFrequency(desiredFrequencyHz);
+            _pwmFrequencyCommanded.AddOrUpdate(streaming, PwmCommandedMarker);
 
             streaming.SetPwmEnabled(ch, true);
 
-            return Task.FromResult(PwmResult.From(deviceId, streaming, ch));
+            return Task.FromResult(PwmResult.From(deviceId, streaming, ch, dutyCommanded: true, frequencyCommanded: true));
         }).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Stops PWM output on a digital channel. The pin is left high-impedance; use
-    /// set_digital_direction / set_digital_output to drive it digitally again.
+    /// set_digital_direction / set_digital_output to drive it digitally again. A no-op on the wire
+    /// for a channel that is not <see cref="IDigitalChannel.IsPwmCapable"/>: such a channel can
+    /// never have had PWM armed (the half-armed state this recovers from is only reachable on
+    /// capable channels), so sending the command would only cost the device a spurious execution
+    /// error (#450) for no effect.
     /// </summary>
     public async Task<PwmResult> DisablePwmAsync(string deviceId, int channel)
     {
@@ -331,9 +356,14 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(_ =>
         {
-            streaming.SetPwmEnabled(ch, false);
+            if (ch is IDigitalChannel { IsPwmCapable: true })
+            {
+                streaming.SetPwmEnabled(ch, false);
+            }
 
-            return Task.FromResult(PwmResult.From(deviceId, streaming, ch));
+            var dutyCommanded = _pwmDutyCommanded.TryGetValue(ch, out var dutyMarker);
+            var frequencyCommanded = _pwmFrequencyCommanded.TryGetValue(streaming, out var frequencyMarker);
+            return Task.FromResult(PwmResult.From(deviceId, streaming, ch, dutyCommanded, frequencyCommanded));
         }).ConfigureAwait(false);
     }
 

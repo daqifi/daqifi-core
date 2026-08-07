@@ -103,7 +103,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.SetPwmOutputAsync(deviceId, channel, dutyCyclePercent, frequencyHz));
 
     [McpServerTool(Name = "disable_pwm")]
-    [Description("Stop PWM output on a digital channel. The pin is left high-impedance (not driven); use set_digital_direction/set_digital_output to drive it digitally again.")]
+    [Description("Stop PWM output on a digital channel. The pin is left high-impedance (not driven); use set_digital_direction/set_digital_output to drive it digitally again. Safe to call on any digital channel (documented recovery path for the firmware's half-armed PWM state), but a no-op on a channel that isn't PWM-capable, since such a channel can never have had PWM armed.")]
     public static Task<PwmResult> DisablePwm(
         DaqifiAgent agent,
         [Description("The device_id to control.")] string deviceId,
