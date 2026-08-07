@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
@@ -49,6 +50,24 @@ public sealed class DaqifiAgent
     /// two tool calls that touch different devices.
     /// </summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// Which digital channels have had a PWM duty cycle actually commanded through
+    /// <see cref="SetPwmOutputAsync"/> this session, as opposed to Core's uncommanded
+    /// <see cref="DigitalChannel"/> default (#450). Keyed by channel identity so a fresh
+    /// connection — which gets fresh channel instances — starts clean without explicit eviction.
+    /// </summary>
+    private readonly ConditionalWeakTable<IChannel, object> _pwmDutyCommanded = new();
+
+    /// <summary>
+    /// Which devices have had a PWM frequency actually commanded through
+    /// <see cref="SetPwmOutputAsync"/> this session, as opposed to Core's uncommanded session
+    /// default (#450). Keyed by device identity for the same reason as <see cref="_pwmDutyCommanded"/>.
+    /// </summary>
+    private readonly ConditionalWeakTable<IStreamingDevice, object> _pwmFrequencyCommanded = new();
+
+    /// <summary>Presence-only marker value for the two "commanded" tables above.</summary>
+    private static readonly object PwmCommandedMarker = new();
 
     public DaqifiAgent(ServerOptions options, ILogger<DaqifiAgent>? logger = null)
     {
@@ -307,21 +326,30 @@ public sealed class DaqifiAgent
             var desiredFrequencyHz = frequencyHz != 0 ? frequencyHz : streaming.PwmFrequencyHz;
 
             streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
+            _pwmDutyCommanded.AddOrUpdate(ch, PwmCommandedMarker);
 
             // Reprogram the shared device-wide timer. Core skips the SCPI round-trip when the
             // frequency is unchanged from what it last sent this connection (#345), so a duty-only
             // update or re-enable no longer costs an extra round-trip and needs no agent-side cache.
             streaming.SetPwmFrequency(desiredFrequencyHz);
+            _pwmFrequencyCommanded.AddOrUpdate(streaming, PwmCommandedMarker);
 
             streaming.SetPwmEnabled(ch, true);
 
-            return Task.FromResult(PwmResult.From(deviceId, streaming, ch));
+            return Task.FromResult(PwmResult.From(deviceId, streaming, ch, dutyCommanded: true, frequencyCommanded: true));
         }).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Stops PWM output on a digital channel. The pin is left high-impedance; use
-    /// set_digital_direction / set_digital_output to drive it digitally again.
+    /// set_digital_direction / set_digital_output to drive it digitally again. Deliberately sent
+    /// for every digital channel, including one that is not <see cref="IDigitalChannel.IsPwmCapable"/>:
+    /// that is Core's only recovery command for a channel the firmware flagged PWM-active before
+    /// failing its capability check (e.g. via a raw command outside Core's guard), so skipping the
+    /// send here would remove the one MCP-level way to clear that wedge. On a channel that was never
+    /// actually armed the firmware rejects the command, but that send is fire-and-forget — Core does
+    /// not read the device's error queue back, so this call still succeeds and neither throws nor
+    /// reports the rejection in its <see cref="PwmResult"/> (#450).
     /// </summary>
     public async Task<PwmResult> DisablePwmAsync(string deviceId, int channel)
     {
@@ -333,7 +361,9 @@ public sealed class DaqifiAgent
         {
             streaming.SetPwmEnabled(ch, false);
 
-            return Task.FromResult(PwmResult.From(deviceId, streaming, ch));
+            var dutyCommanded = _pwmDutyCommanded.TryGetValue(ch, out var dutyMarker);
+            var frequencyCommanded = _pwmFrequencyCommanded.TryGetValue(streaming, out var frequencyMarker);
+            return Task.FromResult(PwmResult.From(deviceId, streaming, ch, dutyCommanded, frequencyCommanded));
         }).ConfigureAwait(false);
     }
 
