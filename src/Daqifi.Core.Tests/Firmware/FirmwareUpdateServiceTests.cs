@@ -1740,6 +1740,16 @@ public class FirmwareUpdateServiceTests
                 "SYSTem:COMMunicate:LAN:APPLY"
             ],
             device.SentCommands);
+
+        // State the guarantee this test exists for on its own terms, not as a side effect of the
+        // sequence above. The Assert.Equal already implies both of these today, but it is the
+        // assertion most likely to be edited: every change to the recovery sequence rewrites that
+        // list, and whoever rewrites it is thinking about the commands they are adding, not about
+        // the two that must never appear. Spelled out separately, a cancel that starts persisting
+        // a network configuration fails on a line that says so, instead of looking like one more
+        // expected-list update to wave through.
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", device.SentCommands);
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:SAVE", device.SentCommands);
     }
 
     [Fact]
