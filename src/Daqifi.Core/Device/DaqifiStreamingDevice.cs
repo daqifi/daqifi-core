@@ -859,12 +859,33 @@ namespace Daqifi.Core.Device
         /// <inheritdoc />
         public void Reboot() => _administration.Reboot();
 
-        /// <inheritdoc cref="IStreamingDevice.RebootAsync" />
-        public Task RebootAsync(CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Reboots the device and disconnects from it, without blocking the calling thread.
+        /// </summary>
+        /// <remarks>
+        /// Unlike <see cref="IStreamingDevice.RebootAsync"/>'s default implementation, this override
+        /// does not call the blocking <see cref="Reboot"/>: that path tears down through
+        /// <see cref="DaqifiDevice.Disconnect"/>, which can stall the caller for the full teardown
+        /// wait (up to <see cref="DaqifiDevice.TextExchangeTeardownWait"/>) — exactly the freeze the
+        /// async surface exists to avoid. This sends the same reboot command and then awaits
+        /// <see cref="DaqifiDevice.DisconnectAsync"/> instead, so the local teardown is genuinely
+        /// asynchronous.
+        /// </remarks>
+        /// <inheritdoc cref="IStreamingDevice.RebootAsync" path="/param|/returns|/exception" />
+        public async Task RebootAsync(CancellationToken cancellationToken = default)
         {
+            if (!IsConnected)
+            {
+                throw new DeviceNotConnectedException();
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            Reboot();
-            return Task.CompletedTask;
+
+            Send(ScpiMessageProducer.RebootDevice);
+
+            // The device drops its link while restarting, so tear down the local connection —
+            // without blocking the caller, unlike Reboot()'s synchronous Disconnect().
+            await DisconnectAsync(cancellationToken).ConfigureAwait(false);
         }
 
         /// <inheritdoc />

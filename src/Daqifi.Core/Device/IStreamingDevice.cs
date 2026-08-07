@@ -15,9 +15,12 @@ namespace Daqifi.Core.Device
     /// available with a <see cref="CancellationToken"/> directly on this interface, with no cast
     /// needed — see that interface for why the confirming calibration calls exist alongside the
     /// <c>void</c> ones declared here. The streaming/channel/DIO/PWM/output/reboot operations below
-    /// each carry an <c>...Async</c> twin for the same reason; unlike calibration, the concrete
-    /// device runs no async machinery under those today, so the default implementation is a thin,
-    /// cancellable wrapper over the synchronous call — see the remarks on <see cref="StartStreamingAsync"/>.
+    /// each carry an <c>...Async</c> twin for the same reason. Most of them have no genuine async
+    /// machinery underneath today, so the default implementation is a thin, cancellable wrapper over
+    /// the synchronous call — see the remarks on <see cref="StartStreamingAsync"/>. Reboot is the
+    /// exception: its teardown is a real, potentially-blocking wait, so
+    /// <see cref="DaqifiStreamingDevice.RebootAsync"/> overrides the default to await
+    /// <see cref="IDevice.DisconnectAsync"/> instead of calling <see cref="Reboot"/>.
     /// </remarks>
     public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     {
