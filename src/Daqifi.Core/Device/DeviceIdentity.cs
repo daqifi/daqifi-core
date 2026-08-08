@@ -1,3 +1,4 @@
+using System.Globalization;
 using Daqifi.Core.Device.Discovery;
 
 namespace Daqifi.Core.Device;
@@ -12,7 +13,13 @@ namespace Daqifi.Core.Device;
 /// <item><description>
 /// Serial number — reported by every transport once the device has answered a status message
 /// (<see cref="IDeviceInfo.SerialNumber"/> pre-connect, <see cref="DeviceMetadata.SerialNumber"/>
-/// post-connect). Compared case-insensitively.
+/// post-connect). Core's own protobuf-sourced paths always report this in base-10, but the
+/// device's own capability document (<c>identity.serial</c>) reports the same value as a
+/// fixed-width, 16-digit base-16 string — so when one side is a valid decimal number and the other
+/// is a 16-digit hex string, both are parsed as a 64-bit integer and compared numerically rather
+/// than as strings. Any value that does not parse as either — for example a USB HID serial
+/// descriptor, which is not guaranteed to be numeric at all and is not held to the capability
+/// document's fixed width — falls back to case-insensitive string comparison.
 /// </description></item>
 /// <item><description>
 /// MAC address — network-only, but present before a serial number is known on the WiFi path.
@@ -41,7 +48,7 @@ public sealed class DeviceIdentity
         MacAddress = Normalize(macAddress);
         LocationKey = Normalize(locationKey);
 
-        Key = SerialNumber != null ? "sn:" + SerialNumber.ToLowerInvariant()
+        Key = SerialNumber != null ? "sn:" + NormalizeSerialForKey(SerialNumber)
             : MacAddress != null ? "mac:" + NormalizeMac(MacAddress)
             : LocationKey != null ? "loc:" + LocationKey.ToLowerInvariant()
             : string.Empty;
@@ -130,6 +137,12 @@ public sealed class DeviceIdentity
 
         if (SerialNumber != null && other.SerialNumber != null)
         {
+            if (TryParseSerialAsNumber(SerialNumber, out var thisSerial)
+                && TryParseSerialAsNumber(other.SerialNumber, out var otherSerial))
+            {
+                return thisSerial == otherSerial;
+            }
+
             return SerialNumber.Equals(other.SerialNumber, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -199,6 +212,55 @@ public sealed class DeviceIdentity
     /// </summary>
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>
+    /// Reduces a serial number to the key fragment used in <see cref="Key"/>: the decimal value
+    /// when the serial parses as one (see <see cref="TryParseSerialAsNumber"/>), otherwise the
+    /// lowercased raw string. Keeps <see cref="Key"/> in lock-step with <see cref="Matches"/> — two
+    /// identities that <see cref="Matches"/> says are equal always produce the same key.
+    /// </summary>
+    private static string NormalizeSerialForKey(string serialNumber)
+        => TryParseSerialAsNumber(serialNumber, out var value)
+            ? value.ToString(CultureInfo.InvariantCulture)
+            : serialNumber.ToLowerInvariant();
+
+    /// <summary>
+    /// The capability document's <c>identity.serial</c> field is a fixed-width 64-bit value
+    /// rendered as hex, which is always 16 digits (see #446) — never fewer, since a shorter value
+    /// would be zero-padded.
+    /// </summary>
+    private const int CapabilityDocumentSerialHexLength = 16;
+
+    /// <summary>
+    /// Parses a serial number as the 64-bit integer it represents, trying base-10 first (the form
+    /// every protobuf-sourced path in Core produces) and falling back to base-16 (the form the
+    /// device's own capability document reports). A pure-digit string is genuinely ambiguous — for
+    /// example a 16-digit all-numeric capability-document serial is valid as both — and the
+    /// decimal-first order resolves that ambiguity in favor of the representation Core's own
+    /// status-message path produces, so a serial that never leaves that path is unaffected by this
+    /// method existing at all.
+    /// </summary>
+    /// <remarks>
+    /// The hex fallback only fires for a string exactly <see cref="CapabilityDocumentSerialHexLength"/>
+    /// digits long — the capability document's fixed width. Without that constraint, any short
+    /// hex-digit-only string (a plausible USB HID serial descriptor, which is not guaranteed to be
+    /// numeric at all) would silently normalize to a small decimal value and could collide with an
+    /// unrelated device that happens to report that value as its decimal serial — e.g. the four
+    /// characters <c>"FACE"</c> parsing as <c>64206</c>.
+    /// </remarks>
+    /// <param name="serial">The serial number string to parse.</param>
+    /// <param name="value">The parsed value, or <c>0</c> when parsing fails.</param>
+    /// <returns><c>true</c> when <paramref name="serial"/> parses as either base.</returns>
+    private static bool TryParseSerialAsNumber(string serial, out ulong value)
+    {
+        if (ulong.TryParse(serial, NumberStyles.None, CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        return serial.Length == CapabilityDocumentSerialHexLength
+            && ulong.TryParse(serial, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out value);
+    }
 
     /// <summary>
     /// Strips separators and case from a MAC address so the hyphenated form Core produces
