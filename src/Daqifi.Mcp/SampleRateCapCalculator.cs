@@ -23,13 +23,19 @@ public static class SampleRateCapCalculator
     /// values come from independently-parsed fields, so a stale or racing read could otherwise
     /// report a "current" cap above the absolute ceiling. <c>0</c> is a real answer (no channels
     /// enabled) and is deliberately not floored the way <paramref name="hardwareMaxSamplingRateHz"/> is.
+    /// A negative value is not a real answer — the JSON parser accepts any <c>int32</c>, so a
+    /// malformed capability document could otherwise produce a negative effective cap, which would
+    /// both misreport as "no channels enabled" in <see cref="DaqifiAgent.SetSampleRateAsync"/> and,
+    /// worse, disable <see cref="DaqifiAgent.StartLoggingAsync"/>'s over-cap backstop outright
+    /// (that check only fires when the cap is positive) — treated as "not reported" instead, the
+    /// same as <c>null</c>.
     /// </param>
     /// <param name="maxSampleRateHzOption">The server's optional <c>--max-sample-rate-hz</c> clamp.</param>
     /// <returns>The effective cap in Hz. Can legitimately be <c>0</c> when nothing is enabled.</returns>
     public static int ComputeCapHz(int hardwareMaxSamplingRateHz, int? currentMaxRateHz, int? maxSampleRateHzOption)
     {
         var hardwareMax = Math.Max(1, hardwareMaxSamplingRateHz);
-        var deviceCap = currentMaxRateHz.HasValue ? Math.Min(currentMaxRateHz.Value, hardwareMax) : hardwareMax;
+        var deviceCap = currentMaxRateHz is >= 0 ? Math.Min(currentMaxRateHz.Value, hardwareMax) : hardwareMax;
         return maxSampleRateHzOption.HasValue ? Math.Min(maxSampleRateHzOption.Value, deviceCap) : deviceCap;
     }
 

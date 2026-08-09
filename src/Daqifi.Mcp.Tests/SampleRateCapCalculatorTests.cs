@@ -56,6 +56,22 @@ public class SampleRateCapCalculatorTests
         Assert.Equal(7746, SampleRateCapCalculator.ComputeCapHz(22000, currentMaxRateHz: 7746, maxSampleRateHzOption: 50000));
     }
 
+    [Fact]
+    public void ComputeCapHz_NegativeCurrentMax_TreatedAsAbsent_FallsBackToHardwareMax()
+    {
+        // A malformed capability document could report a negative current_max_rate_hz (the JSON
+        // parser accepts any int32). Left unguarded this produces a negative effective cap, which
+        // both misreports as "no channels enabled" in SetSampleRateAsync and disables
+        // StartLoggingAsync's over-cap backstop outright (that check only fires when cap > 0).
+        Assert.Equal(22000, SampleRateCapCalculator.ComputeCapHz(22000, currentMaxRateHz: -1, maxSampleRateHzOption: null));
+    }
+
+    [Fact]
+    public void ComputeCapHz_NegativeCurrentMax_StillBoundedByServerOption()
+    {
+        Assert.Equal(500, SampleRateCapCalculator.ComputeCapHz(22000, currentMaxRateHz: -1, maxSampleRateHzOption: 500));
+    }
+
     #endregion
 
     #region EnforceCap
