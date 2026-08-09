@@ -214,7 +214,9 @@ public sealed class DaqifiAgent
             // set_sample_rate validates against the configuration that is actually live.
             await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
 
-            return new ConfigureResult(deviceId, EnabledAnalog(device), streaming.StreamingFrequency);
+            var adjustedFromHz = EnforceSampleRateCap(device, streaming);
+
+            return new ConfigureResult(deviceId, EnabledAnalog(device), streaming.StreamingFrequency, adjustedFromHz);
         }).ConfigureAwait(false);
     }
 
@@ -256,7 +258,9 @@ public sealed class DaqifiAgent
             // set_sample_rate even though the rate model itself ignores digital channels.
             await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
 
-            return new ConfigureDigitalResult(deviceId, EnabledDigital(device));
+            var adjustedFromHz = EnforceSampleRateCap(device, streaming);
+
+            return new ConfigureDigitalResult(deviceId, EnabledDigital(device), streaming.StreamingFrequency, adjustedFromHz);
         }).ConfigureAwait(false);
     }
 
@@ -379,23 +383,20 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(_ =>
         {
-            // MaxSamplingRate is the absolute sampling-ISR ceiling, not what the device will
-            // actually accept for the channels enabled right now — that is
-            // CapabilityStreaming.CurrentMaximumRateHz, refreshed after every channel-
-            // configuration call (see ConfigureAnalogChannelsAsync/ConfigureDigitalChannelsAsync).
-            // Guard against a non-positive board-table value so the fallback is always >= 1; a
-            // reported CurrentMaximumRateHz of 0 is a real answer ("no channels enabled") and is
-            // deliberately not floored the same way.
-            var hardwareMax = Math.Max(1, device.Metadata.Capabilities.MaxSamplingRate);
+            var cap = ComputeSampleRateCapHz(device);
 
-            // Bound to hardwareMax defensively: CurrentMaximumRateHz and MaxSamplingRate come from
-            // two independently-parsed fields, so a self-inconsistent document (or a channel-set
-            // read that raced a board-table update) could otherwise report a "current" cap above
-            // the absolute ceiling StreamingFrequency itself enforces — which would let this check
-            // pass and then fail one line down with the wrong exception type.
-            var currentMax = device.Metadata.CapabilityDocument?.Streaming?.CurrentMaximumRateHz;
-            var deviceCap = currentMax.HasValue ? Math.Min(currentMax.Value, hardwareMax) : hardwareMax;
-            var cap = _options.MaxSampleRateHz is { } max ? Math.Min(max, deviceCap) : deviceCap;
+            // A reported CurrentMaximumRateHz of 0 is a real answer ("no channels enabled right
+            // now"), not a parsing gap — see ComputeSampleRateCapHz. Called out with its own
+            // message rather than falling into the generic "exceeds the maximum" rejection below:
+            // that message reads as "you asked for too much", which points an agent at lowering
+            // rateHz when the actual remedy is enabling a channel first.
+            if (cap <= 0)
+            {
+                throw new InvalidOperationException(
+                    "No channels are enabled, so the device has no sample-rate capacity right now. " +
+                    "Enable at least one channel with configure_analog_channels or " +
+                    "configure_digital_channels before setting a sample rate.");
+            }
 
             if (rateHz > cap)
             {
@@ -406,6 +407,61 @@ public sealed class DaqifiAgent
             streaming.StreamingFrequency = rateHz;
             return Task.FromResult(new SampleRateResult(deviceId, rateHz));
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Computes the effective sample-rate ceiling for <paramref name="device"/> right now: the
+    /// device's cap for its currently enabled channels (<see cref="CapabilityStreaming.CurrentMaximumRateHz"/>,
+    /// refreshed by <see cref="RefreshCapabilityDocumentAsync"/> after every channel-configuration
+    /// call), bounded by the absolute sampling-ISR ceiling (<see cref="DeviceCapabilities.MaxSamplingRate"/>)
+    /// and by a lower <c>--max-sample-rate-hz</c> if one was configured. Shared by
+    /// <see cref="SetSampleRateAsync"/> (to validate a request) and
+    /// <see cref="ConfigureAnalogChannelsAsync"/>/<see cref="ConfigureDigitalChannelsAsync"/> (to
+    /// re-validate the rate that is already live once the channel set — and therefore the cap —
+    /// changes underneath it).
+    /// </summary>
+    /// <remarks>
+    /// Zero is a real answer (no channels enabled) and is deliberately not floored the way the
+    /// board-table fallback is. Bounding the device's reported cap to <c>hardwareMax</c> guards
+    /// against a self-inconsistent document — <c>CurrentMaximumRateHz</c> and
+    /// <c>MaxSamplingRate</c> come from two independently-parsed fields, so a stale or racing read
+    /// could otherwise report a "current" cap above the absolute ceiling
+    /// <see cref="IStreamingDevice.StreamingFrequency"/> itself enforces.
+    /// </remarks>
+    private int ComputeSampleRateCapHz(DaqifiDevice device)
+    {
+        var currentMax = device.Metadata.CapabilityDocument?.Streaming?.CurrentMaximumRateHz;
+        return SampleRateCapCalculator.ComputeCapHz(
+            device.Metadata.Capabilities.MaxSamplingRate, currentMax, _options.MaxSampleRateHz);
+    }
+
+    /// <summary>
+    /// Re-validates the already-live <see cref="IStreamingDevice.StreamingFrequency"/> against the
+    /// cap this device's channel set now allows, lowering it when the set just enabled by
+    /// <see cref="ConfigureAnalogChannelsAsync"/>/<see cref="ConfigureDigitalChannelsAsync"/>
+    /// shrank the cap below the rate a previous <see cref="SetSampleRateAsync"/> call left running
+    /// (#447) — otherwise that stale rate stays live, is echoed back to the agent as if it were
+    /// still valid, and is unreachable through <see cref="SetSampleRateAsync"/>'s own guard, since
+    /// re-requesting the same value now fails.
+    /// </summary>
+    /// <remarks>
+    /// A cap of zero (nothing enabled) leaves the rate alone rather than driving it to zero — zero
+    /// is not a meaningful streaming frequency, and the channel set is expected to change again
+    /// before streaming actually starts.
+    /// </remarks>
+    /// <returns>
+    /// The rate that was live before the adjustment, or <c>null</c> when no adjustment was needed.
+    /// </returns>
+    private int? EnforceSampleRateCap(DaqifiDevice device, IStreamingDevice streaming)
+    {
+        var cap = ComputeSampleRateCapHz(device);
+        var (newRateHz, adjustedFromHz) = SampleRateCapCalculator.EnforceCap(streaming.StreamingFrequency, cap);
+        if (adjustedFromHz.HasValue)
+        {
+            streaming.StreamingFrequency = newRateHz;
+        }
+
+        return adjustedFromHz;
     }
 
     // --------------------------------------------------------- SD card logging
@@ -421,6 +477,21 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(async ct =>
         {
+            // Use-time backstop for #447: EnforceSampleRateCap already keeps the live rate at or
+            // under the cap through every configure_* call, but re-check here too, since this is
+            // the point an out-of-range rate would actually reach the firmware. The firmware's
+            // response to an over-cap rate is a silent one — it refuses with "Data out of range"
+            // and streams zero samples, with no exception and no ErrorOccurred — so failing loudly
+            // here is the only way an agent finds out before a logging session comes back empty.
+            var cap = ComputeSampleRateCapHz(device);
+            if (cap > 0 && streaming.StreamingFrequency > cap)
+            {
+                throw new InvalidOperationException(
+                    $"The current sample rate ({streaming.StreamingFrequency} Hz) exceeds the " +
+                    $"maximum {cap} Hz for the currently enabled channels. Call set_sample_rate " +
+                    "with a value at or below the maximum before starting SD-card logging.");
+            }
+
             // Core owns the naming convention and reports the effective on-card filename back to
             // us, so we no longer duplicate the log_{timestamp} generation here.
             var session = await sd.StartSdCardLoggingSessionAsync(fileName, channelMask: null, format: fmt, ct)
