@@ -100,11 +100,30 @@ public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bo
     }
 }
 
-/// <summary>Result of a channel-configuration change.</summary>
-public sealed record ConfigureResult(string DeviceId, IReadOnlyList<int> EnabledAnalogChannels, int SampleRateHz);
+/// <summary>
+/// Result of a channel-configuration change. <see cref="SampleRateAdjustedFromHz"/> is non-null
+/// only when the newly-enabled channel set lowered the device's rate cap below the sample rate
+/// that was already live, in which case <see cref="SampleRateHz"/> has already been brought down
+/// to the new cap — see <see cref="DaqifiAgent.EnforceSampleRateCap"/> (#447). It is <c>null</c>
+/// when the rate needed no adjustment, including when nothing was ever set.
+/// </summary>
+public sealed record ConfigureResult(
+    string DeviceId,
+    IReadOnlyList<int> EnabledAnalogChannels,
+    int SampleRateHz,
+    int? SampleRateAdjustedFromHz);
 
-/// <summary>Result of a digital channel-configuration change.</summary>
-public sealed record ConfigureDigitalResult(string DeviceId, IReadOnlyList<int> EnabledDigitalChannels);
+/// <summary>
+/// Result of a digital channel-configuration change. <see cref="SampleRateHz"/> and
+/// <see cref="SampleRateAdjustedFromHz"/> mirror <see cref="ConfigureResult"/> — digital
+/// reconfiguration also refreshes the device's rate cap, so the same live-rate re-validation
+/// applies (#447).
+/// </summary>
+public sealed record ConfigureDigitalResult(
+    string DeviceId,
+    IReadOnlyList<int> EnabledDigitalChannels,
+    int SampleRateHz,
+    int? SampleRateAdjustedFromHz);
 
 /// <summary>
 /// Result of a digital direction or output change, reflecting the channel's state after the

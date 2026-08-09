@@ -59,7 +59,7 @@ public static class DaqifiTools
         => Guard(() => agent.ListChannels(deviceId));
 
     [McpServerTool(Name = "configure_analog_channels")]
-    [Description("Enable exactly the given analog input channels (by channel number) and disable the rest. Pass an empty list to disable all analog channels.")]
+    [Description("Enable exactly the given analog input channels (by channel number) and disable the rest. Pass an empty list to disable all analog channels. Widening the channel set can lower the device's sample-rate ceiling; if the currently set rate no longer fits, it is automatically lowered to the new ceiling and the response's sampleRateAdjustedFromHz reports the rate it was lowered from.")]
     public static Task<ConfigureResult> ConfigureAnalogChannels(
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
@@ -67,7 +67,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.ConfigureAnalogChannelsAsync(deviceId, enabledChannels));
 
     [McpServerTool(Name = "configure_digital_channels")]
-    [Description("Enable exactly the given digital channels (by channel number) and disable the rest. Enabled digital channels are sampled during streaming; the device's DIO enable is global, so enabling any digital channel powers the whole port. Pass an empty list to disable all digital channels.")]
+    [Description("Enable exactly the given digital channels (by channel number) and disable the rest. Enabled digital channels are sampled during streaming; the device's DIO enable is global, so enabling any digital channel powers the whole port. Pass an empty list to disable all digital channels. As with configure_analog_channels, an over-cap live sample rate is automatically lowered and reported via sampleRateAdjustedFromHz.")]
     public static Task<ConfigureDigitalResult> ConfigureDigitalChannels(
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
