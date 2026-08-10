@@ -275,10 +275,14 @@ public sealed class DaqifiAgent
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
         var ch = RequireDigitalChannel(device, channel);
-        RequirePwmDisabled(ch);
 
+        // The PWM check runs inside the same exclusive section as the write it guards, so no
+        // concurrent tool call can toggle PWM between the check and the send (#473) — an outer,
+        // unlocked check would leave that race open and could let Core's SDK-oriented exception
+        // (naming SetPwmEnabled, not an MCP tool) leak through instead of this guard's message.
         return await device.RunExclusiveAsync(_ =>
         {
+            RequirePwmDisabled(ch);
             streaming.SetDioDirection(ch, parsed);
 
             return Task.FromResult(DigitalPinResult.From(deviceId, ch));
@@ -294,12 +298,14 @@ public sealed class DaqifiAgent
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
         var ch = RequireDigitalChannel(device, channel);
-        RequirePwmDisabled(ch);
 
         // Direction-then-value is the sequence that must not be split: another tool call landing
-        // between them could flip the pin back to input before the value is driven.
+        // between them could flip the pin back to input before the value is driven. The PWM check
+        // runs inside the same exclusive section for the same reason — see SetDigitalDirectionAsync.
         return await device.RunExclusiveAsync(_ =>
         {
+            RequirePwmDisabled(ch);
+
             if (ch.Direction != ChannelDirection.Output)
             {
                 streaming.SetDioDirection(ch, ChannelDirection.Output);
