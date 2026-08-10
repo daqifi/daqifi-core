@@ -185,7 +185,7 @@ namespace Daqifi.Core.Device.Internal
             if (channel is IDigitalChannel { IsPwmEnabled: true })
             {
                 throw new InvalidOperationException(
-                    $"Channel {channel.ChannelNumber} has PWM enabled; digital direction/state commands are ignored by the firmware while PWM is running. Call SetPwmEnabled(channel, false) first.");
+                    $"Channel {channel.ChannelNumber} has PWM enabled; digital direction/state commands are ignored by the firmware while PWM is running. Disable PWM on this channel first (SetPwmEnabled(channel, false); the MCP server exposes this as the disable_pwm tool).");
             }
         }
 

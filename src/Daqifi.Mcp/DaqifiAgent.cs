@@ -277,7 +277,7 @@ public sealed class DaqifiAgent
         var ch = RequireDigitalChannel(device, channel);
 
         // The PWM check runs inside the same exclusive section as the write it guards, so no
-        // concurrent tool call can toggle PWM between the check and the send (#473) — an outer,
+        // concurrent tool call can toggle PWM between the check and the send (#449) — an outer,
         // unlocked check would leave that race open and could let Core's SDK-oriented exception
         // (naming SetPwmEnabled, not an MCP tool) leak through instead of this guard's message.
         return await device.RunExclusiveAsync(_ =>
