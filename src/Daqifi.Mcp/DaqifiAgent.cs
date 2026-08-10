@@ -574,6 +574,14 @@ public sealed class DaqifiAgent
         return registration.Device;
     }
 
+    // #333 promoted Channels/Metadata/GetChannelsSnapshot/ChannelsPopulated onto IStreamingDevice
+    // and narrowed DaqifiDeviceFactory's return type, but this cast is a different one: it exists
+    // because DaqifiDeviceRegistry (this._registry) is deliberately typed over the base DaqifiDevice
+    // — its public Register(DaqifiDevice, ...) accepts any manually-constructed DaqifiDevice, not
+    // only ones this factory built — so a registered handle's static type here is never narrower
+    // than that. Every device this agent actually connects is in practice a DaqifiStreamingDevice,
+    // so the runtime check below always succeeds; it stays a check rather than an assumption because
+    // the registry's contract doesn't guarantee it.
     private (DaqifiDevice device, IStreamingDevice streaming) RequireStreaming(string deviceId)
     {
         var device = Require(deviceId);

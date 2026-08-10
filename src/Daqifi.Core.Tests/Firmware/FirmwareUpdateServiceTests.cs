@@ -4063,11 +4063,15 @@ public class FirmwareUpdateServiceTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => ConnectionStatus.Connected;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }
         public void Connect() => IsConnected = true;
         public void Disconnect() => IsConnected = false;
 
@@ -4197,11 +4201,15 @@ public class FirmwareUpdateServiceTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => ConnectionStatus.Connected;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }
         public void Connect() => IsConnected = true;
         public void Disconnect() => IsConnected = false;
 
@@ -4956,6 +4964,9 @@ public class FirmwareUpdateServiceTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => _status;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
 
@@ -4979,6 +4990,12 @@ public class FirmwareUpdateServiceTests
         }
 
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred
+        {
+            add { }
+            remove { }
+        }
+
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated
         {
             add { }
             remove { }
@@ -5113,6 +5130,9 @@ public class FirmwareUpdateServiceTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => _status;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
 
@@ -5132,6 +5152,12 @@ public class FirmwareUpdateServiceTests
         }
 
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred
+        {
+            add { }
+            remove { }
+        }
+
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated
         {
             add { }
             remove { }

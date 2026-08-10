@@ -349,6 +349,9 @@ namespace Daqifi.Core.Tests.Device
             public IPAddress? IpAddress => null;
             public bool IsConnected { get; private set; } = true;
             public ConnectionStatus Status => IsConnected ? ConnectionStatus.Connected : ConnectionStatus.Disconnected;
+            public DeviceMetadata Metadata { get; } = new();
+            public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+            public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
             public int StreamingFrequency { get; set; }
             public bool IsStreaming { get; private set; }
             public int PwmFrequencyHz => 0;
@@ -356,6 +359,7 @@ namespace Daqifi.Core.Tests.Device
             public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
             public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
             public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
+            public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }
 
             public void Connect() => IsConnected = true;
             public void Disconnect() => IsConnected = false;

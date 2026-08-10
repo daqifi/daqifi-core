@@ -35,9 +35,8 @@ dotnet add package Daqifi.Core
 using Daqifi.Core.Device;
 using Daqifi.Core.Channel;
 
-// Connect — transport and device initialization handled for you. The factory returns the base
-// DaqifiDevice type, but the constructed instance is always a DaqifiStreamingDevice.
-await using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+// Connect — transport and device initialization handled for you.
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // Subscribe to decoded, per-channel samples
 var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
@@ -174,23 +173,17 @@ using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
 Digital channels default to inputs. Flip one to output and drive it — the level is applied
 immediately, and flipping back to input releases the pin to high-impedance.
 
-`DaqifiDeviceFactory` returns the base `DaqifiDevice` type, so pattern-match to `IStreamingDevice`
-to reach these members — the same way as `INetworkConfigurable` below.
-
 ```csharp
 using Daqifi.Core.Channel;
 
-if (device is IStreamingDevice streamingDevice)
-{
-    var channels = device.GetChannelsSnapshot();
-    var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
+var channels = device.GetChannelsSnapshot();
+var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
 
-    streamingDevice.SetDioDirection(dio3, ChannelDirection.Output);
-    streamingDevice.SetDioValue(dio3, true);   // drive high
-    streamingDevice.SetDioValue(dio3, false);  // drive low
+device.SetDioDirection(dio3, ChannelDirection.Output);
+device.SetDioValue(dio3, true);   // drive high
+device.SetDioValue(dio3, false);  // drive low
 
-    streamingDevice.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
-}
+device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
 ```
 
 Every `IStreamingDevice` method above (and the rest of the channel/PWM/analog-output/reboot surface)
@@ -206,43 +199,37 @@ one hardware timer drives them all.
 ```csharp
 using Daqifi.Core.Channel;
 
-if (device is IStreamingDevice streamingDevice)
-{
-    var pwm = device.GetChannelsSnapshot()
-        .OfType<IDigitalChannel>()
-        .First(c => c.IsPwmCapable);
+var pwm = device.GetChannelsSnapshot()
+    .OfType<IDigitalChannel>()
+    .First(c => c.IsPwmCapable);
 
-    streamingDevice.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
-    streamingDevice.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
-    streamingDevice.SetPwmEnabled(pwm, true);  // start
+device.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
+device.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
+device.SetPwmEnabled(pwm, true);  // start
 
-    streamingDevice.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
+device.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
 
-    streamingDevice.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
-}
+device.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
 ```
 
 ### Network configuration
 
-Devices implementing `INetworkConfigurable` accept programmatic WiFi and LAN configuration. `Mode`, `Ssid`, and `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
+`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, and `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
 
 ```csharp
 using System.Net;
 using Daqifi.Core.Device.Network;
 
-if (device is INetworkConfigurable networkDevice)
+var config = new NetworkConfiguration
 {
-    var config = new NetworkConfiguration
-    {
-        Ssid       = "MyNetwork",
-        Password   = "secret",
-        Mode       = WifiMode.ExistingNetwork,
-        StaticIP   = IPAddress.Parse("192.168.1.42"),
-        SubnetMask = IPAddress.Parse("255.255.255.0"),
-        Gateway    = IPAddress.Parse("192.168.1.1"),
-    };
-    await networkDevice.UpdateNetworkConfigurationAsync(config);
-}
+    Ssid       = "MyNetwork",
+    Password   = "secret",
+    Mode       = WifiMode.ExistingNetwork,
+    StaticIP   = IPAddress.Parse("192.168.1.42"),
+    SubnetMask = IPAddress.Parse("255.255.255.0"),
+    Gateway    = IPAddress.Parse("192.168.1.1"),
+};
+await device.UpdateNetworkConfigurationAsync(config);
 ```
 
 ### Firmware updates
