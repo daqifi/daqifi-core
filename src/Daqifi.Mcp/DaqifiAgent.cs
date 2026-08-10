@@ -69,6 +69,26 @@ public sealed class DaqifiAgent
     /// <summary>Presence-only marker value for the two "commanded" tables above.</summary>
     private static readonly object PwmCommandedMarker = new();
 
+    /// <summary>
+    /// Floor for <see cref="DiscoverAsync"/>'s <c>timeoutMs</c> clamp. Bench-measured: the serial
+    /// identify handshake takes ~830 ms on real hardware, so this is that plus ~20% margin — a
+    /// timeout below it can never succeed and returns an empty list indistinguishable from "no
+    /// device attached" (#448). Was 250 ms, which is below the handshake time on every run.
+    /// </summary>
+    internal const int MinDiscoveryTimeoutMs = 1000;
+
+    /// <summary>
+    /// Clamps a caller-supplied discovery timeout to <c>[<see cref="MinDiscoveryTimeoutMs"/>, 30_000]</c>
+    /// ms. The floor is derived from measurement, not a guess: the serial identify handshake takes
+    /// ~830 ms on real hardware, so anything below ~1000 ms returns empty before the device can
+    /// ever answer — indistinguishable from "nothing is attached" (#448). Serial probing can settle
+    /// and return before the full budget; <see cref="WiFiDeviceFinder"/> listens for the whole
+    /// window regardless (its receive loop runs until the timeout cancels it), so this floor mainly
+    /// rejects budgets that could never have succeeded rather than guaranteeing an early return.
+    /// </summary>
+    internal static TimeSpan ClampDiscoveryTimeout(int timeoutMs) =>
+        TimeSpan.FromMilliseconds(Math.Clamp(timeoutMs, MinDiscoveryTimeoutMs, 30_000));
+
     public DaqifiAgent(ServerOptions options, ILogger<DaqifiAgent>? logger = null)
     {
         _options = options;
@@ -80,7 +100,7 @@ public sealed class DaqifiAgent
     public async Task<IReadOnlyList<DiscoveredDevice>> DiscoverAsync(
         int timeoutMs, bool wifi, bool serial, CancellationToken cancellationToken)
     {
-        var timeout = TimeSpan.FromMilliseconds(Math.Clamp(timeoutMs, 250, 30_000));
+        var timeout = ClampDiscoveryTimeout(timeoutMs);
         var infos = new List<IDeviceInfo>();
 
         if (wifi)
