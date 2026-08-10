@@ -81,9 +81,10 @@ public sealed class DaqifiAgent
     /// Clamps a caller-supplied discovery timeout to <c>[<see cref="MinDiscoveryTimeoutMs"/>, 30_000]</c>
     /// ms. The floor is derived from measurement, not a guess: the serial identify handshake takes
     /// ~830 ms on real hardware, so anything below ~1000 ms returns empty before the device can
-    /// ever answer — indistinguishable from "nothing is attached" (#448). Successful discovery
-    /// still returns as soon as the device responds; this floor only rejects budgets that could
-    /// never have succeeded.
+    /// ever answer — indistinguishable from "nothing is attached" (#448). Serial probing can settle
+    /// and return before the full budget; <see cref="WiFiDeviceFinder"/> listens for the whole
+    /// window regardless (its receive loop runs until the timeout cancels it), so this floor mainly
+    /// rejects budgets that could never have succeeded rather than guaranteeing an early return.
     /// </summary>
     internal static TimeSpan ClampDiscoveryTimeout(int timeoutMs) =>
         TimeSpan.FromMilliseconds(Math.Clamp(timeoutMs, MinDiscoveryTimeoutMs, 30_000));
