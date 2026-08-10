@@ -115,6 +115,32 @@ directly (no cast required). It implements:
 - `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
   (see [Device Diagnostics](#device-diagnostics) below)
 
+### BootloaderSessionDevice
+
+Stands in for a device that is **already sitting in its bootloader**, so a manual bootloader-only
+firmware update can go through the same `IFirmwareUpdateService` entry points as a normal update.
+Every operation is a no-op and every collection is empty — a device in bootloader mode has no SCPI
+transport to talk to.
+
+```csharp
+await using var session = new BootloaderSessionDevice("DAQiFi Bootloader");
+await firmwareUpdateService.UpdateFirmwareAsync(session, hexFilePath, progress);
+```
+
+Three of its behaviours are load-bearing rather than incidental, because the PIC32 update flow
+touches the device before it ever reaches the bootloader:
+
+| Member | Value | Why |
+|--------|-------|-----|
+| `IsConnected` | starts `true` | The flow rejects a disconnected device before it starts |
+| `IsStreaming` | always `false` | Lets the flow skip its `StopStreaming()` call |
+| `Send(...)` | discards silently | The flow sends force-bootloader unconditionally; throwing would abort a valid update |
+
+Prefer this over hand-writing an `IStreamingDevice` stub in your own application. It is the only
+hand-written implementation of that interface shipped with the product, so a member added to
+`IStreamingDevice` is resolved here — in the change that adds it — instead of breaking your build on
+your next Core upgrade.
+
 ### DaqifiDeviceFactory
 
 Static factory class for simplified device connections:
