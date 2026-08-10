@@ -853,16 +853,19 @@ Console.WriteLine($"Received {sampleCount} samples");
 or disabling analog channels recomputes the full `ENAble:VOLTage:DC` bitmask internally; digital
 channels are toggled via the global DIO enable.
 
-`Channels`, along with the rest of the members below, is declared directly on `IStreamingDevice`
-(#333) — no cast to the concrete device type needed, whether `device` came from
-`DaqifiDeviceFactory` or is held only as an `IStreamingDevice` reference.
+`Channels`/`GetChannelsSnapshot()`, along with the rest of the members below, are declared directly
+on `IStreamingDevice` (#333) — no cast to the concrete device type needed, whether `device` came
+from `DaqifiDeviceFactory` or is held only as an `IStreamingDevice` reference.
 
 ```csharp
 using Daqifi.Core.Channel;
 
-// Channels are populated after a status message is received from the device.
-var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
-var ai2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
+// Channels are populated after a status message is received from the device. Channels itself is
+// a live view that can be repopulated concurrently on the consumer thread, so a snapshot (rather
+// than the live property) is what's safe to run LINQ queries against off that thread.
+var channels = device.GetChannelsSnapshot();
+var ai0 = channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+var ai2 = channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
 
 // Enable analog input channels (the device receives the combined bitmask, e.g. "5").
 device.EnableChannels(new[] { ai0, ai2 });
@@ -874,13 +877,13 @@ device.DisableChannel(ai0);
 device.DisableAllChannels();
 
 // Digital I/O: set direction and drive an output.
-var dio1 = device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+var dio1 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
 device.SetDioDirection(dio1, ChannelDirection.Output);
 device.SetDioValue(dio1, true); // drive high
 
 // PWM on a capable channel (IDigitalChannel.IsPwmCapable). Duty is per channel; the
 // frequency is device-wide because one hardware timer drives every PWM channel.
-var pwm = device.Channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
+var pwm = channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
 device.SetPwmDutyCycle(pwm, 25);  // 1-100 %
 device.SetPwmFrequency(1000);     // 6-50000 Hz, shared by all PWM channels
 device.SetPwmEnabled(pwm, true);  // start; SetPwmEnabled(pwm, false) stops (pin goes high-impedance)
