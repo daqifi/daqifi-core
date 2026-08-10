@@ -307,16 +307,62 @@ public class BootloaderSessionDeviceTests
                     $"{target.Name} threw {ex.InnerException?.GetType().Name}: {ex.InnerException?.Message}");
             }
 
-            // Observe returned tasks so a faulted one is not silently dropped.
-            switch (result)
-            {
-                case Task task:
-                    await task;
-                    break;
-                case ValueTask valueTask:
-                    await valueTask;
-                    break;
-            }
+            await ObserveAsync(result);
+        }
+    }
+
+    /// <summary>
+    /// Awaits whatever a reflected member returned, so a faulted result is surfaced rather than
+    /// silently dropped.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Task{TResult}"/> needs no special case — it derives from <see cref="Task"/>.
+    /// <see cref="ValueTask{TResult}"/> does: it is a distinct struct with no non-generic base, so
+    /// without the third branch a future member returning one could fault unobserved while the
+    /// sweep still passed.
+    /// </remarks>
+    private static async Task ObserveAsync(object? result)
+    {
+        switch (result)
+        {
+            case Task task:
+                await task;
+                break;
+            case ValueTask valueTask:
+                await valueTask;
+                break;
+            default:
+                if (result?.GetType() is { IsGenericType: true } type
+                    && type.GetGenericTypeDefinition() == typeof(ValueTask<>))
+                {
+                    await (Task)type.GetMethod(nameof(ValueTask<int>.AsTask))!.Invoke(result, null)!;
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Guards the sweep's own result-observing logic: each awaitable shape a member could return
+    /// must surface a fault, or the sweep would report success over a throwing member.
+    /// </summary>
+    [Fact]
+    public async Task ObserveAsync_SurfacesFaults_ForEveryAwaitableShape()
+    {
+        var boom = new InvalidOperationException("boom");
+
+        object[] faulted =
+        [
+            Task.FromException(boom),
+            Task.FromException<int>(boom),
+            new ValueTask(Task.FromException(boom)),
+            new ValueTask<int>(Task.FromException<int>(boom)),
+        ];
+
+        foreach (var result in faulted)
+        {
+            var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => ObserveAsync(result));
+            Assert.Equal("boom", thrown.Message);
         }
     }
 
