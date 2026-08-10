@@ -464,6 +464,9 @@ public class LanChipInfoProviderExtensionsTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; set; } = true;
         public ConnectionStatus Status => IsConnected ? ConnectionStatus.Connected : ConnectionStatus.Disconnected;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
 
@@ -480,6 +483,12 @@ public class LanChipInfoProviderExtensionsTests
         }
 
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred
+        {
+            add { }
+            remove { }
+        }
+
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated
         {
             add { }
             remove { }

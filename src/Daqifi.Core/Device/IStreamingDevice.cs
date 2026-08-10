@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,6 +25,37 @@ namespace Daqifi.Core.Device
     /// </remarks>
     public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     {
+        /// <summary>
+        /// Gets the device metadata containing part number, firmware version, capabilities, etc.
+        /// </summary>
+        DeviceMetadata Metadata { get; }
+
+        /// <summary>
+        /// Gets the collection of channels populated from device status messages. Every
+        /// enable/disable/DIO/PWM method below documents that the channel it is given "must belong
+        /// to this device's <c>Channels</c> collection" — this member is what makes that
+        /// requirement satisfiable from an <see cref="IStreamingDevice"/> reference alone, with no
+        /// cast to the concrete device type (#333).
+        /// </summary>
+        /// <remarks>
+        /// This is a live view over the backing collection; callers that fold over channels off the
+        /// consumer thread should prefer <see cref="GetChannelsSnapshot"/> instead, for the same
+        /// reason documented there.
+        /// </remarks>
+        IReadOnlyList<IChannel> Channels { get; }
+
+        /// <summary>
+        /// Returns a point-in-time snapshot of the channel collection, safe to enumerate even when
+        /// a status message repopulates the collection concurrently on the consumer thread.
+        /// </summary>
+        /// <returns>A lock-protected copy of the current channel collection.</returns>
+        IReadOnlyList<IChannel> GetChannelsSnapshot();
+
+        /// <summary>
+        /// Occurs when channels have been populated from a device status message.
+        /// </summary>
+        event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated;
+
         /// <summary>
         /// Gets or sets the streaming frequency in Hz.
         /// </summary>

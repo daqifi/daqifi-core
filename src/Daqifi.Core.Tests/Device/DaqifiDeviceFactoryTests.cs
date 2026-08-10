@@ -577,6 +577,60 @@ public class DaqifiDeviceFactoryTests
 
     #endregion
 
+    #region Return Type Tests
+
+    // The constructed instance was always a DaqifiStreamingDevice; every public Connect* method
+    // returned the base DaqifiDevice type anyway, forcing every caller to cast (#333). These pin
+    // the narrower return type at the reflection level so a regression is caught even though the
+    // actual connect path needs live hardware to exercise end to end.
+    [Theory]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectTcp), new[] { typeof(string), typeof(int), typeof(DeviceConnectionOptions) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectTcp), new[] { typeof(IPAddress), typeof(int), typeof(DeviceConnectionOptions) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectSerial), new[] { typeof(string), typeof(DeviceConnectionOptions) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectSerial), new[] { typeof(string), typeof(int), typeof(DeviceConnectionOptions) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectFromDeviceInfo), new[] { typeof(IDeviceInfo), typeof(DeviceConnectionOptions) })]
+    public void SyncConnectMethod_ReturnsDaqifiStreamingDevice(string methodName, Type[] parameterTypes)
+    {
+        var method = typeof(DaqifiDeviceFactory).GetMethod(methodName, parameterTypes);
+        Assert.NotNull(method);
+        Assert.Equal(typeof(DaqifiStreamingDevice), method!.ReturnType);
+    }
+
+    [Theory]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectTcpAsync), new[] { typeof(string), typeof(int), typeof(DeviceConnectionOptions), typeof(CancellationToken) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectTcpAsync), new[] { typeof(IPAddress), typeof(int), typeof(DeviceConnectionOptions), typeof(CancellationToken) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectSerialAsync), new[] { typeof(string), typeof(DeviceConnectionOptions), typeof(CancellationToken) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectSerialAsync), new[] { typeof(string), typeof(int), typeof(DeviceConnectionOptions), typeof(CancellationToken) })]
+    [InlineData(nameof(DaqifiDeviceFactory.ConnectFromDeviceInfoAsync), new[] { typeof(IDeviceInfo), typeof(DeviceConnectionOptions), typeof(CancellationToken) })]
+    public void AsyncConnectMethod_ReturnsTaskOfDaqifiStreamingDevice(string methodName, Type[] parameterTypes)
+    {
+        var method = typeof(DaqifiDeviceFactory).GetMethod(methodName, parameterTypes);
+        Assert.NotNull(method);
+        Assert.Equal(typeof(Task<DaqifiStreamingDevice>), method!.ReturnType);
+    }
+
+    [Fact]
+    public void DiscoverAndConnectAsync_ReturnsTaskOfDaqifiStreamingDevice()
+    {
+        var method = typeof(DaqifiDeviceFactory).GetMethod(nameof(DaqifiDeviceFactory.DiscoverAndConnectAsync));
+        Assert.NotNull(method);
+        Assert.Equal(typeof(Task<DaqifiStreamingDevice>), method!.ReturnType);
+    }
+
+    [Fact]
+    public void IStreamingDevice_ExposesChannelsAndMetadataDirectly()
+    {
+        // Promoted onto the interface (#333) so a caller holding only IStreamingDevice can obtain
+        // a channel to pass into the interface's own enable/disable/DIO/PWM methods, without a
+        // cast to the concrete device type.
+        Assert.NotNull(typeof(IStreamingDevice).GetProperty(nameof(IStreamingDevice.Channels)));
+        Assert.NotNull(typeof(IStreamingDevice).GetProperty(nameof(IStreamingDevice.Metadata)));
+        Assert.NotNull(typeof(IStreamingDevice).GetMethod(nameof(IStreamingDevice.GetChannelsSnapshot)));
+        Assert.NotNull(typeof(IStreamingDevice).GetEvent(nameof(IStreamingDevice.ChannelsPopulated)));
+    }
+
+    #endregion
+
     #region Test Helpers
 
     /// <summary>
