@@ -276,8 +276,13 @@ public sealed class DaqifiAgent
         var (device, streaming) = RequireStreaming(deviceId);
         var ch = RequireDigitalChannel(device, channel);
 
+        // The PWM check runs inside the same exclusive section as the write it guards, so no
+        // concurrent tool call can toggle PWM between the check and the send (#449) — an outer,
+        // unlocked check would leave that race open and could let Core's SDK-oriented exception
+        // (naming SetPwmEnabled, not an MCP tool) leak through instead of this guard's message.
         return await device.RunExclusiveAsync(_ =>
         {
+            RequirePwmDisabled(ch);
             streaming.SetDioDirection(ch, parsed);
 
             return Task.FromResult(DigitalPinResult.From(deviceId, ch));
@@ -295,9 +300,12 @@ public sealed class DaqifiAgent
         var ch = RequireDigitalChannel(device, channel);
 
         // Direction-then-value is the sequence that must not be split: another tool call landing
-        // between them could flip the pin back to input before the value is driven.
+        // between them could flip the pin back to input before the value is driven. The PWM check
+        // runs inside the same exclusive section for the same reason — see SetDigitalDirectionAsync.
         return await device.RunExclusiveAsync(_ =>
         {
+            RequirePwmDisabled(ch);
+
             if (ch.Direction != ChannelDirection.Output)
             {
                 streaming.SetDioDirection(ch, ChannelDirection.Output);
@@ -649,6 +657,22 @@ public sealed class DaqifiAgent
                 $"{string.Join(", ", digital.Select(c => c.ChannelNumber).OrderBy(n => n))}.");
         }
         return match;
+    }
+
+    /// <summary>
+    /// Fails fast with MCP-actionable guidance when PWM is enabled on <paramref name="channel"/>,
+    /// rather than letting the call reach Core and surface its SDK-oriented
+    /// <see cref="InvalidOperationException"/> message (which points at <c>SetPwmEnabled</c>, a
+    /// method MCP callers have no tool for) — see #449.
+    /// </summary>
+    private static void RequirePwmDisabled(IChannel channel)
+    {
+        if (channel is IDigitalChannel { IsPwmEnabled: true })
+        {
+            throw new InvalidOperationException(
+                $"Channel {channel.ChannelNumber} has PWM enabled; the firmware ignores digital direction/state " +
+                "commands while PWM is running. Call disable_pwm on this channel first.");
+        }
     }
 
     private static ChannelDirection ParseDirection(string? direction) => (direction ?? string.Empty).Trim().ToLowerInvariant() switch

@@ -75,7 +75,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.ConfigureDigitalChannelsAsync(deviceId, enabledChannels));
 
     [McpServerTool(Name = "set_digital_direction")]
-    [Description("Set a digital channel's direction: 'input' (high-impedance, sampled during streaming) or 'output' (driven by the device; set the level with set_digital_output).")]
+    [Description("Set a digital channel's direction: 'input' (high-impedance, sampled during streaming) or 'output' (driven by the device; set the level with set_digital_output). Rejected while PWM is enabled on the channel — call disable_pwm first.")]
     public static Task<DigitalPinResult> SetDigitalDirection(
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
@@ -84,7 +84,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.SetDigitalDirectionAsync(deviceId, channel, direction));
 
     [McpServerTool(Name = "set_digital_output")]
-    [Description("Drive a digital channel high or low. If the channel is currently an input it is switched to output direction first, so one call is enough to drive a pin.")]
+    [Description("Drive a digital channel high or low. If the channel is currently an input it is switched to output direction first, so one call is enough to drive a pin. Rejected while PWM is enabled on the channel — call disable_pwm first.")]
     public static Task<DigitalPinResult> SetDigitalOutput(
         DaqifiAgent agent,
         [Description("The device_id to control.")] string deviceId,
@@ -93,7 +93,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.SetDigitalOutputAsync(deviceId, channel, high));
 
     [McpServerTool(Name = "set_pwm_output")]
-    [Description("Start PWM output on a PWM-capable digital channel (Nyquist: channels 0, 3, 4, 5, 6, 7). Sets the duty cycle, optionally the device-wide frequency, then enables the channel. The frequency is shared by ALL PWM channels (one hardware timer). While PWM runs, digital direction/state commands for the channel are ignored by the hardware.")]
+    [Description("Start PWM output on a PWM-capable digital channel (Nyquist: channels 0, 3, 4, 5, 6, 7). Sets the duty cycle, optionally the device-wide frequency, then enables the channel. The frequency is shared by ALL PWM channels (one hardware timer). While PWM runs, set_digital_direction/set_digital_output on the channel are rejected rather than silently ignored — call disable_pwm first to drive it digitally again.")]
     public static Task<PwmResult> SetPwmOutput(
         DaqifiAgent agent,
         [Description("The device_id to control.")] string deviceId,

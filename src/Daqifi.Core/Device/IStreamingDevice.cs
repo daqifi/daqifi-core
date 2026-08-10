@@ -179,8 +179,13 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Sets the direction (input or output) of a digital I/O channel.
         /// </summary>
-        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
+        /// Rejected if <see cref="Channel.IDigitalChannel.IsPwmEnabled"/> is <c>true</c> on this channel — see
+        /// <see cref="SetPwmEnabled"/>.</param>
         /// <param name="direction">The direction to apply. Must be <see cref="ChannelDirection.Input"/> or <see cref="ChannelDirection.Output"/>.</param>
+        /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
+        /// firmware ignores direction writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
+        /// <c>enabled: false</c> first.</exception>
         void SetDioDirection(IChannel channel, ChannelDirection direction);
 
         /// <summary>
@@ -188,11 +193,16 @@ namespace Daqifi.Core.Device
         /// calling thread.
         /// </summary>
         /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
+        /// Rejected if <see cref="Channel.IDigitalChannel.IsPwmEnabled"/> is <c>true</c> on this channel — see
+        /// <see cref="SetPwmEnabled"/>.</param>
         /// <param name="direction">The direction to apply. Must be <see cref="ChannelDirection.Input"/> or <see cref="ChannelDirection.Output"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
+        /// firmware ignores direction writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
+        /// <c>enabled: false</c> first.</exception>
         Task SetDioDirectionAsync(IChannel channel, ChannelDirection direction, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -203,8 +213,13 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Sets the output state (high or low) of a digital I/O channel.
         /// </summary>
-        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
+        /// Rejected if <see cref="Channel.IDigitalChannel.IsPwmEnabled"/> is <c>true</c> on this channel — see
+        /// <see cref="SetPwmEnabled"/>.</param>
         /// <param name="value"><c>true</c> to drive the output high; <c>false</c> to drive it low.</param>
+        /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
+        /// firmware ignores state writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
+        /// <c>enabled: false</c> first.</exception>
         void SetDioValue(IChannel channel, bool value);
 
         /// <summary>
@@ -212,11 +227,16 @@ namespace Daqifi.Core.Device
         /// calling thread.
         /// </summary>
         /// <inheritdoc cref="StartStreamingAsync" path="/remarks" />
-        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.</param>
+        /// <param name="channel">The digital channel. Must belong to this device's <c>Channels</c> collection.
+        /// Rejected if <see cref="Channel.IDigitalChannel.IsPwmEnabled"/> is <c>true</c> on this channel — see
+        /// <see cref="SetPwmEnabled"/>.</param>
         /// <param name="value"><c>true</c> to drive the output high; <c>false</c> to drive it low.</param>
         /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
         /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when PWM is enabled on <paramref name="channel"/>; the
+        /// firmware ignores state writes while PWM drives the pin. Call <see cref="SetPwmEnabled"/> with
+        /// <c>enabled: false</c> first.</exception>
         Task SetDioValueAsync(IChannel channel, bool value, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();

@@ -136,6 +136,7 @@ namespace Daqifi.Core.Device.Internal
             }
 
             EnsureChannelBelongs(channel);
+            EnsurePwmNotEnabled(channel);
 
             channel.Direction = direction;
             _host.Send(ScpiMessageProducer.SetDioPortDirection(
@@ -162,6 +163,7 @@ namespace Daqifi.Core.Device.Internal
             }
 
             EnsureChannelBelongs(channel);
+            EnsurePwmNotEnabled(channel);
 
             if (channel is IDigitalChannel digitalChannel)
             {
@@ -169,6 +171,22 @@ namespace Daqifi.Core.Device.Internal
             }
 
             _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
+        }
+
+        /// <summary>
+        /// Blocks digital direction/state writes while PWM is active on the channel. The firmware
+        /// silently ignores those commands once PWM is running the pin, but Core would otherwise
+        /// still mirror the commanded level/direction into local state — telling every caller the
+        /// pin is doing something it is not (#449). Symmetric with the capability guard in
+        /// <see cref="SetPwmEnabled"/>; the only way past this is <c>SetPwmEnabled(channel, false)</c>.
+        /// </summary>
+        private static void EnsurePwmNotEnabled(IChannel channel)
+        {
+            if (channel is IDigitalChannel { IsPwmEnabled: true })
+            {
+                throw new InvalidOperationException(
+                    $"Channel {channel.ChannelNumber} has PWM enabled; digital direction/state commands are ignored by the firmware while PWM is running. Disable PWM on this channel first (SetPwmEnabled(channel, false); the MCP server exposes this as the disable_pwm tool).");
+            }
         }
 
         /// <inheritdoc cref="IStreamingDevice.SetPwmEnabled" />
