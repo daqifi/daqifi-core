@@ -18,7 +18,7 @@ public static class DaqifiTools
     [Description("Discover DAQiFi devices on USB/serial and WiFi. Returns a list whose device_id values are used by the other tools. Call this first.")]
     public static Task<IReadOnlyList<DiscoveredDevice>> DiscoverDevices(
         DaqifiAgent agent,
-        [Description("Discovery timeout in milliseconds (default 2000; clamped to 250..30000).")] int timeoutMs = 2000,
+        [Description("Discovery timeout in milliseconds (default 2000; clamped to 1000..30000). The floor is bench-measured: the serial identify handshake takes ~830 ms, so a lower budget returns an empty list before a device could ever answer — indistinguishable from none being attached. Successful calls return as soon as a device responds, not at the full timeout.")] int timeoutMs = 2000,
         [Description("Include WiFi/network discovery (default true).")] bool wifi = true,
         [Description("Include USB/serial discovery (default true).")] bool serial = true,
         CancellationToken cancellationToken = default)

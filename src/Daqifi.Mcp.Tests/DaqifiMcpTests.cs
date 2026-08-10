@@ -66,6 +66,35 @@ public class DaqifiAgentTests
         Assert.Contains("discover_devices", ex.Message);
     }
 
+    // The serial identify handshake measures ~830 ms on real hardware (#448); a timeout below the
+    // floor returns an empty list before the device could ever answer, indistinguishable from "no
+    // device attached". These pin the clamp directly rather than through a real discovery run.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(250)]   // the old floor — must no longer be honored
+    [InlineData(999)]
+    public void ClampDiscoveryTimeout_BelowFloor_ClampsToFloor(int timeoutMs)
+    {
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(DaqifiAgent.MinDiscoveryTimeoutMs),
+            DaqifiAgent.ClampDiscoveryTimeout(timeoutMs));
+    }
+
+    [Theory]
+    [InlineData(1000)]
+    [InlineData(2000)]
+    [InlineData(30_000)]
+    public void ClampDiscoveryTimeout_WithinRange_IsUnchanged(int timeoutMs)
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(timeoutMs), DaqifiAgent.ClampDiscoveryTimeout(timeoutMs));
+    }
+
+    [Fact]
+    public void ClampDiscoveryTimeout_AboveCeiling_ClampsTo30Seconds()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(30), DaqifiAgent.ClampDiscoveryTimeout(60_000));
+    }
+
     [Fact]
     public async Task Disconnect_UnknownDevice_ReturnsMessageRatherThanThrows()
     {
