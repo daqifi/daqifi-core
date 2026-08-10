@@ -418,6 +418,21 @@ namespace Daqifi.Core.Tests.Device
             Assert.Throws<ArgumentException>(() => device.SetDioDirection(foreign, ChannelDirection.Output));
         }
 
+        [Fact]
+        public void SetDioDirection_WhilePwmEnabled_ThrowsInvalidOperationException()
+        {
+            // The firmware silently ignores direction/state writes while PWM is running the pin
+            // (#449) — Core rejects rather than mirroring a level the pin doesn't have.
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+            device.SetPwmEnabled(channel, true);
+            device.SentMessages.Clear();
+
+            var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioDirection(channel, ChannelDirection.Output));
+            Assert.Contains("SetPwmEnabled", ex.Message);
+            Assert.Empty(device.SentMessages);
+        }
+
         #endregion
 
         #region SetDioValue
@@ -465,6 +480,23 @@ namespace Daqifi.Core.Tests.Device
             var foreign = new DigitalChannel(1); // correctly typed, but not a member of Channels
 
             Assert.Throws<ArgumentException>(() => device.SetDioValue(foreign, true));
+        }
+
+        [Fact]
+        public void SetDioValue_WhilePwmEnabled_ThrowsInvalidOperationExceptionAndDoesNotMirrorOutputValue()
+        {
+            // The firmware ignores the write entirely; Core must not report success or mirror a
+            // level the pin does not actually have (#449).
+            var device = CreateConnectedDevice(digitalChannels: 8);
+            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+            device.SetPwmEnabled(channel, true);
+            device.SentMessages.Clear();
+            var outputValueBeforeAttempt = channel.OutputValue;
+
+            var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioValue(channel, !outputValueBeforeAttempt));
+            Assert.Contains("SetPwmEnabled", ex.Message);
+            Assert.Equal(outputValueBeforeAttempt, channel.OutputValue);
+            Assert.Empty(device.SentMessages);
         }
 
         #endregion
