@@ -15,7 +15,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
-using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -27,7 +26,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that can be connected to and communicated with.
     /// This is the base implementation of the IDevice interface.
     /// </summary>
-    public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable
+    public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost
     {
         /// <summary>
         /// Gets the name of the device.
@@ -610,6 +609,7 @@ namespace Daqifi.Core.Device
                 () => Name,
                 () => LifecycleLockTimeout,
                 () => TeardownLockTimeout);
+            _textExchange = new TextExchangeEngine(this);
         }
 
         /// <summary>
@@ -631,6 +631,7 @@ namespace Daqifi.Core.Device
                 () => Name,
                 () => LifecycleLockTimeout,
                 () => TeardownLockTimeout);
+            _textExchange = new TextExchangeEngine(this);
             _messageProducer = new MessageProducer<string>(stream);
             _messageProducer.SendFailed += OnMessageSendFailed;
             _directStream = stream;
@@ -653,6 +654,7 @@ namespace Daqifi.Core.Device
                 () => Name,
                 () => LifecycleLockTimeout,
                 () => TeardownLockTimeout);
+            _textExchange = new TextExchangeEngine(this);
             _transport = transport;
 
             // Subscribe to transport status changes
@@ -1860,95 +1862,11 @@ namespace Daqifi.Core.Device
         /// <returns>A task representing the asynchronous operation.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
-        protected virtual async Task ExecuteRawCaptureAsync(
+        protected virtual Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default)
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            if (_transport == null)
-            {
-                throw new InvalidOperationException("ExecuteRawCaptureAsync requires a transport-based connection.");
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                // Stop the protobuf consumer so it doesn't compete for stream bytes
-                if (_messageConsumer != null)
-                {
-                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
-                    if (!stopped)
-                    {
-                        _messageConsumer.Stop();
-                    }
-                }
-
-                // Hand the stream to the caller for raw I/O
-                await rawAction(_transport.Stream, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                RestartMessageConsumerAfterSwap();
-            }
-        }
-
-        /// <summary>
-        /// Restarts the protobuf consumer after a swap (raw capture or text exchange) has stopped it.
-        /// </summary>
-        /// <remarks>
-        /// The stop paths join the reader thread with a bounded timeout, so a reader parked in a slow
-        /// blocking <see cref="Stream.Read(byte[], int, int)"/> can still be alive here.
-        /// <see cref="StreamMessageConsumer{T}.Start"/> absorbs that case by waiting a grace period
-        /// for the stopped reader to exit, which is what keeps a normal connect from failing with
-        /// "a previous consumer thread has not yet exited" (issue #383).
-        /// <para>
-        /// If it still refuses, the reader's read is not returning at all — the stream is stuck.
-        /// Deliberately do <b>not</b> recover by binding a fresh consumer to that same stream: a new
-        /// instance would be a second concurrent reader on it, which is exactly the framing
-        /// corruption the guard exists to prevent, and it would block on the stuck stream anyway.
-        /// The consumer is left stopped; the operation's own failure (or the next
-        /// <see cref="Connect"/>) surfaces the problem honestly.
-        /// </para>
-        /// <para>
-        /// Never throws: it runs from <c>finally</c> blocks, where an exception would mask the real
-        /// failure already unwinding. The consumer is also snapshotted once up front — the
-        /// text-exchange path holds <c>_textExchangeLock</c> (which <see cref="Disconnect"/> waits
-        /// on), but the raw-capture path does not, so a concurrent teardown could otherwise null the
-        /// field between reads.
-        /// </para>
-        /// </remarks>
-        private void RestartMessageConsumerAfterSwap()
-        {
-            var consumer = _messageConsumer;
-            if (consumer == null)
-            {
-                return;
-            }
-
-            try
-            {
-                consumer.Start();
-                consumer.MessageReceived += OnInboundMessageReceived;
-            }
-            catch (ConsumerThreadNotExitedException ex)
-            {
-                SafeLog(() => _logger.LogError(
-                    ex,
-                    "The previous message consumer thread did not exit, so the consumer was left stopped. "
-                    + "The device stream appears stuck; a reconnect is required to resume inbound messages."));
-            }
-            catch (Exception ex)
-            {
-                // e.g. ObjectDisposedException from a concurrent Dispose(). Swallow rather than let
-                // it escape a finally block and replace the operation's real exception.
-                SafeLog(() => _logger.LogError(ex, "Failed to restart the message consumer after a stream swap."));
-            }
+            return _textExchange.ExecuteRawCaptureAsync(rawAction, cancellationToken);
         }
 
         /// <summary>
@@ -2069,7 +1987,7 @@ namespace Daqifi.Core.Device
                 cancellationToken);
         }
 
-        private async Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
+        private Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
             Func<CancellationToken, Task>? prepareAsync,
             Func<Task>? finalizeAsync,
             Func<CancellationToken, Task> setupActionAsync,
@@ -2077,361 +1995,97 @@ namespace Daqifi.Core.Device
             int completionTimeoutMs,
             CancellationToken cancellationToken)
         {
-            if (responseTimeoutMs <= 0)
-                throw new ArgumentOutOfRangeException(nameof(responseTimeoutMs), responseTimeoutMs, "Timeout must be positive.");
-            if (completionTimeoutMs <= 0)
-                throw new ArgumentOutOfRangeException(nameof(completionTimeoutMs), completionTimeoutMs, "Timeout must be positive.");
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Async-context re-entrancy detection: a setupAction that calls
-            // ExecuteTextCommandAsync on the same device would corrupt the
-            // consumer swap mid-flight. Surface as a clean exception rather
-            // than wedging on _textExchangeLock.WaitAsync() forever.
-            // AsyncLocal flows across await thread hops so this catches
-            // re-entry even when the inner call resumes on a different
-            // thread than the outer call.
-            if (_isInsideTextExchange.Value)
-            {
-                throw new InvalidOperationException(
-                    "ExecuteTextCommandAsync is not re-entrant on the same device; "
-                    + "do not call it from inside a setupAction callback.");
-            }
-
-            // The exchange runs under the device's operation lock. A flow that already owns it —
-            // one inside RunExclusiveAsync, typically — runs nested rather than waiting on a
-            // semaphore it is itself holding, and leaves the release to the owner.
-            var ownsLock = !HoldsOperationLock;
-            if (ownsLock)
-            {
-                try
-                {
-                    await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (ObjectDisposedException ex)
-                {
-                    // Dispose() raced ahead of us and disposed the semaphore.
-                    // Surface the same clean failure as the post-acquisition
-                    // _disposed check below, instead of leaking a low-level
-                    // teardown exception to callers. The original is kept as
-                    // InnerException so this rare race stays diagnosable.
-                    throw new DeviceNotConnectedException(
-                        "ExecuteTextCommandAsync cannot run because the device is disposed.",
-                        ex,
-                        isShuttingDown: true);
-                }
-
-                // Assigned in this frame, not in a helper: an async method's AsyncLocal writes flow
-                // forward to its callees but never back to its caller.
-                _operationLockGeneration.Value = Volatile.Read(ref _operationGeneration);
-                MarkOperationInFlight();
-            }
-
-            _isInsideTextExchange.Value = true;
-
-            // Whether the exchange got past validation and so owes its finalize phase, and whether
-            // it is on its way out normally rather than with an exception unwinding. Both are read
-            // only by the finalize block in the outer finally below.
-            var exchangeStarted = false;
-            var completedNormally = false;
-            try
-            {
-                // All validation runs INSIDE the lock so a competing thread
-                // calling DisconnectAsync() / Dispose() while we're blocked
-                // on WaitAsync() doesn't leave us with a stale _transport /
-                // _messageConsumer reference (closes the TOCTOU window
-                // documented in #186).
-                if (_disposed || _isDisconnecting)
-                {
-                    throw new DeviceNotConnectedException(
-                        "ExecuteTextCommandAsync cannot run while the device is "
-                        + "disposing or disconnecting.",
-                        isShuttingDown: true);
-                }
-
-                if (!IsConnected)
-                {
-                    throw new DeviceNotConnectedException();
-                }
-
-                if (_transport == null)
-                {
-                    throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
-                }
-
-                // The device-level IsConnected check above is status-based and can still report
-                // Connected when the underlying transport has dropped (e.g. a serial port closed
-                // by an unplug or a DTR-triggered MCU reset mid-connect). Detect that here and
-                // fail with the typed transport-disconnected exception, rather than dereferencing
-                // Stream below and surfacing the framework's raw "BaseStream is only available
-                // when the port is open." message (issue #238).
-                if (!_transport.IsConnected)
-                {
-                    throw new TransportNotConnectedException(
-                        "Device transport is no longer connected.");
-                }
-
-                // Past validation: from here on the exchange acts on the device, so its finalize
-                // phase (if any) is owed however this ends — including a prepare phase that failed
-                // part-way and left the device half-way into the state it was establishing.
-                exchangeStarted = true;
-
-                var sw = Stopwatch.StartNew();
-
-                // Prepare phase, if any. Deliberately here: inside the lock, so no competing text
-                // exchange can interleave between it and the setup action below and undo the state
-                // it establishes; and before the consumer swap, so the wait it typically needs
-                // cannot widen the stale-line boundary taken further down. Any device output it
-                // provokes goes to the protobuf consumer, which is still running at this point.
-                if (prepareAsync != null)
-                {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-                }
-
-                // Let anything queued before this exchange opened reach the wire while the protobuf
-                // consumer is still the one reading, so its reply is not mistaken for an answer to
-                // a command this exchange is about to send (issue #342). New sends from other
-                // threads are already parked by this point, so the queue can only shrink.
-                //
-                // Deliberately OUTSIDE the swap's try/finally below: this is the one step here that
-                // can throw (a cancelled token) before the consumer has been stopped, and that
-                // finally restarts the consumer — which on a consumer that was never stopped means
-                // subscribing the inbound handler a second time and dispatching every frame twice.
-                await DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
-
-                var collectedLines = new List<string>();
-                var stream = _transport.Stream;
-                int? originalReadTimeout = null;
-
-                // Number of lines that were already in flight when this exchange opened — see the
-                // note at the point it is captured, below.
-                var staleLineCount = 0;
-
-                try
-                {
-                    if (stream.CanTimeout)
-                    {
-                        try
-                        {
-                            originalReadTimeout = stream.ReadTimeout;
-                            stream.ReadTimeout = Math.Min(500, Math.Max(100, responseTimeoutMs / 4));
-                        }
-                        catch
-                        {
-                            // Some streams may not allow setting read timeout; ignore.
-                            originalReadTimeout = null;
-                        }
-                    }
-
-                    // Stop the protobuf consumer so it doesn't compete for stream bytes.
-                    // The serial transport sets ReadTimeout=500ms after connect, so the
-                    // consumer thread's blocking Read will unblock within 500ms.
-                    if (_messageConsumer != null)
-                    {
-                        _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                        var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
-                        if (!stopped)
-                        {
-                            _messageConsumer.Stop();
-                        }
-                    }
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-
-                    // Create a temporary text consumer on the same stream
-                    using var textConsumer = new StreamMessageConsumer<string>(
-                        _transport.Stream,
-                        new LineBasedMessageParser(),
-                        healthSink: _transport as ITransportHealthSink);
-
-                    textConsumer.MessageReceived += (_, e) =>
-                    {
-                        collectedLines.Add(e.Message.Data);
-                    };
-
-                    // The protobuf consumer is stopped for the duration of this exchange, so
-                    // without this a read failure during a text command (an unplug mid-SD-listing,
-                    // say) would be the one background failure with nowhere to go (issue #378).
-                    //
-                    // Scoped rather than a bare '+=' because this consumer can outlive the block:
-                    // its stop and dispose are both time-bounded and may return with the reader
-                    // thread still parked in an un-returning read. A live thread roots the consumer,
-                    // which would root this device through the handler — retaining the whole object
-                    // graph and, worse, letting a zombie reader keep raising errors on a device that
-                    // has since been disconnected. 'using' disposes in reverse declaration order, so
-                    // this detaches before textConsumer itself is disposed, on every exit path
-                    // including a cancellation or a throwing setup action.
-                    using var textConsumerErrors = new ConsumerErrorSubscription(this, textConsumer);
-
-                    textConsumer.Start();
-                    // ConfigureAwait(false): the lock is held, so resuming on a captured
-                    // sync context (e.g. UI thread) would deadlock if that thread calls Disconnect().
-                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-
-                    // Mark the boundary between "already in flight" and "answers to this exchange".
-                    // Anything captured before the setup action has sent anything is a late reply to
-                    // an EARLIER command, or line noise — never a response to a command this exchange
-                    // has yet to send. Those lines are dropped from the result below.
-                    //
-                    // Position matters as much as content: a caller that keys off response content —
-                    // e.g. the SD listing's end-of-listing terminator (#396) — would otherwise accept
-                    // a stale line as proof that the device answered a query it never even received,
-                    // and report a complete listing for a device that has gone silent.
-                    staleLineCount = collectedLines.Count;
-                    if (staleLineCount > 0)
-                    {
-                        SafeLog(() => _logger.LogDebug(
-                            "[ExecuteTextCommandAsync] Discarding {StaleLineCount} line(s) received before this exchange sent anything",
-                            staleLineCount));
-                    }
-
-                    // Execute the setup action (sends SCPI commands). ConfigureAwait(false)
-                    // matches the surrounding lock-protected awaits.
-                    await setupActionAsync(cancellationToken).ConfigureAwait(false);
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-
-                    // Wait for responses using a two-phase inactivity-based timeout:
-                    // Phase 1: Wait up to responseTimeoutMs for the first response.
-                    // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
-                    var lastMessageTime = DateTime.UtcNow;
-                    var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
-                    var startTime = DateTime.UtcNow;
-                    var hasReceivedAny = false;
-
-                    while (DateTime.UtcNow - startTime < maxWait)
-                    {
-                        var previousCount = collectedLines.Count;
-                        await Task.Delay(50, cancellationToken).ConfigureAwait(false);
-                        if (collectedLines.Count > previousCount)
-                        {
-                            lastMessageTime = DateTime.UtcNow;
-                            if (!hasReceivedAny)
-                            {
-                                hasReceivedAny = true;
-                                SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-                            }
-                        }
-
-                        var elapsed = DateTime.UtcNow - lastMessageTime;
-
-                        if (hasReceivedAny)
-                        {
-                            // Phase 2: short completion timeout after first data
-                            if (elapsed >= TimeSpan.FromMilliseconds(completionTimeoutMs))
-                            {
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            // Phase 1: full initial timeout waiting for first data
-                            if (elapsed >= TimeSpan.FromMilliseconds(responseTimeoutMs))
-                            {
-                                break;
-                            }
-                        }
-                    }
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", sw.ElapsedMilliseconds, collectedLines.Count));
-
-                    // Stop the text consumer
-                    textConsumer.StopSafely();
-                }
-                finally
-                {
-                    if (originalReadTimeout.HasValue && stream.CanTimeout)
-                    {
-                        try
-                        {
-                            stream.ReadTimeout = originalReadTimeout.Value;
-                        }
-                        catch
-                        {
-                            // Ignore failures when restoring timeout.
-                        }
-                    }
-
-                    // Restart the protobuf consumer
-                    RestartMessageConsumerAfterSwap();
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
-                }
-
-                // The text consumer is stopped by this point, so the list is no longer being
-                // appended to concurrently and can be re-projected safely.
-                var result = staleLineCount > 0
-                    ? collectedLines.Skip(staleLineCount).ToList()
-                    : collectedLines;
-
-                completedNormally = true;
-                return result;
-            }
-            finally
-            {
-                // Finalize phase, if any — the mirror of the prepare phase above, and deliberately
-                // still inside the lock: an exchange that switches shared device state on the way in
-                // has to switch it back before anything else can run, or the pairing is only half
-                // serialized (#407). It runs after the protobuf consumer has been restarted, just as
-                // the prepare phase ran before the consumer was swapped out.
-                // A failure here is never thrown from this point: doing so would abandon the rest of
-                // the finally, leaking the lock this exchange holds. It is held until after the
-                // release below and dealt with there.
-                Exception? finalizeFailure = null;
-                if (exchangeStarted && finalizeAsync != null)
-                {
-                    try
-                    {
-                        await finalizeAsync().ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        finalizeFailure = ex;
-                    }
-                }
-
-                _isInsideTextExchange.Value = false;
-
-                // Only the flow that took the lock releases it; a nested exchange leaves it to the
-                // RunExclusiveAsync block that owns it. Parked sends are flushed before the release
-                // so they are queued ahead of whatever runs next, and ReleaseOperationLock absorbs
-                // a Dispose that already tore the semaphore down (Dispose acquires the lock first,
-                // but proceeds anyway if that acquisition times out).
-                if (ownsLock)
-                {
-                    _operationLockGeneration.Value = 0;
-                    FlushDeferredSends();
-                    ReleaseOperationLock();
-                }
-
-                if (finalizeFailure != null)
-                {
-                    if (completedNormally)
-                    {
-                        // Nothing else is unwinding, so a failed restore is the only failure there
-                        // is. Surface it rather than report a success the device never got back
-                        // from — the caller's next command would run against the wrong state.
-                        // Rethrown only now, with the lock already released, so a failed restore
-                        // cannot also wedge the device.
-                        ExceptionDispatchInfo.Capture(finalizeFailure).Throw();
-                    }
-
-                    // Otherwise an exception is already on its way to the caller, and it is the one
-                    // that explains what went wrong. Replacing it with this one would lose the
-                    // diagnosis, so the cleanup failure is logged instead: cleanup never hides the
-                    // failure that caused the cleanup.
-                    SafeLog(() => _logger.LogError(
-                        finalizeFailure,
-                        "The text exchange's finalize phase failed while another failure was already "
-                        + "unwinding. The original failure is being surfaced to the caller; the device "
-                        + "may be left in the state the prepare phase established."));
-                }
-            }
+            return _textExchange.ExecuteAsync(
+                prepareAsync,
+                finalizeAsync,
+                setupActionAsync,
+                responseTimeoutMs,
+                completionTimeoutMs,
+                cancellationToken);
         }
+
+        /// <summary>
+        /// The text (SCPI) exchange primitive and the raw-capture swap it shares its consumer
+        /// handling with, extracted so this class delegates rather than hosts them (issue #344).
+        /// </summary>
+        private readonly TextExchangeEngine _textExchange;
+
+        #region ITextExchangeHost — the engine's view of this device
+
+        /// <inheritdoc />
+        bool ITextExchangeHost.IsConnected => IsConnected;
+
+        /// <inheritdoc />
+        bool ITextExchangeHost.IsShuttingDown => _disposed || _isDisconnecting;
+
+        /// <inheritdoc />
+        IStreamTransport? ITextExchangeHost.Transport => _transport;
+
+        /// <inheritdoc />
+        IMessageConsumer<DaqifiOutMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;
+
+        /// <inheritdoc />
+        void ITextExchangeHost.AttachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
+            consumer.MessageReceived += OnInboundMessageReceived;
+
+        /// <inheritdoc />
+        void ITextExchangeHost.DetachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
+            consumer.MessageReceived -= OnInboundMessageReceived;
+
+        /// <inheritdoc />
+        bool ITextExchangeHost.HoldsOperationLock => HoldsOperationLock;
+
+        /// <inheritdoc />
+        Task ITextExchangeHost.WaitForOperationLockAsync(CancellationToken cancellationToken) =>
+            _textExchangeLock.WaitAsync(cancellationToken);
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Synchronous, and must stay that way: the <see cref="AsyncLocal{T}"/> write below flows
+        /// forward from whichever frame performs it. Called synchronously from the engine's own
+        /// frame it lands there, exactly as the inline assignment in
+        /// <see cref="RunExclusiveAsync{TResult}"/> does; behind an <c>await</c> it would land in a
+        /// frame nobody reads and the exchange would stop recognising its own ownership.
+        /// </remarks>
+        void ITextExchangeHost.EnterOperationLockOwnership()
+        {
+            _operationLockGeneration.Value = Volatile.Read(ref _operationGeneration);
+            MarkOperationInFlight();
+        }
+
+        /// <inheritdoc />
+        /// <remarks>Synchronous for the same reason as <see cref="ITextExchangeHost.EnterOperationLockOwnership"/>.</remarks>
+        void ITextExchangeHost.ExitOperationLockOwnership()
+        {
+            _operationLockGeneration.Value = 0;
+            FlushDeferredSends();
+            ReleaseOperationLock();
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// The setter is synchronous for the same reason as
+        /// <see cref="ITextExchangeHost.EnterOperationLockOwnership"/>: the re-entrancy guard only
+        /// works if the flag reaches the callbacks the engine invokes.
+        /// </remarks>
+        bool ITextExchangeHost.IsInsideTextExchange
+        {
+            get => _isInsideTextExchange.Value;
+            set => _isInsideTextExchange.Value = value;
+        }
+
+        /// <inheritdoc />
+        Task ITextExchangeHost.DrainOutboundQueueAsync(CancellationToken cancellationToken) =>
+            DrainOutboundQueueAsync(cancellationToken);
+
+        /// <inheritdoc />
+        IDisposable ITextExchangeHost.SubscribeConsumerErrors(IMessageConsumer<string> consumer) =>
+            new ConsumerErrorSubscription(this, consumer);
+
+        /// <inheritdoc />
+        ILogger ITextExchangeHost.Logger => _logger;
+
+        #endregion
 
         /// <summary>
         /// Pops <c>SYSTem:ERRor?</c> entries from the device until the queue reports

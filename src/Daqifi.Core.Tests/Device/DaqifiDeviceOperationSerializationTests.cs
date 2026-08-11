@@ -356,6 +356,65 @@ public class DaqifiDeviceOperationSerializationTests
     }
 
     [Fact]
+    public async Task Send_FromInsideATextExchange_GoesStraightOut()
+    {
+        // The mirror of Send_FromTheOwningFlow_GoesStraightOut, for the lock acquisition the text
+        // exchange makes for itself rather than the one RunExclusiveAsync makes. Every text query
+        // depends on it: the setup action's whole job is to Send, and if the exchange's own flow
+        // does not register as the lock's owner then its command is parked by the very deferral it
+        // just switched on. The command reaches the device only after the exchange has closed, so
+        // the exchange collects nothing and reports an empty result — indistinguishable, from the
+        // caller's side, from a device that went silent.
+        //
+        // The claim is written into an AsyncLocal, which propagates from the writing frame to that
+        // frame's callees and no further. Sending from inside the setup action, after an await, is
+        // what pins both halves of that: the exchange's flow owns the lock, and the ownership
+        // survives the thread hop.
+        using var transport = new RecordingTransport();
+        using var device = new TextExchangeDevice("Self-sending Device", transport);
+        device.Connect();
+
+        await device.RunTextExchangeAsync(async _ =>
+        {
+            device.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+
+            // Fails here, inside the exchange, if the send was parked — rather than passing later
+            // on the backlog the exchange flushes on its way out.
+            await WaitForWriteAsync(transport, "DIO:PORt:STATe");
+        }).WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task TextExchange_ReEnteredFromItsOwnSetupAction_IsRejected()
+    {
+        // DaqifiDeviceTextCommandLockTests covers this guard by planting the flag through
+        // reflection, which exercises only the reading half. This drives the real thing: the flag
+        // has to be written where the setup action can see it.
+        //
+        // Getting that wrong does not deadlock, which is what makes it worth pinning. The nested
+        // call would find the lock already held by its own flow, decline to wait for it, and run —
+        // a second consumer swap on a stream mid-swap, which is the framing corruption the guard
+        // was added to prevent. It fails silently, as mangled replies, not as a hang.
+        using var transport = new RecordingTransport();
+        using var device = new TextExchangeDevice("Re-entering Device", transport);
+        device.Connect();
+
+        Exception? nested = null;
+
+        await device.RunTextExchangeAsync(async ct =>
+        {
+            nested = await Record.ExceptionAsync(() => device.RunTextExchangeAsync(() => { }, ct));
+        }).WaitAsync(DeadlockBudget);
+
+        Assert.IsType<InvalidOperationException>(nested);
+        Assert.Contains("not re-entrant", nested!.Message);
+
+        device.Disconnect();
+    }
+
+    [Fact]
     public async Task TextExchange_CancelledWhileTheOutboundQueueDrains_DoesNotResubscribeTheConsumer()
     {
         // The drain added for #342 is the one step before the consumer swap that can throw. If it
@@ -834,6 +893,19 @@ public class DaqifiDeviceOperationSerializationTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupAction,
+                responseTimeoutMs: 300,
+                completionTimeoutMs: 100,
+                cancellationToken: cancellationToken);
+
+        /// <summary>
+        /// The async-setup overload, so a test can observe the wire from <i>inside</i> the exchange
+        /// rather than only after it has closed.
+        /// </summary>
+        public Task<IReadOnlyList<string>> RunTextExchangeAsync(
+            Func<CancellationToken, Task> setupActionAsync,
+            CancellationToken cancellationToken = default) =>
+            ExecuteTextCommandAsync(
+                setupActionAsync,
                 responseTimeoutMs: 300,
                 completionTimeoutMs: 100,
                 cancellationToken: cancellationToken);
