@@ -64,7 +64,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         bool includePreRelease = false,
         CancellationToken cancellationToken = default)
     {
-        var releases = await GetFirmwareReleasesAsync(cancellationToken);
+        var releases = await GetFirmwareReleasesAsync(cancellationToken).ConfigureAwait(false);
         return FindLatestRelease(releases, includePreRelease, ".hex");
     }
 
@@ -75,7 +75,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         CancellationToken cancellationToken = default)
     {
         var hasCurrent = FirmwareVersion.TryParse(deviceVersionString, out var deviceVersion);
-        var latest = await GetLatestReleaseAsync(includePreRelease, cancellationToken);
+        var latest = await GetLatestReleaseAsync(includePreRelease, cancellationToken).ConfigureAwait(false);
 
         if (latest == null)
         {
@@ -104,12 +104,12 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var release = await GetLatestReleaseAsync(includePreRelease, cancellationToken);
+        var release = await GetLatestReleaseAsync(includePreRelease, cancellationToken).ConfigureAwait(false);
         if (release?.DownloadUrl == null || release.AssetFileName == null) return null;
 
         return await DownloadFileAsync(
             release.DownloadUrl, destinationDirectory, release.AssetFileName,
-            release.AssetSize, progress, cancellationToken);
+            release.AssetSize, progress, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -119,7 +119,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var releases = await GetFirmwareReleasesAsync(cancellationToken);
+        var releases = await GetFirmwareReleasesAsync(cancellationToken).ConfigureAwait(false);
 
         FirmwareReleaseInfo? release = null;
         foreach (var element in releases)
@@ -138,14 +138,14 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
 
         return await DownloadFileAsync(
             release.DownloadUrl, destinationDirectory, release.AssetFileName,
-            release.AssetSize, progress, cancellationToken);
+            release.AssetSize, progress, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<FirmwareReleaseInfo?> GetLatestWifiReleaseAsync(
         CancellationToken cancellationToken = default)
     {
-        var releases = await GetWifiReleasesAsync(cancellationToken);
+        var releases = await GetWifiReleasesAsync(cancellationToken).ConfigureAwait(false);
         return FindLatestRelease(releases, includePreRelease: false, assetExtension: null);
     }
 
@@ -155,7 +155,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var releases = await GetWifiReleasesAsync(cancellationToken);
+        var releases = await GetWifiReleasesAsync(cancellationToken).ConfigureAwait(false);
         var release = FindLatestRelease(releases, includePreRelease: false, assetExtension: null);
         if (release?.ZipballUrl == null) return null;
 
@@ -168,23 +168,27 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         var zipFilePath = Path.Combine(destinationDirectory, zipFileName);
 
         // Download the zipball
-        using var response = await _httpClient.GetAsync(zipballUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await _httpClient.GetAsync(zipballUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var totalBytes = response.Content.Headers.ContentLength ?? -1;
-        await using (var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken))
-        await using (var fileStream = new FileStream(zipFilePath, FileMode.Create, FileAccess.Write, FileShare.None))
+        var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using (contentStream.ConfigureAwait(false))
         {
-            var buffer = new byte[DOWNLOAD_BUFFER_SIZE];
-            long bytesRead = 0;
-            int read;
-            while ((read = await contentStream.ReadAsync(buffer, cancellationToken)) > 0)
+            var fileStream = new FileStream(zipFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await using (fileStream.ConfigureAwait(false))
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                bytesRead += read;
-                if (totalBytes > 0)
+                var buffer = new byte[DOWNLOAD_BUFFER_SIZE];
+                long bytesRead = 0;
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
                 {
-                    progress?.Report((int)((double)bytesRead / totalBytes * 80));
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    bytesRead += read;
+                    if (totalBytes > 0)
+                    {
+                        progress?.Report((int)((double)bytesRead / totalBytes * 80));
+                    }
                 }
             }
         }
@@ -233,7 +237,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
             return _cachedReleases;
         }
 
-        var elements = await FetchReleasesFromApiAsync(_firmwareRepoApiUrl, cancellationToken);
+        var elements = await FetchReleasesFromApiAsync(_firmwareRepoApiUrl, cancellationToken).ConfigureAwait(false);
         _cachedReleases = elements;
         _cacheTimestamp = DateTime.UtcNow;
         return elements;
@@ -246,7 +250,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
             return _cachedWifiReleases;
         }
 
-        var elements = await FetchReleasesFromApiAsync(_wifiRepoApiUrl, cancellationToken);
+        var elements = await FetchReleasesFromApiAsync(_wifiRepoApiUrl, cancellationToken).ConfigureAwait(false);
         _cachedWifiReleases = elements;
         _wifiCacheTimestamp = DateTime.UtcNow;
         return elements;
@@ -254,7 +258,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
 
     private async Task<List<JsonElement>> FetchReleasesFromApiAsync(string apiUrl, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(apiUrl, cancellationToken);
+        using var response = await _httpClient.GetAsync(apiUrl, cancellationToken).ConfigureAwait(false);
 
         if ((int)response.StatusCode == 403 && response.Headers.Contains("X-RateLimit-Reset"))
         {
@@ -269,7 +273,7 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
 
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
 
         var elements = new List<JsonElement>();
@@ -388,24 +392,29 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
         Directory.CreateDirectory(destinationDirectory);
         var filePath = Path.Combine(destinationDirectory, safeName);
 
-        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var totalBytes = response.Content.Headers.ContentLength ?? expectedSize ?? -1;
 
-        await using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
-
-        var buffer = new byte[DOWNLOAD_BUFFER_SIZE];
+        var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         long bytesRead = 0;
-        int read;
-        while ((read = await contentStream.ReadAsync(buffer, cancellationToken)) > 0)
+        await using (contentStream.ConfigureAwait(false))
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-            bytesRead += read;
-            if (totalBytes > 0)
+            var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await using (fileStream.ConfigureAwait(false))
             {
-                progress?.Report((int)((double)bytesRead / totalBytes * 100));
+                var buffer = new byte[DOWNLOAD_BUFFER_SIZE];
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                {
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    bytesRead += read;
+                    if (totalBytes > 0)
+                    {
+                        progress?.Report((int)((double)bytesRead / totalBytes * 100));
+                    }
+                }
             }
         }
 

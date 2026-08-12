@@ -85,7 +85,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
     /// <returns>A task containing the collection of discovered devices.</returns>
     public override async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
     {
-        return await DiscoverAsync(Timeout.InfiniteTimeSpan, cancellationToken);
+        return await DiscoverAsync(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -217,7 +217,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
         ThrowIfDisposed();
 
         // Prevent concurrent discovery operations
-        await DiscoverySemaphore.WaitAsync(cancellationToken);
+        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var discoveredDevices = new List<IDeviceInfo>();
@@ -268,7 +268,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
                             // it). Devices that reply to source-port still reach us either way.
                             udp.Client.Bind(new IPEndPoint(interfaceInfo.LocalAddress, 0));
                         }
-                        await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint);
+                        await udp.SendAsync(_queryCommandBytes, _queryCommandBytes.Length, interfaceInfo.BroadcastEndpoint).ConfigureAwait(false);
                         perNicClients.Add((udp, interfaceInfo.LocalAddress));
                         added = true;
                     }
@@ -296,7 +296,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
                     .Select(c => ReceiveLoopAsync(c.Client, c.LocalAddress, discoveredDevices, cts.Token))
                     .ToArray();
 
-                await Task.WhenAll(receiveTasks);
+                await Task.WhenAll(receiveTasks).ConfigureAwait(false);
             }
             finally
             {
@@ -326,7 +326,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
             UdpReceiveResult result;
             try
             {
-                result = await udp.ReceiveAsync(cancellationToken);
+                result = await udp.ReceiveAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
