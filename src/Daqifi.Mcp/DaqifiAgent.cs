@@ -79,6 +79,12 @@ public sealed class DaqifiAgent
     internal const int MinDiscoveryTimeoutMs = 1000;
 
     /// <summary>
+    /// Write buffer for the CSV a download exports, matching the 64 KB default the SD parsers read
+    /// with so neither side of the export is the narrow one.
+    /// </summary>
+    private const int CsvWriteBufferBytes = 64 * 1024;
+
+    /// <summary>
     /// Clamps a caller-supplied discovery timeout to <c>[<see cref="MinDiscoveryTimeoutMs"/>, 30_000]</c>
     /// ms. The floor is derived from measurement, not a guess: the serial identify handshake takes
     /// ~830 ms on real hardware, so anything below ~1000 ms returns empty before the device can
@@ -862,7 +868,12 @@ public sealed class DaqifiAgent
             // been disposed by the blocks below, which is what makes it work on Windows too.
             try
             {
-                var fileStream = new FileStream(csvPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+                // useAsync, like the input stream above: CsvExporter writes through WriteAsync for
+                // every row, and a FileStream opened without it services those on the thread pool
+                // instead of the OS async path.
+                var fileStream = new FileStream(
+                    csvPath, FileMode.Create, FileAccess.Write, FileShare.Read,
+                    bufferSize: CsvWriteBufferBytes, useAsync: true);
                 await using (fileStream.ConfigureAwait(false))
                 {
                     var writer = new StreamWriter(fileStream);
