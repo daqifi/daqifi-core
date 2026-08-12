@@ -102,6 +102,43 @@ public class SdCardAgentGuardTests
             () => NewAgent().DeleteSdFileAsync("serial:NOPE", fileName, CancellationToken.None));
         Assert.Contains("list_sd_files", ex.Message);
     }
+
+    // Core rejects these before putting a name into an SCPI command, but the listing pre-flight
+    // runs first — so without the same check here a name full of newlines comes back as a
+    // multi-line "there is no file called ..." instead of something a caller can act on.
+    [Theory]
+    [InlineData("log\n.bin")]
+    [InlineData("log\r.bin")]
+    [InlineData("log\t.bin")]
+    [InlineData("log\".bin")]
+    [InlineData("log;rm.bin")]
+    [InlineData("log\u0000.bin")]
+    public async Task FileNamesWithControlOrCommandCharacters_AreRejectedCleanly(string fileName)
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().DownloadSdFileAsync("serial:NOPE", fileName, exportCsv: true, CancellationToken.None));
+
+        Assert.Contains("not a valid SD file name", ex.Message);
+        Assert.DoesNotContain("\n", ex.Message);
+        Assert.DoesNotContain("\r", ex.Message);
+
+        var deleteEx = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().DeleteSdFileAsync("serial:NOPE", fileName, CancellationToken.None));
+        Assert.Contains("not a valid SD file name", deleteEx.Message);
+    }
+
+    [Fact]
+    public async Task OrdinaryFileNames_AreNotCaughtByTheCharacterCheck()
+    {
+        // Spaces, dots, dashes and underscores all appear in real on-card names; the check must
+        // only be looking for the characters that break an SCPI command or an error message.
+        foreach (var name in new[] { "log_20260812_120000.bin", "iso A 1.bin", "bench-pr2.json" })
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => NewAgent().DownloadSdFileAsync("serial:NOPE", name, exportCsv: true, CancellationToken.None));
+            Assert.Contains("not connected", ex.Message);
+        }
+    }
 }
 
 public class SdCardReportDtoTests

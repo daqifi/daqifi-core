@@ -855,26 +855,38 @@ public sealed class DaqifiAgent
             // would hand back the path of the file being read for a .csv log and truncate the
             // download on the way to parsing it. A suffix cannot collide with what it is added to.
             var csvPath = localPath + ".csv";
-            var fileStream = new FileStream(csvPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-            await using (fileStream.ConfigureAwait(false))
+
+            // Every failure from here on deletes the file it was writing. A caller that is told
+            // "no CSV" gets CsvPath=null, so a half-written one left on disk would be litter
+            // nobody can name — not even to clean it up. The delete runs after the streams have
+            // been disposed by the blocks below, which is what makes it work on Windows too.
+            try
             {
-                var writer = new StreamWriter(fileStream);
-                await using (writer.ConfigureAwait(false))
+                var fileStream = new FileStream(csvPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+                await using (fileStream.ConfigureAwait(false))
                 {
-                    await new CsvExporter()
-                        .ExportAsync(source, writer, new CsvExportOptions { UseRelativeTime = false }, progress: null, cancellationToken)
-                        .ConfigureAwait(false);
+                    var writer = new StreamWriter(fileStream);
+                    await using (writer.ConfigureAwait(false))
+                    {
+                        await new CsvExporter()
+                            .ExportAsync(source, writer, new CsvExportOptions { UseRelativeTime = false }, progress: null, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+
+                if (source.SampleCount == 0)
+                {
+                    // A header and nothing else reads like a successful export of a file that had
+                    // no data in it. Say so instead, and leave the raw download in place for
+                    // whoever wants to look at why.
+                    throw new InvalidOperationException(
+                        $"'{deviceFileName}' parsed to zero samples, so no CSV was written. The raw file is still available at the returned path.");
                 }
             }
-
-            if (source.SampleCount == 0)
+            catch
             {
-                // A header and nothing else reads like a successful export of a file that had no
-                // data in it. Say so instead, and leave the raw download in place for whoever
-                // wants to look at why.
                 TryDelete(csvPath);
-                throw new InvalidOperationException(
-                    $"'{deviceFileName}' parsed to zero samples, so no CSV was written. The raw file is still available at the returned path.");
+                throw;
             }
 
             // Reported rather than thrown, and the CSV is kept: the columns that did map are real
@@ -915,6 +927,16 @@ public sealed class DaqifiAgent
         _ => null,
     };
 
+    /// <summary>
+    /// Validates a caller-supplied SD file name and returns it trimmed.
+    /// </summary>
+    /// <remarks>
+    /// The character check mirrors the one Core applies before putting a name into an SCPI command
+    /// (quotes, newlines and semicolons), widened to every control character. It has to happen
+    /// here, not just in Core: the listing pre-flight runs first and would otherwise answer a name
+    /// full of newlines with "there is no file called &lt;several lines of garbage&gt;" instead of
+    /// the plain "that is not a valid file name" the caller can act on.
+    /// </remarks>
     private static string RequireFileName(string? fileName)
     {
         var trimmed = fileName?.Trim();
@@ -923,6 +945,18 @@ public sealed class DaqifiAgent
             throw new InvalidOperationException(
                 "A file name is required. Call list_sd_files to see what is on the card.");
         }
+
+        foreach (var c in trimmed)
+        {
+            if (char.IsControl(c) || c is '"' or ';')
+            {
+                throw new InvalidOperationException(
+                    "That is not a valid SD file name: quotes, semicolons and control characters "
+                    + "(including newlines and tabs) are not allowed. Call list_sd_files and pass a "
+                    + "name exactly as it is listed.");
+            }
+        }
+
         return trimmed;
     }
 
