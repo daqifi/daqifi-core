@@ -46,18 +46,36 @@ namespace Daqifi.Core.Device.Internal
         }
 
         /// <summary>
-        /// Temporarily pauses the protobuf message consumer to allow raw byte access to the
-        /// underlying transport stream. The consumer is restored when the returned action completes
-        /// or is disposed.
+        /// Takes exclusive use of the device and hands the transport stream to the caller for raw
+        /// byte access, with the protobuf consumer paused for the duration. Everything is restored
+        /// when the action completes, however it completes.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Runs under the device's operation lock, on the same protocol
+        /// <see cref="ExecuteAsync"/> uses — including nested re-entry for a flow that already holds
+        /// it. Until #493 this was the one path that took the stream without excluding anything: a
+        /// status poll from another thread would acquire the exchange lock uncontended and put a
+        /// second reader on the same stream mid-capture, and a plain <see cref="DaqifiDevice.Send{T}"/>
+        /// was not even deferred, so its reply landed inside the captured bytes. The capture window
+        /// is therefore also what makes other flows' sends defer; they are replayed on the way out.
+        /// </para>
+        /// <para>
+        /// Captures can be long — an SD download's budget is 30 minutes — so a competing text
+        /// exchange now waits that long rather than corrupting the transfer. Callers who cannot
+        /// wait should pass a cancellation token: it is observed while queueing for the lock.
+        /// </para>
+        /// </remarks>
         /// <param name="rawAction">
         /// An async function that receives the transport stream and performs raw I/O.
         /// The protobuf consumer will not read from the stream while this action is executing.
         /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected, disconnecting or disposed.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
+        /// <exception cref="TransportNotConnectedException">Thrown when the transport dropped while this capture waited for the lock.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when cancelled, including while waiting for the lock.</exception>
         internal async Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default)
@@ -67,25 +85,104 @@ namespace Daqifi.Core.Device.Internal
                 throw new DeviceNotConnectedException();
             }
 
-            var transport = _host.Transport;
-            if (transport == null)
-            {
-                throw new InvalidOperationException("ExecuteRawCaptureAsync requires a transport-based connection.");
-            }
-
             cancellationToken.ThrowIfCancellationRequested();
+
+            // A flow that already owns the lock — an exclusive block, or the SD operations' own
+            // prepare/restore exchanges (#407) — runs nested rather than waiting on a semaphore it
+            // is itself holding, and leaves the release to the owner. Same rule as ExecuteAsync.
+            var ownsLock = !_host.HoldsOperationLock;
+            if (ownsLock)
+            {
+                try
+                {
+                    await _host.WaitForOperationLockAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException ex)
+                {
+                    // Dispose() raced ahead of us and disposed the semaphore. Surface the same clean
+                    // failure as the post-acquisition shutdown check below, with the original kept
+                    // as InnerException so the race stays diagnosable.
+                    throw new DeviceNotConnectedException(
+                        "ExecuteRawCaptureAsync cannot run because the device is disposed.",
+                        ex,
+                        isShuttingDown: true);
+                }
+
+                // Claimed in this frame, not behind an await: an AsyncLocal write flows forward to
+                // this frame's callees but never back to its caller, and the callees — the raw
+                // action and every Send() it makes — are exactly who must see it. See the remarks
+                // on ITextExchangeHost. This is also what starts deferring other flows' sends.
+                _host.EnterOperationLockOwnership();
+            }
 
             try
             {
-                // Stop the protobuf consumer so it doesn't compete for stream bytes
-                SuspendInboundConsumer();
+                // All validation runs INSIDE the lock. Everything checked before the wait was
+                // checked against a session that may have been torn down while this flow queued
+                // behind another operation — the same TOCTOU window #186 closed for the text
+                // exchange, and a wider one here because captures are long.
+                if (_host.IsShuttingDown)
+                {
+                    throw new DeviceNotConnectedException(
+                        "ExecuteRawCaptureAsync cannot run while the device is disposing or disconnecting.",
+                        isShuttingDown: true);
+                }
 
-                // Hand the stream to the caller for raw I/O
-                await rawAction(transport.Stream, cancellationToken).ConfigureAwait(false);
+                if (!_host.IsConnected)
+                {
+                    throw new DeviceNotConnectedException();
+                }
+
+                var transport = _host.Transport;
+                if (transport == null)
+                {
+                    throw new InvalidOperationException("ExecuteRawCaptureAsync requires a transport-based connection.");
+                }
+
+                // Device-level IsConnected is status-based and can still report Connected when the
+                // underlying transport has dropped. Fail typed here rather than dereferencing
+                // Stream below and surfacing the framework's raw "BaseStream is only available when
+                // the port is open." (issue #238, the same check ExecuteAsync makes).
+                if (!transport.IsConnected)
+                {
+                    throw new TransportNotConnectedException(
+                        "Device transport is no longer connected.");
+                }
+
+                // Let anything queued before this capture opened reach the wire while the protobuf
+                // consumer is still the one reading (issue #342). Deferral only parks sends that
+                // arrive from here on; a command queued microseconds earlier would otherwise be
+                // written mid-capture and its reply read as captured content.
+                //
+                // Deliberately OUTSIDE the swap's try/finally below, for the same reason as in
+                // ExecuteAsync: this is the one step that can throw (a cancelled token) before the
+                // consumer has been stopped, and that finally restarts the consumer — which on a
+                // consumer that was never stopped means subscribing the inbound handler a second
+                // time and dispatching every frame twice.
+                await _host.DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
+
+                try
+                {
+                    // Stop the protobuf consumer so it doesn't compete for stream bytes
+                    SuspendInboundConsumer();
+
+                    // Hand the stream to the caller for raw I/O
+                    await rawAction(transport.Stream, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    RestartMessageConsumerAfterSwap();
+                }
             }
             finally
             {
-                RestartMessageConsumerAfterSwap();
+                // Only the flow that took the lock releases it; a nested capture leaves that to the
+                // block that owns it. The release replays the sends parked while the capture ran,
+                // before the semaphore is handed on, so they are queued ahead of whatever runs next.
+                if (ownsLock)
+                {
+                    _host.ExitOperationLockOwnership();
+                }
             }
         }
 
@@ -499,10 +596,10 @@ namespace Daqifi.Core.Device.Internal
         /// </para>
         /// <para>
         /// Never throws: it runs from <c>finally</c> blocks, where an exception would mask the real
-        /// failure already unwinding. The consumer is also snapshotted once up front — the
-        /// text-exchange path holds the operation lock (which <see cref="DaqifiDevice.Disconnect"/>
-        /// waits on), but the raw-capture path does not, so a concurrent teardown could otherwise
-        /// null the field between reads.
+        /// failure already unwinding. The consumer is also snapshotted once up front: both swap
+        /// paths hold the operation lock (which <see cref="DaqifiDevice.Disconnect"/> waits on), but
+        /// that wait is bounded and teardown proceeds anyway once it expires, so a concurrent
+        /// teardown could still null the field between reads.
         /// </para>
         /// </remarks>
         private void RestartMessageConsumerAfterSwap()
