@@ -66,9 +66,10 @@ public class DaqifiAgentTests
         Assert.Contains("discover_devices", ex.Message);
     }
 
-    // The serial identify handshake measures ~830 ms on real hardware (#448); a timeout below the
-    // floor returns an empty list before the device could ever answer, indistinguishable from "no
-    // device attached". These pin the clamp directly rather than through a real discovery run.
+    // A timeout below the identify handshake returns an empty list before the device could ever
+    // answer, indistinguishable from "no device attached" (#448). The handshake measured ~830 ms
+    // when the floor was set and ~320-430 ms after #486; the floor stays at 1000 ms for the reasons
+    // on MinDiscoveryTimeoutMs. These pin the clamp directly rather than through a real discovery run.
     [Theory]
     [InlineData(0)]
     [InlineData(250)]   // the old floor — must no longer be honored

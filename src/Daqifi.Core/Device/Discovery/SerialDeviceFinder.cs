@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Ports;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -23,7 +24,8 @@ namespace Daqifi.Core.Device.Discovery;
 /// Port probes are claimed process-wide so a wedged USB CDC device can block at
 /// most one thread per port (see issues #294 / #295). A pass that ends by timeout
 /// or cancellation abandons its in-flight probe and leaves the claim behind while
-/// that probe unwinds — bench-measured at ~490ms on a real Nq1.
+/// that probe unwinds — bench-measured at ~57ms on a real Nq1 (was ~490ms before
+/// the probe teardown was fixed in #486).
 /// </para>
 /// <para>
 /// A pass that starts inside that drain window waits (bounded by both the window
@@ -39,7 +41,49 @@ public class SerialDeviceFinder : DeviceFinderBase
     #region Constants
 
     private const int DefaultBaudRate = 9600;
-    private const int ProbeTimeoutMs = 1000;
+    private const int ProbeWriteTimeoutMs = 1000;
+
+    /// <summary>
+    /// Read timeout for the probe port, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// This is a <em>stop-latency</em> knob, not a response deadline — the probe's own
+    /// <see cref="ResponseTimeoutMs"/> loop decides how long to wait for the device. The reader
+    /// thread spends the whole probe parked in a blocking <see cref="Stream.Read(byte[], int, int)"/>,
+    /// and it can only notice a stop request when that read returns, so the teardown join at the end
+    /// of <see cref="RequestDeviceStatusAsync"/> is bounded by this value and nothing else (#486).
+    /// At the old 1s it was the single largest item in the probe's teardown; 50ms is the same
+    /// granularity the probe's own response poll already runs at (<see cref="PollIntervalMs"/>), so
+    /// the consumer is now joined within one poll interval instead of twenty.
+    /// A timed-out read is a benign loop iteration for
+    /// <see cref="StreamMessageConsumer{T}"/>, and a partially-received message survives across
+    /// iterations in its buffer, so shortening this costs only a few extra loop passes per probe —
+    /// it can neither drop bytes nor split a protobuf frame. Deliberately separate from
+    /// <see cref="ProbeWriteTimeoutMs"/>, which stays at 1s: a write has no such polling loop
+    /// behind it, and a short write timeout would fail a slow send outright.
+    /// </remarks>
+    private const int ProbeReadTimeoutMs = 50;
+
+    /// <summary>
+    /// How long the probe's teardown waits for the consumer's reader thread to exit, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// Only ever reached when the reader is stuck in a read that outlives
+    /// <see cref="ProbeReadTimeoutMs"/> — a healthy port joins in well under this. Left at the value
+    /// the probe has always used so a genuinely stuck stream is still bounded the same way.
+    /// </remarks>
+    private const int ConsumerStopTimeoutMs = 500;
+
+    /// <summary>
+    /// How long the probe's teardown waits for the producer's send queue to drain, in milliseconds.
+    /// </summary>
+    private const int ProducerStopTimeoutMs = 500;
+
+    /// <summary>
+    /// Pause between dropping DTR and closing the probe port, in milliseconds, so the device sees the
+    /// de-assert before the handle goes away.
+    /// </summary>
+    private const int DtrSettleMs = 50;
     // Tightened for the GetDeviceInfo-only probe (closes #157):
     //   - 200ms wake instead of 1s — USB CDC enumerates fast
     //   - 1s response timeout instead of 4s — DAQiFi devices reply within
@@ -99,7 +143,7 @@ public class SerialDeviceFinder : DeviceFinderBase
     // re-appears without a process restart at a bounded leak rate).
     //
     // A claim abandoned by a timed-out / cancelled pass is usually NOT wedged; it
-    // drains in ~490ms. Within AbandonedClaimDrainWaitMs a fresh pass waits for it
+    // drains in ~57ms. Within AbandonedClaimDrainWaitMs a fresh pass waits for it
     // rather than reporting the port absent — see ProbeSafelyAsync.
     //
     // STATIC on purpose: a wedged COM port is machine-global state, not finder
@@ -137,16 +181,19 @@ public class SerialDeviceFinder : DeviceFinderBase
     // How long AFTER abandonment a claim is still treated as "probably draining"
     // rather than "wedged". A pass that ends by timeout or caller cancellation
     // abandons its in-flight probe, but that probe is usually NOT wedged — it is
-    // unwinding TryGetDeviceInfoAsync's cleanup (consumer/producer StopSafely, DTR
-    // drop + 50ms settle, port close). Bench-measured on a real Nq1 (fw 3.7.2, USB,
-    // macOS): the claim was held 488/490/491ms across three runs, then auto-released
-    // by the abandonment continuation.
+    // unwinding the probe's cleanup (consumer/producer StopSafely, DTR drop + 50ms
+    // settle, port close). Bench-measured on a real Nq1 (fw 3.7.2, USB, macOS): the
+    // claim is held 58/57/55ms across three runs, then auto-released by the
+    // abandonment continuation. It was 488/490/491ms before #486, when the consumer
+    // stop self-joined the reader thread and burned its whole 500ms budget.
     //
     // Within this window a fresh pass WAITS for the claim to clear instead of
     // skipping the port; past it, the port is presumed genuinely wedged and skipped
-    // immediately as before. 1s is ~2x the measured drain — enough headroom for a
-    // loaded thread pool, still short enough that a truly wedged port costs at most
-    // one sub-second wait before ageing out of the window entirely.
+    // immediately as before. 1s is now ~17x the measured drain rather than ~2x —
+    // deliberately left alone, because it is a ceiling on how long a fresh pass may
+    // wait, not a cost anything pays: the wait ends the moment the claim clears, so
+    // the extra headroom is free for healthy ports and still bounds a truly wedged
+    // one at a single sub-second wait before it ages out of the window entirely.
     private const int DefaultAbandonedClaimDrainWaitMs = 1000;
 
     // Internal so tests can shrink the drain wait instead of burning ~1s per case.
@@ -565,16 +612,14 @@ public class SerialDeviceFinder : DeviceFinderBase
     private async Task<IDeviceInfo?> TryGetDeviceInfoAsync(string portName, CancellationToken cancellationToken)
     {
         SerialPort? port = null;
-        MessageProducer<string>? producer = null;
-        StreamMessageConsumer<DaqifiOutMessage>? consumer = null;
 
         try
         {
             // Create and configure the serial port
             port = new SerialPort(portName, _baudRate)
             {
-                ReadTimeout = ProbeTimeoutMs,
-                WriteTimeout = ProbeTimeoutMs
+                ReadTimeout = ProbeReadTimeoutMs,
+                WriteTimeout = ProbeWriteTimeoutMs
             };
 
             // Try to open the port
@@ -584,65 +629,8 @@ public class SerialDeviceFinder : DeviceFinderBase
             // Wait for device to wake up (devices need time after DTR is enabled)
             await Task.Delay(DeviceWakeUpDelayMs, cancellationToken);
 
-            // Set up message producer and consumer
-            var stream = port.BaseStream;
-            producer = new MessageProducer<string>(stream);
-            producer.Start();
-
-            var parser = new ProtobufMessageParser();
-            consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
-
-            // Track status message reception
-            DaqifiOutMessage? statusMessage = null;
-            var messageReceived = new TaskCompletionSource<bool>();
-
-            consumer.MessageReceived += (_, args) =>
-            {
-                if (args.Message.Data is DaqifiOutMessage message)
-                {
-                    var messageType = ProtobufProtocolHandler.DetectMessageType(message);
-                    if (messageType == ProtobufMessageType.Status)
-                    {
-                        statusMessage = message;
-                        messageReceived.TrySetResult(true);
-                    }
-                }
-            };
-
-            consumer.Start();
-
-            // Identity probe: GetDeviceInfo only. The rest of the old setup sequence
-            // (StopStreaming / TurnDeviceOn / SetProtobufStreamFormat) is connection setup, not
-            // identification — a healthy DAQiFi answers SYSTem:SYSInfoPB? regardless of stream format or
-            // power state, so the caller setting up an actual connection still owns those. Echo is left
-            // alone too: an echo-on device wraps its reply in the echoed command text plus a trailing
-            // "DAQIFI>" prompt, but ProtobufMessageParser now resyncs past that non-protobuf noise to
-            // the embedded frame (issue #268), so the probe stays GetDeviceInfo-only (closes #157)
-            // instead of toggling device echo.
-            // Send GetDeviceInfo command with retry logic
-            var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
-            var lastRequestTime = DateTime.MinValue;
-            var retryCount = 0;
-
-            while (statusMessage == null && DateTime.UtcNow < timeout && !cancellationToken.IsCancellationRequested)
-            {
-                // Send request every RetryIntervalMs, up to MaxRetries times
-                if ((DateTime.UtcNow - lastRequestTime).TotalMilliseconds >= RetryIntervalMs && retryCount < MaxRetries)
-                {
-                    producer.Send(ScpiMessageProducer.GetDeviceInfo);
-                    lastRequestTime = DateTime.UtcNow;
-                    retryCount++;
-                }
-
-                // Wait a bit for response
-                var remainingTime = Math.Min(PollIntervalMs, (int)(timeout - DateTime.UtcNow).TotalMilliseconds);
-                if (remainingTime > 0)
-                {
-                    await Task.WhenAny(
-                        messageReceived.Task,
-                        Task.Delay(remainingTime, cancellationToken));
-                }
-            }
+            var statusMessage = await RequestDeviceStatusAsync(port.BaseStream, cancellationToken)
+                .ConfigureAwait(false);
 
             if (statusMessage == null)
             {
@@ -684,10 +672,125 @@ public class SerialDeviceFinder : DeviceFinderBase
         }
         finally
         {
+            // Clean up resources. The producer and consumer are already gone by here —
+            // RequestDeviceStatusAsync owns them and tears them down inside its own finally, so the
+            // reader thread has provably exited before the port below is closed under it.
+            try
+            {
+                if (port is { IsOpen: true })
+                {
+                    port.DtrEnable = false;
+                    await Task.Delay(DtrSettleMs); // Give DTR time to be processed
+                    port.Close();
+                }
+
+                port?.Dispose();
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
+    }
+
+    /// <summary>
+    /// Asks an already-open device stream to identify itself and returns its status message, or
+    /// <c>null</c> if nothing answered within <see cref="ResponseTimeoutMs"/>.
+    /// </summary>
+    /// <param name="stream">
+    /// The open device stream. Owned by the caller: this method starts and stops its own producer
+    /// and consumer over it, and both are fully torn down before it returns, but the stream itself
+    /// is left open.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// Split out of <see cref="TryGetDeviceInfoAsync"/> — which owns the port lifecycle — so the
+    /// request/reply exchange and its teardown can be exercised against a scripted stream with no
+    /// serial hardware attached (#486).
+    /// </remarks>
+    internal static async Task<DaqifiOutMessage?> RequestDeviceStatusAsync(
+        Stream stream, CancellationToken cancellationToken)
+    {
+        MessageProducer<string>? producer = null;
+        StreamMessageConsumer<DaqifiOutMessage>? consumer = null;
+
+        try
+        {
+            producer = new MessageProducer<string>(stream);
+            producer.Start();
+
+            var parser = new ProtobufMessageParser();
+            consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+            // Carries the status message itself rather than signalling a separately-assigned local:
+            // the message is published on the consumer's reader thread and read back on whichever
+            // thread resumes below, and handing it through the completion source is what makes that
+            // hand-off ordered instead of a bare cross-thread field write.
+            //
+            // RunContinuationsAsynchronously is load-bearing, not a style choice (#486). This source
+            // is completed from inside the consumer's MessageReceived dispatch, i.e. ON the reader
+            // thread. With inline continuations the rest of this method — the poll-loop exit and the
+            // whole finally block below — resumed on that same reader thread, and the first thing
+            // the finally does is StopSafely, which joins it. The reader was then waiting for
+            // itself: the join could never succeed, so it burned its full timeout on every
+            // successful probe and left the consumer un-joined afterwards. Bench-measured on a real
+            // Nq1: that single self-join was ~500ms of an ~830ms serial identify.
+            var statusReceived =
+                new TaskCompletionSource<DaqifiOutMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            consumer.MessageReceived += (_, args) =>
+            {
+                if (args.Message.Data is DaqifiOutMessage message
+                    && ProtobufProtocolHandler.DetectMessageType(message) == ProtobufMessageType.Status)
+                {
+                    statusReceived.TrySetResult(message);
+                }
+            };
+
+            consumer.Start();
+
+            // Identity probe: GetDeviceInfo only. The rest of the old setup sequence
+            // (StopStreaming / TurnDeviceOn / SetProtobufStreamFormat) is connection setup, not
+            // identification — a healthy DAQiFi answers SYSTem:SYSInfoPB? regardless of stream format or
+            // power state, so the caller setting up an actual connection still owns those. Echo is left
+            // alone too: an echo-on device wraps its reply in the echoed command text plus a trailing
+            // "DAQIFI>" prompt, but ProtobufMessageParser now resyncs past that non-protobuf noise to
+            // the embedded frame (issue #268), so the probe stays GetDeviceInfo-only (closes #157)
+            // instead of toggling device echo.
+            // Send GetDeviceInfo command with retry logic
+            var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
+            var lastRequestTime = DateTime.MinValue;
+            var retryCount = 0;
+
+            while (!statusReceived.Task.IsCompleted && DateTime.UtcNow < timeout
+                                                    && !cancellationToken.IsCancellationRequested)
+            {
+                // Send request every RetryIntervalMs, up to MaxRetries times
+                if ((DateTime.UtcNow - lastRequestTime).TotalMilliseconds >= RetryIntervalMs && retryCount < MaxRetries)
+                {
+                    producer.Send(ScpiMessageProducer.GetDeviceInfo);
+                    lastRequestTime = DateTime.UtcNow;
+                    retryCount++;
+                }
+
+                // Wait a bit for response
+                var remainingTime = Math.Min(PollIntervalMs, (int)(timeout - DateTime.UtcNow).TotalMilliseconds);
+                if (remainingTime > 0)
+                {
+                    await Task.WhenAny(
+                        statusReceived.Task,
+                        Task.Delay(remainingTime, cancellationToken)).ConfigureAwait(false);
+                }
+            }
+
+            return statusReceived.Task.IsCompletedSuccessfully ? statusReceived.Task.Result : null;
+        }
+        finally
+        {
             // Clean up resources
             try
             {
-                consumer?.StopSafely(500);
+                consumer?.StopSafely(ConsumerStopTimeoutMs);
                 consumer?.Dispose();
             }
             catch
@@ -697,24 +800,8 @@ public class SerialDeviceFinder : DeviceFinderBase
 
             try
             {
-                producer?.StopSafely(500);
+                producer?.StopSafely(ProducerStopTimeoutMs);
                 producer?.Dispose();
-            }
-            catch
-            {
-                // Ignore cleanup errors
-            }
-
-            try
-            {
-                if (port is { IsOpen: true })
-                {
-                    port.DtrEnable = false;
-                    await Task.Delay(50); // Give DTR time to be processed
-                    port.Close();
-                }
-
-                port?.Dispose();
             }
             catch
             {
