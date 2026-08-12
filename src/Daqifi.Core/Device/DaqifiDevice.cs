@@ -445,7 +445,8 @@ namespace Daqifi.Core.Device
         private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
 
         // Async-context flag that tracks whether the current logical flow
-        // is inside the consumer swap of ExecuteTextCommandAsync. AsyncLocal flows across await
+        // is inside a consumer swap — ExecuteTextCommandAsync's or ExecuteRawCaptureAsync's; both
+        // stop the protobuf consumer and take the stream. AsyncLocal flows across await
         // resumptions on different threads, so a setupAction that re-enters
         // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
         // detected and surfaced as InvalidOperationException — instead of
@@ -2072,17 +2073,25 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Temporarily pauses the protobuf message consumer to allow raw byte access to the
-        /// underlying transport stream. The consumer is restored when the returned action completes
-        /// or is disposed.
+        /// Takes exclusive use of the device and hands the transport stream to <paramref name="rawAction"/>
+        /// for raw byte access, with the protobuf consumer paused for the duration. Everything is
+        /// restored when the action completes, however it completes.
         /// </summary>
+        /// <remarks>
+        /// Runs under the same operation lock as <see cref="RunExclusiveAsync{TResult}"/> and the
+        /// text exchange, so a text query from another thread waits for the capture and a
+        /// <see cref="Send{T}"/> from another thread is deferred and replayed afterwards (#493).
+        /// Reentrant on the flow that already holds the lock. Captures can be long — an SD
+        /// download's budget is 30 minutes — so pass a cancellation token if the caller cannot wait
+        /// that long for the lock.
+        /// </remarks>
         /// <param name="rawAction">
         /// An async function that receives the transport stream and performs raw I/O.
         /// The protobuf consumer will not read from the stream while this action is executing.
         /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected, disconnecting or disposed.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         protected virtual Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,

@@ -846,6 +846,13 @@ namespace Daqifi.Core.Device.SdCard
         /// </exception>
         /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
         /// <remarks>
+        /// The transfer holds the device's operation lock for its whole duration (#493), so while it
+        /// runs a text query from another thread waits and a <see cref="DaqifiDevice.Send{T}"/> from
+        /// another thread is deferred and replayed afterwards. That is what keeps a status poll from
+        /// putting a second reader on the stream, and a stray command's reply out of the file's
+        /// bytes. The cost is that an unrelated query on another thread can now wait for the whole
+        /// download rather than corrupting it; pass it a cancellation token if it cannot.
+        /// <para>
         /// On a timeout — or a cancellation the parked transfer cannot itself observe — the
         /// in-flight transfer is <b>abandoned</b> rather than awaited: it may be blocked in native
         /// serial I/O that no token can interrupt, and waiting for it is the hang this method
@@ -856,6 +863,14 @@ namespace Daqifi.Core.Device.SdCard
         /// not be reused for anything else; and the device is left mid-<c>SD:GET</c> with the
         /// protobuf consumer stopped, so reconnecting (or power-cycling, if its SD subsystem is
         /// genuinely wedged) is the reliable way to resume normal operation.
+        /// </para>
+        /// <para>
+        /// An abandoned transfer also still holds the operation lock. Its token is cancelled on the
+        /// way out, so the usual case — a read that returns late — unwinds at its next token check
+        /// and releases it. A read that never returns keeps the lock, and keeps the transport stream
+        /// with it: a text query blocked on that lock is blocked on a stream nothing could safely
+        /// have used anyway, and the reconnect this case already calls for is what clears it.
+        /// </para>
         /// <para>
         /// The LAN interface is deliberately <b>not</b> restored in that case: the abandoned
         /// transfer still owns the transport, and putting the restore commands onto a link it is
