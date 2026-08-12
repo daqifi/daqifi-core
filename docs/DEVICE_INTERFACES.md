@@ -1066,6 +1066,15 @@ other threads' text queries wait. Keep bodies short, and do not start background
 a `Task.Run` launched from the body inherits the flow's ownership of the lock, so its commands would
 *not* be deferred and could still interleave.
 
+The deferred backlog is capped at `DaqifiDevice.DefaultMaxDeferredSends` (1024) messages and
+overflows **drop-oldest**. This only matters for the genuinely long exclusive operations — an SD card
+download is allowed thirty minutes, a firmware update longer — where a UI or agent polling at even
+10 Hz would otherwise park tens of thousands of commands and then fire all of them at the device at
+once. Keeping the newest is the right way round for the level-setting commands that get parked ("set
+this pin", "set that duty cycle"), where a superseded instruction is worth less than the memory it
+costs. Discards are counted by `device.DroppedDeferredSendCount`; a non-zero and growing value means
+you are commanding faster than the operation in progress can let the commands out.
+
 `RunExclusiveAsync` is per device. Two devices always run in parallel — there is no global lock.
 
 ### 3. Connect / Disconnect / Dispose serialize themselves, but do not wait forever

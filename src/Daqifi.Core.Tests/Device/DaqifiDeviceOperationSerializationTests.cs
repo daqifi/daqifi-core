@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
@@ -456,6 +457,330 @@ public class DaqifiDeviceOperationSerializationTests
             .GetValue(consumer);
 
         return handler?.GetInvocationList().Length ?? 0;
+    }
+
+    // ── Issue #492: the parked backlog is capped ────────────────────────────────────────────
+
+    [Fact]
+    public async Task Send_PastTheBacklogCap_DropsTheOldestAndReplaysTheNewestInOrder()
+    {
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Capped Device", transport, cap: 4);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:00}"));
+            }
+        });
+
+        // Read while the operation still holds the device, so this is the backlog itself and not
+        // what survived a replay.
+        Assert.Equal(4, DeferredBacklogCount(device));
+        Assert.Equal(6, device.DroppedDeferredSendCount);
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        await WaitForWriteAsync(transport, "m09");
+
+        // Drop-oldest: the four newest survive, still in the order they were sent.
+        Assert.Equal(new[] { "m06", "m07", "m08", "m09" }, TaggedWrites(transport));
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_WithABacklogUnderTheCap_DropsNothing()
+    {
+        // The guard on the existing ordering guarantees: everything already tested here parks a
+        // handful of messages, and none of it may change because a cap now exists.
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Uncapped-In-Practice Device", transport, cap: 8);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:00}"));
+            }
+        });
+
+        Assert.Equal(5, DeferredBacklogCount(device));
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        await WaitForWriteAsync(transport, "m04");
+
+        Assert.Equal(new[] { "m00", "m01", "m02", "m03", "m04" }, TaggedWrites(transport));
+        Assert.Equal(0, device.DroppedDeferredSendCount);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_HammeredThroughoutALongOperation_LeavesTheBacklogBounded()
+    {
+        // The reported failure: an SD card download is allowed thirty minutes, and a UI or agent
+        // polling at 10 Hz throughout it parked ~18,000 closures with nothing to stop it. The
+        // backlog now sits at the cap no matter how long the hammering goes on.
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Hammered Device", transport, cap: 4);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < 2000; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:0000}"));
+
+                // Sampled as it grows, not just at the end: a backlog that ballooned and was
+                // trimmed once at the finish would pass an end-state-only assertion.
+                Assert.True(
+                    DeferredBacklogCount(device) <= 4,
+                    $"The backlog grew to {DeferredBacklogCount(device)} after {i + 1} sends.");
+            }
+        });
+
+        Assert.Equal(4, DeferredBacklogCount(device));
+        Assert.Equal(1996, device.DroppedDeferredSendCount);
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_PastTheDefaultCap_UsesDefaultMaxDeferredSends()
+    {
+        // The production constant, not a test seam: proves the shipped device is the bounded one.
+        using var transport = new RecordingTransport();
+        using var device = new DaqifiDevice("Default Cap Device", transport);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        const int overflowBy = 6;
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < DaqifiDevice.DefaultMaxDeferredSends + overflowBy; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:0000}"));
+            }
+        });
+
+        Assert.Equal(DaqifiDevice.DefaultMaxDeferredSends, DeferredBacklogCount(device));
+        Assert.Equal(overflowBy, device.DroppedDeferredSendCount);
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public void Send_OnAnIdleDevice_NeverDropsAnything()
+    {
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Idle Device", transport, cap: 1);
+        device.Connect();
+
+        Assert.Equal(0, device.DroppedDeferredSendCount);
+
+        for (var i = 0; i < 20; i++)
+        {
+            device.Send(new TaggedBinaryMessage($"m{i:00}"));
+        }
+
+        // Nothing owns the device, so nothing was parked and nothing could be dropped — even with
+        // a cap of one.
+        Assert.Equal(0, device.DroppedDeferredSendCount);
+        Assert.Equal(20, TaggedWrites(transport).Count);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_OverflowingTwoOperations_AccumulatesTheCountAndWarnsOncePerBacklog()
+    {
+        var logger = new CapturingLogger();
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Twice Overflowed Device", transport, cap: 2, logger: logger);
+        device.Connect();
+
+        for (var round = 0; round < 2; round++)
+        {
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+            {
+                entered.SetResult();
+                await release.Task;
+            }));
+
+            await entered.Task.WaitAsync(DeadlockBudget);
+
+            await Task.Run(() =>
+            {
+                for (var i = 0; i < 5; i++)
+                {
+                    device.Send(new TaggedBinaryMessage($"r{round}i{i}"));
+                }
+            });
+
+            release.SetResult();
+            await operation.WaitAsync(DeadlockBudget);
+
+            // The backlog has to be observed empty before the next round, or the second round's
+            // overflow would land in the first round's backlog and be reported as one episode.
+            await WaitForBacklogDrainAsync(device);
+        }
+
+        Assert.Equal(6, device.DroppedDeferredSendCount);
+
+        // One line per overflowing backlog, not one per dropped message: three were dropped in
+        // each round, and a warning per drop is how a diagnostic becomes noise nobody reads.
+        var overflowWarnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("reached its cap", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Equal(2, overflowWarnings.Count);
+        Assert.All(overflowWarnings, w => Assert.Contains("DroppedDeferredSendCount", w.Message, StringComparison.Ordinal));
+
+        device.Disconnect();
+    }
+
+    /// <summary>The live backlog length, read straight off the device's own queue.</summary>
+    private static int DeferredBacklogCount(DaqifiDevice device)
+    {
+        var backlog = (System.Collections.ICollection?)typeof(DaqifiDevice)
+            .GetField("_deferredSends", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(device);
+
+        return backlog?.Count ?? 0;
+    }
+
+    /// <summary>
+    /// Waits for the backlog to reach its resting state. The tail of a flush can be handed to a
+    /// background drain, so "the operation returned" is not yet "the backlog is gone".
+    /// </summary>
+    private static async Task WaitForBacklogDrainAsync(DaqifiDevice device)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (DeferredBacklogCount(device) == 0)
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail("The deferred backlog never drained.");
+    }
+
+    /// <summary>The tagged payloads that reached the wire, in order.</summary>
+    private static List<string> TaggedWrites(RecordingTransport transport) =>
+        transport.Writes
+            .Where(w => w.Length > 1 && (w[0] == 'm' || w[0] == 'r'))
+            .ToList();
+
+    /// <summary>Shrinks the backlog cap so the drop path is reachable in a bounded test.</summary>
+    private sealed class CappedDevice : DaqifiDevice
+    {
+        private readonly int _cap;
+
+        public CappedDevice(string name, IStreamTransport transport, int cap, ILogger? logger = null)
+            : base(name, transport, logger)
+        {
+            _cap = cap;
+        }
+
+        internal override int MaxDeferredSends => _cap;
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        private readonly object _gate = new();
+        private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _entries.ToList();
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+            {
+                _entries.Add((logLevel, formatter(state, exception)));
+            }
+        }
     }
 
     // ── Qodo round 3: teardown must reset deferral state ────────────────────────────────────
