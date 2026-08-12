@@ -1,0 +1,15 @@
+# Analyzer configuration for the Daqifi.Core library only.
+#
+# Daqifi.Core ships synchronous facades that block on their own async work
+# (DaqifiDevice.Connect(), DaqifiDeviceFactory.ConnectTcp/ConnectSerial,
+# IStreamTransport.Connect/Disconnect, ...). Under a single-threaded
+# SynchronizationContext — a WPF/WinForms UI thread — a naked `await` posts its
+# continuation back to that context, which is already blocked inside
+# GetAwaiter().GetResult(), and the application deadlocks with no timeout and no
+# exception (issue #495).
+#
+# CA2007 makes that a build error rather than a code-review habit. Library code
+# has no business resuming on the caller's context, so the rule applies to every
+# await in this project, not just the connect path.
+[*.cs]
+dotnet_diagnostic.CA2007.severity = warning

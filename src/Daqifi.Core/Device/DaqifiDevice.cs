@@ -445,7 +445,8 @@ namespace Daqifi.Core.Device
         private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
 
         // Async-context flag that tracks whether the current logical flow
-        // is inside the consumer swap of ExecuteTextCommandAsync. AsyncLocal flows across await
+        // is inside a consumer swap — ExecuteTextCommandAsync's or ExecuteRawCaptureAsync's; both
+        // stop the protobuf consumer and take the stream. AsyncLocal flows across await
         // resumptions on different threads, so a setupAction that re-enters
         // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
         // detected and surfaced as InvalidOperationException — instead of
@@ -475,7 +476,56 @@ namespace Daqifi.Core.Device
             {
                 if (_status == value) return;
                 _status = value;
+                RaiseConnectionStatusChanged(_status);
                 RaiseStatusChanged(_status);
+            }
+        }
+
+        /// <summary>
+        /// Tells a derived device inside this library that the connection status has changed, before
+        /// consumers are notified on <see cref="StatusChanged"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Internal rather than protected: this is wiring between this class and the collaborators
+        /// the library ships, not an extension point. It exists because some of those collaborators
+        /// hold work that only makes sense on a live session — the live-sample enumerations behind
+        /// <see cref="DaqifiStreamingDevice.StreamSamplesAsync"/>, which used to park forever once
+        /// the device went away (issue #496).
+        /// </para>
+        /// <para>
+        /// Runs before <see cref="StatusChanged"/> so that a consumer's handler already sees the
+        /// library's own reaction as done, and is isolated by <see cref="RaiseConnectionStatusChanged"/>
+        /// exactly as a consumer's handler is. An override still has no business throwing, but a
+        /// transition is never allowed to fail — that is the whole of issue #494, and the rule cannot
+        /// be weaker for the library's own code than it is for a consumer's.
+        /// </para>
+        /// </remarks>
+        /// <param name="status">The status the device has just moved to.</param>
+        internal virtual void OnConnectionStatusChanged(ConnectionStatus status)
+        {
+        }
+
+        /// <summary>
+        /// Calls <see cref="OnConnectionStatusChanged"/>, isolating a throwing override from the
+        /// transition it is reacting to.
+        /// </summary>
+        /// <remarks>
+        /// The same guarantee, for the same reason, as <see cref="RaiseStatusChanged"/> one line
+        /// further on: this runs on the drop path, where an escaping exception used to skip the
+        /// reconnect start and unwind into the transport before it had released the port handle
+        /// (issue #494). A failure here is reported on <see cref="ErrorOccurred"/> and the transition
+        /// completes regardless.
+        /// </remarks>
+        private void RaiseConnectionStatusChanged(ConnectionStatus status)
+        {
+            try
+            {
+                OnConnectionStatusChanged(status);
+            }
+            catch (Exception ex)
+            {
+                RaiseDeviceError(DeviceErrorSource.StatusNotification, ex);
             }
         }
 
@@ -2072,17 +2122,25 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Temporarily pauses the protobuf message consumer to allow raw byte access to the
-        /// underlying transport stream. The consumer is restored when the returned action completes
-        /// or is disposed.
+        /// Takes exclusive use of the device and hands the transport stream to <paramref name="rawAction"/>
+        /// for raw byte access, with the protobuf consumer paused for the duration. Everything is
+        /// restored when the action completes, however it completes.
         /// </summary>
+        /// <remarks>
+        /// Runs under the same operation lock as <see cref="RunExclusiveAsync{TResult}"/> and the
+        /// text exchange, so a text query from another thread waits for the capture and a
+        /// <see cref="Send{T}"/> from another thread is deferred and replayed afterwards (#493).
+        /// Reentrant on the flow that already holds the lock. Captures can be long — an SD
+        /// download's budget is 30 minutes — so pass a cancellation token if the caller cannot wait
+        /// that long for the lock.
+        /// </remarks>
         /// <param name="rawAction">
         /// An async function that receives the transport stream and performs raw I/O.
         /// The protobuf consumer will not read from the stream while this action is executing.
         /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected, disconnecting or disposed.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         protected virtual Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
@@ -3298,11 +3356,42 @@ namespace Daqifi.Core.Device
         /// </remarks>
         private void ReleaseResources()
         {
-            _messageConsumer?.Dispose();
-            _messageProducer?.Dispose();
-            _transport?.Dispose();
-            _textExchangeLock.Dispose();
-            _disposed = true;
+            try
+            {
+                ReleaseDerivedResources();
+            }
+            catch (Exception ex)
+            {
+                // Disposal must not fail on account of the library's own cleanup — the handles
+                // released below are what a caller is actually relying on this for, and a throwing
+                // Dispose would hide them behind an exception nobody can act on. Reported rather
+                // than swallowed.
+                RaiseDeviceError(DeviceErrorSource.Unknown, ex);
+            }
+            finally
+            {
+                _messageConsumer?.Dispose();
+                _messageProducer?.Dispose();
+                _transport?.Dispose();
+                _textExchangeLock.Dispose();
+                _disposed = true;
+            }
+        }
+
+        /// <summary>
+        /// Releases what a derived device inside this library owns, ahead of the handles this class
+        /// owns.
+        /// </summary>
+        /// <remarks>
+        /// The companion to <see cref="OnConnectionStatusChanged"/>, and internal for the same
+        /// reason. It covers the one teardown a status transition cannot: disposing a device that
+        /// was never connected, or was already disconnected, moves it nowhere, so nothing would tell
+        /// a live-sample enumeration parked on it that the device is gone (issue #496). An override
+        /// that throws is caught and reported on <see cref="ErrorOccurred"/>: the handles this method
+        /// exists to release are freed regardless, and <see cref="Dispose()"/> does not fail.
+        /// </remarks>
+        internal virtual void ReleaseDerivedResources()
+        {
         }
 
         /// <summary>

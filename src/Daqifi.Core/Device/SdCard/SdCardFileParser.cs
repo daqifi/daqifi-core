@@ -137,7 +137,7 @@ public sealed class SdCardFileParser
             throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
         }
 
-        await using var stream = new FileStream(
+        var stream = new FileStream(
             filePath,
             FileMode.Open,
             FileAccess.Read,
@@ -145,7 +145,10 @@ public sealed class SdCardFileParser
             options.BufferSize,
             useAsync: true);
 
-        return await ParseAsync(stream, Path.GetFileName(filePath), options, ct).ConfigureAwait(false);
+        await using (stream.ConfigureAwait(false))
+        {
+            return await ParseAsync(stream, Path.GetFileName(filePath), options, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

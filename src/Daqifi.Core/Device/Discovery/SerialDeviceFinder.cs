@@ -299,7 +299,7 @@ public class SerialDeviceFinder : DeviceFinderBase
         ThrowIfDisposed();
 
         // Prevent concurrent discovery operations
-        await DiscoverySemaphore.WaitAsync(cancellationToken);
+        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var discoveredDevices = new List<IDeviceInfo>();
@@ -635,7 +635,7 @@ public class SerialDeviceFinder : DeviceFinderBase
             port.DtrEnable = true;
 
             // Wait for device to wake up (devices need time after DTR is enabled)
-            await Task.Delay(DeviceWakeUpDelayMs, cancellationToken);
+            await Task.Delay(DeviceWakeUpDelayMs, cancellationToken).ConfigureAwait(false);
 
             var statusMessage = await RequestDeviceStatusAsync(port.BaseStream, cancellationToken)
                 .ConfigureAwait(false);
@@ -688,7 +688,7 @@ public class SerialDeviceFinder : DeviceFinderBase
                 if (port is { IsOpen: true })
                 {
                     port.DtrEnable = false;
-                    await Task.Delay(DtrSettleMs); // Give DTR time to be processed
+                    await Task.Delay(DtrSettleMs).ConfigureAwait(false); // Give DTR time to be processed
                     port.Close();
                 }
 

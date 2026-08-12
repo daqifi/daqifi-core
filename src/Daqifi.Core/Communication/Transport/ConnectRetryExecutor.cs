@@ -66,11 +66,11 @@ internal static class ConnectRetryExecutor
                     var delay = options.CalculateDelay(attempt);
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay, cancellationToken);
+                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                     }
                 }
 
-                await connectAttempt(options, cancellationToken);
+                await connectAttempt(options, cancellationToken).ConfigureAwait(false);
                 onStatusChanged(true, null);
                 return; // Success!
             }

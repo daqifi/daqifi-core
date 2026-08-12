@@ -149,7 +149,7 @@ namespace Daqifi.Core.Device.Network
             // while the device is sitting on a different network.
             try
             {
-                await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken);
+                await Task.Delay(WIFI_MODULE_RESTART_DELAY_MS, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
