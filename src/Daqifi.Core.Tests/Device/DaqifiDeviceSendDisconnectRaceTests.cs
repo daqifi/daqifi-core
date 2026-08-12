@@ -152,8 +152,13 @@ public class DaqifiDeviceSendDisconnectRaceTests
         using var device = new DaqifiDevice("Racing Device", transport);
         device.Connect();
 
-        var failures = new List<Exception>();
-        var failureGate = new object();
+        // Only the first untyped failure is kept. It is the one that fails the test, and holding on
+        // to every teardown exception a four-second loop produces would have the test allocating
+        // harder than the race it is trying to lose. Typed failures are counted rather than stored:
+        // the count is diagnostic only, since whether a given run actually hits the race is not
+        // something a test can schedule.
+        Exception? untyped = null;
+        var typedFailures = 0;
         var sends = 0;
         var stop = false;
 
@@ -166,12 +171,17 @@ public class DaqifiDeviceSendDisconnectRaceTests
                     device.Send(ScpiMessageProducer.GetDeviceInfo);
                     Interlocked.Increment(ref sends);
                 }
+                catch (DeviceNotConnectedException)
+                {
+                    // The expected way to lose this race, and the whole point of the fix.
+                    Interlocked.Increment(ref typedFailures);
+                }
                 catch (Exception ex)
                 {
-                    lock (failureGate)
-                    {
-                        failures.Add(ex);
-                    }
+                    // First one wins and ends the run: it already fails the test, and letting the
+                    // loop carry on only buries it under thousands more of the same.
+                    Interlocked.CompareExchange(ref untyped, ex, null);
+                    Volatile.Write(ref stop, true);
                 }
 
                 // Keeps the producer's unbounded queue from being the thing under test.
@@ -184,7 +194,10 @@ public class DaqifiDeviceSendDisconnectRaceTests
 
         var cycles = 0;
         var clock = Stopwatch.StartNew();
-        while (cycles < MaxStressCycles && clock.Elapsed < StressBudget)
+
+        // The sender raises `stop` the moment something untyped escapes, so a failing run reports in
+        // milliseconds instead of burning the whole budget cycling a device nobody is sending to.
+        while (cycles < MaxStressCycles && clock.Elapsed < StressBudget && !Volatile.Read(ref stop))
         {
             device.Disconnect();
             device.Connect();
@@ -198,21 +211,17 @@ public class DaqifiDeviceSendDisconnectRaceTests
         Assert.True(cycles > 0, "No disconnect/reconnect cycles ran.");
         Assert.True(Volatile.Read(ref sends) > 0, "No sends were attempted.");
 
-        List<Exception> observed;
-        lock (failureGate)
-        {
-            observed = failures.ToList();
-        }
-
         // Asserted as a negative on purpose: whether a given run wins or loses the race is not
         // something a test can schedule, so this pins "no untyped failure can escape" rather than
-        // "the race happened". Before the fix, a long enough run produced both of these.
-        Assert.DoesNotContain(observed, ex => ex is NullReferenceException);
-
-        var untyped = observed.FirstOrDefault(ex => ex is not DeviceNotConnectedException);
+        // "the race happened". Before the fix, a long enough run produced both a
+        // NullReferenceException, from dereferencing the field teardown had just nulled, and a bare
+        // InvalidOperationException from the stopped producer; either one lands here. Read plainly —
+        // Thread.Join already published everything the sender wrote.
+        var escaped = untyped;
         Assert.True(
-            untyped == null,
-            $"Send surfaced an untyped failure while racing teardown: {untyped?.GetType().Name}: {untyped?.Message}");
+            escaped == null,
+            $"Send surfaced an untyped failure while racing teardown (after {typedFailures} typed "
+            + $"failure(s)): {escaped?.GetType().Name}: {escaped?.Message}");
 
         device.Disconnect();
     }
