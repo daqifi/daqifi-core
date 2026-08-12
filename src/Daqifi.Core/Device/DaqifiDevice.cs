@@ -445,7 +445,8 @@ namespace Daqifi.Core.Device
         private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
 
         // Async-context flag that tracks whether the current logical flow
-        // is inside the consumer swap of ExecuteTextCommandAsync. AsyncLocal flows across await
+        // is inside a consumer swap — ExecuteTextCommandAsync's or ExecuteRawCaptureAsync's; both
+        // stop the protobuf consumer and take the stream. AsyncLocal flows across await
         // resumptions on different threads, so a setupAction that re-enters
         // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
         // detected and surfaced as InvalidOperationException — instead of

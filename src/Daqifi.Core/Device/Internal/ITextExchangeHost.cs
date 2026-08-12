@@ -109,8 +109,9 @@ namespace Daqifi.Core.Device.Internal
         void ExitOperationLockOwnership();
 
         /// <summary>
-        /// Whether the current logical flow is already inside a consumer swap. Set by the engine
-        /// around the exchange so a <c>setupAction</c> that re-enters is caught rather than wedging.
+        /// Whether the current logical flow is already inside a consumer swap — a text exchange or
+        /// a raw capture. Set by the engine around both, so a callback that re-enters either one is
+        /// caught rather than restarting the consumer underneath the swap that is still running.
         /// </summary>
         /// <remarks>
         /// <b>The setter must not be made async</b> — see the remarks on

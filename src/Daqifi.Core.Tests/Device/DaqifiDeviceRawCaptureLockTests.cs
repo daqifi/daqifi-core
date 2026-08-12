@@ -295,6 +295,62 @@ public class DaqifiDeviceRawCaptureLockTests
         device.Disconnect();
     }
 
+    // ── Nested consumer swaps ───────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RawCapture_NestedInsideAnotherRawCapture_IsRejected()
+    {
+        // The lock deliberately lets a flow that already owns it run nested — which is exactly what
+        // makes a nested swap silent. The inner capture's finally would restart the protobuf
+        // consumer while the outer one still had the stream, putting a second reader on it.
+        using var transport = new CaptureTransport();
+        using var device = new RawCaptureDevice("Nested-swap Device", transport);
+        device.Connect();
+
+        Exception? inner = null;
+
+        await device.RunRawCaptureAsync(async (_, ct) =>
+        {
+            inner = await Record.ExceptionAsync(
+                () => device.RunRawCaptureAsync((_, _) => Task.CompletedTask, ct));
+        }).WaitAsync(DeadlockBudget);
+
+        var rejected = Assert.IsType<InvalidOperationException>(inner);
+        Assert.Contains("not re-entrant", rejected.Message, StringComparison.Ordinal);
+
+        // The guard is per-flow state, so it must be cleared: a later capture still works.
+        await device.RunRawCaptureAsync((_, _) => Task.CompletedTask).WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task TextExchange_FromInsideARawCapture_IsRejected()
+    {
+        // Same corruption from the other direction, and the one a caller is likelier to write:
+        // "while I have the stream, let me just ask the device something."
+        using var transport = new CaptureTransport();
+        using var device = new RawCaptureDevice("Nested-exchange Device", transport);
+        device.Connect();
+
+        Exception? inner = null;
+
+        await device.RunRawCaptureAsync(async (_, ct) =>
+        {
+            inner = await Record.ExceptionAsync(
+                () => device.RunTextExchangeAsync(() => device.Send(ScpiMessageProducer.GetDeviceInfo), ct));
+        }).WaitAsync(DeadlockBudget);
+
+        var rejected = Assert.IsType<InvalidOperationException>(inner);
+        Assert.Contains("not re-entrant", rejected.Message, StringComparison.Ordinal);
+
+        // And the outer capture left the device usable.
+        await device.RunTextExchangeAsync(() => device.Send(ScpiMessageProducer.GetDeviceInfo))
+            .WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
     // ── Lock hygiene ────────────────────────────────────────────────────────────────────────
 
     [Fact]

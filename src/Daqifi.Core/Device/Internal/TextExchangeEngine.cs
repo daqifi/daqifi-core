@@ -87,6 +87,17 @@ namespace Daqifi.Core.Device.Internal
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            // A capture is a consumer swap, so it obeys the same nesting rule an exchange does: one
+            // swap at a time per flow. The lock does not cover this — a nested call runs nested by
+            // design — and without the guard the inner swap's finally would restart the protobuf
+            // consumer while the outer capture still owns the stream, putting a second reader on it.
+            if (_host.IsInsideTextExchange)
+            {
+                throw new InvalidOperationException(
+                    "ExecuteRawCaptureAsync is not re-entrant on the same device and cannot run "
+                    + "inside a text exchange; both swap the device's message consumer.");
+            }
+
             // A flow that already owns the lock — an exclusive block, or the SD operations' own
             // prepare/restore exchanges (#407) — runs nested rather than waiting on a semaphore it
             // is itself holding, and leaves the release to the owner. Same rule as ExecuteAsync.
@@ -114,6 +125,11 @@ namespace Daqifi.Core.Device.Internal
                 // on ITextExchangeHost. This is also what starts deferring other flows' sends.
                 _host.EnterOperationLockOwnership();
             }
+
+            // Claims the swap for this flow, so anything the raw action calls that would swap the
+            // consumer again is caught by the guard above (or by ExecuteAsync's) rather than
+            // restarting the consumer underneath this capture.
+            _host.IsInsideTextExchange = true;
 
             try
             {
@@ -176,6 +192,8 @@ namespace Daqifi.Core.Device.Internal
             }
             finally
             {
+                _host.IsInsideTextExchange = false;
+
                 // Only the flow that took the lock releases it; a nested capture leaves that to the
                 // block that owns it. The release replays the sends parked while the capture ran,
                 // before the semaphore is handed on, so they are queued ahead of whatever runs next.
@@ -217,11 +235,13 @@ namespace Daqifi.Core.Device.Internal
             // AsyncLocal flows across await thread hops so this catches
             // re-entry even when the inner call resumes on a different
             // thread than the outer call.
+            // The flag covers a raw capture's swap too, so this also catches an
+            // exchange opened from inside one — same corruption, same answer.
             if (_host.IsInsideTextExchange)
             {
                 throw new InvalidOperationException(
                     "ExecuteTextCommandAsync is not re-entrant on the same device; "
-                    + "do not call it from inside a setupAction callback.");
+                    + "do not call it from inside a setupAction callback or a raw capture.");
             }
 
             // The exchange runs under the device's operation lock. A flow that already owns it —
