@@ -721,6 +721,10 @@ public class SerialDeviceFinder : DeviceFinderBase
     {
         MessageProducer<string>? producer = null;
         StreamMessageConsumer<DaqifiOutMessage>? consumer = null;
+        // Noted before anything touches the stream so the shortened teardown timeout can be put back
+        // — the stream belongs to the caller, and a probe has no business changing how it reads
+        // afterwards.
+        var originalReadTimeout = TryGetReadTimeout(stream);
 
         try
         {
@@ -811,6 +815,11 @@ public class SerialDeviceFinder : DeviceFinderBase
                 // Ignore cleanup errors
             }
 
+            // Strictly after the consumer has been joined: the short timeout is what makes that join
+            // quick, so restoring any earlier would give the benefit back. By here the reader has
+            // exited, so this is also the only thread touching the stream.
+            RestoreReadTimeout(stream, originalReadTimeout);
+
             try
             {
                 producer?.StopSafely(ProducerStopTimeoutMs);
@@ -820,6 +829,50 @@ public class SerialDeviceFinder : DeviceFinderBase
             {
                 // Ignore cleanup errors
             }
+        }
+    }
+
+    /// <summary>
+    /// Reads a stream's current read timeout, or <c>null</c> when it does not have one.
+    /// </summary>
+    private static int? TryGetReadTimeout(Stream stream)
+    {
+        try
+        {
+            return stream.CanTimeout ? stream.ReadTimeout : null;
+        }
+        catch
+        {
+            // A stream that claims CanTimeout but refuses the getter has nothing to restore either.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Puts back the read timeout the stream had before the probe shortened it.
+    /// </summary>
+    /// <remarks>
+    /// Writes only when the value actually differs, so a probe that never shortened anything — a
+    /// port that answered nothing, most commonly — leaves the stream completely untouched rather
+    /// than rewriting it with its own value.
+    /// </remarks>
+    private static void RestoreReadTimeout(Stream stream, int? originalReadTimeout)
+    {
+        if (originalReadTimeout is not { } original)
+        {
+            return;
+        }
+
+        try
+        {
+            if (stream.CanTimeout && stream.ReadTimeout != original)
+            {
+                stream.ReadTimeout = original;
+            }
+        }
+        catch
+        {
+            // Best-effort, exactly as the shortening was.
         }
     }
 

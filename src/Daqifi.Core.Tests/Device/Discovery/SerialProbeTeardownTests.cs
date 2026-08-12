@@ -164,6 +164,8 @@ public class SerialProbeTeardownTests
         Assert.NotNull(second);
         Assert.Equal(TestSerialNumber, second.DeviceSn);
         Assert.Equal(2, stream.ReaderThreadIds.Distinct().Count());
+        // Each exchange started from the timeout it found, because the previous one put it back.
+        Assert.All(stream.ReadsIssuedWithTimeout.Take(1), issued => Assert.Equal(ProbeStartReadTimeoutMs, issued));
     }
 
     [Fact]
@@ -175,10 +177,37 @@ public class SerialProbeTeardownTests
 
         // The reader can only notice the imminent stop when its current read returns, so the read it
         // issues after handing over the status is the one teardown has to wait out.
-        Assert.Equal([PostIdentifyReadTimeoutMs], stream.ReadTimeoutHistory);
+        Assert.Equal(PostIdentifyReadTimeoutMs, stream.ReadTimeoutHistory.First());
         Assert.All(
             stream.ReadsIssuedWithTimeout.Skip(1),
             issued => Assert.Equal(PostIdentifyReadTimeoutMs, issued));
+    }
+
+    [Fact]
+    public async Task RequestDeviceStatusAsync_AfterIdentifying_RestoresTheReadTimeoutItFound()
+    {
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: true);
+
+        Assert.NotNull(await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None));
+
+        // The stream belongs to the caller and stays open, so the faster teardown must not be left
+        // behind as a permanently twitchier read timeout on someone else's stream.
+        Assert.Equal(ProbeStartReadTimeoutMs, stream.ReadTimeout);
+        Assert.Equal([PostIdentifyReadTimeoutMs, ProbeStartReadTimeoutMs], stream.ReadTimeoutHistory);
+    }
+
+    [Fact]
+    public async Task RequestDeviceStatusAsync_StreamWithoutTimeoutSupport_StillCompletes()
+    {
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: true)
+        {
+            RejectTimeoutAccess = true
+        };
+
+        // Shortening and restoring are both best-effort: a stream that refuses to talk about its
+        // timeouts costs a slower teardown, not a failed probe.
+        Assert.NotNull(await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None));
+        Assert.Empty(stream.ReadTimeoutHistory);
     }
 
     [Fact]
@@ -238,13 +267,21 @@ public class SerialProbeTeardownTests
             get { lock (_gate) { return _readTimeoutHistory.ToList(); } }
         }
 
-        public override bool CanTimeout => true;
+        /// <summary>When set, the stream behaves like one whose timeouts cannot be inspected or set.</summary>
+        public bool RejectTimeoutAccess { get; init; }
+
+        public override bool CanTimeout => !RejectTimeoutAccess;
 
         public override int ReadTimeout
         {
-            get => _readTimeoutMs;
+            get => RejectTimeoutAccess ? throw new InvalidOperationException("Timeouts not supported.") : _readTimeoutMs;
             set
             {
+                if (RejectTimeoutAccess)
+                {
+                    throw new InvalidOperationException("Timeouts not supported.");
+                }
+
                 _readTimeoutMs = value;
                 lock (_gate)
                 {
