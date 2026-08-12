@@ -25,13 +25,21 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 /// </remarks>
 public class SerialProbeTeardownTests
 {
-    private const int FakeReadTimeoutMs = 50;
+    /// <summary>
+    /// Stand-in for the read timeout the probe opens its port with (1s on real hardware), kept short
+    /// enough that the silent-device cases do not dominate the suite's runtime.
+    /// </summary>
+    private const int ProbeStartReadTimeoutMs = 400;
+
+    /// <summary>Mirror of the production constant the probe shortens to once a device answers.</summary>
+    private const int PostIdentifyReadTimeoutMs = 50;
+
     private const ulong TestSerialNumber = 9090539562006014104;
 
     [Fact]
     public async Task RequestDeviceStatusAsync_DeviceAnswers_ReturnsParsedStatus()
     {
-        using var stream = new ScriptedProbeStream(FakeReadTimeoutMs, autoRespond: true);
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: true);
 
         var status = await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
 
@@ -44,7 +52,7 @@ public class SerialProbeTeardownTests
     [Fact]
     public async Task RequestDeviceStatusAsync_WhenItReturns_ReaderThreadHasExited()
     {
-        using var stream = new ScriptedProbeStream(FakeReadTimeoutMs, autoRespond: false);
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: false);
 
         var exchange = SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
 
@@ -72,7 +80,7 @@ public class SerialProbeTeardownTests
     [Fact]
     public async Task RequestDeviceStatusAsync_DoesNotCompleteOnTheReaderThread()
     {
-        using var stream = new ScriptedProbeStream(FakeReadTimeoutMs, autoRespond: false);
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: false);
 
         var exchange = SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
 
@@ -97,7 +105,7 @@ public class SerialProbeTeardownTests
     [Fact]
     public async Task RequestDeviceStatusAsync_SilentDevice_ReturnsNullAfterRetrying()
     {
-        using var stream = new ScriptedProbeStream(FakeReadTimeoutMs, autoRespond: false);
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: false);
 
         var status = await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
 
@@ -110,7 +118,7 @@ public class SerialProbeTeardownTests
     [Fact]
     public async Task RequestDeviceStatusAsync_Cancelled_GivesUpEarlyAndStillTearsDown()
     {
-        using var stream = new ScriptedProbeStream(FakeReadTimeoutMs, autoRespond: false);
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: false);
         using var cts = new CancellationTokenSource();
 
         var exchange = SerialDeviceFinder.RequestDeviceStatusAsync(stream, cts.Token);
@@ -132,7 +140,7 @@ public class SerialProbeTeardownTests
     [Fact]
     public async Task RequestDeviceStatusAsync_LeavesTheStreamOpenForItsOwner()
     {
-        using var stream = new ScriptedProbeStream(FakeReadTimeoutMs, autoRespond: true);
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: true);
 
         await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
 
@@ -145,7 +153,7 @@ public class SerialProbeTeardownTests
     [Fact]
     public async Task RequestDeviceStatusAsync_CanBeRunTwiceOverTheSameStream()
     {
-        using var stream = new ScriptedProbeStream(FakeReadTimeoutMs, autoRespond: true);
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: true);
 
         var first = await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
         var second = await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
@@ -158,6 +166,38 @@ public class SerialProbeTeardownTests
         Assert.Equal(2, stream.ReaderThreadIds.Distinct().Count());
     }
 
+    [Fact]
+    public async Task RequestDeviceStatusAsync_AfterIdentifying_ShortensTheReadTimeoutForTeardown()
+    {
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: true);
+
+        Assert.NotNull(await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None));
+
+        // The reader can only notice the imminent stop when its current read returns, so the read it
+        // issues after handing over the status is the one teardown has to wait out.
+        Assert.Equal([PostIdentifyReadTimeoutMs], stream.ReadTimeoutHistory);
+        Assert.All(
+            stream.ReadsIssuedWithTimeout.Skip(1),
+            issued => Assert.Equal(PostIdentifyReadTimeoutMs, issued));
+    }
+
+    [Fact]
+    public async Task RequestDeviceStatusAsync_SilentDevice_LeavesTheReadTimeoutAlone()
+    {
+        using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: false);
+
+        Assert.Null(await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None));
+
+        // A port with nothing to say keeps the timeout it started with. Shortening it for the whole
+        // probe would make an unresponsive port wake — and throw a TimeoutException — many times a
+        // second for the entire response window, which buys nothing: there is no teardown latency to
+        // save on a probe that found no device.
+        Assert.Empty(stream.ReadTimeoutHistory);
+        Assert.All(
+            stream.ReadsIssuedWithTimeout,
+            issued => Assert.Equal(ProbeStartReadTimeoutMs, issued));
+    }
+
     /// <summary>
     /// A stand-in for an open serial port: reads block for a timeout and then throw
     /// <see cref="TimeoutException"/> exactly as <c>SerialPort.BaseStream</c> does, and writes are
@@ -166,12 +206,14 @@ public class SerialProbeTeardownTests
     /// </summary>
     private sealed class ScriptedProbeStream : Stream
     {
-        private readonly int _readTimeoutMs;
         private readonly bool _autoRespond;
+        private volatile int _readTimeoutMs;
         private readonly object _gate = new();
         private readonly Queue<byte> _inbound = new();
         private readonly List<string> _written = [];
         private readonly List<int> _readerThreadIds = [];
+        private readonly List<int> _readTimeoutHistory = [];
+        private readonly List<int> _readsIssuedWithTimeout = [];
         private readonly ManualResetEventSlim _dataAvailable = new(false);
         private readonly ManualResetEventSlim _firstRead = new(false);
         private Thread? _firstReaderThread;
@@ -182,7 +224,34 @@ public class SerialProbeTeardownTests
             _autoRespond = autoRespond;
         }
 
+        /// <summary>The timeout each read was issued with, in order.</summary>
+        public IReadOnlyList<int> ReadsIssuedWithTimeout
+        {
+            get { lock (_gate) { return _readsIssuedWithTimeout.ToList(); } }
+        }
+
         public int DisposeCount { get; private set; }
+
+        /// <summary>Every value the probe assigned to <see cref="ReadTimeout"/>, in order.</summary>
+        public IReadOnlyList<int> ReadTimeoutHistory
+        {
+            get { lock (_gate) { return _readTimeoutHistory.ToList(); } }
+        }
+
+        public override bool CanTimeout => true;
+
+        public override int ReadTimeout
+        {
+            get => _readTimeoutMs;
+            set
+            {
+                _readTimeoutMs = value;
+                lock (_gate)
+                {
+                    _readTimeoutHistory.Add(value);
+                }
+            }
+        }
 
         public IReadOnlyList<string> WrittenCommands
         {
@@ -236,6 +305,7 @@ public class SerialProbeTeardownTests
             lock (_gate)
             {
                 _readerThreadIds.Add(Environment.CurrentManagedThreadId);
+                _readsIssuedWithTimeout.Add(_readTimeoutMs);
                 _firstReaderThread ??= Thread.CurrentThread;
             }
 

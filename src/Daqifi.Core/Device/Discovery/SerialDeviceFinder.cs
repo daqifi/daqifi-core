@@ -41,36 +41,41 @@ public class SerialDeviceFinder : DeviceFinderBase
     #region Constants
 
     private const int DefaultBaudRate = 9600;
-    private const int ProbeWriteTimeoutMs = 1000;
+    private const int ProbeTimeoutMs = 1000;
 
     /// <summary>
-    /// Read timeout for the probe port, in milliseconds.
+    /// Read timeout applied to the probe stream the moment the device has identified itself, in
+    /// milliseconds.
     /// </summary>
     /// <remarks>
-    /// This is a <em>stop-latency</em> knob, not a response deadline — the probe's own
-    /// <see cref="ResponseTimeoutMs"/> loop decides how long to wait for the device. The reader
-    /// thread spends the whole probe parked in a blocking <see cref="Stream.Read(byte[], int, int)"/>,
-    /// and it can only notice a stop request when that read returns, so the teardown join at the end
-    /// of <see cref="RequestDeviceStatusAsync"/> is bounded by this value and nothing else (#486).
-    /// At the old 1s it was the single largest item in the probe's teardown; 50ms is the same
-    /// granularity the probe's own response poll already runs at (<see cref="PollIntervalMs"/>), so
-    /// the consumer is now joined within one poll interval instead of twenty.
-    /// A timed-out read is a benign loop iteration for
-    /// <see cref="StreamMessageConsumer{T}"/>, and a partially-received message survives across
-    /// iterations in its buffer, so shortening this costs only a few extra loop passes per probe —
-    /// it can neither drop bytes nor split a protobuf frame. Deliberately separate from
-    /// <see cref="ProbeWriteTimeoutMs"/>, which stays at 1s: a write has no such polling loop
-    /// behind it, and a short write timeout would fail a slow send outright.
+    /// <para>
+    /// Pure stop latency, and only for the tail of a successful probe. The consumer's reader thread
+    /// spends the probe parked in a blocking <see cref="Stream.Read(byte[], int, int)"/> and can
+    /// only notice a stop request when that read returns, so the teardown join at the end of
+    /// <see cref="RequestDeviceStatusAsync"/> is bounded by whatever timeout the in-flight read was
+    /// issued with — at <see cref="ProbeTimeoutMs"/> that was up to a second of waiting after the
+    /// device had already answered (#486).
+    /// </para>
+    /// <para>
+    /// Applied from inside the status dispatch, which runs on the reader thread between two reads:
+    /// the next read — the one teardown has to wait out — picks it up, and no read is in flight to
+    /// be disturbed. Deliberately <em>not</em> applied for the whole probe. A port that never
+    /// answers would then wake twenty times a second instead of once, and each of those wake-ups
+    /// ends in a thrown <see cref="TimeoutException"/>; bench-measured on this hardware at ~180ms of
+    /// CPU per 2s of probing against ~5-13ms at the one-second timeout. A silent port therefore
+    /// still idles exactly as it did before this change, and only a probe that has something to show
+    /// for itself pays the faster teardown.
+    /// </para>
     /// </remarks>
-    private const int ProbeReadTimeoutMs = 50;
+    private const int PostIdentifyReadTimeoutMs = 50;
 
     /// <summary>
     /// How long the probe's teardown waits for the consumer's reader thread to exit, in milliseconds.
     /// </summary>
     /// <remarks>
-    /// Only ever reached when the reader is stuck in a read that outlives
-    /// <see cref="ProbeReadTimeoutMs"/> — a healthy port joins in well under this. Left at the value
-    /// the probe has always used so a genuinely stuck stream is still bounded the same way.
+    /// A probe that identified a device joins within <see cref="PostIdentifyReadTimeoutMs"/>; one
+    /// that found nothing is still bounded by the read timeout it was running at. Left at the value
+    /// the probe has always used.
     /// </remarks>
     private const int ConsumerStopTimeoutMs = 500;
 
@@ -185,7 +190,10 @@ public class SerialDeviceFinder : DeviceFinderBase
     // settle, port close). Bench-measured on a real Nq1 (fw 3.7.2, USB, macOS): the
     // claim is held 58/57/55ms across three runs, then auto-released by the
     // abandonment continuation. It was 488/490/491ms before #486, when the consumer
-    // stop self-joined the reader thread and burned its whole 500ms budget.
+    // stop self-joined the reader thread and burned its whole 500ms budget. Both
+    // figures are for a port whose device answered before the pass was abandoned; a
+    // port that never answers unwinds at its own read timeout instead, as it always
+    // has (see PostIdentifyReadTimeoutMs).
     //
     // Within this window a fresh pass WAITS for the claim to clear instead of
     // skipping the port; past it, the port is presumed genuinely wedged and skipped
@@ -618,8 +626,8 @@ public class SerialDeviceFinder : DeviceFinderBase
             // Create and configure the serial port
             port = new SerialPort(portName, _baudRate)
             {
-                ReadTimeout = ProbeReadTimeoutMs,
-                WriteTimeout = ProbeWriteTimeoutMs
+                ReadTimeout = ProbeTimeoutMs,
+                WriteTimeout = ProbeTimeoutMs
             };
 
             // Try to open the port
@@ -743,6 +751,11 @@ public class SerialDeviceFinder : DeviceFinderBase
                 if (args.Message.Data is DaqifiOutMessage message
                     && ProtobufProtocolHandler.DetectMessageType(message) == ProtobufMessageType.Status)
                 {
+                    // We have what we came for, so shorten the reader's next read before releasing
+                    // the waiter below — see PostIdentifyReadTimeoutMs. This runs on the reader
+                    // thread, between two reads, which is the one moment the timeout can be changed
+                    // without a read already in flight under the old value.
+                    ShortenReadTimeoutForTeardown(stream);
                     statusReceived.TrySetResult(message);
                 }
             };
@@ -807,6 +820,39 @@ public class SerialDeviceFinder : DeviceFinderBase
             {
                 // Ignore cleanup errors
             }
+        }
+    }
+
+    /// <summary>
+    /// Drops the probe stream's read timeout to <see cref="PostIdentifyReadTimeoutMs"/> so the
+    /// reader notices the imminent stop promptly.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort by design. A stream that does not support timeouts, or refuses this one, simply
+    /// keeps the timeout it had — the teardown is correct either way, just slower — and this runs
+    /// inside a consumer callback, where an escaping exception would be reported as a message-
+    /// handling failure and hide a perfectly good status message.
+    /// </remarks>
+    private static void ShortenReadTimeoutForTeardown(Stream stream)
+    {
+        try
+        {
+            if (!stream.CanTimeout)
+            {
+                return;
+            }
+
+            // Infinite reads as "smaller than any timeout" numerically (-1) and is the one case that
+            // most needs shortening, so it is tested for rather than compared.
+            var current = stream.ReadTimeout;
+            if (current == Timeout.Infinite || current > PostIdentifyReadTimeoutMs)
+            {
+                stream.ReadTimeout = PostIdentifyReadTimeoutMs;
+            }
+        }
+        catch
+        {
+            // Not supported on this stream — leave it as it is.
         }
     }
 
