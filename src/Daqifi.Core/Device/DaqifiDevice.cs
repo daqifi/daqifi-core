@@ -1787,7 +1787,12 @@ namespace Daqifi.Core.Device
         /// </remarks>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
         /// <param name="message">The message to send to the device.</param>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">
+        /// Thrown when the device is not connected. Also thrown, with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set, when a disconnect, dispose
+        /// or auto-reconnect on another thread tears the send path down after this call has passed
+        /// its connectivity guard — an ordinary race a long-lived sender should expect, not a defect.
+        /// </exception>
         /// <exception cref="InvalidOperationException">
         /// Thrown when the device is connected but has no transport or stream to send on
         /// (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/> constructor).
@@ -1819,11 +1824,20 @@ namespace Daqifi.Core.Device
         /// </summary>
         private void SendNow<T>(IOutboundMessage<T> message)
         {
+            // Snapshotted once, for the reason TextExchangeEngine.SuspendInboundConsumer snapshots
+            // the consumer: the field behind it is mutable and teardown nulls it
+            // (StopMessagePumps) from another thread, under no lock this path takes. Null-checking
+            // the field and then dereferencing it reads it twice, and a teardown landing between
+            // the two reads throws NullReferenceException out of a public API. The window is not
+            // limited to a user-initiated Disconnect() — every auto-reconnect attempt goes through
+            // DisconnectCore(Retrying) and nulls the field the same way (issue #497).
+            var producer = _messageProducer;
+
             // Use the queued message producer when available and the message is string-based;
             // this is the common path (SCPI text commands).
-            if (_messageProducer != null && message is IOutboundMessage<string> stringMessage)
+            if (producer != null && message is IOutboundMessage<string> stringMessage)
             {
-                _messageProducer.Send(stringMessage);
+                SendViaProducer(producer, stringMessage);
                 return;
             }
 
@@ -1846,6 +1860,68 @@ namespace Daqifi.Core.Device
             lock (_directWriteGate)
             {
                 stream.Write(bytes, 0, bytes.Length);
+            }
+        }
+
+        /// <summary>
+        /// Hands a message to the queued producer, reporting a producer that teardown has already
+        /// stopped or disposed as the same typed failure every other guard on this device reports.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Snapshotting the field closes the null-dereference half of the disconnect race; this
+        /// closes the other half. Winning the snapshot only means the reference was still there —
+        /// teardown can have stopped or disposed that very instance a moment later, and the send
+        /// then fails inside the producer. Untranslated, callers would see a bare
+        /// <see cref="InvalidOperationException"/> whose message names an internal lifecycle method
+        /// ("Call Start() first"), or an <see cref="ObjectDisposedException"/> naming an internal
+        /// type — both indistinguishable, without matching on message text, from a genuine
+        /// application defect. That is exactly the distinction
+        /// <see cref="DeviceNotConnectedException"/> was introduced to make (#395), so this reports
+        /// the ordinary, expected condition it is, with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set.
+        /// </para>
+        /// <para>
+        /// The original is kept as <see cref="Exception.InnerException"/> so the race stays
+        /// diagnosable, and a <see cref="DeviceNotConnectedException"/> from the producer itself is
+        /// let through unwrapped — it already says what this would say.
+        /// </para>
+        /// <para>
+        /// Internal rather than private so the translation can be tested against a producer that
+        /// throws on demand. Hitting these branches through the public API means winning a race
+        /// against teardown, which no test can schedule reliably; the stress test that exercises the
+        /// real race can only assert the negative (no untyped exception escaped).
+        /// </para>
+        /// </remarks>
+        internal static void SendViaProducer(IMessageProducer<string> producer, IOutboundMessage<string> message)
+        {
+            try
+            {
+                producer.Send(message);
+            }
+            catch (DeviceNotConnectedException)
+            {
+                // Already the failure this method would translate to. Rethrown unchanged so the
+                // producer's own wording and IsShuttingDown value survive.
+                throw;
+            }
+            catch (ObjectDisposedException ex)
+            {
+                // Checked before InvalidOperationException: ObjectDisposedException derives from it,
+                // so the broader filter below would otherwise swallow this case first.
+                throw new DeviceNotConnectedException(
+                    "The message could not be sent because the device's message producer has been "
+                    + "disposed; a disconnect or dispose completed while this send was in flight.",
+                    ex,
+                    isShuttingDown: true);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new DeviceNotConnectedException(
+                    "The message could not be sent because the device's message producer is no "
+                    + "longer running; a disconnect or reconnect is in flight.",
+                    ex,
+                    isShuttingDown: true);
             }
         }
 
