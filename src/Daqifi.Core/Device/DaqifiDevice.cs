@@ -475,15 +475,58 @@ namespace Daqifi.Core.Device
             {
                 if (_status == value) return;
                 _status = value;
-                StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+                RaiseStatusChanged(_status);
             }
         }
 
         /// <summary>
         /// Occurs when the device status changes.
         /// </summary>
+        /// <remarks>
+        /// Raised on whichever thread observed the change — for a drop, a background watchdog or
+        /// reader thread. A subscriber that throws (a UI framework's cross-thread
+        /// <see cref="InvalidOperationException"/> is the usual one) is isolated: the exception is
+        /// reported on <see cref="ErrorOccurred"/> as
+        /// <see cref="DeviceErrorSource.StatusNotification"/> and the transition completes
+        /// regardless.
+        /// </remarks>
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
-        
+
+        /// <summary>
+        /// Raises <see cref="StatusChanged"/>, isolating everything downstream of the transition
+        /// from a subscriber that throws — the same guarantee <see cref="RaiseDeviceError"/>,
+        /// <see cref="RaiseReconnectEvent{TArgs}"/> and <c>SendFailed</c> already give.
+        /// </summary>
+        /// <remarks>
+        /// The drop path is what makes this load-bearing (issue #494). A drop runs
+        /// <c>transport.HandleConnectionLost</c> → <see cref="OnTransportStatusChanged"/> →
+        /// <c>Status = Lost</c> → this event → <c>BeginReconnectIfEnabled</c>, all on one thread.
+        /// An escaping subscriber exception used to skip the reconnect start entirely (so
+        /// <see cref="ReconnectOptions.Enabled"/> silently did nothing) and unwind back into the
+        /// transport before it had released the port handle, leaving the OS port claimed until the
+        /// process exited. It then vanished into a background loop's catch, so the consumer saw a
+        /// dead, unreconnectable device with no error at all.
+        /// </remarks>
+        private void RaiseStatusChanged(ConnectionStatus status)
+        {
+            var handler = StatusChanged;
+            if (handler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handler(this, new DeviceStatusEventArgs(status));
+            }
+            catch (Exception ex)
+            {
+                // Logs and raises ErrorOccurred, both isolated: a status change is never allowed to
+                // fail, so this must not throw either.
+                RaiseDeviceError(DeviceErrorSource.StatusNotification, ex);
+            }
+        }
+
         /// <summary>
         /// Occurs when a message is received from the device.
         /// </summary>

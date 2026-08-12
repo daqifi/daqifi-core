@@ -405,16 +405,51 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         var stream = Interlocked.Exchange(ref _networkStream, null);
         var client = Interlocked.Exchange(ref _tcpClient, null);
 
-        OnStatusChanged(false, error);
-
         try
         {
-            stream?.Dispose();
-            client?.Dispose();
+            OnStatusChanged(false, error);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // The peer is already gone; failing to close the socket changes nothing.
+            // A subscriber that throws must not cost us the socket (issue #494). The references have
+            // already been taken out of their fields, so if this unwound past the dispose below,
+            // Disconnect() and Dispose() would both find null and skip them too, leaking the socket
+            // for the life of the process. Not rethrown, and traced best-effort because this
+            // transport carries no logger: see SerialStreamTransport.HandleConnectionLost.
+            SafeTrace(ex);
+        }
+        finally
+        {
+            try
+            {
+                stream?.Dispose();
+                client?.Dispose();
+            }
+            catch (Exception)
+            {
+                // The peer is already gone; failing to close the socket changes nothing.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the diagnostic line for a <see cref="StatusChanged"/> subscriber failure, swallowing
+    /// anything a misbehaving <see cref="System.Diagnostics.TraceListener"/> throws. See
+    /// <c>SerialStreamTransport.SafeTrace</c> for why the trace itself — and the composition of its
+    /// message from a consumer-supplied exception — has to be contained.
+    /// </summary>
+    /// <param name="subscriberFailure">The exception the subscriber threw.</param>
+    private static void SafeTrace(Exception subscriberFailure)
+    {
+        try
+        {
+            System.Diagnostics.Trace.WriteLine(
+                $"[{nameof(TcpStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {subscriberFailure}");
+        }
+        catch
+        {
+            // A trace listener — or an exception that cannot render itself — is not permitted to
+            // affect the drop path.
         }
     }
 

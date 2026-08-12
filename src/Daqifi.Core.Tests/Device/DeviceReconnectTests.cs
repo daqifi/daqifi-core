@@ -1119,6 +1119,30 @@ public class DeviceReconnectTests
     }
 
     [Fact]
+    public async Task AThrowingStatusSubscriber_DoesNotStopTheLoopFromStarting()
+    {
+        // Issue #494. Raising Lost and starting the loop happen back to back on the thread that
+        // detected the drop, so an escaping StatusChanged exception used to skip
+        // BeginReconnectIfEnabled entirely — ReconnectOptions.Enabled silently did nothing, and the
+        // exception was swallowed by the background loop it unwound into. The subscriber here
+        // throws on every transition, so the loop's own Retrying/Connected raises are covered too.
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Badly Observed Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+        device.StatusChanged += (_, _) =>
+            throw new InvalidOperationException("the calling thread cannot access this object");
+
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+        transport.SimulateDrop();
+
+        var result = await reconnected;
+        Assert.Equal(1, result.AttemptNumber);
+        Assert.Equal(ConnectionStatus.Connected, device.Status);
+    }
+
+    [Fact]
     public async Task ASecondDropAfterARecovery_StartsAFreshLoop()
     {
         using var transport = new ScriptedReconnectTransport();

@@ -617,15 +617,67 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         // so it happens after the notification.
         var port = Interlocked.Exchange(ref _serialPort, null);
 
-        OnStatusChanged(false, error);
-
         try
         {
-            port?.Dispose();
+            OnStatusChanged(false, error);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // The device is already gone; failing to close its handle changes nothing.
+            // A subscriber that throws must not cost us the port handle (issue #494). The reference
+            // has already been taken out of the field, so if this unwound past the dispose below,
+            // Disconnect() and Dispose() would both find null and skip it too — the OS port would
+            // stay claimed for the life of the process and re-plugging the device would fail with
+            // "Access is denied". Not rethrown: the callers of this are a watchdog timer thread and
+            // the reader/writer loops, all of which already absorb it, so propagating only risks
+            // disturbing them. A DaqifiDevice surfaces its own StatusChanged subscriber failures on
+            // ErrorOccurred; this transport carries no logger, so a consumer working against a bare
+            // transport gets the same best-effort trace DeviceFinderBase gives its event raises.
+            SafeTrace(ex);
+        }
+        finally
+        {
+            try
+            {
+                port?.Dispose();
+            }
+            catch (Exception)
+            {
+                // The device is already gone; failing to close its handle changes nothing.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the diagnostic line for a <see cref="StatusChanged"/> subscriber failure, swallowing
+    /// anything a misbehaving <see cref="System.Diagnostics.TraceListener"/> throws.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="System.Diagnostics.Trace"/> dispatches to listeners the consumer installed, so it
+    /// is consumer code and can throw like any other. A listener throwing out of the <c>catch</c>
+    /// that was containing a bad subscriber would defeat the containment and cost the port handle
+    /// anyway. Same guarantee as <c>DeviceFinderBase.RaiseIsolated</c> and
+    /// <c>DaqifiStreamingDevice.SafeTrace</c>; this transport has no <c>ILogger</c>, hence the local
+    /// twin rather than a shared one.
+    /// <para>
+    /// The message is composed <em>inside</em> the guard rather than passed in ready-made, because
+    /// <paramref name="subscriberFailure"/> came out of consumer code too: rendering an exception
+    /// whose <see cref="object.ToString"/> or <see cref="Exception.Message"/> throws would otherwise
+    /// escape the <c>catch</c> from the interpolation itself and leave the drop path exactly as
+    /// disrupted as an unguarded raise.
+    /// </para>
+    /// </remarks>
+    /// <param name="subscriberFailure">The exception the subscriber threw.</param>
+    private static void SafeTrace(Exception subscriberFailure)
+    {
+        try
+        {
+            System.Diagnostics.Trace.WriteLine(
+                $"[{nameof(SerialStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {subscriberFailure}");
+        }
+        catch
+        {
+            // A trace listener — or an exception that cannot render itself — is not permitted to
+            // affect the drop path.
         }
     }
 
