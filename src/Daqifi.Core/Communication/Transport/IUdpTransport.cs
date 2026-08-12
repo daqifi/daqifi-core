@@ -21,6 +21,13 @@ public interface IUdpTransport : IDisposable
     /// <summary>
     /// Occurs when the transport status changes.
     /// </summary>
+    /// <remarks>
+    /// Handlers run synchronously on whatever thread raised the change, which is not guaranteed
+    /// to be the caller's — the library resumes its awaits off the caller's
+    /// <see cref="SynchronizationContext"/> so its synchronous facades cannot deadlock a UI
+    /// thread (issue #495). A UI consumer must marshal to its own dispatcher before touching
+    /// controls.
+    /// </remarks>
     event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
     /// <summary>
