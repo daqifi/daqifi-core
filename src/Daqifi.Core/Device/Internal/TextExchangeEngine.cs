@@ -94,8 +94,9 @@ namespace Daqifi.Core.Device.Internal
             if (_host.IsInsideTextExchange)
             {
                 throw new InvalidOperationException(
-                    "ExecuteRawCaptureAsync is not re-entrant on the same device and cannot run "
-                    + "inside a text exchange; both swap the device's message consumer.");
+                    "ExecuteRawCaptureAsync is not re-entrant: this flow is already inside a "
+                    + "consumer swap — another raw capture, or a text exchange — and both take "
+                    + "the device's message consumer and its stream.");
             }
 
             // A flow that already owns the lock — an exclusive block, or the SD operations' own
