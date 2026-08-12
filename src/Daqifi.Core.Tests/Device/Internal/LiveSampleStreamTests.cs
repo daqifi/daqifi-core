@@ -197,6 +197,203 @@ public class LiveSampleStreamTests
         }
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Issue #496: an enumeration is bound to the connected session it started in. What the device
+    // observes end to end is pinned by DaqifiStreamingDeviceLiveStreamTerminationTests; these add
+    // what only a direct test can see — the subscription bookkeeping on the new exit paths, several
+    // enumerations at once, and the release that no status transition accompanies.
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Enumeration_EndedByADrop_UnsubscribesFromEveryChannel()
+    {
+        var host = new FakeHost(new FakeChannel(0), new FakeChannel(1));
+        var stream = new LiveSampleStream(host);
+
+        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var moveNext = e.MoveNextAsync();
+
+        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => moveNext.AsTask().WaitAsync(MoveNextTimeout));
+
+        // The issue's second criterion: the handlers went with the enumeration. A drop that ended
+        // the loop but left it subscribed would still root the device for the rest of its life.
+        Assert.All(host.Channels, c => Assert.Equal(0, c.SubscriberCount));
+    }
+
+    [Fact]
+    public async Task Enumeration_EndedByADeliberateDisconnect_CompletesWithoutThrowing()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+
+        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var moveNext = e.MoveNextAsync();
+
+        stream.OnConnectionStatusChanged(ConnectionStatus.Disconnected);
+
+        Assert.False(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
+        Assert.Equal(0, host.Channels[0].SubscriberCount);
+    }
+
+    [Fact]
+    public async Task Enumeration_EndedByADrop_YieldsWhatWasBufferedFirst()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+
+        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var moveNext = e.MoveNextAsync();
+        host.Channels[0].RaiseSample(1.0);
+        host.Channels[0].RaiseSample(2.0);
+
+        Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
+        Assert.Equal(1.0, e.Current.Sample.Value);
+
+        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+
+        Assert.True(await e.MoveNextAsync().AsTask().WaitAsync(MoveNextTimeout));
+        Assert.Equal(2.0, e.Current.Sample.Value);
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => e.MoveNextAsync().AsTask().WaitAsync(MoveNextTimeout));
+    }
+
+    [Fact]
+    public async Task Enumeration_ADropFollowedByTheTeardownItCauses_StillReportsTheDrop()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+
+        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var moveNext = e.MoveNextAsync();
+
+        // The real sequence after an unplug: Lost, then whatever teardown follows it — the reconnect
+        // loop's Retrying, or the Disconnect a consumer issues from its status handler. None of them
+        // may downgrade the drop to an ordinary end of session.
+        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+        stream.OnConnectionStatusChanged(ConnectionStatus.Retrying);
+        stream.OnConnectionStatusChanged(ConnectionStatus.Disconnected);
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => moveNext.AsTask().WaitAsync(MoveNextTimeout));
+    }
+
+    [Fact]
+    public async Task Enumeration_EndedByRelease_CompletesEvenWithNoStatusTransition()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+
+        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var moveNext = e.MoveNextAsync();
+
+        // Disposing a device that is already disconnected moves it nowhere, so the status hook never
+        // fires. This is the path that keeps such a dispose from leaving the loop parked.
+        stream.OnDeviceReleased();
+
+        Assert.False(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
+        Assert.Equal(0, host.Channels[0].SubscriberCount);
+    }
+
+    [Fact]
+    public async Task Enumeration_StartedAfterRelease_ThrowsWithIsShuttingDown()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+        stream.OnDeviceReleased();
+
+        var thrown = await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => ConsumeAsync().WaitAsync(MoveNextTimeout));
+
+        // Latched, not momentary: a disposed device can never produce another sample, so this has to
+        // keep failing rather than park.
+        Assert.True(thrown.IsShuttingDown);
+        Assert.Equal(0, host.SnapshotCalls);
+
+        async Task ConsumeAsync()
+        {
+            await foreach (var _ in stream.StreamSamplesAsync(CancellationToken.None)) { }
+        }
+    }
+
+    [Fact]
+    public async Task Enumeration_StartedWhileDisconnected_ThrowsBeforeSubscribingToAnything()
+    {
+        var host = new FakeHost(new FakeChannel(0)) { IsConnected = false };
+        var stream = new LiveSampleStream(host);
+
+        var thrown = await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => ConsumeAsync().WaitAsync(MoveNextTimeout));
+
+        Assert.False(thrown.IsShuttingDown);
+        Assert.Equal(0, host.SnapshotCalls);
+        Assert.Equal(0, host.Channels[0].SubscriberCount);
+
+        async Task ConsumeAsync()
+        {
+            await foreach (var _ in stream.StreamSamplesAsync(CancellationToken.None)) { }
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentEnumerations_AllEndOnTheSameDrop()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+
+        await using var first = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        await using var second = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var firstMove = first.MoveNextAsync();
+        var secondMove = second.MoveNextAsync();
+
+        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => firstMove.AsTask().WaitAsync(MoveNextTimeout));
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(
+            () => secondMove.AsTask().WaitAsync(MoveNextTimeout));
+        Assert.Equal(0, host.Channels[0].SubscriberCount);
+    }
+
+    [Fact]
+    public async Task ADropAfterTheEnumerationHasEnded_IsANoOp()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+
+        var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var moveNext = e.MoveNextAsync();
+        host.Channels[0].RaiseSample(1.0);
+        Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
+        await e.DisposeAsync();
+
+        // A finished enumeration deregisters itself, so the device's own teardown — which always
+        // follows eventually — has nothing left to touch.
+        stream.OnConnectionStatusChanged(ConnectionStatus.Lost);
+        stream.OnDeviceReleased();
+        Assert.Equal(0, host.Channels[0].SubscriberCount);
+    }
+
+    [Fact]
+    public async Task StayingConnected_DoesNotEndAnEnumeration()
+    {
+        var host = new FakeHost(new FakeChannel(0));
+        var stream = new LiveSampleStream(host);
+
+        await using var e = stream.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+        var moveNext = e.MoveNextAsync();
+
+        // The transition a reconnect ends on. Only leaving Connected ends an enumeration; arriving
+        // at it must leave a healthy one alone.
+        stream.OnConnectionStatusChanged(ConnectionStatus.Connected);
+        host.Channels[0].RaiseSample(4.0);
+
+        Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
+        Assert.Equal(4.0, e.Current.Sample.Value);
+    }
+
     #region Helpers
 
     /// <summary>
@@ -274,10 +471,17 @@ public class LiveSampleStreamTests
             return _channels.ToArray();
         }
 
+        /// <summary>
+        /// In the collaborator's remit since issue #496: an enumeration is only meaningful on a
+        /// connected device, so the start-up guard reads this. Settable so both sides of that guard
+        /// can be exercised. Reading state is still a world away from the members below, which
+        /// <em>do</em> something to the device.
+        /// </summary>
+        public bool IsConnected { get; set; } = true;
+
         // Outside this block's remit — reaching for any of these is a regression, not a refinement.
         // In particular the live path must never send a command or take the channels lock: it is an
         // adapter over events the decoder already raises, and it runs on the decode thread.
-        public bool IsConnected => throw new NotSupportedException();
         public bool IsUsbConnection => throw new NotSupportedException();
         public bool IsStreaming { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public int StreamingFrequency => throw new NotSupportedException();

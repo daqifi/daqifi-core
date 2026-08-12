@@ -572,6 +572,36 @@ namespace Daqifi.Core.Device
         /// device's stream — call <see cref="StopStreaming"/> for that.
         /// </para>
         /// <para>
+        /// <b>An enumeration is bound to the connected session it starts in</b> (issue #496), because
+        /// samples only ever arrive on one. It ends as soon as the device stops being connected, after
+        /// yielding whatever was already buffered:
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>
+        /// A teardown that was asked for — <see cref="DaqifiDevice.Disconnect"/>,
+        /// <see cref="DaqifiDevice.DisconnectAsync"/>, or <see cref="DaqifiDevice.Dispose()"/> — ends
+        /// the <c>await foreach</c> normally.
+        /// </description></item>
+        /// <item><description>
+        /// A drop the caller did not ask for — an unplug, a WiFi loss, a reconnect that gives up —
+        /// throws <see cref="DeviceNotConnectedException"/>. A cut-short acquisition must not be
+        /// indistinguishable from a complete one.
+        /// </description></item>
+        /// <item><description>
+        /// Starting an enumeration on a device that is not connected throws
+        /// <see cref="DeviceNotConnectedException"/> on the first <c>MoveNextAsync</c>, rather than
+        /// waiting for samples that cannot come.
+        /// </description></item>
+        /// </list>
+        /// <para>
+        /// Automatic reconnection (<see cref="DaqifiDevice.ReconnectOptions"/>) does <b>not</b> resume
+        /// an enumeration: the drop ends it, and a caller that wants live samples from the restored
+        /// session starts a new one once <see cref="DaqifiDevice.Status"/> reads
+        /// <see cref="ConnectionStatus.Connected"/> again. Ending is what makes the outcome the same
+        /// whether or not reconnect is enabled, and the restored session may not even be built from
+        /// the same channel objects this enumeration subscribed to.
+        /// </para>
+        /// <para>
         /// This returns <see cref="LiveSampleStream"/>'s async iterator directly rather than wrapping
         /// it in one of its own, which is what keeps the two deferred behaviors a caller can observe
         /// exactly as they were: <c>WithCancellation</c> still reaches the iterator's own
@@ -585,10 +615,38 @@ namespace Daqifi.Core.Device
         /// </param>
         /// <returns>An async stream of <see cref="LiveSample"/> (channel + decoded sample).</returns>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 1.</exception>
+        /// <exception cref="DeviceNotConnectedException">
+        /// The device is not connected when enumeration starts, or the connection was lost while it
+        /// was running. Both are raised from <c>MoveNextAsync</c>, after any buffered samples.
+        /// </exception>
         public IAsyncEnumerable<LiveSample> StreamSamplesAsync(
             CancellationToken cancellationToken = default,
             int? bufferCapacity = null)
             => _liveSampleStream.StreamSamplesAsync(cancellationToken, bufferCapacity);
+
+        /// <summary>
+        /// Ends the live-sample enumerations when the device stops being connected (issue #496).
+        /// </summary>
+        /// <remarks>
+        /// The only device state that has to react to a transition before consumers do. Everything
+        /// else the streaming device owns is either driven by inbound frames — which stop on their
+        /// own — or torn down by the disconnect itself.
+        /// </remarks>
+        internal override void OnConnectionStatusChanged(ConnectionStatus status)
+        {
+            base.OnConnectionStatusChanged(status);
+
+            // Null only if a transition could somehow beat InitializeStreamingDevice, which no
+            // constructor path allows; cheap enough to not depend on that staying true.
+            _liveSampleStream?.OnConnectionStatusChanged(status);
+        }
+
+        /// <inheritdoc />
+        internal override void ReleaseDerivedResources()
+        {
+            base.ReleaseDerivedResources();
+            _liveSampleStream?.OnDeviceReleased();
+        }
 
         /// <summary>
         /// Handles a streaming data frame by handing it to <see cref="StreamFrameDecoder"/>, which

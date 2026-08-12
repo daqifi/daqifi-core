@@ -475,8 +475,33 @@ namespace Daqifi.Core.Device
             {
                 if (_status == value) return;
                 _status = value;
+                OnConnectionStatusChanged(_status);
                 RaiseStatusChanged(_status);
             }
+        }
+
+        /// <summary>
+        /// Tells a derived device inside this library that the connection status has changed, before
+        /// consumers are notified on <see cref="StatusChanged"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Internal rather than protected: this is wiring between this class and the collaborators
+        /// the library ships, not an extension point. It exists because some of those collaborators
+        /// hold work that only makes sense on a live session — the live-sample enumerations behind
+        /// <see cref="DaqifiStreamingDevice.StreamSamplesAsync"/>, which used to park forever once
+        /// the device went away (issue #496).
+        /// </para>
+        /// <para>
+        /// Runs before <see cref="StatusChanged"/> so that a consumer's handler already sees the
+        /// library's own reaction as done. An override must not throw: an exception here would
+        /// escape the transition itself, which is the failure issue #494 removed from the consumer
+        /// side.
+        /// </para>
+        /// </remarks>
+        /// <param name="status">The status the device has just moved to.</param>
+        internal virtual void OnConnectionStatusChanged(ConnectionStatus status)
+        {
         }
 
         /// <summary>
@@ -3298,11 +3323,34 @@ namespace Daqifi.Core.Device
         /// </remarks>
         private void ReleaseResources()
         {
-            _messageConsumer?.Dispose();
-            _messageProducer?.Dispose();
-            _transport?.Dispose();
-            _textExchangeLock.Dispose();
-            _disposed = true;
+            try
+            {
+                ReleaseDerivedResources();
+            }
+            finally
+            {
+                _messageConsumer?.Dispose();
+                _messageProducer?.Dispose();
+                _transport?.Dispose();
+                _textExchangeLock.Dispose();
+                _disposed = true;
+            }
+        }
+
+        /// <summary>
+        /// Releases what a derived device inside this library owns, ahead of the handles this class
+        /// owns.
+        /// </summary>
+        /// <remarks>
+        /// The companion to <see cref="OnConnectionStatusChanged"/>, and internal for the same
+        /// reason. It covers the one teardown a status transition cannot: disposing a device that
+        /// was never connected, or was already disconnected, moves it nowhere, so nothing would tell
+        /// a live-sample enumeration parked on it that the device is gone (issue #496). Wrapped in a
+        /// <c>try</c> so that an override which throws still cannot leak the transport handle this
+        /// method exists to release.
+        /// </remarks>
+        internal virtual void ReleaseDerivedResources()
+        {
         }
 
         /// <summary>

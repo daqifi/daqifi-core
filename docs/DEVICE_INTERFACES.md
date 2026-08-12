@@ -851,6 +851,22 @@ increments; the decode thread is never blocked. Cancelling the token ends the en
 (surfaced as `OperationCanceledException`) and unsubscribes, but does **not** stop the device stream —
 call `StopStreaming()` for that. This is additive: `SampleReceived` and `MessageReceived` are unaffected.
 
+**An enumeration is bound to the connected session it starts in.** Samples only ever arrive on one, so
+the loop ends as soon as the device stops being connected, after yielding whatever was already
+buffered:
+
+| What happened | What the `await foreach` does |
+| --- | --- |
+| `Disconnect()` / `DisconnectAsync()` / `Dispose()` | Ends normally |
+| Unplug, WiFi loss, a reconnect that gave up | Throws `DeviceNotConnectedException` |
+| Started while the device is not connected | Throws `DeviceNotConnectedException` on the first `MoveNextAsync` |
+| Token cancelled | Throws `OperationCanceledException`, as before |
+
+A drop is deliberately not silent: an acquisition cut short by a pulled cable must not look identical
+to one that finished. Automatic reconnection (`ReconnectOptions`) does **not** resume an enumeration —
+the drop ends it, and a consumer that wants live samples from the restored session starts a new
+`await foreach` once `Status` reads `Connected` again.
+
 #### Raw protobuf frames
 
 ```csharp
