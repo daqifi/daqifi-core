@@ -52,7 +52,9 @@ public enum DeviceErrorSource
     /// <remarks>
     /// The transition itself already happened and is not rolled back; this reports only that one
     /// consumer callback failed. A cross-thread UI exception is the common cause, since the event
-    /// is raised on whichever background thread observed the change.
+    /// is raised on whichever background thread observed the change. The library's own reaction to a
+    /// transition is isolated the same way and reported here too, so a defect inside Core cannot
+    /// break a transition either.
     /// </remarks>
     StatusNotification = 4,
 }

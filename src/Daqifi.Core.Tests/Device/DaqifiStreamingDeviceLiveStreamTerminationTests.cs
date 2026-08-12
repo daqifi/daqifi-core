@@ -211,6 +211,43 @@ namespace Daqifi.Core.Tests.Device
             await e.DisposeAsync();
         }
 
+        [Fact]
+        public void AThrowingStatusHook_DoesNotAbortTheTransition()
+        {
+            // The hooks this fix added sit on the drop path, where issue #494 established that an
+            // escaping exception skips the reconnect start and unwinds into the transport before it
+            // has released the port. That rule cannot be weaker for the library's own code than it
+            // is for a consumer's handler.
+            using var transport = new DroppableTransport();
+            using var device = new ThrowingHookDevice("Badly Wired Device", transport);
+
+            var seen = new List<ConnectionStatus>();
+            var errors = new List<DeviceErrorEventArgs>();
+            device.StatusChanged += (_, e) => seen.Add(e.Status);
+            device.ErrorOccurred += (_, e) => errors.Add(e);
+
+            var escaped = Record.Exception(() => device.Connect());
+
+            Assert.Null(escaped);
+            Assert.Equal(ConnectionStatus.Connected, device.Status);
+            Assert.Contains(ConnectionStatus.Connected, seen);
+            Assert.Contains(errors, e => e.Source == DeviceErrorSource.StatusNotification);
+        }
+
+        [Fact]
+        public void AThrowingReleaseHook_DoesNotFailDispose()
+        {
+            using var transport = new DroppableTransport();
+            var device = new ThrowingHookDevice("Badly Wired Device", transport);
+            device.Connect();
+
+            var escaped = Record.Exception(() => device.Dispose());
+
+            // A Dispose that throws hides the handles it did release behind an exception nobody can
+            // act on, so the library's own cleanup failure is reported instead.
+            Assert.Null(escaped);
+        }
+
         #region Helpers
 
         private static LiveStreamDevice CreateStreaming(IStreamTransport transport)
@@ -256,6 +293,23 @@ namespace Daqifi.Core.Tests.Device
 
             // The transport here exists to report a drop, not to carry traffic.
             public override void Send<T>(IOutboundMessage<T> message) { }
+        }
+
+        /// <summary>
+        /// A device whose internal lifecycle hooks throw — the shape of a defect inside Core, which
+        /// still must not be able to break a status transition or a dispose.
+        /// </summary>
+        private sealed class ThrowingHookDevice : DaqifiStreamingDevice
+        {
+            public ThrowingHookDevice(string name, IStreamTransport transport) : base(name, transport) { }
+
+            public override void Send<T>(IOutboundMessage<T> message) { }
+
+            internal override void OnConnectionStatusChanged(ConnectionStatus status) =>
+                throw new InvalidOperationException("a badly wired internal status hook");
+
+            internal override void ReleaseDerivedResources() =>
+                throw new InvalidOperationException("a badly wired internal release hook");
         }
 
         /// <summary>
