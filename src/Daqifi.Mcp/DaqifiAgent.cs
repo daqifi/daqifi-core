@@ -79,9 +79,16 @@ public sealed class DaqifiAgent
     internal const int MinDiscoveryTimeoutMs = 1000;
 
     /// <summary>
-    /// Write buffer for the CSV a download exports, matching the 64 KB default the SD parsers read
-    /// with so neither side of the export is the narrow one.
+    /// Write buffer for the CSV a download exports. An exported CSV is several times the size of
+    /// the log it came from — a row per timestamp, a column per channel — so it is worth more than
+    /// the 4 KB a <see cref="FileStream"/> defaults to.
     /// </summary>
+    /// <remarks>
+    /// Deliberately its own number rather than <see cref="SdCardParseOptions.BufferSize"/>: that
+    /// one is how much of the raw log is read at a time, this one is how much CSV is held before
+    /// it goes to disk. They happen to be equal today, and nothing should have to keep them that
+    /// way.
+    /// </remarks>
     private const int CsvWriteBufferBytes = 64 * 1024;
 
     /// <summary>
@@ -870,7 +877,8 @@ public sealed class DaqifiAgent
             {
                 // useAsync, like the input stream above: CsvExporter writes through WriteAsync for
                 // every row, and a FileStream opened without it services those on the thread pool
-                // instead of the OS async path.
+                // instead of the OS async path. See CsvWriteBufferBytes for why the buffer is its
+                // own number and not the parse buffer.
                 var fileStream = new FileStream(
                     csvPath, FileMode.Create, FileAccess.Write, FileShare.Read,
                     bufferSize: CsvWriteBufferBytes, useAsync: true);
