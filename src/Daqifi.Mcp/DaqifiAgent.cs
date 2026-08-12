@@ -70,21 +70,30 @@ public sealed class DaqifiAgent
     private static readonly object PwmCommandedMarker = new();
 
     /// <summary>
-    /// Floor for <see cref="DiscoverAsync"/>'s <c>timeoutMs</c> clamp. Bench-measured: the serial
-    /// identify handshake takes ~830 ms on real hardware, so this is that plus ~20% margin — a
-    /// timeout below it can never succeed and returns an empty list indistinguishable from "no
-    /// device attached" (#448). Was 250 ms, which is below the handshake time on every run.
+    /// Floor for <see cref="DiscoverAsync"/>'s <c>timeoutMs</c> clamp. A timeout below the identify
+    /// handshake can never succeed and returns an empty list indistinguishable from "no device
+    /// attached" (#448), which is why the floor exists at all; it was 250 ms, below the handshake
+    /// time on every run.
     /// </summary>
+    /// <remarks>
+    /// Originally derived from an ~830 ms bench-measured serial identify. That handshake is now
+    /// ~320-430 ms (#486), but the floor is deliberately left at 1000 ms rather than tracked down to
+    /// it: the measurement is one macOS host with one candidate port and a warm USB-descriptor
+    /// cache, while the number this floor has to cover is the slowest supported path — several
+    /// candidate ports, and a platform that still runs an uncached descriptor query per port
+    /// (#487). Lowering it on the strength of the fast case is how a caller ends up back at #448's
+    /// empty-list-means-nothing-attached, so it should follow #487 rather than lead it.
+    /// </remarks>
     internal const int MinDiscoveryTimeoutMs = 1000;
 
     /// <summary>
     /// Clamps a caller-supplied discovery timeout to <c>[<see cref="MinDiscoveryTimeoutMs"/>, 30_000]</c>
-    /// ms. The floor is derived from measurement, not a guess: the serial identify handshake takes
-    /// ~830 ms on real hardware, so anything below ~1000 ms returns empty before the device can
-    /// ever answer — indistinguishable from "nothing is attached" (#448). Serial probing can settle
-    /// and return before the full budget; <see cref="WiFiDeviceFinder"/> listens for the whole
-    /// window regardless (its receive loop runs until the timeout cancels it), so this floor mainly
-    /// rejects budgets that could never have succeeded rather than guaranteeing an early return.
+    /// ms. Anything below the floor returns empty before the device can ever answer —
+    /// indistinguishable from "nothing is attached" (#448); see <see cref="MinDiscoveryTimeoutMs"/>
+    /// for how that floor is chosen. Serial probing can settle and return before the full budget;
+    /// <see cref="WiFiDeviceFinder"/> listens for the whole window regardless (its receive loop runs
+    /// until the timeout cancels it), so this floor mainly rejects budgets that could never have
+    /// succeeded rather than guaranteeing an early return.
     /// </summary>
     internal static TimeSpan ClampDiscoveryTimeout(int timeoutMs) =>
         TimeSpan.FromMilliseconds(Math.Clamp(timeoutMs, MinDiscoveryTimeoutMs, 30_000));
