@@ -30,13 +30,15 @@ public interface IStreamTransport : IDisposable
     /// Occurs when the connection status changes.
     /// </summary>
     /// <remarks>
-    /// Handlers run synchronously on whatever thread raised the change, and that is never
-    /// guaranteed to be the thread that asked for the connection. A drop is reported from the
-    /// watchdog or reader thread that detected it, and the connect path deliberately resumes off
-    /// the caller's <see cref="SynchronizationContext"/> so the synchronous
-    /// <see cref="Connect"/>/<see cref="Disconnect"/> facades cannot deadlock a UI thread
-    /// (issue #495) — so a successful connect is reported from a thread-pool thread too. A UI
-    /// consumer must marshal to its own dispatcher before touching controls.
+    /// Handlers run synchronously on whatever thread raised the change, and no particular thread
+    /// is guaranteed. A drop is raised from the watchdog or reader thread that detected it. A
+    /// connect is raised from a thread-pool thread when the dial actually suspends, or inline on
+    /// the calling thread when it does not — the connect path deliberately resumes off the
+    /// caller's <see cref="SynchronizationContext"/> so the synchronous <see cref="Connect"/> and
+    /// <see cref="Disconnect"/> facades cannot deadlock a UI thread (issue #495), but
+    /// <c>ConfigureAwait(false)</c> only declines the context, it does not force a thread hop.
+    /// Treat the thread as arbitrary: a UI consumer must marshal to its own dispatcher before
+    /// touching controls.
     /// </remarks>
     event EventHandler<TransportStatusEventArgs>? StatusChanged;
 

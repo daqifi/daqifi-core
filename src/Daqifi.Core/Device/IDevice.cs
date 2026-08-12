@@ -43,13 +43,14 @@ namespace Daqifi.Core.Device
         /// Occurs when the device status changes.
         /// </summary>
         /// <remarks>
-        /// Handlers run synchronously on whatever thread raised the change, and that is never
-        /// guaranteed to be the thread that asked for the connection: a drop is reported from the
-        /// watchdog or reader thread that detected it, a reconnect from the reconnect supervisor,
-        /// and — because the library resumes its awaits off the caller's
-        /// <see cref="SynchronizationContext"/> so the synchronous <see cref="Connect"/> facade
-        /// cannot deadlock a UI thread (issue #495) — a successful connect from a thread-pool
-        /// thread. A UI consumer must marshal to its own dispatcher before touching controls.
+        /// Handlers run synchronously on whatever thread raised the change, and no particular
+        /// thread is guaranteed: a drop is raised from the watchdog or reader thread that detected
+        /// it, a reconnect from the reconnect supervisor, and a connect either from a thread-pool
+        /// thread or inline on the calling thread depending on whether the dial suspended. The
+        /// library resumes its awaits off the caller's <see cref="SynchronizationContext"/> so the
+        /// synchronous <see cref="Connect"/> facade cannot deadlock a UI thread (issue #495), but
+        /// that only declines the context — it is not a promise of a thread hop. Treat the thread
+        /// as arbitrary: a UI consumer must marshal to its own dispatcher before touching controls.
         /// </remarks>
         event EventHandler<DeviceStatusEventArgs> StatusChanged;
 
