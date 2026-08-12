@@ -34,7 +34,7 @@ public static class SdCardFileParserFactory
         ArgumentNullException.ThrowIfNull(filePath);
 
         var format = DetectFormat(filePath);
-        await using var stream = new FileStream(
+        var stream = new FileStream(
             filePath,
             FileMode.Open,
             FileAccess.Read,
@@ -42,7 +42,10 @@ public static class SdCardFileParserFactory
             bufferSize: options?.BufferSize ?? 64 * 1024,
             useAsync: true);
 
-        return await ParseWithFormatAsync(stream, Path.GetFileName(filePath), format, options, ct);
+        await using (stream.ConfigureAwait(false))
+        {
+            return await ParseWithFormatAsync(stream, Path.GetFileName(filePath), format, options, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -63,7 +66,7 @@ public static class SdCardFileParserFactory
         ArgumentNullException.ThrowIfNull(fileName);
 
         var format = DetectFormat(fileName);
-        return await ParseWithFormatAsync(fileStream, fileName, format, options, ct);
+        return await ParseWithFormatAsync(fileStream, fileName, format, options, ct).ConfigureAwait(false);
     }
 
     /// <summary>

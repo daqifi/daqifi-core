@@ -126,7 +126,7 @@ public sealed class SdCardCsvFileParser
     {
         ArgumentNullException.ThrowIfNull(filePath);
 
-        await using var fileStream = new FileStream(
+        var fileStream = new FileStream(
             filePath,
             FileMode.Open,
             FileAccess.Read,
@@ -134,7 +134,10 @@ public sealed class SdCardCsvFileParser
             bufferSize: options?.BufferSize ?? 64 * 1024,
             useAsync: true);
 
-        return await ParseAsync(fileStream, Path.GetFileName(filePath), options, ct);
+        await using (fileStream.ConfigureAwait(false))
+        {
+            return await ParseAsync(fileStream, Path.GetFileName(filePath), options, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

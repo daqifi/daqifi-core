@@ -199,7 +199,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// </exception>
     public async Task ConnectAsync()
     {
-        await ConnectAsync(null);
+        await ConnectAsync(null).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -213,13 +213,13 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     /// </exception>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
     {
-        await ConnectAsync(retryOptions, CancellationToken.None);
+        await ConnectAsync(retryOptions, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
-        await ConnectAsync(null, cancellationToken);
+        await ConnectAsync(null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -262,7 +262,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
 
                 try
                 {
-                    await connectTask.WaitAsync(cts.Token);
+                    await connectTask.WaitAsync(cts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException oce)
                     when (cts.IsCancellationRequested && !attemptToken.IsCancellationRequested)
@@ -295,7 +295,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
                 _networkStream = null;
             },
             onStatusChanged: OnStatusChanged,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         _watchdog.Arm();
     }
@@ -358,7 +358,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             OnStatusChanged(false, null);
         }
 
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     /// <summary>

@@ -17,6 +17,15 @@ All code changes go through a pull request:
 3. Open a PR against `main` describing the change and linking any related issue.
 4. CI must pass and the PR needs review before merge.
 
+### Awaits in `Daqifi.Core` must be `ConfigureAwait(false)`
+
+`Daqifi.Core` ships synchronous facades (`DaqifiDevice.Connect()`,
+`DaqifiDeviceFactory.ConnectTcp`/`ConnectSerial`, `IStreamTransport.Connect`/`Disconnect`)
+that block on their own async work. An `await` that resumes on the caller's
+`SynchronizationContext` therefore deadlocks a WPF/WinForms app calling from the UI
+thread. CA2007 is enabled for the library project (see `src/Daqifi.Core/.editorconfig`)
+and warnings are errors, so a naked `await` fails the build. Test projects are exempt.
+
 ## Security: how we do and don't accept code
 
 **We only ever accept code changes as pull requests against this repository.** A PR gives

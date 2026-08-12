@@ -270,7 +270,7 @@ namespace Daqifi.Core.Device.SdCard
                     completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                     cancellationToken: cancellationToken,
                     prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                    finalizeAsync: RestoreLanInterfaceAsync);
+                    finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                 isComplete = TrySplitAtSdListTerminator(lines, out listing);
 
@@ -448,7 +448,7 @@ namespace Daqifi.Core.Device.SdCard
                 responseTimeoutMs: 3000,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                finalizeAsync: RestoreLanInterfaceAsync);
+                finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
             // Only retry transient SCPI errors. A "No SD Card Detected" line
             // is non-transient — retrying just delays the typed exception and
@@ -466,7 +466,7 @@ namespace Daqifi.Core.Device.SdCard
                         responseTimeoutMs: 3000,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                        finalizeAsync: RestoreLanInterfaceAsync);
+                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                     if (!ScpiResponseClassifier.ContainsScpiError(lines) || ContainsNoSdCardMarker(lines))
                     {
@@ -627,25 +627,25 @@ namespace Daqifi.Core.Device.SdCard
             // SD card and LAN share the SPI bus on the hardware, so LAN must be
             // disabled before the SD card can be used.
             _host.Send(ScpiMessageProducer.DisableNetworkLan);
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             _host.Send(ScpiMessageProducer.EnableStorageSd);
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             // Route the data stream to the SD card interface.
             _host.Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             _host.Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             _host.Send(formatCommand);
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             if (!string.IsNullOrWhiteSpace(channelMask))
             {
                 _host.Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
-                await Task.Delay(100, cancellationToken);
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
             }
 
             _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
@@ -753,7 +753,7 @@ namespace Daqifi.Core.Device.SdCard
                 responseTimeoutMs: 3000,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                finalizeAsync: RestoreLanInterfaceAsync);
+                finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
             if (ScpiResponseClassifier.ContainsScpiError(lines))
             {
@@ -772,7 +772,7 @@ namespace Daqifi.Core.Device.SdCard
                         responseTimeoutMs: 3000,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                        finalizeAsync: RestoreLanInterfaceAsync);
+                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                     if (!ScpiResponseClassifier.ContainsScpiError(lines))
                     {
@@ -1069,7 +1069,7 @@ namespace Daqifi.Core.Device.SdCard
             var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}{ext}");
             try
             {
-                await using var fileStream = new FileStream(
+                var fileStream = new FileStream(
                     tempPath,
                     FileMode.Create,
                     FileAccess.Write,
@@ -1077,10 +1077,13 @@ namespace Daqifi.Core.Device.SdCard
                     bufferSize: 65536,
                     useAsync: true);
 
-                var result = await DownloadSdCardFileAsync(fileName, fileStream, progress, cancellationToken)
-                    .ConfigureAwait(false);
+                await using (fileStream.ConfigureAwait(false))
+                {
+                    var result = await DownloadSdCardFileAsync(fileName, fileStream, progress, cancellationToken)
+                        .ConfigureAwait(false);
 
-                return result with { FilePath = tempPath };
+                    return result with { FilePath = tempPath };
+                }
             }
             catch
             {

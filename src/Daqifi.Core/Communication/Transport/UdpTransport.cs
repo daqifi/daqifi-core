@@ -99,7 +99,7 @@ public class UdpTransport : IUdpTransport
             _udpClient.Client.SendTimeout = 5000;
 
             OnStatusChanged(true, null);
-            await Task.CompletedTask;
+            await Task.CompletedTask.ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -135,7 +135,7 @@ public class UdpTransport : IUdpTransport
             OnStatusChanged(false, null);
         }
 
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     /// <summary>
@@ -152,7 +152,7 @@ public class UdpTransport : IUdpTransport
             throw new InvalidOperationException("UDP transport is not open.");
 
         var broadcastEndPoint = new IPEndPoint(IPAddress.Broadcast, port);
-        await _udpClient!.SendAsync(data, data.Length, broadcastEndPoint);
+        await _udpClient!.SendAsync(data, data.Length, broadcastEndPoint).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -168,7 +168,7 @@ public class UdpTransport : IUdpTransport
         if (!IsOpen)
             throw new InvalidOperationException("UDP transport is not open.");
 
-        await _udpClient!.SendAsync(data, data.Length, endPoint);
+        await _udpClient!.SendAsync(data, data.Length, endPoint).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -184,7 +184,7 @@ public class UdpTransport : IUdpTransport
         if (!IsOpen)
             throw new InvalidOperationException("UDP transport is not open.");
 
-        await _udpClient!.SendAsync(data, data.Length, endPoint);
+        await _udpClient!.SendAsync(data, data.Length, endPoint).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -211,7 +211,7 @@ public class UdpTransport : IUdpTransport
 
                 try
                 {
-                    result = await _udpClient!.ReceiveAsync(cts.Token);
+                    result = await _udpClient!.ReceiveAsync(cts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -221,7 +221,7 @@ public class UdpTransport : IUdpTransport
             }
             else
             {
-                result = await _udpClient!.ReceiveAsync(cancellationToken);
+                result = await _udpClient!.ReceiveAsync(cancellationToken).ConfigureAwait(false);
             }
 
             return (result.Buffer, result.RemoteEndPoint);
