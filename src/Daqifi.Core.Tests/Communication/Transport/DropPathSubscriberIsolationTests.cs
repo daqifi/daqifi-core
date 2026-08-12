@@ -197,9 +197,7 @@ public class DropPathSubscriberIsolationTests
 
         Assert.Null(escaped);
         Assert.False(transport.IsConnected);
-
-        server.Client.ReceiveTimeout = 5000;
-        Assert.Equal(0, server.Client.Receive(new byte[1]));
+        AssertPeerObservedTheSocketClose(server);
     }
 
     [Fact]
@@ -225,11 +223,36 @@ public class DropPathSubscriberIsolationTests
         }
 
         Assert.False(transport.IsConnected);
+        AssertPeerObservedTheSocketClose(server);
+    }
 
-        // Proof the handle was actually released rather than merely dropped from the field: the
-        // peer sees the FIN, which only arrives when the client socket is closed.
+    /// <summary>
+    /// Asserts the peer saw the client socket actually close, which is the proof the handle was
+    /// released rather than merely dropped from its field.
+    /// </summary>
+    /// <remarks>
+    /// A graceful close (the expected case here — nothing is ever sent to this client, so its
+    /// receive buffer is empty at close) surfaces as a zero-byte read. A close that the stack turns
+    /// into a reset instead is equally good proof, so it is accepted rather than left as a source of
+    /// platform flakiness. What must not be accepted is a <see cref="SocketError.TimedOut"/>: that
+    /// is precisely the symptom of the leak these tests exist to catch, since a socket still held
+    /// open sends the peer neither a FIN nor an RST.
+    /// </remarks>
+    private static void AssertPeerObservedTheSocketClose(TcpClient server)
+    {
         server.Client.ReceiveTimeout = 5000;
-        Assert.Equal(0, server.Client.Receive(new byte[1]));
+
+        int read;
+        try
+        {
+            read = server.Client.Receive(new byte[1]);
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+        {
+            return;
+        }
+
+        Assert.Equal(0, read);
     }
 
     /// <summary>
