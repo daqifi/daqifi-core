@@ -416,8 +416,7 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             // Disconnect() and Dispose() would both find null and skip them too, leaking the socket
             // for the life of the process. Not rethrown, and traced best-effort because this
             // transport carries no logger: see SerialStreamTransport.HandleConnectionLost.
-            SafeTrace(
-                $"[{nameof(TcpStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {ex}");
+            SafeTrace(ex);
         }
         finally
         {
@@ -434,20 +433,23 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
     }
 
     /// <summary>
-    /// Writes a diagnostic line, swallowing anything a misbehaving
-    /// <see cref="System.Diagnostics.TraceListener"/> throws. See
-    /// <c>SerialStreamTransport.SafeTrace</c> for why the trace itself has to be contained.
+    /// Writes the diagnostic line for a <see cref="StatusChanged"/> subscriber failure, swallowing
+    /// anything a misbehaving <see cref="System.Diagnostics.TraceListener"/> throws. See
+    /// <c>SerialStreamTransport.SafeTrace</c> for why the trace itself — and the composition of its
+    /// message from a consumer-supplied exception — has to be contained.
     /// </summary>
-    /// <param name="message">The diagnostic line to write.</param>
-    private static void SafeTrace(string message)
+    /// <param name="subscriberFailure">The exception the subscriber threw.</param>
+    private static void SafeTrace(Exception subscriberFailure)
     {
         try
         {
-            System.Diagnostics.Trace.WriteLine(message);
+            System.Diagnostics.Trace.WriteLine(
+                $"[{nameof(TcpStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {subscriberFailure}");
         }
         catch
         {
-            // A trace listener that throws is not permitted to affect the drop path.
+            // A trace listener — or an exception that cannot render itself — is not permitted to
+            // affect the drop path.
         }
     }
 

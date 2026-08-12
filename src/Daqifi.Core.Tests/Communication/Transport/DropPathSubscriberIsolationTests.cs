@@ -144,6 +144,65 @@ public class DropPathSubscriberIsolationTests
     }
 
     [Fact]
+    public void SerialTransport_WhenTheSubscribersExceptionCannotRenderItself_TheDropPathIsStillContained()
+    {
+        // The exception being traced came out of consumer code as surely as the subscriber did, so
+        // rendering it is not a safe operation either. Composing the trace message outside the guard
+        // let a throwing ToString() escape the catch that exists to contain the subscriber — the
+        // handle still went out in the finally, but the watchdog/reader thread was disrupted anyway,
+        // which is the very thing the isolation is for.
+        using var transport = new SerialStreamTransport("/dev/ttyTest494", livenessCheckInterval: TimeSpan.Zero);
+        var port = new DisposalTrackingSerialPort();
+        transport.SetSerialPortForTesting(port);
+        transport.StatusChanged += (_, _) => throw new UnrenderableException();
+
+        transport.StartDropDetection();
+
+        var escaped = Record.Exception(() =>
+        {
+            for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
+            {
+                transport.ReportIoFault(new IOException("device gone"));
+            }
+        });
+
+        Assert.Null(escaped);
+        Assert.True(port.IsDisposed);
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
+    public void TcpTransport_WhenTheSubscribersExceptionCannotRenderItself_TheDropPathIsStillContained()
+    {
+        using var listener = new LoopbackListener();
+        using var transport = new TcpStreamTransport(IPAddress.Loopback, listener.Port);
+        transport.StatusChanged += (_, e) =>
+        {
+            if (!e.IsConnected)
+            {
+                throw new UnrenderableException();
+            }
+        };
+
+        transport.Connect();
+        using var server = listener.AcceptOne();
+
+        var escaped = Record.Exception(() =>
+        {
+            for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
+            {
+                transport.ReportIoFault(new IOException("peer gone"));
+            }
+        });
+
+        Assert.Null(escaped);
+        Assert.False(transport.IsConnected);
+
+        server.Client.ReceiveTimeout = 5000;
+        Assert.Equal(0, server.Client.Receive(new byte[1]));
+    }
+
+    [Fact]
     public void TcpTransport_WhenAStatusSubscriberThrows_TheSocketIsStillReleased()
     {
         using var listener = new LoopbackListener();
@@ -193,6 +252,15 @@ public class DropPathSubscriberIsolationTests
         public TcpClient AcceptOne() => _listener.AcceptTcpClient();
 
         public void Dispose() => _listener.Stop();
+    }
+
+    /// <summary>
+    /// An exception that throws while being rendered — the shape a consumer's own exception type can
+    /// take when its <see cref="object.ToString"/> (or a property it reads) is itself buggy.
+    /// </summary>
+    private sealed class UnrenderableException : Exception
+    {
+        public override string ToString() => throw new InvalidOperationException("cannot render");
     }
 
     /// <summary>
