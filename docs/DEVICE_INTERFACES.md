@@ -650,6 +650,14 @@ device.StatusChanged += (_, e) =>
 };
 ```
 
+Because that callback runs on a background thread, a UI handler that touches a bound control from it
+throws — so the raise is isolated. A `StatusChanged` subscriber that throws cannot stop the
+transition, cannot stop automatic reconnection from starting, and cannot keep the transport from
+releasing its handle; the exception is reported on `ErrorOccurred` as
+`DeviceErrorSource.StatusNotification` and written to the device logger. Isolation is per raise, not
+per subscriber: the first handler to throw ends that one notification for the rest of the invocation
+list.
+
 Custom transports can opt into the same escalation by implementing `ITransportHealthSink`; the
 reader and writer loops report every read/write outcome to a transport that does.
 
@@ -1136,6 +1144,7 @@ device.ErrorOccurred += (_, e) =>
 |---|---|
 | `MessageConsumer` | A read from the transport stream failed, a frame could not be parsed, or a `MessageReceived` subscriber threw |
 | `StreamDecode` | A streaming frame could not be decoded into channel samples. That frame is dropped; the stream continues |
+| `StatusNotification` | A `StatusChanged` subscriber threw. The status transition itself still completed |
 
 ### Observational, never escalating
 

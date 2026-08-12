@@ -617,15 +617,31 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         // so it happens after the notification.
         var port = Interlocked.Exchange(ref _serialPort, null);
 
-        OnStatusChanged(false, error);
-
         try
         {
-            port?.Dispose();
+            OnStatusChanged(false, error);
         }
         catch (Exception)
         {
-            // The device is already gone; failing to close its handle changes nothing.
+            // A subscriber that throws must not cost us the port handle (issue #494). The reference
+            // has already been taken out of the field, so if this unwound past the dispose below,
+            // Disconnect() and Dispose() would both find null and skip it too — the OS port would
+            // stay claimed for the life of the process and re-plugging the device would fail with
+            // "Access is denied". Not rethrown: the callers of this are a watchdog timer thread and
+            // the reader/writer loops, all of which already absorb it, so propagating only risks
+            // disturbing them. A DaqifiDevice surfaces its own StatusChanged subscriber failures on
+            // ErrorOccurred; a consumer that subscribes to a bare transport owns its handler.
+        }
+        finally
+        {
+            try
+            {
+                port?.Dispose();
+            }
+            catch (Exception)
+            {
+                // The device is already gone; failing to close its handle changes nothing.
+            }
         }
     }
 

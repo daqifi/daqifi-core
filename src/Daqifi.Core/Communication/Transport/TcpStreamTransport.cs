@@ -405,16 +405,28 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         var stream = Interlocked.Exchange(ref _networkStream, null);
         var client = Interlocked.Exchange(ref _tcpClient, null);
 
-        OnStatusChanged(false, error);
-
         try
         {
-            stream?.Dispose();
-            client?.Dispose();
+            OnStatusChanged(false, error);
         }
         catch (Exception)
         {
-            // The peer is already gone; failing to close the socket changes nothing.
+            // A subscriber that throws must not cost us the socket (issue #494). The references have
+            // already been taken out of their fields, so if this unwound past the dispose below,
+            // Disconnect() and Dispose() would both find null and skip them too, leaking the socket
+            // for the life of the process. Not rethrown: see SerialStreamTransport.HandleConnectionLost.
+        }
+        finally
+        {
+            try
+            {
+                stream?.Dispose();
+                client?.Dispose();
+            }
+            catch (Exception)
+            {
+                // The peer is already gone; failing to close the socket changes nothing.
+            }
         }
     }
 
