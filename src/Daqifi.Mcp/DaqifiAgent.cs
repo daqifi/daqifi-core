@@ -97,23 +97,19 @@ public sealed class DaqifiAgent
 
     // ---------------------------------------------------------------- discovery
 
+    /// <remarks>
+    /// The enabled transports run concurrently, so the call costs the slower transport's window
+    /// rather than the sum of both (#488). That matters because <see cref="WiFiDeviceFinder"/>
+    /// listens for its whole budget by design, so running it before serial used to add its full
+    /// timeout to every pass — on the first tool call of every session.
+    /// </remarks>
     public async Task<IReadOnlyList<DiscoveredDevice>> DiscoverAsync(
         int timeoutMs, bool wifi, bool serial, CancellationToken cancellationToken)
     {
         var timeout = ClampDiscoveryTimeout(timeoutMs);
-        var infos = new List<IDeviceInfo>();
 
-        if (wifi)
-        {
-            using var finder = new WiFiDeviceFinder();
-            infos.AddRange(await finder.DiscoverAsync(timeout).ConfigureAwait(false));
-        }
-
-        if (serial)
-        {
-            using var finder = new SerialDeviceFinder();
-            infos.AddRange(await finder.DiscoverAsync(timeout).ConfigureAwait(false));
-        }
+        var infos = await DiscoverAcrossTransportsAsync(
+            CreateTransportFinders(wifi, serial), timeout).ConfigureAwait(false);
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -125,6 +121,67 @@ public sealed class DaqifiAgent
             result.Add(DiscoveredDevice.From(id, info));
         }
         return result;
+    }
+
+    /// <summary>
+    /// The transport finders a discovery pass runs over, in the order their results are reported.
+    /// WiFi comes first so that a device reachable both ways keeps the ordering callers have always
+    /// seen. Internal for testing.
+    /// </summary>
+    internal static IReadOnlyList<IDeviceFinder> CreateTransportFinders(bool wifi, bool serial)
+    {
+        var finders = new List<IDeviceFinder>(2);
+        if (wifi)
+        {
+            finders.Add(new WiFiDeviceFinder());
+        }
+
+        if (serial)
+        {
+            finders.Add(new SerialDeviceFinder());
+        }
+
+        return finders;
+    }
+
+    /// <summary>
+    /// Runs the supplied transport finders concurrently and returns one deduplicated device set.
+    /// Owns the finders: they are disposed before this returns, so the caller passes them in and
+    /// forgets them. Internal for testing.
+    /// </summary>
+    /// <remarks>
+    /// The fan-out itself is <see cref="AllTransportsDeviceFinder"/> rather than a local
+    /// <c>Task.WhenAll</c> — Core already had the primitive, and with it come two behaviours this
+    /// path did not have: intra-transport duplicates collapse (the same unit reported twice by one
+    /// finder is one entry, while the same unit reached over two transports stays two, because the
+    /// identity is transport-prefixed), and one transport failing no longer sinks the pass. A WiFi
+    /// probe on a host with no usable network used to throw straight out of <c>discover_devices</c>
+    /// and lose the USB device that was found alongside it.
+    /// </remarks>
+    internal static async Task<IReadOnlyList<IDeviceInfo>> DiscoverAcrossTransportsAsync(
+        IReadOnlyList<IDeviceFinder> finders, TimeSpan timeout)
+    {
+        // Both transports disabled is a legitimate no-op call, but AllTransportsDeviceFinder
+        // requires at least one finder — answer it here rather than let the aggregator throw.
+        if (finders.Count == 0)
+        {
+            return Array.Empty<IDeviceInfo>();
+        }
+
+        try
+        {
+            using var allTransports = new AllTransportsDeviceFinder(finders);
+            return (await allTransports.DiscoverAsync(timeout).ConfigureAwait(false)).ToList();
+        }
+        finally
+        {
+            // AllTransportsDeviceFinder only disposes finders it created itself, so the ones
+            // constructed above are ours to release — including when the pass throws.
+            foreach (var finder in finders)
+            {
+                (finder as IDisposable)?.Dispose();
+            }
+        }
     }
 
     // ------------------------------------------------------------- connection
