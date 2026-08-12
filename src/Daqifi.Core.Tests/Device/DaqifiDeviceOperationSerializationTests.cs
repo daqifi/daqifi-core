@@ -468,8 +468,8 @@ public class DaqifiDeviceOperationSerializationTests
         using var device = new CappedDevice("Capped Device", transport, cap: 4);
         device.Connect();
 
-        var entered = new TaskCompletionSource();
-        var release = new TaskCompletionSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
         {
@@ -512,8 +512,8 @@ public class DaqifiDeviceOperationSerializationTests
         using var device = new CappedDevice("Uncapped-In-Practice Device", transport, cap: 8);
         device.Connect();
 
-        var entered = new TaskCompletionSource();
-        var release = new TaskCompletionSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
         {
@@ -554,8 +554,8 @@ public class DaqifiDeviceOperationSerializationTests
         using var device = new CappedDevice("Hammered Device", transport, cap: 4);
         device.Connect();
 
-        var entered = new TaskCompletionSource();
-        var release = new TaskCompletionSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
         {
@@ -596,8 +596,8 @@ public class DaqifiDeviceOperationSerializationTests
         using var device = new DaqifiDevice("Default Cap Device", transport);
         device.Connect();
 
-        var entered = new TaskCompletionSource();
-        var release = new TaskCompletionSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
         {
@@ -657,8 +657,8 @@ public class DaqifiDeviceOperationSerializationTests
 
         for (var round = 0; round < 2; round++)
         {
-            var entered = new TaskCompletionSource();
-            var release = new TaskCompletionSource();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
             var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
             {
