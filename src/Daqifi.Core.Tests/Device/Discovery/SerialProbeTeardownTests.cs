@@ -134,7 +134,11 @@ public class SerialProbeTeardownTests
         // Teardown is in a finally, so giving up early must leave the stream just as quiet as the
         // success path does.
         Assert.False(stream.FirstReaderThread!.IsAlive);
-        Assert.True(stream.WrittenCommands.Count < 2, "cancellation should stop further retries");
+        // Deliberately a bound, not an exact count. Requests go out on a RetryIntervalMs cadence and
+        // the cancellation lands wherever the scheduler puts it, so asserting that the retry did not
+        // happen is a race against a 300ms timer — it failed on CI doing exactly that. What is
+        // always true is that the probe never exceeds MaxRetries.
+        Assert.InRange(stream.WrittenCommands.Count, 1, 2);
     }
 
     [Fact]
@@ -156,6 +160,7 @@ public class SerialProbeTeardownTests
         using var stream = new ScriptedProbeStream(ProbeStartReadTimeoutMs, autoRespond: true);
 
         var first = await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
+        var readsDuringFirst = stream.ReadsIssuedWithTimeout.Count;
         var second = await SerialDeviceFinder.RequestDeviceStatusAsync(stream, CancellationToken.None);
 
         // Only true if the first exchange left no reader behind: a second consumer over a stream
@@ -164,8 +169,14 @@ public class SerialProbeTeardownTests
         Assert.NotNull(second);
         Assert.Equal(TestSerialNumber, second.DeviceSn);
         Assert.Equal(2, stream.ReaderThreadIds.Distinct().Count());
-        // Each exchange started from the timeout it found, because the previous one put it back.
-        Assert.All(stream.ReadsIssuedWithTimeout.Take(1), issued => Assert.Equal(ProbeStartReadTimeoutMs, issued));
+        // Each exchange started from the timeout it found, because the previous one put it back. The
+        // second exchange's opening read is the one that matters — it is the read that would have
+        // inherited the first exchange's shortened timeout — so it is indexed explicitly rather than
+        // covered by an assertion about the start of the list.
+        var reads = stream.ReadsIssuedWithTimeout;
+        Assert.True(reads.Count > readsDuringFirst, "the second exchange should have read the stream");
+        Assert.Equal(ProbeStartReadTimeoutMs, reads[0]);
+        Assert.Equal(ProbeStartReadTimeoutMs, reads[readsDuringFirst]);
     }
 
     [Fact]
