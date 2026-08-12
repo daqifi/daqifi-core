@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Transport;
+using System.Diagnostics;
 using System.IO.Ports;
 using System.Net;
 using System.Net.Sockets;
@@ -104,6 +105,42 @@ public class DropPathSubscriberIsolationTests
 
         Assert.Null(escaped);
         Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
+    public void SerialTransport_AThrowingStatusSubscriber_IsTracedRatherThanSwallowedSilently()
+    {
+        // These transports carry no ILogger, so the best-effort trace DeviceFinderBase uses for the
+        // same situation is the only diagnosability a bare-transport consumer gets. The listener is
+        // synchronized and only asserted with Contains, so traffic from tests running in parallel
+        // can neither corrupt it nor fail this.
+        using var transport = new SerialStreamTransport("/dev/ttyTest494", livenessCheckInterval: TimeSpan.Zero);
+        transport.SetSerialPortForTesting(new DisposalTrackingSerialPort());
+        transport.StatusChanged += (_, _) => throw new InvalidOperationException("a badly behaved subscriber");
+
+        var captured = new StringWriter();
+        var listener = new TextWriterTraceListener(TextWriter.Synchronized(captured));
+        Trace.Listeners.Add(listener);
+        try
+        {
+            transport.StartDropDetection();
+
+            for (var i = 0; i < TransportConnectionWatchdog.ConsecutiveFaultThreshold; i++)
+            {
+                transport.ReportIoFault(new IOException("device gone"));
+            }
+
+            Trace.Flush();
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+            listener.Dispose();
+        }
+
+        var traced = captured.ToString();
+        Assert.Contains(nameof(SerialStreamTransport), traced);
+        Assert.Contains("a badly behaved subscriber", traced);
     }
 
     [Fact]

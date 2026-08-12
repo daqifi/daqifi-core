@@ -621,7 +621,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         {
             OnStatusChanged(false, error);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // A subscriber that throws must not cost us the port handle (issue #494). The reference
             // has already been taken out of the field, so if this unwound past the dispose below,
@@ -630,7 +630,10 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             // "Access is denied". Not rethrown: the callers of this are a watchdog timer thread and
             // the reader/writer loops, all of which already absorb it, so propagating only risks
             // disturbing them. A DaqifiDevice surfaces its own StatusChanged subscriber failures on
-            // ErrorOccurred; a consumer that subscribes to a bare transport owns its handler.
+            // ErrorOccurred; this transport carries no logger, so a consumer working against a bare
+            // transport gets the same best-effort trace DeviceFinderBase gives its event raises.
+            SafeTrace(
+                $"[{nameof(SerialStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {ex}");
         }
         finally
         {
@@ -642,6 +645,31 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             {
                 // The device is already gone; failing to close its handle changes nothing.
             }
+        }
+    }
+
+    /// <summary>
+    /// Writes a diagnostic line, swallowing anything a misbehaving
+    /// <see cref="System.Diagnostics.TraceListener"/> throws.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="System.Diagnostics.Trace"/> dispatches to listeners the consumer installed, so it
+    /// is consumer code and can throw like any other. A listener throwing out of the <c>catch</c>
+    /// that was containing a bad subscriber would defeat the containment and cost the port handle
+    /// anyway. Same guarantee as <c>DeviceFinderBase.RaiseIsolated</c> and
+    /// <c>DaqifiStreamingDevice.SafeTrace</c>; this transport has no <c>ILogger</c>, hence the local
+    /// twin rather than a shared one.
+    /// </remarks>
+    /// <param name="message">The diagnostic line to write.</param>
+    private static void SafeTrace(string message)
+    {
+        try
+        {
+            System.Diagnostics.Trace.WriteLine(message);
+        }
+        catch
+        {
+            // A trace listener that throws is not permitted to affect the drop path.
         }
     }
 

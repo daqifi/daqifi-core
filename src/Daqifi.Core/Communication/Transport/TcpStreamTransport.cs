@@ -409,12 +409,15 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
         {
             OnStatusChanged(false, error);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // A subscriber that throws must not cost us the socket (issue #494). The references have
             // already been taken out of their fields, so if this unwound past the dispose below,
             // Disconnect() and Dispose() would both find null and skip them too, leaking the socket
-            // for the life of the process. Not rethrown: see SerialStreamTransport.HandleConnectionLost.
+            // for the life of the process. Not rethrown, and traced best-effort because this
+            // transport carries no logger: see SerialStreamTransport.HandleConnectionLost.
+            SafeTrace(
+                $"[{nameof(TcpStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {ex}");
         }
         finally
         {
@@ -427,6 +430,24 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             {
                 // The peer is already gone; failing to close the socket changes nothing.
             }
+        }
+    }
+
+    /// <summary>
+    /// Writes a diagnostic line, swallowing anything a misbehaving
+    /// <see cref="System.Diagnostics.TraceListener"/> throws. See
+    /// <c>SerialStreamTransport.SafeTrace</c> for why the trace itself has to be contained.
+    /// </summary>
+    /// <param name="message">The diagnostic line to write.</param>
+    private static void SafeTrace(string message)
+    {
+        try
+        {
+            System.Diagnostics.Trace.WriteLine(message);
+        }
+        catch
+        {
+            // A trace listener that throws is not permitted to affect the drop path.
         }
     }
 
