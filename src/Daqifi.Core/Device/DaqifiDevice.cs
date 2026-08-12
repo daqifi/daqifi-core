@@ -770,6 +770,46 @@ namespace Daqifi.Core.Device
         private Queue<Action>? _deferredSends;
 
         /// <summary>
+        /// The most messages <see cref="Send{T}"/> will park while another flow owns the device
+        /// before it starts discarding the oldest of them.
+        /// </summary>
+        /// <remarks>
+        /// Exclusive operations can be very long — an SD card download is allowed thirty minutes and
+        /// a firmware update longer — so an uncapped backlog grows with the sender's rate for as
+        /// long as the operation runs, and then fires every one of those stale commands at the
+        /// device in a burst when it ends. The cap is far above any backlog an ordinary text query
+        /// can build (those are measured in milliseconds), so it only ever engages on the long
+        /// exclusive operations it exists for.
+        /// </remarks>
+        public const int DefaultMaxDeferredSends = 1024;
+
+        /// <summary>
+        /// The live backlog cap. A seam for tests, which need a small cap to reach the drop path in
+        /// bounded time; production always reads <see cref="DefaultMaxDeferredSends"/>. Values below
+        /// one are clamped, so an override can never make the append path throw.
+        /// </summary>
+        internal virtual int MaxDeferredSends => DefaultMaxDeferredSends;
+
+        /// <summary>Backing field for <see cref="DroppedDeferredSendCount"/>.</summary>
+        private long _droppedDeferredSendCount;
+
+        /// <summary>
+        /// Whether the current backlog has already reported an overflow, so a sender that keeps
+        /// overflowing it produces one log line rather than one per dropped message. Guarded by
+        /// <see cref="_deferralGate"/>, and cleared wherever the backlog itself is.
+        /// </summary>
+        private bool _deferralOverflowReported;
+
+        /// <summary>
+        /// Gets the cumulative number of messages passed to <see cref="Send{T}"/> that were
+        /// discarded because the backlog of messages parked during an exclusive operation was full
+        /// (drop-oldest policy, capped at <see cref="DefaultMaxDeferredSends"/>). A non-zero and
+        /// growing value means commands are being issued faster than a long-running exclusive
+        /// operation can let them out.
+        /// </summary>
+        public long DroppedDeferredSendCount => Interlocked.Read(ref _droppedDeferredSendCount);
+
+        /// <summary>
         /// Serializes writes on the producer-less path, where <see cref="Send{T}"/> writes to the
         /// stream on the caller's own thread. Two threads writing a stream concurrently is the one
         /// place SCPI bytes really can interleave mid-command; the queued path is already safe
@@ -793,7 +833,9 @@ namespace Daqifi.Core.Device
         /// While the operation runs, a <see cref="Send{T}"/> from another thread is <b>deferred</b>,
         /// not blocked: it returns immediately, as fire-and-forget always has, and the message goes
         /// out in order once this operation finishes. Text queries from other threads wait, exactly
-        /// as they already waited for each other.
+        /// as they already waited for each other. A long operation paired with a busy sender can
+        /// park more than the backlog holds, in which case the oldest parked messages are dropped —
+        /// see <see cref="Send{T}"/> and <see cref="DroppedDeferredSendCount"/>.
         /// </para>
         /// <para>
         /// Reentrant on the same logical flow, so the body is free to call anything on the device,
@@ -960,6 +1002,7 @@ namespace Daqifi.Core.Device
                         // observed, so no message can be parked into a backlog nobody will drain.
                         _deferredSends = null;
                         _operationInFlight = false;
+                        _deferralOverflowReported = false;
                         return;
                     }
 
@@ -1004,6 +1047,7 @@ namespace Daqifi.Core.Device
                     {
                         _deferredSends = null;
                         _operationInFlight = false;
+                        _deferralOverflowReported = false;
                     }
 
                     SafeLog(() => _logger.LogWarning(
@@ -1077,6 +1121,7 @@ namespace Daqifi.Core.Device
             {
                 _deferredSends = null;
                 _operationInFlight = false;
+                _deferralOverflowReported = false;
             }
         }
 
@@ -1106,8 +1151,18 @@ namespace Daqifi.Core.Device
         /// and parking them would leave the operation waiting for itself.
         /// </para>
         /// <para>
-        /// Only ever appends: this holds the gate for a queue insert and nothing else, which is what
-        /// lets <see cref="Send{T}"/> promise it will not block.
+        /// The backlog is capped at <see cref="MaxDeferredSends"/> and overflows by discarding its
+        /// <b>oldest</b> entries. Drop-oldest is the right way round for what actually gets parked:
+        /// these are level-setting commands — set this pin, set that duty cycle — where the newest
+        /// instruction is the one the caller currently wants and an older one it has already
+        /// superseded is worth less than the memory it costs. Every discarded message counts into
+        /// <see cref="DroppedDeferredSendCount"/>.
+        /// </para>
+        /// <para>
+        /// Never blocks: this holds the gate for a queue insert (plus, at the cap, one dequeue) and
+        /// nothing else, which is what lets <see cref="Send{T}"/> promise it will not block. The
+        /// overflow log deliberately happens after the gate is released, so a slow logger cannot
+        /// turn a fire-and-forget send into a wait.
         /// </para>
         /// </remarks>
         private bool TryDeferSend<T>(IOutboundMessage<T> message)
@@ -1117,6 +1172,12 @@ namespace Daqifi.Core.Device
                 return false;
             }
 
+            // Read once, outside the gate: the seam is a property, and reading it again for the log
+            // below could report a different number than the one that was actually enforced.
+            // Clamped so an override can never drive Dequeue past empty.
+            var cap = Math.Max(1, MaxDeferredSends);
+
+            bool reportOverflow;
             lock (_deferralGate)
             {
                 if (!_operationInFlight && _deferredSends == null)
@@ -1124,9 +1185,42 @@ namespace Daqifi.Core.Device
                     return false;
                 }
 
-                (_deferredSends ??= new Queue<Action>()).Enqueue(() => SendNow(message));
-                return true;
+                var backlog = _deferredSends ??= new Queue<Action>();
+
+                // A loop rather than a single test, so a cap that shrank still converges on the
+                // first append after it did.
+                var dropped = 0;
+                while (backlog.Count >= cap)
+                {
+                    backlog.Dequeue();
+                    dropped++;
+                }
+
+                if (dropped > 0)
+                {
+                    Interlocked.Add(ref _droppedDeferredSendCount, dropped);
+                }
+
+                // One line per overflowing backlog, not per dropped message: the sender that
+                // overflows a backlog usually goes on overflowing it thousands of times.
+                reportOverflow = dropped > 0 && !_deferralOverflowReported;
+                if (reportOverflow)
+                {
+                    _deferralOverflowReported = true;
+                }
+
+                backlog.Enqueue(() => SendNow(message));
             }
+
+            if (reportOverflow)
+            {
+                SafeLog(() => _logger.LogWarning(
+                    "The backlog of messages deferred while an exclusive operation runs reached its "
+                    + "cap of {Cap}; the oldest are being dropped. See DroppedDeferredSendCount.",
+                    cap));
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -1783,6 +1877,15 @@ namespace Daqifi.Core.Device
         /// has — but the message can reach the device later than it used to. That is the point: a
         /// command written while a text query owns the stream gets its reply mixed into that
         /// query's answer.
+        /// </para>
+        /// <para>
+        /// That held-back backlog is capped at <see cref="DefaultMaxDeferredSends"/> messages, and
+        /// overflows by discarding the <b>oldest</b> of them — so sending continuously through a
+        /// long exclusive operation (an SD card download may run for thirty minutes) costs bounded
+        /// memory and replays a bounded burst afterwards, keeping the most recent commands rather
+        /// than the most stale. Discards are counted by <see cref="DroppedDeferredSendCount"/>.
+        /// Nothing is dropped while the device is idle, and nothing is dropped for a backlog under
+        /// the cap.
         /// </para>
         /// </remarks>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
