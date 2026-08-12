@@ -47,13 +47,22 @@ public sealed record SdCardDeviceConfiguration(
     /// <returns>A configuration snapshot, or <c>null</c> if the device has no analog channels.</returns>
     public static SdCardDeviceConfiguration? FromDevice(DaqifiDevice device)
     {
-        var analogChannels = device.Channels.OfType<IAnalogChannel>().ToList();
+        ArgumentNullException.ThrowIfNull(device);
+
+        // Taken through GetChannelsSnapshot rather than the live Channels view: this runs on
+        // whatever thread the caller is on (a download about to be parsed, an MCP tool dispatch)
+        // while the device's consumer thread can be repopulating the collection from a status
+        // message. Folding the live view there is exactly what DaqifiDevice.Channels documents as
+        // unsafe — it throws "Collection was modified" mid-enumeration. One snapshot also makes
+        // the analog and digital counts below describe the same instant instead of two.
+        var channels = device.GetChannelsSnapshot();
+        var analogChannels = channels.OfType<IAnalogChannel>().ToList();
         if (analogChannels.Count == 0)
         {
             return null;
         }
 
-        var digitalCount = device.Channels.Count(c => c.Type == ChannelType.Digital);
+        var digitalCount = channels.Count(c => c.Type == ChannelType.Digital);
         var firstAnalog = analogChannels[0];
 
         return new SdCardDeviceConfiguration(

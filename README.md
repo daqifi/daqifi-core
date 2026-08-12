@@ -23,7 +23,7 @@ DAQiFi builds wireless data acquisition hardware designed to get out of the way 
 
 Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
 
-Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O and PWM outputs, set the sample rate, and run SD-card logging through plain conversation.
+Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O and PWM outputs, set the sample rate, and run SD-card logging — then list, download, and CSV the recorded data back — through plain conversation.
 
 ## See it in 30 seconds
 
@@ -70,7 +70,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
 | **SDK** | **DAQiFi Core — this library** |
 | App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
-| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM, and SD logging |
+| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM, SD logging, and SD data retrieval |
 | Your code | Custom apps, dashboards, pipelines, test rigs |
 
 ## What you can do

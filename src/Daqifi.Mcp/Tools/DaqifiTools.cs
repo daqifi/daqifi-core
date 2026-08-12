@@ -136,6 +136,41 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.StopLoggingAsync(deviceId, cancellationToken));
 
+    [McpServerTool(Name = "list_sd_files")]
+    [Description("List the log files on the device's SD card, with size and creation date where the device reports them. An empty list always means an empty card — a device that fails to answer the listing raises an error instead. Available in --read-only mode.")]
+    public static Task<SdFileListing> ListSdFiles(
+        DaqifiAgent agent,
+        [Description("The device_id to list files on.")] string deviceId,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.ListSdFilesAsync(deviceId, cancellationToken));
+
+    [McpServerTool(Name = "get_sd_storage")]
+    [Description("Report free, used, and total space on the device's SD card. Refused while the device is logging (the SD card is busy) — call stop_sd_logging first. Available in --read-only mode.")]
+    public static Task<SdStorageReport> GetSdStorage(
+        DaqifiAgent agent,
+        [Description("The device_id to inspect.")] string deviceId,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.GetSdStorageAsync(deviceId, cancellationToken));
+
+    [McpServerTool(Name = "download_sd_file")]
+    [Description("Download an SD-card log file to this machine and, by default, parse it into a CSV you can read. Returns the local path of both files plus the sample and CSV row counts (a row is one timestamp, not one sample). Run SD retrieval before any live streaming on the same connection: a stream collapses the device's SD buffer and later downloads come back empty. Filenames come from list_sd_files. Large files take as long as the transfer takes.")]
+    public static Task<SdDownloadReport> DownloadSdFile(
+        DaqifiAgent agent,
+        [Description("The device_id to download from.")] string deviceId,
+        [Description("The on-card file name as list_sd_files reports it (matched without case sensitivity). A name that is not on the card is rejected straight away.")] string fileName,
+        [Description("Also parse the download and write a CSV next to it (default true). Set false to fetch the raw file only, e.g. when it is large and you just want it on disk. If the parse fails, the download still succeeds and csvError explains why.")] bool exportCsv = true,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.DownloadSdFileAsync(deviceId, fileName, exportCsv, cancellationToken));
+
+    [McpServerTool(Name = "delete_sd_file")]
+    [Description("Permanently delete a file from the device's SD card. There is no undo and no recycle bin — download it first if the data matters. Refused in --read-only mode, and refused while the device is logging.")]
+    public static Task<SdDeleteResult> DeleteSdFile(
+        DaqifiAgent agent,
+        [Description("The device_id to delete from.")] string deviceId,
+        [Description("The on-card file name, exactly as list_sd_files reports it.")] string fileName,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.DeleteSdFileAsync(deviceId, fileName, cancellationToken));
+
     // Surface real exception messages (validation + Core errors) to the agent rather than a
     // generic "An error occurred". Cancellation is allowed to propagate untouched.
     private static T Guard<T>(Func<T> action)

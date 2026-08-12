@@ -4,6 +4,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
 using Daqifi.Core.Device.SdCard;
+using Daqifi.Core.Logging.Export;
 using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Mcp;
@@ -598,6 +599,331 @@ public sealed class DaqifiAgent
             await sd.StopSdCardLoggingAsync(ct).ConfigureAwait(false);
             return $"Stopped SD-card logging on '{deviceId}'.";
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    // ------------------------------------------------------------ SD card retrieval
+
+    /// <summary>
+    /// Lists the files on the device's SD card. Read-only: available even under
+    /// <c>--read-only</c>.
+    /// </summary>
+    public async Task<SdFileListing> ListSdFilesAsync(string deviceId, CancellationToken cancellationToken)
+    {
+        var device = Require(deviceId);
+        var sd = RequireSdCard(device);
+
+        IReadOnlyList<SdCardFileInfo> files;
+        try
+        {
+            files = await sd.GetSdCardFilesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (Rewrite(ex, deviceId) is { } rewritten)
+        {
+            throw rewritten;
+        }
+
+        var entries = files.Select(SdFileEntry.From).ToList();
+        return new SdFileListing(deviceId, entries.Count, entries);
+    }
+
+    /// <summary>
+    /// Reports free/used/total space on the device's SD card. Read-only: available even under
+    /// <c>--read-only</c>.
+    /// </summary>
+    public async Task<SdStorageReport> GetSdStorageAsync(string deviceId, CancellationToken cancellationToken)
+    {
+        var device = Require(deviceId);
+        var sd = RequireSdCard(device);
+
+        try
+        {
+            var storage = await sd.GetSdCardStorageAsync(cancellationToken).ConfigureAwait(false);
+            return SdStorageReport.From(deviceId, storage);
+        }
+        catch (Exception ex) when (Rewrite(ex, deviceId) is { } rewritten)
+        {
+            throw rewritten;
+        }
+    }
+
+    /// <summary>
+    /// Downloads an SD-card file to this machine and, when <paramref name="exportCsv"/> is set,
+    /// parses it and writes a CSV alongside it.
+    /// </summary>
+    /// <remarks>
+    /// Not gated by <c>--read-only</c>: it reads device data and changes nothing on the card. It
+    /// does write two files into this machine's temp directory, which is the only way the agent
+    /// can be handed the data at all.
+    /// </remarks>
+    public async Task<SdDownloadReport> DownloadSdFileAsync(
+        string deviceId, string fileName, bool exportCsv, CancellationToken cancellationToken)
+    {
+        var name = RequireFileName(fileName);
+        var device = Require(deviceId);
+        var sd = RequireSdCard(device);
+
+        // Snapshotted BEFORE the download: the download suspends the protobuf consumer and can
+        // leave the transport mid-switch on a timeout, so this is the last point the live channel
+        // state is guaranteed readable. It carries the calibration and — the part that actually
+        // matters — the timestamp clock, which firmware 3.7.2 and earlier do not write into SD
+        // logs at all. Without it the parser falls back to a 50 MHz guess against a 42 MHz clock
+        // and every reconstructed timestamp comes out ~19% fast.
+        var liveConfig = exportCsv ? SdCardDeviceConfiguration.FromDevice(device) : null;
+
+        name = await ResolveFileNameAsync(sd, name, cancellationToken).ConfigureAwait(false);
+
+        SdCardDownloadResult download;
+        try
+        {
+            download = await sd.DownloadSdCardFileAsync(name, progress: null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (Rewrite(ex, deviceId) is { } rewritten)
+        {
+            throw rewritten;
+        }
+
+        var localPath = download.FilePath
+            ?? throw new InvalidOperationException(
+                $"The download of '{name}' reported no local file path, so there is nothing to read.");
+
+        string? csvPath = null;
+        long? rowCount = null;
+        long? sampleCount = null;
+        string? csvError = null;
+
+        if (exportCsv)
+        {
+            try
+            {
+                (csvPath, rowCount, sampleCount, csvError) =
+                    await ExportCsvAsync(localPath, name, liveConfig, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // The raw file is already on disk and took the whole transfer to get there.
+                // Failing the tool call here would hand back an error and no path, and the agent
+                // would re-download to discover the same thing.
+                csvError = ex.Message;
+                _logger.LogWarning(ex, "CSV export failed for '{FileName}'; the raw download at {Path} is unaffected.", name, localPath);
+            }
+        }
+
+        return new SdDownloadReport(
+            deviceId,
+            download.FileName,
+            download.FileSize,
+            Math.Round(download.Duration.TotalSeconds, 3),
+            localPath,
+            csvPath,
+            rowCount,
+            sampleCount,
+            csvError);
+    }
+
+    /// <summary>
+    /// Deletes a file from the device's SD card. Destructive, so it is refused under
+    /// <c>--read-only</c>.
+    /// </summary>
+    public async Task<SdDeleteResult> DeleteSdFileAsync(
+        string deviceId, string fileName, CancellationToken cancellationToken)
+    {
+        RequireControl();
+        var name = RequireFileName(fileName);
+        var device = Require(deviceId);
+        var sd = RequireSdCard(device);
+
+        try
+        {
+            await sd.DeleteSdCardFileAsync(name, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (Rewrite(ex, deviceId) is { } rewritten)
+        {
+            throw rewritten;
+        }
+
+        return new SdDeleteResult(deviceId, name);
+    }
+
+    /// <summary>
+    /// Confirms the file is actually on the card before a transfer is attempted, and returns the
+    /// name exactly as the card spells it.
+    /// </summary>
+    /// <remarks>
+    /// Asking the firmware for a file that is not there produces no answer at all: the transfer
+    /// stalls and gives up 20 seconds later with "the device stopped feeding the transfer", which
+    /// tells the caller to retry the one thing that cannot work. A name that does not appear in a
+    /// listing is worth failing on immediately, with the names that do.
+    /// <para>
+    /// Free when the caller listed first — the check runs against the listing Core already cached.
+    /// The re-listing on a miss is what keeps it honest: a file recorded since that listing (by
+    /// <c>start_sd_logging</c>, say) is genuinely on the card, and must not be rejected for being
+    /// absent from a stale snapshot.
+    /// </para>
+    /// </remarks>
+    internal static async Task<string> ResolveFileNameAsync(
+        ISdCardOperations sd, string fileName, CancellationToken cancellationToken)
+    {
+        var match = Match(sd.SdCardFiles, fileName);
+        if (match is not null)
+        {
+            return match;
+        }
+
+        IReadOnlyList<SdCardFileInfo> files;
+        try
+        {
+            files = await sd.GetSdCardFilesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // The listing is a courtesy, not a gate. If it cannot be taken — a busy card, a
+            // firmware that will not answer — let the download itself be the thing that fails, so
+            // this check can never be the reason a downloadable file is refused.
+            return fileName;
+        }
+
+        match = Match(files, fileName);
+        if (match is not null)
+        {
+            return match;
+        }
+
+        var available = files.Count == 0
+            ? "The card is empty."
+            : "On the card: " + string.Join(", ", files.Take(20).Select(f => f.FileName))
+              + (files.Count > 20 ? $", and {files.Count - 20} more (call list_sd_files for all of them)." : ".");
+
+        throw new InvalidOperationException($"There is no file named '{fileName}' on the SD card. {available}");
+
+        // Matched without case sensitivity because the card's filesystem is not case-sensitive,
+        // and the name that comes back is the card's own spelling — the firmware is handed what it
+        // put in the listing rather than whatever the caller typed.
+        static string? Match(IReadOnlyList<SdCardFileInfo> files, string fileName) => files
+            .FirstOrDefault(f => string.Equals(f.FileName, fileName, StringComparison.OrdinalIgnoreCase))
+            ?.FileName;
+    }
+
+    /// <summary>
+    /// Parses a downloaded log and writes a CSV next to it, returning the CSV path, the two counts
+    /// the caller reports (CSV lines and log entries), and a warning when the CSV was written but
+    /// is known to be incomplete.
+    /// </summary>
+    internal static async Task<(string CsvPath, long Rows, long Samples, string? Warning)> ExportCsvAsync(
+        string localPath,
+        string deviceFileName,
+        SdCardDeviceConfiguration? liveConfig,
+        CancellationToken cancellationToken)
+    {
+        // Format comes from the DEVICE-side name, not the local one: the local file is a temp file
+        // Core minted, and deriving the format from it would make the parse depend on a name the
+        // caller never chose.
+        var format = SdCardFileParserFactory.DetectFormat(deviceFileName);
+
+        var parseOptions = new SdCardParseOptions { ConfigurationOverride = liveConfig };
+
+        var stream = new FileStream(
+            localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: parseOptions.BufferSize, useAsync: true);
+
+        await using (stream.ConfigureAwait(false))
+        {
+            var session = await SdCardFileParserFactory
+                .ParseWithFormatAsync(stream, Path.GetFileName(deviceFileName), format, parseOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            // The file's own status message wins; the live device fills in when the log carries
+            // none. Zero is the honest last resort — a device with no analog channels exports the
+            // digital column alone rather than inventing width.
+            var analogCount = session.DeviceConfig?.AnalogPortCount ?? liveConfig?.AnalogPortCount ?? 0;
+
+            var source = new SdCardSampleSource(
+                session.Samples,
+                session.DeviceConfig?.DeviceSerialNumber ?? liveConfig?.DeviceSerialNumber,
+                analogCount);
+
+            // Appended, not swapped: the firmware logs in CSV as well as protobuf and JSON, and
+            // Core's temp file keeps the device-side extension — so Path.ChangeExtension(".csv")
+            // would hand back the path of the file being read for a .csv log and truncate the
+            // download on the way to parsing it. A suffix cannot collide with what it is added to.
+            var csvPath = localPath + ".csv";
+            var fileStream = new FileStream(csvPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+            await using (fileStream.ConfigureAwait(false))
+            {
+                var writer = new StreamWriter(fileStream);
+                await using (writer.ConfigureAwait(false))
+                {
+                    await new CsvExporter()
+                        .ExportAsync(source, writer, new CsvExportOptions { UseRelativeTime = false }, progress: null, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+
+            if (source.SampleCount == 0)
+            {
+                // A header and nothing else reads like a successful export of a file that had no
+                // data in it. Say so instead, and leave the raw download in place for whoever
+                // wants to look at why.
+                TryDelete(csvPath);
+                throw new InvalidOperationException(
+                    $"'{deviceFileName}' parsed to zero samples, so no CSV was written. The raw file is still available at the returned path.");
+            }
+
+            // Reported rather than thrown, and the CSV is kept: the columns that did map are real
+            // data. Silence is the one unacceptable option — an agent analysing a CSV that quietly
+            // lost channels has no way to notice.
+            var warning = source.DroppedAnalogColumns > 0
+                ? $"The CSV is incomplete: samples in '{deviceFileName}' carry {analogCount + source.DroppedAnalogColumns} " +
+                  $"analog values but only {analogCount} analog channels are known, so {source.DroppedAnalogColumns} " +
+                  "column(s) were dropped."
+                : null;
+
+            return (csvPath, source.RowCount, source.SampleCount, warning);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { /* best effort; a leftover temp file is not worth failing over */ }
+    }
+
+    /// <summary>
+    /// Rewrites the SD-card failures that have an MCP-specific next step into messages naming the
+    /// tool to call, and lets everything else through untouched (Core's own messages are already
+    /// written for a human). Used as an exception filter, so a null return leaves the original
+    /// exception — and its stack — completely unmodified.
+    /// </summary>
+    private static Exception? Rewrite(Exception ex, string deviceId) => ex switch
+    {
+        SdCardBusyException => new InvalidOperationException(
+            $"Device '{deviceId}' is busy with the SD card, which usually means it is still logging. " +
+            "Call stop_sd_logging first, then retry.", ex),
+
+        SdCardEmptyTransferException empty => new InvalidOperationException(
+            $"{empty.Message} This is also what a live-streaming session does to the SD subsystem: " +
+            "run SD retrieval before streaming in the same connection, or start and stop an SD " +
+            "recording to re-arm it.", ex),
+
+        _ => null,
+    };
+
+    private static string RequireFileName(string? fileName)
+    {
+        var trimmed = fileName?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            throw new InvalidOperationException(
+                "A file name is required. Call list_sd_files to see what is on the card.");
+        }
+        return trimmed;
     }
 
     // ------------------------------------------------------------------ shutdown
