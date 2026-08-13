@@ -2675,6 +2675,10 @@ namespace Daqifi.Core.Device
 
             Metadata.ApplyCapabilityDocument(document);
 
+            // The document is also the only description of the device's DAC channels, so this is
+            // the moment they can be modelled (#499).
+            SyncAnalogOutputChannelsFromCapabilities();
+
             // The document is the only place the device says what its analog readings are measured
             // in, so this is where a channel learns its unit (#501). Never overwrites a scaling a
             // caller configured, which matters because this method is re-run on every capability
@@ -3987,6 +3991,13 @@ namespace Daqifi.Core.Device
 
                 (analogCount, digitalCount) = _channelPopulator.Populate(message, _channels, updatedChannels);
 
+                // Analog-output (DAC) channels are described only by the capability document —
+                // the protobuf declares analog_out_port_num/_res/_range but the firmware never
+                // fills them in — so a status message says nothing about them and must not be read
+                // as "this device has none". Carry the modelled ones across untouched, in the same
+                // order, so the membership comparison below still sees no change.
+                CarryForwardAnalogOutputChannels(_channels, updatedChannels);
+
                 // Only a change of *membership* needs handling here. A status that re-asserts a
                 // different enabled mask on channels the device already had has moved the version
                 // already, through those channels' own notifications — they were still subscribed
@@ -4032,6 +4043,203 @@ namespace Daqifi.Core.Device
                 Array.AsReadOnly(channelsSnapshot),
                 analogCount,
                 digitalCount));
+        }
+
+        /// <summary>
+        /// Appends the analog-output channels already modelled on this device to a freshly-built
+        /// channel list, preserving their instances and their order.
+        /// </summary>
+        private static void CarryForwardAnalogOutputChannels(
+            IReadOnlyList<IChannel> existing, List<IChannel> destination)
+        {
+            foreach (var channel in existing)
+            {
+                if (channel.Type == ChannelType.AnalogOutput)
+                {
+                    destination.Add(channel);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Brings the device's analog-output (DAC) channels into line with the capability document
+        /// the device most recently reported, so they appear in <see cref="GetChannelsSnapshot"/>
+        /// alongside the input channels.
+        /// </summary>
+        /// <remarks>
+        /// The capability document is the <b>only</b> place the firmware describes its DAC
+        /// channels: the protobuf status message declares
+        /// <c>analog_out_port_num</c>/<c>_res</c>/<c>_range</c> but never populates them, which is
+        /// why analog outputs are not built in <see cref="PopulateChannelsFromStatus"/> with
+        /// everything else. <see cref="ReadCapabilityDocumentAsync"/> calls this for you; call it
+        /// yourself only if you applied a document by hand through
+        /// <see cref="DeviceMetadata.ApplyCapabilityDocument"/>. With no document in hand, or on a
+        /// device whose document lists no analog outputs, the channel collection is left alone.
+        /// Existing instances are refreshed in place so a consumer-held reference survives a
+        /// re-read.
+        /// </remarks>
+        /// <returns>The number of analog-output channels the device now has.</returns>
+        public int SyncAnalogOutputChannelsFromCapabilities()
+        {
+            var document = Metadata.CapabilityDocument;
+            if (document is null || document.Channels.Count == 0)
+            {
+                return 0;
+            }
+
+            IChannel[]? channelsSnapshot = null;
+            var analogCount = 0;
+            var digitalCount = 0;
+            int outputCount;
+
+            lock (_channelsLock)
+            {
+                var existingOutputs = new Dictionary<int, AnalogOutputChannel>();
+                var retained = new List<IChannel>(_channels.Count);
+
+                foreach (var channel in _channels)
+                {
+                    if (channel is AnalogOutputChannel output)
+                    {
+                        existingOutputs[output.ChannelNumber] = output;
+                    }
+                    else
+                    {
+                        retained.Add(channel);
+
+                        if (channel.Type == ChannelType.Analog)
+                        {
+                            analogCount++;
+                        }
+                        else if (channel.Type == ChannelType.Digital)
+                        {
+                            digitalCount++;
+                        }
+                    }
+                }
+
+                var rebuiltOutputs = new List<IChannel>();
+                var seenNumbers = new HashSet<int>();
+
+                foreach (var descriptor in document.Channels)
+                {
+                    if (descriptor.Kind != CapabilityChannelKind.AnalogOutput)
+                    {
+                        continue;
+                    }
+
+                    if (descriptor.Id < 0)
+                    {
+                        var negativeId = descriptor.Id;
+                        SafeLog(() => _logger.LogWarning(
+                            "[SyncAnalogOutputChannels] Device '{DeviceName}' described an analog output with a negative id ({ChannelId}); ignoring it.",
+                            Name, negativeId));
+                        continue;
+                    }
+
+                    if (!seenNumbers.Add(descriptor.Id))
+                    {
+                        var duplicateId = descriptor.Id;
+                        SafeLog(() => _logger.LogWarning(
+                            "[SyncAnalogOutputChannels] Device '{DeviceName}' described analog output {ChannelId} more than once; keeping the first description.",
+                            Name, duplicateId));
+                        continue;
+                    }
+
+                    var (resolutionBits, minimumVoltage, maximumVoltage, rangeIsAssumed) =
+                        ResolveAnalogOutputDescriptor(descriptor);
+
+                    if (existingOutputs.TryGetValue(descriptor.Id, out var existing))
+                    {
+                        existing.UpdateFromCapabilities(resolutionBits, minimumVoltage, maximumVoltage, rangeIsAssumed);
+                        rebuiltOutputs.Add(existing);
+                    }
+                    else
+                    {
+                        rebuiltOutputs.Add(new AnalogOutputChannel(
+                            descriptor.Id, resolutionBits, minimumVoltage, maximumVoltage, rangeIsAssumed));
+                    }
+                }
+
+                outputCount = rebuiltOutputs.Count;
+
+                // Only disturb the collection when the set of output channels actually changed; a
+                // re-read describing the same DACs updates them in place and raises nothing.
+                var compositionChanged =
+                    outputCount != existingOutputs.Count ||
+                    !seenNumbers.SetEquals(existingOutputs.Keys);
+
+                if (compositionChanged)
+                {
+                    retained.AddRange(rebuiltOutputs);
+                    _channels.Clear();
+                    _channels.AddRange(retained);
+                    channelsSnapshot = _channels.ToArray();
+
+                    // An analog output carries no enablement notification of its own, so the set
+                    // changing is the only thing a cache keyed on the channel list can observe.
+                    Interlocked.Increment(ref _channelStateVersion);
+                }
+            }
+
+            if (channelsSnapshot is not null)
+            {
+                // Outside the lock: a handler calling back into a channel method takes the same
+                // lock. Mirrors PopulateChannelsFromStatus.
+                ChannelsPopulated?.Invoke(this, new ChannelsPopulatedEventArgs(
+                    Array.AsReadOnly(channelsSnapshot), analogCount, digitalCount));
+            }
+
+            return outputCount;
+        }
+
+        /// <summary>
+        /// Derives the resolution and voltage range to model an analog-output channel with, falling
+        /// back to <see cref="AnalogOutputChannel"/>'s NQ3 defaults for anything the document does
+        /// not state or states implausibly.
+        /// </summary>
+        private (int ResolutionBits, double MinimumVoltage, double MaximumVoltage, bool RangeIsAssumed)
+            ResolveAnalogOutputDescriptor(CapabilityChannel descriptor)
+        {
+            var resolutionBits = descriptor.ResolutionBits ?? AnalogOutputChannel.DefaultResolutionBits;
+
+            if (resolutionBits is < AnalogOutputChannel.MinResolutionBits or > AnalogOutputChannel.MaxResolutionBits)
+            {
+                var stated = resolutionBits;
+                SafeLog(() => _logger.LogWarning(
+                    "[SyncAnalogOutputChannels] Device '{DeviceName}' reported an implausible DAC resolution ({Resolution} bits) for analog output {ChannelId}; assuming {AssumedResolution}.",
+                    Name, stated, descriptor.Id, AnalogOutputChannel.DefaultResolutionBits));
+                resolutionBits = AnalogOutputChannel.DefaultResolutionBits;
+            }
+
+            var minimum = descriptor.RangeMinimum;
+            var maximum = descriptor.RangeMaximum;
+
+            var statedRangeIsUsable =
+                minimum.HasValue && maximum.HasValue &&
+                double.IsFinite(minimum.Value) && double.IsFinite(maximum.Value) &&
+                Math.Abs(minimum.Value) <= AnalogOutputChannel.MaxRangeMagnitudeVolts &&
+                Math.Abs(maximum.Value) <= AnalogOutputChannel.MaxRangeMagnitudeVolts &&
+                minimum.Value < maximum.Value;
+
+            if (statedRangeIsUsable)
+            {
+                return (resolutionBits, minimum!.Value, maximum!.Value, false);
+            }
+
+            if (minimum.HasValue || maximum.HasValue)
+            {
+                SafeLog(() => _logger.LogWarning(
+                    "[SyncAnalogOutputChannels] Device '{DeviceName}' reported an unusable output range ({Minimum} to {Maximum}) for analog output {ChannelId}; assuming {AssumedMinimum} to {AssumedMaximum} V.",
+                    Name, minimum, maximum, descriptor.Id,
+                    AnalogOutputChannel.DefaultMinimumVoltage, AnalogOutputChannel.DefaultMaximumVoltage));
+            }
+
+            return (
+                resolutionBits,
+                AnalogOutputChannel.DefaultMinimumVoltage,
+                AnalogOutputChannel.DefaultMaximumVoltage,
+                true);
         }
 
         /// <summary>

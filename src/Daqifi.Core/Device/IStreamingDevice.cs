@@ -407,13 +407,22 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Sets the analog output (DAC) voltage of a channel and applies it immediately.
         /// </summary>
-        /// <param name="channelNumber">The analog output channel number. DAC channels are addressed by
-        /// number; they are not part of the <c>Channels</c> collection (which holds analog inputs).</param>
-        /// <param name="voltage">The output voltage, in volts. Must be a finite number.</param>
+        /// <param name="channelNumber">The analog output channel number.</param>
+        /// <param name="voltage">
+        /// The output voltage, in volts. Must be a finite number, and within the channel's stated
+        /// range when the device described one (see
+        /// <see cref="Daqifi.Core.Channel.IAnalogOutputChannel"/>).
+        /// </param>
         /// <remarks>
         /// Analog output is available on NQ3 hardware only. Each call stages the level and then latches it
-        /// immediately, so it is not suitable for synchronized multi-channel updates.
+        /// immediately, so it is not suitable for synchronized multi-channel updates — use
+        /// <see cref="DaqifiStreamingDevice.StageAnalogOutput"/> and
+        /// <see cref="DaqifiStreamingDevice.LatchAnalogOutputs"/> for that.
         /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The channel number is negative, or the voltage falls outside the range the device stated
+        /// for a channel it described.
+        /// </exception>
         void SetAnalogOutput(int channelNumber, double voltage);
 
         /// <summary>

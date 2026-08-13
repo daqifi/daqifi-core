@@ -695,6 +695,29 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> UpdateDacOutputs => new ScpiMessage("CONFigure:DAC:UPDATE");
 
+    /// <summary>
+    /// Creates a query message asking the device for the voltage currently held on an analog
+    /// output (DAC) channel.
+    /// </summary>
+    /// <param name="channel">The analog output channel number.</param>
+    /// <remarks>
+    /// The DAC7718 has no hardware readback, so the device answers with the voltage it was last
+    /// told to drive, formatted to its configured voltage precision. Analog output is available on
+    /// NQ3 hardware only.
+    /// Command: SOURce:VOLTage:LEVel? channel
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetAnalogOutputVoltage(0));
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is negative.</exception>
+    public static IOutboundMessage<string> GetAnalogOutputVoltage(int channel)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        return new ScpiMessage($"SOURce:VOLTage:LEVel? {channel}");
+    }
+
     // ---------------------------------------------------------------------
     // ADC calibration & voltage-precision persistence
     //
