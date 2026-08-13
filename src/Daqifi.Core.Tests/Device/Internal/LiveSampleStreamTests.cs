@@ -472,6 +472,14 @@ public class LiveSampleStreamTests
         }
 
         /// <summary>
+        /// Bumped by <see cref="Add"/> so a caller caching a derivation of the channel set sees the
+        /// change. <see cref="LiveSampleStream"/> does not cache, but the host contract says this
+        /// moves whenever the channels do, and a fake that lied about it would let a future caller
+        /// that <em>does</em> cache pass here and fail on a real device.
+        /// </summary>
+        public long ChannelStateVersion => _channels.Count;
+
+        /// <summary>
         /// In the collaborator's remit since issue #496: an enumeration is only meaningful on a
         /// connected device, so the start-up guard reads this. Settable so both sides of that guard
         /// can be exercised. Reading state is still a world away from the members below, which

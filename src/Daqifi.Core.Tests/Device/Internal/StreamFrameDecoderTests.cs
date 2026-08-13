@@ -344,6 +344,160 @@ public class StreamFrameDecoderTests
 
     #endregion
 
+    #region Channel caching (#490)
+
+    /// <summary>
+    /// The point of the cache: a stream that nobody reconfigures asks the device for its channels
+    /// once, not once per frame. Every snapshot is an array copy taken under the device's channels
+    /// lock, so at kilohertz rates this was both garbage and lock traffic against the configuration
+    /// path.
+    /// </summary>
+    [Fact]
+    public void SteadyStateFrames_AskTheDeviceForChannelsOnlyOnce()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.AddAnalog(0, enabled: true);
+        host.AddAnalog(1, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        var afterBeginSession = host.SnapshotChannelsCallCount;
+
+        for (uint ts = 1000; ts <= 100_000; ts += 1000)
+        {
+            decoder.ProcessFrame(FullAnalogFrame(ts, 1.0f, 2.0f));
+        }
+
+        Assert.Equal(1, host.SnapshotChannelsCallCount - afterBeginSession);
+    }
+
+    /// <summary>
+    /// The cache is only sound if it is rebuilt when the device says the channel state moved —
+    /// once, not on every subsequent frame.
+    /// </summary>
+    [Fact]
+    public void AChannelStateChange_RebuildsTheCacheExactlyOnce()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 1.0f));
+        var baseline = host.SnapshotChannelsCallCount;
+
+        ai0.IsEnabled = false;
+
+        for (uint ts = 2000; ts <= 10_000; ts += 1000)
+        {
+            decoder.ProcessFrame(AnalogFrame(ts, 1.0f));
+        }
+
+        Assert.Equal(1, host.SnapshotChannelsCallCount - baseline);
+    }
+
+    /// <summary>
+    /// Enabling a channel by writing <c>IsEnabled</c> straight onto it — which
+    /// <see cref="IChannel"/> permits and which no device API sees — must reach the decoder. This
+    /// is the failure the cache invalidation exists for: without it the frame's values keep being
+    /// mapped onto the previously active channels, so AI1's reading is silently filed under AI0.
+    /// </summary>
+    [Fact]
+    public void EnablingAChannelDirectly_TakesEffectOnTheNextFrame()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: false);
+        var ai1 = host.AddAnalog(1, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 5.0f));
+        Assert.Equal(5.0, ai1.ActiveSample!.Value, 3);
+        Assert.Null(ai0.ActiveSample);
+
+        ai0.IsEnabled = true;
+        decoder.ProcessFrame(FullAnalogFrame(2000, 1.0f, 2.0f));
+
+        Assert.Equal(1.0, ai0.ActiveSample!.Value, 3);
+        Assert.Equal(2.0, ai1.ActiveSample!.Value, 3);
+    }
+
+    /// <summary>
+    /// The same in the other direction: a channel disabled mid-stream must stop consuming a
+    /// position in the frame, or every channel after it is read one slot out.
+    /// </summary>
+    [Fact]
+    public void DisablingAChannelDirectly_TakesEffectOnTheNextFrame()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var ai1 = host.AddAnalog(1, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(FullAnalogFrame(1000, 1.0f, 2.0f));
+        Assert.Equal(1.0, ai0.ActiveSample!.Value, 3);
+        Assert.Equal(2.0, ai1.ActiveSample!.Value, 3);
+
+        ai0.IsEnabled = false;
+        decoder.ProcessFrame(AnalogFrame(2000, 7.0f));
+
+        // AI1 is now the only active analog channel, so the frame's single value is its reading.
+        Assert.Equal(7.0, ai1.ActiveSample!.Value, 3);
+        Assert.Equal(1.0, ai0.ActiveSample!.Value, 3); // unchanged from the first frame
+    }
+
+    /// <summary>
+    /// The device streams analog values ordered by channel number, not by the order the channels
+    /// were enabled in — so the cached array has to stay sorted, not merely filtered.
+    /// </summary>
+    [Fact]
+    public void CachedChannels_StayInAscendingChannelOrder_WhateverOrderTheyWereEnabledIn()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai2 = host.AddAnalog(2, enabled: true);
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var ai1 = host.AddAnalog(1, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(FullAnalogFrame(1000, 10.0f, 11.0f, 12.0f));
+
+        Assert.Equal(10.0, ai0.ActiveSample!.Value, 3);
+        Assert.Equal(11.0, ai1.ActiveSample!.Value, 3);
+        Assert.Equal(12.0, ai2.ActiveSample!.Value, 3);
+    }
+
+    /// <summary>
+    /// The warmup-frame guard (#351) counts enabled analog channels to decide whether a leading
+    /// frame is short. It now reads that count from the cache, so it has to see enablement changes
+    /// too — a guard working from a stale count would either suppress good frames or let malformed
+    /// ones through.
+    /// </summary>
+    [Fact]
+    public void TheWarmupGuard_SeesEnablementChangesThroughTheCache()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var ai1 = host.AddAnalog(1, enabled: false);
+        var decoder = new StreamFrameDecoder(host);
+
+        // One enabled analog channel at session start: a one-value frame is full, not short.
+        decoder.BeginSession(TicksPerSecond, 100);
+        decoder.ProcessFrame(AnalogFrame(1000, 1.0f));
+        Assert.DoesNotContain("discard", host.Calls);
+
+        // Re-arm the guard with two channels enabled; now a one-value frame *is* short.
+        ai1.IsEnabled = true;
+        decoder.BeginSession(TicksPerSecond, 100);
+        decoder.ProcessFrame(AnalogFrame(2000, 9.0f));
+
+        Assert.Contains("discard", host.Calls);
+        Assert.Equal(1.0, ai0.ActiveSample!.Value, 3); // the short frame's value was withheld
+    }
+
+    #endregion
+
     #region Helpers
 
     private static ThrowSwitch AttachThrowingSubscriber(IChannel channel)
@@ -384,6 +538,7 @@ public class StreamFrameDecoderTests
     private sealed class FakeHost : IDeviceOperationHost
     {
         private readonly List<IChannel> _channels = new();
+        private long _channelStateVersion;
 
         public List<string> Calls { get; } = new();
 
@@ -398,18 +553,44 @@ public class StreamFrameDecoderTests
         public AnalogChannel AddAnalog(int number, bool enabled)
         {
             var channel = new AnalogChannel(number) { IsEnabled = enabled };
-            _channels.Add(channel);
+            Track(channel);
             return channel;
         }
 
         public IChannel AddDigital(int number, bool enabled)
         {
             var channel = new DigitalChannel(number) { IsEnabled = enabled, Direction = ChannelDirection.Input };
-            _channels.Add(channel);
+            Track(channel);
             return channel;
         }
 
-        public IReadOnlyList<IChannel> SnapshotChannels() => _channels.ToArray();
+        /// <summary>
+        /// Adds a channel and wires up change tracking exactly as <c>DaqifiDevice</c> does, so the
+        /// decoder's cache invalidation is exercised against the real contract: membership changes
+        /// bump the version, and so does a direct write to <see cref="IChannel.IsEnabled"/>.
+        /// </summary>
+        private void Track(IChannel channel)
+        {
+            _channels.Add(channel);
+            ((IChannelEnablementNotifier)channel).EnablementChanged += BumpChannelStateVersion;
+            BumpChannelStateVersion();
+        }
+
+        private void BumpChannelStateVersion() => Interlocked.Increment(ref _channelStateVersion);
+
+        /// <summary>
+        /// How many times the decoder has asked for a channel snapshot. Counted rather than
+        /// appended to <see cref="Calls"/> so the existing call-order assertions are unaffected.
+        /// </summary>
+        public int SnapshotChannelsCallCount { get; private set; }
+
+        public IReadOnlyList<IChannel> SnapshotChannels()
+        {
+            SnapshotChannelsCallCount++;
+            return _channels.ToArray();
+        }
+
+        public long ChannelStateVersion => Interlocked.Read(ref _channelStateVersion);
 
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
         {

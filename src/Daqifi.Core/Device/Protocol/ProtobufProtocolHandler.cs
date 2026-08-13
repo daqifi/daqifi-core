@@ -55,24 +55,46 @@ public class ProtobufProtocolHandler : IProtocolHandler
             return Task.CompletedTask;
         }
 
-        var messageType = DetectMessageType(pbMessage);
+        Handle(pbMessage);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Classifies <paramref name="message"/> and routes it to the matching handler.
+    /// </summary>
+    /// <remarks>
+    /// The same work <see cref="HandleAsync"/> does, minus the unwrapping — routing is entirely
+    /// synchronous, so a caller that already holds a typed <see cref="DaqifiOutMessage"/> has no
+    /// reason to wrap it in an <see cref="IInboundMessage{T}"/> first. On a streaming device that
+    /// wrapper was allocated for every frame (issue #490).
+    /// </remarks>
+    /// <param name="message">The protobuf message to route.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="message"/> is <c>null</c>.</exception>
+    public void Handle(DaqifiOutMessage message)
+    {
+        if (message == null)
+        {
+            throw new ArgumentNullException(nameof(message));
+        }
+
+        var messageType = DetectMessageType(message);
 
         switch (messageType)
         {
             case ProtobufMessageType.Status:
-                _statusMessageHandler?.Invoke(pbMessage);
+                _statusMessageHandler?.Invoke(message);
                 break;
 
             case ProtobufMessageType.Stream:
-                _streamMessageHandler?.Invoke(pbMessage);
+                _streamMessageHandler?.Invoke(message);
                 break;
 
             case ProtobufMessageType.SdCard:
-                _sdCardMessageHandler?.Invoke(pbMessage);
+                _sdCardMessageHandler?.Invoke(message);
                 break;
 
             case ProtobufMessageType.Error:
-                _errorMessageHandler?.Invoke(pbMessage);
+                _errorMessageHandler?.Invoke(message);
                 break;
 
             case ProtobufMessageType.Unknown:
@@ -80,8 +102,6 @@ public class ProtobufProtocolHandler : IProtocolHandler
                 // Unknown message type - could log here if needed
                 break;
         }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>

@@ -120,6 +120,31 @@ namespace Daqifi.Core.Device.Internal
         /// </summary>
         private long _decodeFailureCount;
 
+        /// <summary>
+        /// The <see cref="IDeviceOperationHost.ChannelStateVersion"/> the two cached views below
+        /// were built from, or -1 before the first build. Any other value means they are stale.
+        /// </summary>
+        private long _cachedChannelStateVersion = -1;
+
+        /// <summary>
+        /// The channel snapshot the current frame decodes against. Refreshed only when the device
+        /// reports a different channel-state version.
+        /// </summary>
+        private IReadOnlyList<IChannel> _cachedChannels = Array.Empty<IChannel>();
+
+        /// <summary>
+        /// The enabled analog channels, ordered by channel number — the order the device streams
+        /// analog values in.
+        /// </summary>
+        /// <remarks>
+        /// Rebuilding this per frame was the single largest steady-state cost on the decode path
+        /// (issue #490): a snapshot copy taken under the device's channels lock, a fresh list, and
+        /// a comparison sort, a thousand times a second, for a set that only changes when channels
+        /// are configured. Caching it also takes the decode thread out of contention with
+        /// <c>EnableChannel</c> for that lock.
+        /// </remarks>
+        private IAnalogChannel[] _cachedActiveAnalogChannels = Array.Empty<IAnalogChannel>();
+
         internal StreamFrameDecoder(IDeviceOperationHost host)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
@@ -163,6 +188,9 @@ namespace Daqifi.Core.Device.Internal
             // it disarmed there also avoids suppressing short analog frames that could arrive far
             // from session start if analog channels are enabled mid-stream (a scenario with no
             // observed warmup frame).
+            // Reads the device directly rather than through the decode path's cache: this runs on
+            // the caller's thread (see the class remarks), and the cache fields belong to the
+            // consumer thread. Once per session, so there is nothing to save here anyway.
             _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(_host.SnapshotChannels()) > 0;
             _suppressedWarmupFrameCount = 0;
             Interlocked.Exchange(ref _decodeFailureCount, 0);
@@ -197,7 +225,7 @@ namespace Daqifi.Core.Device.Internal
                     StreamFrameDiscardReason.StaleLeftoverFrame,
                     message,
                     CountAnalogValues(message),
-                    CountEnabledAnalogChannels(_host.SnapshotChannels()));
+                    GetActiveAnalogChannels().Length);
                 return;
             }
 
@@ -305,7 +333,7 @@ namespace Daqifi.Core.Device.Internal
                 return false;
             }
 
-            enabledAnalogChannelCount = CountEnabledAnalogChannels(_host.SnapshotChannels());
+            enabledAnalogChannelCount = GetActiveAnalogChannels().Length;
             if (enabledAnalogChannelCount > 0
                 && analogValueCount < enabledAnalogChannelCount
                 && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
@@ -380,7 +408,11 @@ namespace Daqifi.Core.Device.Internal
 
             // Snapshot channels once: the consumer thread that repopulates channels is the same
             // thread that runs this decode, so the structure is stable for the duration of the call.
-            var channels = _host.SnapshotChannels();
+            // Both views are read after a single refresh so this frame's analog and digital decodes
+            // are guaranteed to be describing the same set of channels.
+            RefreshChannelCacheIfStale();
+            var channels = _cachedChannels;
+            var activeAnalog = _cachedActiveAnalogChannels;
 
             // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
             // the raw device tick value through to each decoded sample.
@@ -400,13 +432,81 @@ namespace Daqifi.Core.Device.Internal
 
             if ((hasFloat || hasRawAnalog) && !suppressAnalog)
             {
-                DecodeAnalog(message, channels, hostTimestamp, deviceTimestamp, hasFloat);
+                DecodeAnalog(message, activeAnalog, hostTimestamp, deviceTimestamp, hasFloat);
             }
 
             if (hasDigital)
             {
                 DecodeDigital(message, channels, hostTimestamp, deviceTimestamp);
             }
+        }
+
+        /// <summary>
+        /// Brings <see cref="_cachedChannels"/> and <see cref="_cachedActiveAnalogChannels"/> up to
+        /// date if the device's channel state has moved since they were built.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The version is read <em>before</em> the snapshot, deliberately. A channel change landing
+        /// between the two reads then leaves the cache carrying newer contents under an older
+        /// version, so the next frame simply rebuilds — the cost of a redundant rebuild. Reading it
+        /// afterwards would do the opposite and stamp a pre-change snapshot with the post-change
+        /// version, which no later frame could ever detect: analog values would keep being mapped
+        /// onto the channels that were enabled before the change, silently.
+        /// </para>
+        /// <para>
+        /// Consumer-thread only, like the rest of the decode path. <see cref="BeginSession"/> runs
+        /// on the caller's thread and deliberately does not touch these fields.
+        /// </para>
+        /// </remarks>
+        private void RefreshChannelCacheIfStale()
+        {
+            var version = _host.ChannelStateVersion;
+            if (version == _cachedChannelStateVersion)
+            {
+                return;
+            }
+
+            var channels = _host.SnapshotChannels();
+
+            var activeAnalogCount = 0;
+            foreach (var channel in channels)
+            {
+                if (channel.IsEnabled && channel is IAnalogChannel)
+                {
+                    activeAnalogCount++;
+                }
+            }
+
+            var activeAnalog = activeAnalogCount == 0
+                ? Array.Empty<IAnalogChannel>()
+                : new IAnalogChannel[activeAnalogCount];
+
+            var index = 0;
+            foreach (var channel in channels)
+            {
+                if (channel.IsEnabled && channel is IAnalogChannel analog)
+                {
+                    activeAnalog[index++] = analog;
+                }
+            }
+
+            // The device streams one value per enabled analog channel, ordered by channel number,
+            // not by activation order — so re-derive that ordering here.
+            Array.Sort(activeAnalog, static (a, b) => a.ChannelNumber.CompareTo(b.ChannelNumber));
+
+            _cachedChannels = channels;
+            _cachedActiveAnalogChannels = activeAnalog;
+            _cachedChannelStateVersion = version;
+        }
+
+        /// <summary>
+        /// The enabled analog channels in device order, refreshing the cache if it is stale.
+        /// </summary>
+        private IAnalogChannel[] GetActiveAnalogChannels()
+        {
+            RefreshChannelCacheIfStale();
+            return _cachedActiveAnalogChannels;
         }
 
         /// <summary>
@@ -430,27 +530,24 @@ namespace Daqifi.Core.Device.Internal
         /// USB firmware streams pre-scaled floats (used directly); WiFi firmware streams raw ADC
         /// counts (scaled per channel via <see cref="IAnalogChannel.GetScaledValue"/>).
         /// </summary>
+        /// <param name="message">The frame being decoded.</param>
+        /// <param name="activeAnalog">
+        /// The enabled analog channels already ordered by channel number — the order the device
+        /// streams values in. Supplied by <see cref="GetActiveAnalogChannels"/> rather than derived
+        /// here, so the filter and the sort happen when channels change instead of per frame.
+        /// </param>
+        /// <param name="hostTimestamp">The reconstructed host timestamp for this frame.</param>
+        /// <param name="deviceTimestamp">The frame's raw device tick value.</param>
+        /// <param name="hasFloat">Whether the frame carries pre-scaled floats rather than raw counts.</param>
         private static void DecodeAnalog(
             DaqifiOutMessage message,
-            IReadOnlyList<IChannel> channels,
+            IAnalogChannel[] activeAnalog,
             DateTime hostTimestamp,
             uint deviceTimestamp,
             bool hasFloat)
         {
-            // The device streams one value per enabled analog channel, ordered by channel number,
-            // not by activation order — so re-derive that ordering here.
-            var activeAnalog = new List<IAnalogChannel>();
-            foreach (var channel in channels)
-            {
-                if (channel.IsEnabled && channel is IAnalogChannel analog)
-                {
-                    activeAnalog.Add(analog);
-                }
-            }
-            activeAnalog.Sort((a, b) => a.ChannelNumber.CompareTo(b.ChannelNumber));
-
             var dataCount = hasFloat ? message.AnalogInDataFloat.Count : message.AnalogInData.Count;
-            var count = Math.Min(dataCount, activeAnalog.Count);
+            var count = Math.Min(dataCount, activeAnalog.Length);
 
             for (var i = 0; i < count; i++)
             {

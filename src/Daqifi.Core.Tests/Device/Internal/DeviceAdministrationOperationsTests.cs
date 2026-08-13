@@ -606,6 +606,7 @@ public class DeviceAdministrationOperationsTests
         public TimeSpan SdCardTransferIdleTimeout => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public IReadOnlyList<IChannel> SnapshotChannels() => throw new NotSupportedException();
+        public long ChannelStateVersion => throw new NotSupportedException();
         public void WithChannelsLock(Action action) => throw new NotSupportedException();
         /// <summary>
         /// Runs the setup action so its sends land in <see cref="Calls"/> in order, then answers with

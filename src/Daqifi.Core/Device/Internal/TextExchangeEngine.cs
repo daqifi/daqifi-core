@@ -386,9 +386,12 @@ namespace Daqifi.Core.Device.Internal
                         new LineBasedMessageParser(),
                         healthSink: transport as ITransportHealthSink);
 
-                    textConsumer.MessageReceived += (_, e) =>
+                    // MessageParsed rather than MessageReceived: only the parsed line matters here,
+                    // and the raw-buffer snapshot the other event carries is a copy per read that
+                    // nothing would read (issue #490).
+                    textConsumer.MessageParsed += parsed =>
                     {
-                        collectedLines.Add(e.Message.Data);
+                        collectedLines.Add(parsed.Data);
                     };
 
                     // The protobuf consumer is stopped for the duration of this exchange, so

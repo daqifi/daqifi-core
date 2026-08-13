@@ -40,6 +40,21 @@ public class LineBasedMessageParser : IMessageParser<string>
     /// <param name="consumedBytes">The number of bytes consumed from the data during parsing.</param>
     /// <returns>A collection of parsed text messages.</returns>
     public IEnumerable<IInboundMessage<string>> ParseMessages(byte[] data, out int consumedBytes)
+        => ParseMessages(new ReadOnlySpan<byte>(data), out consumedBytes);
+
+    /// <summary>
+    /// Parses raw data into line-based text messages directly from the caller's buffer.
+    /// </summary>
+    /// <remarks>
+    /// Overriding the span entry point keeps <see cref="StreamMessageConsumer{T}"/> from copying
+    /// its accumulation buffer out on every read (issue #490), and decodes each line straight from
+    /// the buffer rather than through a per-line intermediate array. Nothing here retains
+    /// <paramref name="data"/> past the call.
+    /// </remarks>
+    /// <param name="data">The raw data to parse.</param>
+    /// <param name="consumedBytes">The number of bytes consumed from the data during parsing.</param>
+    /// <returns>A collection of parsed text messages.</returns>
+    public IEnumerable<IInboundMessage<string>> ParseMessages(ReadOnlySpan<byte> data, out int consumedBytes)
     {
         var messages = new List<IInboundMessage<string>>();
         consumedBytes = 0;
@@ -62,10 +77,7 @@ public class LineBasedMessageParser : IMessageParser<string>
             var lineLength = lineEndIndex - searchStart;
             if (lineLength > 0)
             {
-                var lineData = new byte[lineLength];
-                Array.Copy(data, searchStart, lineData, 0, lineLength);
-                
-                var messageText = _encoding.GetString(lineData);
+                var messageText = _encoding.GetString(data.Slice(searchStart, lineLength));
                 if (!string.IsNullOrWhiteSpace(messageText))
                 {
                     messages.Add(new TextInboundMessage(messageText.Trim()));
@@ -86,7 +98,7 @@ public class LineBasedMessageParser : IMessageParser<string>
     /// <param name="data">The data to search.</param>
     /// <param name="startIndex">The index to start searching from.</param>
     /// <returns>The index of the line ending, or -1 if not found.</returns>
-    private int FindLineEnding(byte[] data, int startIndex)
+    private int FindLineEnding(ReadOnlySpan<byte> data, int startIndex)
     {
         for (int i = startIndex; i <= data.Length - _lineEnding.Length; i++)
         {
