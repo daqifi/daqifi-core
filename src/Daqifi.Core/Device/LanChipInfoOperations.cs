@@ -26,10 +26,7 @@ namespace Daqifi.Core.Device
         /// <inheritdoc />
         public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.GetLanChipInfo),

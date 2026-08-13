@@ -60,12 +60,7 @@ namespace Daqifi.Core.Device.Internal
                     nameof(name));
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             _host.Send(ScpiMessageProducer.SetDeviceName(name));
             _host.Send(ScpiMessageProducer.SaveDeviceName);
@@ -77,10 +72,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.Reboot" />
         internal void Reboot()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.RebootDevice);
 
@@ -92,10 +84,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.SaveAdcCalibration" />
         internal void SaveAdcCalibration()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.SaveAdcCalibration);
         }
@@ -103,10 +92,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.LoadAdcCalibration" />
         internal void LoadAdcCalibration()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.LoadAdcCalibration);
         }
@@ -116,10 +102,7 @@ namespace Daqifi.Core.Device.Internal
         {
             ValidateChannelNumber(channelNumber);
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM));
         }
@@ -129,10 +112,7 @@ namespace Daqifi.Core.Device.Internal
         {
             ValidateChannelNumber(channelNumber);
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB));
         }
@@ -140,10 +120,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.SaveFactoryAdcCalibration" />
         internal void SaveFactoryAdcCalibration()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
         }
@@ -151,10 +128,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.LoadFactoryAdcCalibration" />
         internal void LoadFactoryAdcCalibration()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
         }
@@ -164,10 +138,7 @@ namespace Daqifi.Core.Device.Internal
         {
             ValidateBank(bank);
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.UseAdcCalibration(bank));
         }
@@ -175,10 +146,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.SaveVoltagePrecision" />
         internal void SaveVoltagePrecision()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.SaveVoltagePrecision);
         }
@@ -186,10 +154,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.LoadVoltagePrecision" />
         internal void LoadVoltagePrecision()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.LoadVoltagePrecision);
         }
@@ -274,12 +239,7 @@ namespace Daqifi.Core.Device.Internal
         /// </remarks>
         private async Task SendConfirmedAsync(IOutboundMessage<string> command, CancellationToken cancellationToken)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             await _host.DrainErrorQueueAsync(ErrorQueueDrainCap, cancellationToken).ConfigureAwait(false);
 

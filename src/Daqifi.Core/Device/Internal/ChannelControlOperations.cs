@@ -78,10 +78,7 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.DisableAllChannels" />
         internal void DisableAllChannels()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             (bool HasChannels, uint Mask) adcMask = default;
             (bool HasChannels, bool AnyEnabled) dioState = default;
@@ -130,10 +127,7 @@ namespace Daqifi.Core.Device.Internal
                 throw new ArgumentOutOfRangeException(nameof(direction), direction, "Direction must be Input or Output.");
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             EnsureChannelBelongs(channel);
             EnsurePwmNotEnabled(channel);
@@ -157,10 +151,7 @@ namespace Daqifi.Core.Device.Internal
                 throw new ArgumentException("A digital output value can only be set on digital channels.", nameof(channel));
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             EnsureChannelBelongs(channel);
             EnsurePwmNotEnabled(channel);
@@ -210,10 +201,7 @@ namespace Daqifi.Core.Device.Internal
                     nameof(channel));
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             EnsureChannelBelongs(channel);
 
@@ -261,10 +249,7 @@ namespace Daqifi.Core.Device.Internal
                     "Duty cycle must be 1-100 percent. To stop the output, use SetPwmEnabled(channel, false).");
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             EnsureChannelBelongs(channel);
 
@@ -286,10 +271,7 @@ namespace Daqifi.Core.Device.Internal
                     $"PWM frequency must be {DaqifiStreamingDevice.MinPwmFrequencyHz}-{DaqifiStreamingDevice.MaxPwmFrequencyHz} Hz.");
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Skip the redundant round-trip when the device already has this frequency (from a
             // send earlier this connection). The cache is cleared on disconnect so a fresh
@@ -336,10 +318,7 @@ namespace Daqifi.Core.Device.Internal
                 throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Analog-output (DAC) channels are addressed by number; they are not part of the
             // populated Channels collection (PopulateChannelsFromStatus creates analog *input*
@@ -355,10 +334,7 @@ namespace Daqifi.Core.Device.Internal
         /// </summary>
         private void SetChannelsEnabled(IReadOnlyList<IChannel> channels, bool enabled)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Validate everything up front so a bad entry can't leave a partially-applied state.
             foreach (var channel in channels)

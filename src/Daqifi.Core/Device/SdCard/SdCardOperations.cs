@@ -108,10 +108,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         internal void PrepareSdInterface()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_host.IsUsbConnection)
             {
@@ -130,10 +127,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         internal void PrepareLanInterface()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.DisableStorageSd);
 
@@ -216,10 +210,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </remarks>
         internal async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             EnsureSdFileTransferSupportedOnTransport();
 
@@ -415,10 +406,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
         internal async Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_isLoggingToSdCard)
             {
@@ -545,10 +533,7 @@ namespace Daqifi.Core.Device.SdCard
                 throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Minimum free space cannot be negative.");
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
         }
@@ -591,10 +576,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal async Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (!_host.IsUsbConnection)
             {
@@ -665,12 +647,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
             _host.Send(ScpiMessageProducer.StopStreaming);
@@ -712,10 +689,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal async Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_isLoggingToSdCard)
             {
@@ -794,10 +768,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal Task FormatSdCardAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_isLoggingToSdCard)
             {
@@ -892,10 +863,7 @@ namespace Daqifi.Core.Device.SdCard
             IProgress<SdCardTransferProgress>? progress = null,
             CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Over WiFi/TCP this requires firmware >= v3.7.0 (#598/#599); over USB it is always
             // available on SD-capable firmware. Older firmware over WiFi gets a typed

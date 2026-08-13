@@ -278,10 +278,7 @@ namespace Daqifi.Core.Device
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void StartStreaming()
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             if (IsStreaming) return;
 
@@ -311,10 +308,7 @@ namespace Daqifi.Core.Device
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void StopStreaming()
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             if (!IsStreaming) return;
 
@@ -954,10 +948,7 @@ namespace Daqifi.Core.Device
             // a disconnected device, not be masked by DeviceNotConnectedException.
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             Send(ScpiMessageProducer.RebootDevice);
 

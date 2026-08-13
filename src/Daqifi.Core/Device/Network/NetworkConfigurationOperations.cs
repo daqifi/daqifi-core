@@ -47,10 +47,7 @@ namespace Daqifi.Core.Device.Network
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Stop streaming if active
             if (_host.IsStreaming)
@@ -182,10 +179,7 @@ namespace Daqifi.Core.Device.Network
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Re-check right before the state-changing send so a cancellation requested after the
             // entry guard still short-circuits the command (matches the pattern accepted in #324).
@@ -199,10 +193,7 @@ namespace Daqifi.Core.Device.Network
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Re-check right before the state-changing send so a cancellation requested after the
             // entry guard still short-circuits the command (matches the pattern accepted in #324).

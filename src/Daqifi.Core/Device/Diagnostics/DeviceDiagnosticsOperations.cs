@@ -38,12 +38,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <inheritdoc />
         public async Task<IReadOnlyList<SystemLogEntry>> GetSystemLogAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.GetSystemLog),
@@ -64,12 +59,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <inheritdoc />
         public async Task ClearSystemLogAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.ClearSystemLog),
@@ -89,12 +79,7 @@ namespace Daqifi.Core.Device.Diagnostics
             // connection state, matching SetAnalogOutput / SetDioDirection.
             var command = ScpiMessageProducer.SetLogLevel(module, level);
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(command),
@@ -121,12 +106,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <inheritdoc />
         public async Task<IReadOnlyList<string>> GetCommandHistoryAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.GetCommandHistory),
@@ -146,12 +126,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <inheritdoc />
         public async Task TestSystemLogAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.TestSystemLog),
@@ -166,12 +141,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <inheritdoc />
         public async Task<int> GetSystemErrorCountAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.GetSystemErrorCount),
@@ -199,12 +169,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <inheritdoc />
         public async Task<StreamStats> GetStreamStatsAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.GetStreamStats),
@@ -224,12 +189,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <inheritdoc />
         public async Task<MemoryDiagnostics> GetMemoryDiagnosticsAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             var lines = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.GetMemoryDiagnostics),

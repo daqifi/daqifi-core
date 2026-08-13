@@ -80,12 +80,7 @@ namespace Daqifi.Core.Device.Internal
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             // A capture is a consumer swap, so it obeys the same nesting rule an exchange does: one
             // swap at a time per flow. The lock does not cover this — a nested call runs nested by
@@ -145,10 +140,7 @@ namespace Daqifi.Core.Device.Internal
                         isShuttingDown: true);
                 }
 
-                if (!_host.IsConnected)
-                {
-                    throw new DeviceNotConnectedException();
-                }
+                _host.EnsureConnected();
 
                 var transport = _host.Transport;
                 if (transport == null)
@@ -296,10 +288,7 @@ namespace Daqifi.Core.Device.Internal
                         isShuttingDown: true);
                 }
 
-                if (!_host.IsConnected)
-                {
-                    throw new DeviceNotConnectedException();
-                }
+                _host.EnsureConnected();
 
                 var transport = _host.Transport;
                 if (transport == null)

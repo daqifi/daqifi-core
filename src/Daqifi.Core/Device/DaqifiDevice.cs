@@ -44,6 +44,29 @@ namespace Daqifi.Core.Device
         public bool IsConnected => Status == ConnectionStatus.Connected;
 
         /// <summary>
+        /// Throws <see cref="DeviceNotConnectedException"/> when this device is not connected.
+        /// </summary>
+        /// <remarks>
+        /// The device-side face of <see cref="ConnectionGuard"/>: the operation collaborators run
+        /// the same guard through their host seam (<c>_host.EnsureConnected()</c>), while the few
+        /// guards that live on the device itself go through here. Declared as an instance method
+        /// rather than another <see cref="ConnectionGuard"/> extension so that a call inside this
+        /// class or <see cref="DaqifiStreamingDevice"/> — which also implements the host interfaces
+        /// — binds here unambiguously.
+        /// </remarks>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        internal void EnsureConnected() => ConnectionGuard.EnsureConnected(IsConnected);
+
+        /// <summary>
+        /// Throws <see cref="DeviceNotConnectedException"/> when this device is not connected, then
+        /// throws if <paramref name="cancellationToken"/> has already been cancelled.
+        /// </summary>
+        /// <param name="cancellationToken">The caller's cancellation token.</param>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        internal void EnsureConnected(CancellationToken cancellationToken)
+            => ConnectionGuard.EnsureConnected(IsConnected, cancellationToken);
+
+        /// <summary>
         /// Gets the device metadata containing part number, firmware version, etc.
         /// </summary>
         public DeviceMetadata Metadata { get; } = new DeviceMetadata();
@@ -2056,10 +2079,7 @@ namespace Daqifi.Core.Device
         /// </exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             // Checked before the message can be parked. A null used to fail loudly at the producer;
             // deferred, it would instead fail on a background flush where the exception is logged
@@ -2588,10 +2608,7 @@ namespace Daqifi.Core.Device
         public virtual async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
             CancellationToken cancellationToken = default)
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             if (!Supports(DeviceFeature.CapabilityDocument))
             {
