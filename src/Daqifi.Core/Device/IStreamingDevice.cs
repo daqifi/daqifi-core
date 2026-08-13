@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Channel;
+using Daqifi.Core.Device.Capabilities;
 
 #nullable enable
 
@@ -60,6 +61,30 @@ namespace Daqifi.Core.Device
         /// Gets or sets the streaming frequency in Hz.
         /// </summary>
         int StreamingFrequency { get; set; }
+
+        /// <summary>
+        /// Gets the highest streaming frequency in Hz this device can actually sustain with the
+        /// channels it has enabled right now — which is lower, usually far lower, than the absolute
+        /// ceiling <see cref="StreamingFrequency"/> validates against.
+        /// </summary>
+        /// <remarks>
+        /// Zero is a real answer: it means no analog input is enabled, so there is no sampling
+        /// cadence to set a rate for. A digital-only selection reads zero too — digital pins are
+        /// captured on the analog sample tick rather than driving one of their own, and the device
+        /// reports zero for that selection itself. The exception is a device that has stated
+        /// nothing about how its channel set affects the rate, which reports the board ceiling
+        /// whatever is enabled; see <see cref="SampleRateCap"/> for that case, for where the figure
+        /// comes from, and for how fresh it is.
+        /// </remarks>
+        int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
+
+        /// <summary>
+        /// Lowers <see cref="StreamingFrequency"/> to <see cref="MaximumStreamingFrequencyHz"/> when
+        /// the live rate no longer fits under it — as it will not, once the channel set grows after
+        /// the rate was chosen.
+        /// </summary>
+        /// <returns>The rate that was live before the adjustment, or <c>null</c> when none was needed.</returns>
+        int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
 
         /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
