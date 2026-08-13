@@ -24,6 +24,13 @@ public sealed class SdCardJsonFileParser
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
+    /// read from it yourself until you have finished enumerating
+    /// <see cref="SdCardLogSession.Samples"/>. A seekable stream is re-read from its starting
+    /// position on each enumeration, and only one enumeration may be in flight at a time; a
+    /// forward-only stream cannot be re-read, so its contents are decoded up front instead.
+    /// </remarks>
     public async Task<SdCardLogSession> ParseAsync(
         Stream fileStream,
         string fileName,
@@ -35,24 +42,86 @@ public sealed class SdCardJsonFileParser
 
         options ??= new SdCardParseOptions();
 
+        var source = SdCardParseSource.TryCreate(fileStream);
+        if (source != null)
+        {
+            return await BuildSessionAsync(
+                token => SdCardTextLineReader.ReadLinesAsync(source, token),
+                () => source.TotalBytes,
+                fileName,
+                options,
+                ct).ConfigureAwait(false);
+        }
+
+        // A forward-only stream can only be read once, so it has to be read up front.
+        // Callers that want the streaming parse hand the parser a seekable stream or a path.
+        var lines = new List<SdCardLogLine>();
+        await foreach (var line in SdCardTextLineReader.ReadLinesAsync(fileStream, ct).ConfigureAwait(false))
+        {
+            lines.Add(line);
+        }
+
+        return await BuildSessionAsync(
+            _ => SdCardTextLineReader.ToAsyncEnumerable(lines),
+            () => lines.Count > 0 ? lines[^1].BytesRead : 0,
+            fileName,
+            options,
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Parses an SD card JSON log file from a file path.
+    /// </summary>
+    /// <param name="filePath">The path to the JSON log file.</param>
+    /// <param name="options">Optional parse options.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The returned session opens its own read of the file each time
+    /// <see cref="SdCardLogSession.Samples"/> is enumerated, so the file must still exist then.
+    /// </remarks>
+    public async Task<SdCardLogSession> ParseFileAsync(
+        string filePath,
+        SdCardParseOptions? options = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(filePath);
+
+        options ??= new SdCardParseOptions();
+
+        var source = SdCardParseSource.ForFile(filePath, options.BufferSize);
+
+        return await BuildSessionAsync(
+            token => SdCardTextLineReader.ReadLinesAsync(source, token),
+            () => source.TotalBytes,
+            Path.GetFileName(filePath),
+            options,
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the first line to infer the channel layout, then hands the session a sample
+    /// iterator that re-reads the file lazily rather than holding its lines in memory.
+    /// </summary>
+    private static async Task<SdCardLogSession> BuildSessionAsync(
+        Func<CancellationToken, IAsyncEnumerable<SdCardLogLine>> openLines,
+        Func<long> totalBytes,
+        string fileName,
+        SdCardParseOptions options,
+        CancellationToken ct)
+    {
         var fileCreatedDate = options.SessionStartTime
                               ?? SdCardFileListParser.TryParseDateFromLogFileName(fileName);
 
-        // Read all lines into memory (similar to protobuf parser reading all messages)
-        var lines = new List<string>();
-        using (var reader = new StreamReader(fileStream, leaveOpen: true))
+        // Only the first line is needed to infer the layout — JSONL carries no separate header.
+        string? firstLine = null;
+        await foreach (var line in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
-            string? line;
-            while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
-            {
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    lines.Add(line);
-                }
-            }
+            firstLine = line.Text;
+            break;
         }
 
-        if (lines.Count == 0)
+        if (firstLine == null)
         {
             // Empty file
             return new SdCardLogSession(
@@ -62,7 +131,7 @@ public sealed class SdCardJsonFileParser
                 EmptySamples());
         }
 
-        var config = InferConfiguration(lines[0], options);
+        var config = InferConfiguration(firstLine, options);
 
         // JSON log lines carry raw tick counts and no frequency of their own, so the file can
         // only ever contribute 0 here; a connected device's frequency is what stands between
@@ -75,10 +144,15 @@ public sealed class SdCardJsonFileParser
         config = config with { TimestampFrequency = timestampFrequency };
 
         var samples = ParseJsonLines(
-            lines,
+            openLines,
+            totalBytes,
             config,
-            fileCreatedDate,
-            options);
+            // Anchored once, here, rather than inside the iterator: a session whose samples can
+            // be enumerated more than once must not shift its timestamps between reads when the
+            // file name carries no date.
+            fileCreatedDate ?? DateTime.UtcNow,
+            options.Progress,
+            ct);
 
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
         {
@@ -87,42 +161,14 @@ public sealed class SdCardJsonFileParser
         };
     }
 
-    /// <summary>
-    /// Parses an SD card JSON log file from a file path.
-    /// </summary>
-    /// <param name="filePath">The path to the JSON log file.</param>
-    /// <param name="options">Optional parse options.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
-    public async Task<SdCardLogSession> ParseFileAsync(
-        string filePath,
-        SdCardParseOptions? options = null,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(filePath);
-
-        var fileStream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: options?.BufferSize ?? 64 * 1024,
-            useAsync: true);
-
-        await using (fileStream.ConfigureAwait(false))
-        {
-            return await ParseAsync(fileStream, Path.GetFileName(filePath), options, ct).ConfigureAwait(false);
-        }
-    }
-
-#pragma warning disable CS1998 // Async iterator: yield return requires async; method has no real awaits.
     private static async IAsyncEnumerable<SdCardLogEntry> ParseJsonLines(
-        List<string> lines,
+        Func<CancellationToken, IAsyncEnumerable<SdCardLogLine>> openLines,
+        Func<long> totalBytesProvider,
         SdCardDeviceConfiguration config,
-        DateTime? fileCreatedDate,
-        SdCardParseOptions options)
+        DateTime baseTime,
+        IProgress<SdCardParseProgress>? progress,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var baseTime = fileCreatedDate ?? DateTime.UtcNow;
         var timestampFreq = config.TimestampFrequency;
         var tickPeriod = timestampFreq > 0 ? 1.0 / timestampFreq : 0.0;
 
@@ -130,14 +176,15 @@ public sealed class SdCardJsonFileParser
         var elapsedSeconds = 0.0;
         var linesProcessed = 0;
         var bytesRead = 0L;
+        var totalBytes = totalBytesProvider();
 
-        var progress = options.Progress;
-        var totalBytes = lines.Sum(l => l.Length + 1); // +1 for newline
-
-        foreach (var line in lines)
+        await foreach (var entry in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
+            ct.ThrowIfCancellationRequested();
+
+            var line = entry.Text;
             linesProcessed++;
-            bytesRead += line.Length + 1;
+            bytesRead = entry.BytesRead;
 
             var parsed = TryParseJsonLine(line);
             if (parsed == null)
@@ -185,7 +232,6 @@ public sealed class SdCardJsonFileParser
         // Final progress report
         progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
     }
-#pragma warning restore CS1998
 
     private static (uint timestamp, IReadOnlyList<double> analog, uint digital)? TryParseJsonLine(string line)
     {

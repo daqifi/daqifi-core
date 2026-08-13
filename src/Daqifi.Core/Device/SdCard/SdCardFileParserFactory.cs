@@ -26,26 +26,24 @@ public static class SdCardFileParserFactory
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
-    public static async Task<SdCardLogSession> ParseFileAsync(
+    /// <remarks>
+    /// The returned session opens its own read of the file each time
+    /// <see cref="SdCardLogSession.Samples"/> is enumerated, so the file must still exist then.
+    /// </remarks>
+    public static Task<SdCardLogSession> ParseFileAsync(
         string filePath,
         SdCardParseOptions? options = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(filePath);
 
-        var format = DetectFormat(filePath);
-        var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: options?.BufferSize ?? 64 * 1024,
-            useAsync: true);
-
-        await using (stream.ConfigureAwait(false))
+        return DetectFormat(filePath) switch
         {
-            return await ParseWithFormatAsync(stream, Path.GetFileName(filePath), format, options, ct).ConfigureAwait(false);
-        }
+            SdCardLogFormat.Protobuf => new SdCardFileParser().ParseFileAsync(filePath, options, ct),
+            SdCardLogFormat.Json => new SdCardJsonFileParser().ParseFileAsync(filePath, options, ct),
+            SdCardLogFormat.Csv => new SdCardCsvFileParser().ParseFileAsync(filePath, options, ct),
+            var format => throw new ArgumentException($"Unsupported format: {format}", nameof(filePath))
+        };
     }
 
     /// <summary>
@@ -56,6 +54,13 @@ public static class SdCardFileParserFactory
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
+    /// read from it yourself until you have finished enumerating
+    /// <see cref="SdCardLogSession.Samples"/>. A seekable stream is re-read from its starting
+    /// position on each enumeration, and only one enumeration may be in flight at a time; a
+    /// forward-only stream cannot be re-read, so its contents are decoded up front instead.
+    /// </remarks>
     public static async Task<SdCardLogSession> ParseAsync(
         Stream fileStream,
         string fileName,
@@ -78,6 +83,13 @@ public static class SdCardFileParserFactory
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
+    /// read from it yourself until you have finished enumerating
+    /// <see cref="SdCardLogSession.Samples"/>. A seekable stream is re-read from its starting
+    /// position on each enumeration, and only one enumeration may be in flight at a time; a
+    /// forward-only stream cannot be re-read, so its contents are decoded up front instead.
+    /// </remarks>
     public static Task<SdCardLogSession> ParseWithFormatAsync(
         Stream fileStream,
         string fileName,

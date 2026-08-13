@@ -21,7 +21,26 @@ public sealed class SdCardParseOptions
     /// <summary>
     /// Gets or sets an optional progress reporter.
     /// </summary>
+    /// <remarks>
+    /// Progress is reported while <see cref="SdCardLogSession.Samples"/> is being enumerated,
+    /// because that is when the file is actually read.
+    /// </remarks>
     public IProgress<SdCardParseProgress>? Progress { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many leading protobuf messages are examined when looking for the
+    /// device configuration fields (timestamp clock, calibration, port counts) that firmware
+    /// embeds in the log. Default is 512; set to 0 to scan the whole file.
+    /// </summary>
+    /// <remarks>
+    /// Firmware writes these fields in the status message or in the first handful of stream
+    /// messages, so a short look-ahead finds everything a full scan would. The bound is what
+    /// keeps opening a multi-gigabyte log cheap: without it, a log that never states one of
+    /// the fields forces a read of the entire file before the first sample is produced.
+    /// Applies to <c>.bin</c> logs only — the CSV and JSON headers are at the top of the file
+    /// by construction.
+    /// </remarks>
+    public int ConfigurationScanMessageLimit { get; set; } = 512;
 
     /// <summary>
     /// Gets or sets a fallback timestamp frequency (in Hz) to use when no
