@@ -18,12 +18,13 @@ namespace Daqifi.Core.Communication.Transport;
 /// <list type="bullet">
 /// <item><description>
 /// <b>Port-presence polling</b> at <see cref="DefaultLivenessCheckInterval"/> (1 s), requiring two
-/// consecutive misses. This bounds detection of an unplug at <b>roughly three seconds</b> even on
-/// a completely idle connection. Presence is <see cref="SerialPort.GetPortNames"/> containing the
-/// port, falling back to the device node still existing on Unix — no WMI, so it behaves
-/// identically on Windows, macOS, and Linux. It is armed only if the port is visible to that probe
-/// at connect time, so a platform or port-name spelling the probe cannot see disables the check
-/// rather than reporting a false drop.
+/// consecutive misses. This bounds detection of an unplug at <b>roughly three to four seconds</b>
+/// even on a completely idle connection (the extra second is the shared enumeration snapshot's
+/// lifetime — see <see cref="SerialPortNameSnapshot"/>). Presence is the device node still existing
+/// on Unix, where a port name is a path, falling back to <see cref="SerialPort.GetPortNames"/>
+/// listing the port — no WMI, so it behaves identically on Windows, macOS, and Linux. It is armed
+/// only if the port is visible to that probe at connect time, so a platform or port-name spelling
+/// the probe cannot see disables the check rather than reporting a false drop.
 /// </description></item>
 /// <item><description>
 /// <b>I/O fault escalation</b> via <see cref="ITransportHealthSink"/>: the reader/writer loops
@@ -573,36 +574,50 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// look like two consecutive misses and close a healthy connection. A failed enumeration is
     /// therefore only swallowed when the filesystem check can still answer for this port name.
     /// </para>
+    /// <para>
+    /// The two sources are OR-ed, so the order they run in cannot change the answer — and the
+    /// filesystem check goes first because it is by far the cheaper one. On Unix, where the port
+    /// name <em>is</em> a device node path, that single stat answers the overwhelmingly common case
+    /// (the port is still there) outright, and the system-wide enumeration never runs at all. When
+    /// it does run it comes from <see cref="SerialPortNameSnapshot"/>, one snapshot shared by every
+    /// polling transport in the process (issue #491).
+    /// </para>
     /// </remarks>
     /// <exception cref="Exception">
     /// Propagates whatever the underlying probe raised when no source could answer.
     /// </exception>
-    internal static bool IsPortEnumerated(string portName)
+    internal static bool IsPortEnumerated(string portName) =>
+        IsPortEnumerated(portName, SerialPortNameSnapshot.Shared);
+
+    /// <inheritdoc cref="IsPortEnumerated(string)"/>
+    /// <param name="portName">The port name to probe.</param>
+    /// <param name="snapshot">
+    /// The enumeration cache to consult. Tests pass their own so the ordering can be asserted
+    /// without touching the process-wide instance.
+    /// </param>
+    internal static bool IsPortEnumerated(string portName, SerialPortNameSnapshot snapshot)
     {
         var isDeviceNodePath = portName.StartsWith('/');
 
+        if (isDeviceNodePath && File.Exists(portName))
+        {
+            return true;
+        }
+
         try
         {
-            foreach (var name in SerialPort.GetPortNames())
-            {
-                if (string.Equals(name, portName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
+            return snapshot.Contains(portName);
         }
         catch (Exception) when (isDeviceNodePath)
         {
             // Enumeration can fail transiently (a /dev scan racing a device change). A Unix port
             // name is also a filesystem path, so an independent answer is still available — the
             // failure is only swallowed because that second source can actually answer. When it
-            // cannot (a Windows-style name), the exception propagates as "no observation".
-            return File.Exists(portName);
+            // cannot (a Windows-style name), the exception propagates as "no observation". Here
+            // that second source has already spoken: the device node check above ran first and did
+            // not find it.
+            return false;
         }
-
-        // The enumeration answered and did not list this port. On Unix it may simply not enumerate
-        // the spelling the caller opened, so the device node is the tie-breaker.
-        return isDeviceNodePath && File.Exists(portName);
     }
 
     /// <summary>
