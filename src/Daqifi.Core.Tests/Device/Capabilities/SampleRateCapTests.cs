@@ -276,6 +276,9 @@ public class SampleRateCapTests
     [Fact]
     public void ComputeForDevice_WithADocumentThatStatesNoRates_IsTheBoardCeiling()
     {
+        // A document is present but says nothing about rates, which is the same evidence as no
+        // document at all: neither zero nor a model prediction is available, so the board ceiling
+        // stands rather than a number invented for the occasion.
         var device = CreateDevice();
         device.Metadata.ApplyCapabilityDocument(new CapabilityDocument { SchemaVersion = 2 });
 

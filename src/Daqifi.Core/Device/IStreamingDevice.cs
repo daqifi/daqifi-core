@@ -68,10 +68,13 @@ namespace Daqifi.Core.Device
         /// ceiling <see cref="StreamingFrequency"/> validates against.
         /// </summary>
         /// <remarks>
-        /// Zero is a real answer: it means no analog input is enabled, so there is no capacity to
-        /// stream. See <see cref="SampleRateCap"/> for where the figure comes from, how fresh it
-        /// is, and the one case that reports the board ceiling instead of zero for an empty
-        /// configuration — a device that has published no capability document at all.
+        /// Zero is a real answer: it means no analog input is enabled, so there is no sampling
+        /// cadence to set a rate for. A digital-only selection reads zero too — digital pins are
+        /// captured on the analog sample tick rather than driving one of their own, and the device
+        /// reports zero for that selection itself. The exception is a device that has stated
+        /// nothing about how its channel set affects the rate, which reports the board ceiling
+        /// whatever is enabled; see <see cref="SampleRateCap"/> for that case, for where the figure
+        /// comes from, and for how fresh it is.
         /// </remarks>
         int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
 

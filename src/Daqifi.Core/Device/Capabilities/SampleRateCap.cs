@@ -84,11 +84,18 @@ public static class SampleRateCap
     /// </summary>
     /// <param name="device">The device to compute the cap for.</param>
     /// <returns>
+    /// <para>
     /// The effective cap in Hz. <c>0</c> when the device has no analog inputs enabled and either
-    /// said so itself or published a rate model to be evaluated against the enabled set. A device
-    /// that has answered neither — no capability document at all — has told us nothing about how
-    /// its channel set affects the rate, so it reports the board ceiling regardless of what is
-    /// enabled, exactly as it did before this cap existed.
+    /// said so itself or published a rate model to be evaluated against the enabled set.
+    /// </para>
+    /// <para>
+    /// A device that has stated neither — no capability document, or one carrying no
+    /// <see cref="CapabilityStreaming.CurrentMaximumRateHz"/> and no
+    /// <see cref="CapabilityStreaming.RateModel"/> — has said nothing about how its channel set
+    /// affects the rate, so it reports the board ceiling whatever is enabled, exactly as it did
+    /// before this cap existed. Reporting <c>0</c> for those devices would newly refuse rates they
+    /// accept today, on no evidence.
+    /// </para>
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="device"/> is <c>null</c>.</exception>
     public static int ComputeForDevice(IStreamingDevice device)
@@ -112,13 +119,16 @@ public static class SampleRateCap
 
             if (totalCount == 0)
             {
-                // Nothing to sample, so no capacity — the same answer the device gives for this
-                // case, measured on an NQ1 running firmware 3.7.2 with nothing enabled and again
-                // with digital pins only. Evaluating the model here would not agree: its formula
-                // has a fixed per-tick overhead term that stays finite at zero channels, so an
-                // empty selection comes back as a healthy rate (18,333 Hz on that board) and every
-                // "cap is 0, so nothing is enabled" check downstream reads it as a live
-                // configuration.
+                // No analog input is enabled, so there is no sampling cadence to set a rate for.
+                // That includes a digital-only selection: digital pins are captured on the analog
+                // sample tick rather than driving one of their own, which is why the model counts
+                // only analog inputs — and why the device answers 0 for a digital-only selection
+                // just as it does for an empty one. Both measured on an NQ1 running firmware 3.7.2.
+                //
+                // Evaluating the model here would disagree with the device: its formula keeps a
+                // fixed per-tick overhead term at zero channels, so an empty selection comes back
+                // as a healthy rate (18,333 Hz on that board) and every "cap is 0, so nothing is
+                // enabled" check downstream reads it as a live configuration.
                 modelCapHz = 0;
             }
             else if (model.TryComputeMaxRateHz(simultaneousCount, totalCount, out var predictedHz))
