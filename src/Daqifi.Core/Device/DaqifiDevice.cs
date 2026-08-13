@@ -3996,7 +3996,16 @@ namespace Daqifi.Core.Device
                 // fills them in — so a status message says nothing about them and must not be read
                 // as "this device has none". Carry the modelled ones across untouched, in the same
                 // order, so the membership comparison below still sees no change.
-                CarryForwardAnalogOutputChannels(_channels, updatedChannels);
+                //
+                // Their lifetime is the document's: metadata is updated from this same message
+                // before we get here, so a reconnect that lands this instance on a *different*
+                // known board has already dropped the document it read from the previous one, and
+                // the channels it described go with it rather than lingering as another board's
+                // DACs.
+                if (Metadata.CapabilityDocument is not null)
+                {
+                    CarryForwardAnalogOutputChannels(_channels, updatedChannels);
+                }
 
                 // Only a change of *membership* needs handling here. A status that re-asserts a
                 // different enabled mask on channels the device already had has moved the version

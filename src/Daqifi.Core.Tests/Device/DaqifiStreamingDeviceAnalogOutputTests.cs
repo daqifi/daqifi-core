@@ -165,6 +165,50 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public void PopulateChannelsFromStatus_AfterTheDeviceMovedToAnotherBoard_DropsTheOutputChannels()
+        {
+            var device = ConnectedDeviceWith(TwoDacDocument);
+            device.SyncAnalogOutputChannelsFromCapabilities();
+            Assert.Equal(2, OutputChannels(device).Count);
+
+            // Reconnecting this instance to a different known board drops the capability
+            // document it read from the previous one — and the DAC channels that document
+            // described must not linger as another board's outputs.
+            device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+            device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq1" });
+            Assert.Null(device.Metadata.CapabilityDocument);
+
+            device.PopulateChannelsFromStatus(new DaqifiOutMessage
+            {
+                AnalogInPortNum = 2,
+                AnalogInRes = 4095,
+            });
+
+            Assert.Empty(OutputChannels(device));
+        }
+
+        [Fact]
+        public void PopulateChannelsFromStatus_WhenTheBoardIsUnchanged_KeepsTheOutputChannels()
+        {
+            var device = ConnectedDeviceWith(TwoDacDocument);
+            device.SyncAnalogOutputChannelsFromCapabilities();
+
+            // The same board repeating its part number is not a board change, so the document —
+            // and the channels it described — survive.
+            device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+            device.Metadata.UpdateFromProtobuf(new DaqifiOutMessage { DevicePn = "Nq3" });
+            Assert.NotNull(device.Metadata.CapabilityDocument);
+
+            device.PopulateChannelsFromStatus(new DaqifiOutMessage
+            {
+                AnalogInPortNum = 2,
+                AnalogInRes = 4095,
+            });
+
+            Assert.Equal(2, OutputChannels(device).Count);
+        }
+
+        [Fact]
         public void Sync_AfterChannelsWerePopulated_LeavesTheInputChannelsAlone()
         {
             var device = ConnectedDeviceWith(TwoDacDocument);
