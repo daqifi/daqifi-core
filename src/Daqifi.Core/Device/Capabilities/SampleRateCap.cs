@@ -83,7 +83,13 @@ public static class SampleRateCap
     /// Computes the effective cap in Hz for <paramref name="device"/> as it is configured right now.
     /// </summary>
     /// <param name="device">The device to compute the cap for.</param>
-    /// <returns>The effective cap in Hz. Can legitimately be <c>0</c> when nothing is enabled.</returns>
+    /// <returns>
+    /// The effective cap in Hz. <c>0</c> when the device has no analog inputs enabled and either
+    /// said so itself or published a rate model to be evaluated against the enabled set. A device
+    /// that has answered neither — no capability document at all — has told us nothing about how
+    /// its channel set affects the rate, so it reports the board ceiling regardless of what is
+    /// enabled, exactly as it did before this cap existed.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="device"/> is <c>null</c>.</exception>
     public static int ComputeForDevice(IStreamingDevice device)
     {
@@ -104,7 +110,18 @@ public static class SampleRateCap
             var (simultaneousCount, totalCount) = CountEnabledAnalogInputs(
                 device.GetChannelsSnapshot(), metadata.CapabilityDocument!);
 
-            if (model.TryComputeMaxRateHz(simultaneousCount, totalCount, out var predictedHz))
+            if (totalCount == 0)
+            {
+                // Nothing to sample, so no capacity — the same answer the device gives for this
+                // case, measured on an NQ1 running firmware 3.7.2 with nothing enabled and again
+                // with digital pins only. Evaluating the model here would not agree: its formula
+                // has a fixed per-tick overhead term that stays finite at zero channels, so an
+                // empty selection comes back as a healthy rate (18,333 Hz on that board) and every
+                // "cap is 0, so nothing is enabled" check downstream reads it as a live
+                // configuration.
+                modelCapHz = 0;
+            }
+            else if (model.TryComputeMaxRateHz(simultaneousCount, totalCount, out var predictedHz))
             {
                 modelCapHz = predictedHz;
             }

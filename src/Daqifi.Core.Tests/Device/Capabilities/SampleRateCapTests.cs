@@ -245,6 +245,35 @@ public class SampleRateCapTests
     }
 
     [Fact]
+    public void ComputeForDevice_WithoutADeviceCapAndNothingEnabled_ReportsNoCapacity()
+    {
+        // The device's own answer for an empty configuration is 0, measured on the bench NQ1 —
+        // so the model fallback has to agree. Left to the formula it would not: with no channels
+        // selected the per-tick overhead term alone yields 110000/(6+0) = 18333 Hz, a healthy rate
+        // for a device that is not going to stream anything.
+        var device = CreateDevice();
+        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+
+        Assert.Equal(0, device.MaximumStreamingFrequencyHz);
+    }
+
+    [Fact]
+    public void ComputeForDevice_WithoutADeviceCapAndOnlyDigitalEnabled_ReportsNoCapacity()
+    {
+        // Also measured: the bench NQ1 reports 0 with digital pins enabled and no analog input.
+        // Digital costs are amortized into the model's overhead rather than counted, so "no analog
+        // inputs" and "nothing to stream" are the same statement.
+        var device = CreateDevice();
+        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: null));
+        foreach (var digital in device.Channels.Where(c => c.Type == ChannelType.Digital))
+        {
+            digital.IsEnabled = true;
+        }
+
+        Assert.Equal(0, device.MaximumStreamingFrequencyHz);
+    }
+
+    [Fact]
     public void ComputeForDevice_WithADocumentThatStatesNoRates_IsTheBoardCeiling()
     {
         var device = CreateDevice();

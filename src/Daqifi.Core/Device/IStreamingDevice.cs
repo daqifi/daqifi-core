@@ -68,8 +68,10 @@ namespace Daqifi.Core.Device
         /// ceiling <see cref="StreamingFrequency"/> validates against.
         /// </summary>
         /// <remarks>
-        /// Zero is a real answer: it means nothing is enabled, so there is no capacity to stream.
-        /// See <see cref="SampleRateCap"/> for where the figure comes from and how fresh it is.
+        /// Zero is a real answer: it means no analog input is enabled, so there is no capacity to
+        /// stream. See <see cref="SampleRateCap"/> for where the figure comes from, how fresh it
+        /// is, and the one case that reports the board ceiling instead of zero for an empty
+        /// configuration — a device that has published no capability document at all.
         /// </remarks>
         int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
 
