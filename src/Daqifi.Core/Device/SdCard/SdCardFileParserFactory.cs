@@ -26,26 +26,24 @@ public static class SdCardFileParserFactory
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
-    public static async Task<SdCardLogSession> ParseFileAsync(
+    /// <remarks>
+    /// The returned session opens its own read of the file each time
+    /// <see cref="SdCardLogSession.Samples"/> is enumerated, so the file must still exist then.
+    /// </remarks>
+    public static Task<SdCardLogSession> ParseFileAsync(
         string filePath,
         SdCardParseOptions? options = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(filePath);
 
-        var format = DetectFormat(filePath);
-        var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: options?.BufferSize ?? 64 * 1024,
-            useAsync: true);
-
-        await using (stream.ConfigureAwait(false))
+        return DetectFormat(filePath) switch
         {
-            return await ParseWithFormatAsync(stream, Path.GetFileName(filePath), format, options, ct).ConfigureAwait(false);
-        }
+            SdCardLogFormat.Protobuf => new SdCardFileParser().ParseFileAsync(filePath, options, ct),
+            SdCardLogFormat.Json => new SdCardJsonFileParser().ParseFileAsync(filePath, options, ct),
+            SdCardLogFormat.Csv => new SdCardCsvFileParser().ParseFileAsync(filePath, options, ct),
+            var format => throw new ArgumentException($"Unsupported format: {format}", nameof(filePath))
+        };
     }
 
     /// <summary>

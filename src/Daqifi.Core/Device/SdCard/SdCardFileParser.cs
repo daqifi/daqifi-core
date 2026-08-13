@@ -47,37 +47,119 @@ public sealed class SdCardFileParser
             throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
         }
 
+        var source = SdCardParseSource.TryCreate(fileStream);
+        if (source != null)
+        {
+            return await BuildSessionAsync(
+                (progress, token) => ReadMessagesAsync(source, options, progress, token),
+                fileName,
+                options,
+                ct).ConfigureAwait(false);
+        }
+
+        // A forward-only stream can only be read once, so it has to be decoded up front.
+        // Callers that want the streaming parse hand the parser a seekable stream or a path.
+        var buffered = new List<DaqifiOutMessage>();
+        await foreach (var message in ReadMessagesAsync(fileStream, options, options.Progress, -1L, ct)
+                           .WithCancellation(ct).ConfigureAwait(false))
+        {
+            buffered.Add(message);
+        }
+
+        return await BuildSessionAsync(
+            (_, _) => SdCardTextLineReader.ToAsyncEnumerable(buffered),
+            fileName,
+            options,
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Convenience overload that opens a file by path.
+    /// </summary>
+    /// <param name="filePath">Absolute or relative path to the <c>.bin</c> file.</param>
+    /// <param name="options">Optional parse options.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The returned session opens its own read of the file each time
+    /// <see cref="SdCardLogSession.Samples"/> is enumerated, so the file must still exist then.
+    /// </remarks>
+    public async Task<SdCardLogSession> ParseFileAsync(
+        string filePath,
+        SdCardParseOptions? options = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(filePath);
+
+        options ??= new SdCardParseOptions();
+
+        if (options.BufferSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
+        }
+
+        var source = SdCardParseSource.ForFile(filePath, options.BufferSize);
+
+        return await BuildSessionAsync(
+            (progress, token) => ReadMessagesAsync(source, options, progress, token),
+            Path.GetFileName(filePath),
+            options,
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the session's configuration from a short prefix of the log, then hands the
+    /// session a sample iterator that re-reads the log lazily.
+    /// </summary>
+    private static async Task<SdCardLogSession> BuildSessionAsync(
+        Func<IProgress<SdCardParseProgress>?, CancellationToken, IAsyncEnumerable<DaqifiOutMessage>> openMessages,
+        string fileName,
+        SdCardParseOptions options,
+        CancellationToken ct)
+    {
         var fileCreatedDate = options.SessionStartTime
                               ?? SdCardFileListParser.TryParseDateFromLogFileName(fileName);
 
-        // Read all messages from the stream.
-        var allMessages = await ReadAllMessagesAsync(fileStream, options, ct).ConfigureAwait(false);
+        // Only the leading messages are held, never the whole file: firmware states the
+        // configuration in the status message or in the first handful of stream messages.
+        // No progress is reported for this pass — it is not the caller's read of the file.
+        var prefix = new List<DaqifiOutMessage>();
+        var limit = options.ConfigurationScanMessageLimit;
+        await foreach (var message in openMessages(null, ct).WithCancellation(ct).ConfigureAwait(false))
+        {
+            prefix.Add(message);
+            if (limit > 0 && prefix.Count >= limit)
+            {
+                break;
+            }
+        }
 
         SdCardDeviceConfiguration? config = null;
-        var streamStartIndex = 0;
 
         // First, check if the first message is a dedicated status message.
         // Some firmware versions embed config fields (e.g., AnalogInPortNum/TimestampFreq)
         // inside stream messages, so we only treat the first message as status when it
         // has no stream payload.
-        if (allMessages.Count > 0 && !HasStreamPayload(allMessages[0]))
+        if (prefix.Count > 0 && !HasStreamPayload(prefix[0]))
         {
-            config = ExtractDeviceConfiguration(allMessages[0]);
-            streamStartIndex = 1;
+            config = ExtractDeviceConfiguration(prefix[0]);
         }
 
         // If no dedicated status message was found, or the status message had no TimestampFreq,
-        // scan all messages for config fields. Device firmware often embeds config fields
+        // scan the leading messages for config fields. Device firmware often embeds config fields
         // (TimestampFreq, DeviceSn, etc.) in streaming data messages rather than writing
         // a separate status header.
         if (config == null || config.TimestampFrequency == 0)
         {
-            var scannedConfig = ScanMessagesForConfiguration(allMessages);
+            var scannedConfig = ScanMessagesForConfiguration(prefix);
             if (scannedConfig != null)
             {
                 config = MergeConfigurations(config, scannedConfig);
             }
         }
+
+        // The prefix has served its purpose; the sample pass re-reads the log from the start.
+        prefix.Clear();
 
         // Whatever the file itself stated, captured before the override is merged in so the
         // two sources stay distinguishable when reporting which one was used.
@@ -102,9 +184,11 @@ public sealed class SdCardFileParser
             : 0.0;
 
         var samples = ProduceSamples(
-            allMessages,
-            streamStartIndex,
-            fileCreatedDate,
+            token => openMessages(options.Progress, token),
+            // Anchored once, here, rather than inside the iterator: a session whose samples can
+            // be enumerated more than once must not shift its timestamps between reads when the
+            // file name carries no date.
+            fileCreatedDate ?? DateTime.UtcNow,
             tickPeriod,
             config,
             ct);
@@ -117,54 +201,41 @@ public sealed class SdCardFileParser
     }
 
     /// <summary>
-    /// Convenience overload that opens a file by path.
+    /// Streams the protobuf messages of the source, re-opening it from the start each time.
     /// </summary>
-    /// <param name="filePath">Absolute or relative path to the <c>.bin</c> file.</param>
-    /// <param name="options">Optional parse options.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
-    public async Task<SdCardLogSession> ParseFileAsync(
-        string filePath,
-        SdCardParseOptions? options = null,
-        CancellationToken ct = default)
+    private static async IAsyncEnumerable<DaqifiOutMessage> ReadMessagesAsync(
+        SdCardParseSource source,
+        SdCardParseOptions options,
+        IProgress<SdCardParseProgress>? progress,
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(filePath);
-
-        options ??= new SdCardParseOptions();
-
-        if (options.BufferSize <= 0)
+        var lease = source.Open();
+        await using (lease.ConfigureAwait(false))
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
-        }
-
-        var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            options.BufferSize,
-            useAsync: true);
-
-        await using (stream.ConfigureAwait(false))
-        {
-            return await ParseAsync(stream, Path.GetFileName(filePath), options, ct).ConfigureAwait(false);
+            await foreach (var message in ReadMessagesAsync(lease.Stream, options, progress, source.TotalBytes, ct)
+                               .WithCancellation(ct).ConfigureAwait(false))
+            {
+                yield return message;
+            }
         }
     }
 
     /// <summary>
-    /// Reads and deserializes all protobuf messages from the stream.
+    /// Deserializes protobuf messages from the stream, holding at most one read buffer plus
+    /// the bytes of a straddling frame.
     /// </summary>
-    private static async Task<List<DaqifiOutMessage>> ReadAllMessagesAsync(
+    private static async IAsyncEnumerable<DaqifiOutMessage> ReadMessagesAsync(
         Stream stream,
         SdCardParseOptions options,
-        CancellationToken ct)
+        IProgress<SdCardParseProgress>? progress,
+        long totalBytes,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var parser = new ProtobufMessageParser();
-        var messages = new List<DaqifiOutMessage>();
         var buffer = new byte[options.BufferSize];
         var carry = Array.Empty<byte>();
         long totalBytesRead = 0;
-        var totalBytes = stream.CanSeek ? stream.Length : -1L;
+        var messagesRead = 0;
 
         while (true)
         {
@@ -186,12 +257,8 @@ public sealed class SdCardFileParser
 
             var parsed = parser.ParseMessages(chunk, out var consumed);
 
-            foreach (var msg in parsed)
-            {
-                messages.Add(msg.Data);
-            }
-
-            // Carry unconsumed bytes forward
+            // Carry unconsumed bytes forward. Computed before yielding so the reader's state
+            // is already consistent when the consumer pauses mid-chunk.
             if (consumed < chunk.Length)
             {
                 carry = new byte[chunk.Length - consumed];
@@ -202,7 +269,13 @@ public sealed class SdCardFileParser
                 carry = Array.Empty<byte>();
             }
 
-            options.Progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messages.Count));
+            foreach (var msg in parsed)
+            {
+                messagesRead++;
+                yield return msg.Data;
+            }
+
+            progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messagesRead));
         }
 
         // Try to parse any remaining carry bytes (may contain a partial final message)
@@ -211,139 +284,151 @@ public sealed class SdCardFileParser
             var parsed = parser.ParseMessages(carry, out _);
             foreach (var msg in parsed)
             {
-                messages.Add(msg.Data);
+                messagesRead++;
+                yield return msg.Data;
             }
 
-            options.Progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messages.Count));
+            progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messagesRead));
         }
-
-        return messages;
     }
 
-#pragma warning disable CS1998 // Async iterator: yield return requires async; method has no real awaits.
     /// <summary>
-    /// Produces <see cref="SdCardLogEntry"/> samples from the parsed messages.
+    /// Produces <see cref="SdCardLogEntry"/> samples, decoding the log as they are consumed.
     /// </summary>
     private static async IAsyncEnumerable<SdCardLogEntry> ProduceSamples(
-        List<DaqifiOutMessage> messages,
-        int startIndex,
-        DateTime? anchorTime,
+        Func<CancellationToken, IAsyncEnumerable<DaqifiOutMessage>> openMessages,
+        DateTime baseTime,
         double tickPeriod,
         SdCardDeviceConfiguration? config,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var baseTime = anchorTime ?? DateTime.UtcNow;
         uint? previousTimestamp = null;
         var elapsedSeconds = 0.0;
 
-        for (var i = startIndex; i < messages.Count; i++)
+        var enumerator = openMessages(ct).GetAsyncEnumerator(ct);
+        await using (enumerator.ConfigureAwait(false))
         {
-            ct.ThrowIfCancellationRequested();
+            var current = await enumerator.MoveNextAsync().ConfigureAwait(false)
+                ? enumerator.Current
+                : null;
 
-            var msg = messages[i];
-
-            // Skip non-stream messages (no analog and no digital data)
-            if (msg.AnalogInData.Count == 0 &&
-                msg.AnalogInDataFloat.Count == 0 &&
-                msg.DigitalData.Length == 0)
+            while (current != null)
             {
-                continue;
-            }
+                ct.ThrowIfCancellationRequested();
 
-            // Merge consecutive messages at the same timestamp into a single entry.
-            // Device firmware often sends separate analog and digital messages per sample
-            // period with the same MsgTimeStamp.
-            while (i + 1 < messages.Count && messages[i + 1].MsgTimeStamp == msg.MsgTimeStamp)
-            {
-                var next = messages[i + 1];
-                if (!HasStreamPayload(next))
+                var msg = current;
+                current = await enumerator.MoveNextAsync().ConfigureAwait(false)
+                    ? enumerator.Current
+                    : null;
+
+                // Skip non-stream messages (no analog and no digital data)
+                if (!HasStreamPayload(msg))
                 {
-                    break;
+                    continue;
                 }
 
-                i++;
+                // Merge consecutive messages at the same timestamp into a single entry.
+                // Device firmware often sends separate analog and digital messages per sample
+                // period with the same MsgTimeStamp. A message without stream payload ends the
+                // merge without being consumed, so the loop above skips it on the next turn.
+                while (current != null &&
+                       current.MsgTimeStamp == msg.MsgTimeStamp &&
+                       HasStreamPayload(current))
+                {
+                    var next = current;
+                    current = await enumerator.MoveNextAsync().ConfigureAwait(false)
+                        ? enumerator.Current
+                        : null;
 
-                // Take analog data from whichever message has it
-                if (msg.AnalogInDataFloat.Count == 0 && next.AnalogInDataFloat.Count > 0)
-                {
-                    msg.AnalogInDataFloat.AddRange(next.AnalogInDataFloat);
-                }
-                else if (msg.AnalogInData.Count == 0 && next.AnalogInData.Count > 0)
-                {
-                    msg.AnalogInData.AddRange(next.AnalogInData);
+                    // Take analog data from whichever message has it
+                    if (msg.AnalogInDataFloat.Count == 0 && next.AnalogInDataFloat.Count > 0)
+                    {
+                        msg.AnalogInDataFloat.AddRange(next.AnalogInDataFloat);
+                    }
+                    else if (msg.AnalogInData.Count == 0 && next.AnalogInData.Count > 0)
+                    {
+                        msg.AnalogInData.AddRange(next.AnalogInData);
+                    }
+
+                    // Take digital data from whichever message has it
+                    if (msg.DigitalData.Length == 0 && next.DigitalData.Length > 0)
+                    {
+                        msg.DigitalData = next.DigitalData;
+                    }
+
+                    // Take per-channel timestamps from whichever message has them
+                    if (msg.AnalogInDataTs.Count == 0 && next.AnalogInDataTs.Count > 0)
+                    {
+                        msg.AnalogInDataTs.AddRange(next.AnalogInDataTs);
+                    }
                 }
 
-                // Take digital data from whichever message has it
-                if (msg.DigitalData.Length == 0 && next.DigitalData.Length > 0)
+                // Reconstruct timestamp
+                var timestamp = baseTime;
+                var hasDeviceTimestamp = msg.MsgTimeStamp != 0 && tickPeriod > 0;
+                if (hasDeviceTimestamp)
                 {
-                    msg.DigitalData = next.DigitalData;
+                    if (previousTimestamp == null)
+                    {
+                        // First stream message — anchor to base time
+                        previousTimestamp = msg.MsgTimeStamp;
+                    }
+                    else
+                    {
+                        var delta = ComputeTickDelta(previousTimestamp.Value, msg.MsgTimeStamp);
+                        elapsedSeconds += delta * tickPeriod;
+                        previousTimestamp = msg.MsgTimeStamp;
+                    }
+
+                    timestamp = baseTime.AddSeconds(elapsedSeconds);
                 }
 
-                // Take per-channel timestamps from whichever message has them
-                if (msg.AnalogInDataTs.Count == 0 && next.AnalogInDataTs.Count > 0)
+                // Extract analog values (prefer float, fall back to scaled raw int)
+                IReadOnlyList<double> analogValues;
+                if (msg.AnalogInDataFloat.Count > 0)
                 {
-                    msg.AnalogInDataTs.AddRange(next.AnalogInDataTs);
-                }
-            }
+                    // Hand-rolled rather than LINQ: this runs once per sample in the file.
+                    var floats = msg.AnalogInDataFloat;
+                    var converted = new double[floats.Count];
+                    for (var v = 0; v < floats.Count; v++)
+                    {
+                        converted[v] = floats[v];
+                    }
 
-            // Reconstruct timestamp
-            var timestamp = baseTime;
-            var hasDeviceTimestamp = msg.MsgTimeStamp != 0 && tickPeriod > 0;
-            if (hasDeviceTimestamp)
-            {
-                if (previousTimestamp == null)
+                    analogValues = converted;
+                }
+                else if (msg.AnalogInData.Count > 0)
                 {
-                    // First stream message — anchor to base time
-                    previousTimestamp = msg.MsgTimeStamp;
+                    analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(msg.AnalogInData, config);
                 }
                 else
                 {
-                    var delta = ComputeTickDelta(previousTimestamp.Value, msg.MsgTimeStamp);
-                    elapsedSeconds += delta * tickPeriod;
-                    previousTimestamp = msg.MsgTimeStamp;
+                    analogValues = Array.Empty<double>();
                 }
 
-                timestamp = baseTime.AddSeconds(elapsedSeconds);
-            }
-
-            // Extract analog values (prefer float, fall back to scaled raw int)
-            IReadOnlyList<double> analogValues;
-            if (msg.AnalogInDataFloat.Count > 0)
-            {
-                analogValues = msg.AnalogInDataFloat.Select(v => (double)v).ToArray();
-            }
-            else if (msg.AnalogInData.Count > 0)
-            {
-                analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(msg.AnalogInData, config);
-            }
-            else
-            {
-                analogValues = Array.Empty<double>();
-            }
-
-            // Extract digital data
-            var digitalData = 0u;
-            if (msg.DigitalData.Length > 0)
-            {
-                var bytes = msg.DigitalData.ToByteArray();
-                for (var b = 0; b < bytes.Length && b < 4; b++)
+                // Extract digital data
+                var digitalData = 0u;
+                if (msg.DigitalData.Length > 0)
                 {
-                    digitalData |= (uint)bytes[b] << (b * 8);
+                    var bytes = msg.DigitalData.ToByteArray();
+                    for (var b = 0; b < bytes.Length && b < 4; b++)
+                    {
+                        digitalData |= (uint)bytes[b] << (b * 8);
+                    }
                 }
+
+                // Per-channel timestamps
+                IReadOnlyList<uint>? analogTimestamps = msg.AnalogInDataTs.Count > 0
+                    ? msg.AnalogInDataTs.ToArray()
+                    : null;
+
+                yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps)
+                {
+                    HasDeviceTimestamp = hasDeviceTimestamp
+                };
             }
-
-            // Per-channel timestamps
-            IReadOnlyList<uint>? analogTimestamps = msg.AnalogInDataTs.Count > 0
-                ? msg.AnalogInDataTs.ToArray()
-                : null;
-
-            yield return new SdCardLogEntry(timestamp, analogValues, digitalData, analogTimestamps)
-            {
-                HasDeviceTimestamp = hasDeviceTimestamp
-            };
         }
     }
-#pragma warning restore CS1998
 
     /// <summary>
     /// Computes the tick delta between two uint32 timestamps, handling rollover.

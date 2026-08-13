@@ -43,24 +43,80 @@ public sealed class SdCardCsvFileParser
 
         options ??= new SdCardParseOptions();
 
+        var source = SdCardParseSource.TryCreate(fileStream);
+        if (source != null)
+        {
+            return await BuildSessionAsync(
+                token => SdCardTextLineReader.ReadLinesAsync(source, token),
+                () => source.TotalBytes,
+                fileName,
+                options,
+                ct).ConfigureAwait(false);
+        }
+
+        // A forward-only stream can only be read once, so it has to be read up front.
+        // Callers that want the streaming parse hand the parser a seekable stream or a path.
+        var lines = new List<string>();
+        await foreach (var line in SdCardTextLineReader.ReadLinesAsync(fileStream, ct).ConfigureAwait(false))
+        {
+            lines.Add(line);
+        }
+
+        return await BuildSessionAsync(
+            _ => SdCardTextLineReader.ToAsyncEnumerable(lines),
+            () => lines.Sum(l => (long)l.Length + 1),
+            fileName,
+            options,
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Parses an SD card CSV log file from a file path.
+    /// </summary>
+    /// <param name="filePath">The path to the CSV log file.</param>
+    /// <param name="options">Optional parse options.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The returned session opens its own read of the file each time
+    /// <see cref="SdCardLogSession.Samples"/> is enumerated, so the file must still exist then.
+    /// </remarks>
+    public async Task<SdCardLogSession> ParseFileAsync(
+        string filePath,
+        SdCardParseOptions? options = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(filePath);
+
+        options ??= new SdCardParseOptions();
+
+        var source = SdCardParseSource.ForFile(filePath, options.BufferSize);
+
+        return await BuildSessionAsync(
+            token => SdCardTextLineReader.ReadLinesAsync(source, token),
+            () => source.TotalBytes,
+            Path.GetFileName(filePath),
+            options,
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the header region, then hands the session a sample iterator that re-reads the
+    /// file lazily rather than holding its lines in memory.
+    /// </summary>
+    private static async Task<SdCardLogSession> BuildSessionAsync(
+        Func<CancellationToken, IAsyncEnumerable<string>> openLines,
+        Func<long> totalBytes,
+        string fileName,
+        SdCardParseOptions options,
+        CancellationToken ct)
+    {
         var fileCreatedDate = options.SessionStartTime
                               ?? SdCardFileListParser.TryParseDateFromLogFileName(fileName);
 
-        // Read all lines into memory (similar to protobuf parser reading all messages)
-        var lines = new List<string>();
-        using (var reader = new StreamReader(fileStream, leaveOpen: true))
-        {
-            string? line;
-            while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
-            {
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    lines.Add(line);
-                }
-            }
-        }
+        var header = await ReadHeaderAsync(openLines, ct).ConfigureAwait(false);
 
-        if (lines.Count == 0)
+        if (!header.SawAnyLine)
         {
             // Empty file
             return new SdCardLogSession(
@@ -70,20 +126,16 @@ public sealed class SdCardCsvFileParser
                 EmptySamples());
         }
 
-        var (headerConfig, columnLayout) = ParseHeader(lines, options);
-        var config = MergeConfiguration(headerConfig, options.ConfigurationOverride);
+        var config = MergeConfiguration(header.Config, options.ConfigurationOverride);
 
         var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
-            headerConfig.TimestampFrequency,
+            header.Config.TimestampFrequency,
             options.ConfigurationOverride?.TimestampFrequency ?? 0u,
             options.FallbackTimestampFrequency);
 
         config = config with { TimestampFrequency = timestampFrequency };
 
-        // Find the index of the first data row (after comments and column header)
-        var dataStartIndex = FindDataStartIndex(lines);
-
-        if (dataStartIndex >= lines.Count)
+        if (header.DataStartIndex < 0)
         {
             // Only header, no data
             return new SdCardLogSession(
@@ -98,46 +150,23 @@ public sealed class SdCardCsvFileParser
         }
 
         var samples = ParseCsvLines(
-            lines,
-            dataStartIndex,
+            openLines,
+            header.DataStartIndex,
+            totalBytes,
             config,
-            columnLayout,
-            fileCreatedDate,
-            options);
+            header.Layout,
+            // Anchored once, here, rather than inside the iterator: a session whose samples can
+            // be enumerated more than once must not shift its timestamps between reads when the
+            // file name carries no date.
+            fileCreatedDate ?? DateTime.UtcNow,
+            options.Progress,
+            ct);
 
         return new SdCardLogSession(fileName, fileCreatedDate, config, samples)
         {
             TimestampFrequency = timestampFrequency,
             TimestampFrequencySource = timestampSource
         };
-    }
-
-    /// <summary>
-    /// Parses an SD card CSV log file from a file path.
-    /// </summary>
-    /// <param name="filePath">The path to the CSV log file.</param>
-    /// <param name="options">Optional parse options.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
-    public async Task<SdCardLogSession> ParseFileAsync(
-        string filePath,
-        SdCardParseOptions? options = null,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(filePath);
-
-        var fileStream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: options?.BufferSize ?? 64 * 1024,
-            useAsync: true);
-
-        await using (fileStream.ConfigureAwait(false))
-        {
-            return await ParseAsync(fileStream, Path.GetFileName(filePath), options, ct).ConfigureAwait(false);
-        }
     }
 
     /// <summary>
@@ -148,11 +177,26 @@ public sealed class SdCardCsvFileParser
     private sealed record CsvColumnLayout(int AnalogPairCount, bool HasDigitalPair);
 
     /// <summary>
-    /// Parses device metadata and column layout from the comment header lines.
+    /// The result of the header scan: everything the sample pass needs to know before it
+    /// starts reading data rows.
     /// </summary>
-    private static (SdCardDeviceConfiguration Config, CsvColumnLayout Layout) ParseHeader(
-        List<string> lines,
-        SdCardParseOptions options)
+    /// <param name="SawAnyLine">Whether the file contained any non-blank line at all.</param>
+    /// <param name="DataStartIndex">Index of the first data row among the non-blank lines, or -1 when the file has no data rows.</param>
+    /// <param name="Config">Device metadata stated by the file itself.</param>
+    /// <param name="Layout">The column layout stated by the column-header row.</param>
+    private sealed record CsvHeader(
+        bool SawAnyLine,
+        int DataStartIndex,
+        SdCardDeviceConfiguration Config,
+        CsvColumnLayout Layout);
+
+    /// <summary>
+    /// Reads the header region — comment metadata and the column header — and locates the
+    /// first data row. Stops at that row, so this never reads more than the file's preamble.
+    /// </summary>
+    private static async Task<CsvHeader> ReadHeaderAsync(
+        Func<CancellationToken, IAsyncEnumerable<string>> openLines,
+        CancellationToken ct)
     {
         string? deviceName = null;
         string? serialNumber = null;
@@ -165,9 +209,16 @@ public sealed class SdCardCsvFileParser
         var digitalChannelCount = 0;
         var hasDigitalPair = false;
 
-        foreach (var line in lines)
+        var index = 0;
+        var dataStartIndex = -1;
+        var sawAnyLine = false;
+        var headerDone = false;
+
+        await foreach (var line in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
-            if (line.StartsWith('#'))
+            sawAnyLine = true;
+
+            if (!headerDone && line.StartsWith('#'))
             {
                 // # Device: Nyquist 1
                 // # Serial Number: 7E2815916200E898
@@ -197,43 +248,54 @@ public sealed class SdCardCsvFileParser
                     }
                 }
 
+                index++;
                 continue;
             }
 
             if (IsColumnHeaderLine(line))
             {
-                // Column header: ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val
-                // Count channel pairs and identify digital columns
-                var cols = line.Split(',');
-                var totalPairs = cols.Length / 2;
-
-                // Check each pair to distinguish analog from digital
-                for (var p = 0; p < totalPairs; p++)
+                if (!headerDone)
                 {
-                    var nameCol = cols[p * 2]; // e.g., "ain0_ts" or "dio_ts"
-                    if (nameCol.StartsWith("dio", StringComparison.OrdinalIgnoreCase))
+                    // Column header: ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val
+                    // Count channel pairs and identify digital columns
+                    var cols = line.Split(',');
+                    var totalPairs = cols.Length / 2;
+
+                    // Check each pair to distinguish analog from digital
+                    for (var p = 0; p < totalPairs; p++)
                     {
-                        hasDigitalPair = true;
-                        digitalChannelCount = 1;
+                        var nameCol = cols[p * 2]; // e.g., "ain0_ts" or "dio_ts"
+                        if (nameCol.StartsWith("dio", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasDigitalPair = true;
+                            digitalChannelCount = 1;
+                        }
+                        else
+                        {
+                            analogChannelCount++;
+                        }
                     }
-                    else
-                    {
-                        analogChannelCount++;
-                    }
+
+                    // Only the first column header states the layout; anything after it is
+                    // no longer part of the metadata region.
+                    headerDone = true;
                 }
 
-                break;
-            }
-
-            if (IsHeaderNoiseLine(line))
-            {
-                // Malformed header-region noise (e.g. a stray "ch") before the real
-                // column header. Skip it and keep scanning so the real header — and its
-                // channel layout — isn't lost. Must stay consistent with FindDataStartIndex.
+                index++;
                 continue;
             }
 
-            // First data row reached without finding a column header.
+            if (IsHeaderNoiseLine(line) || line.StartsWith('#'))
+            {
+                // Malformed header-region noise (e.g. a stray "ch") before the real
+                // column header. Skip it and keep scanning so the real header — and its
+                // channel layout — isn't lost.
+                index++;
+                continue;
+            }
+
+            // First data row.
+            dataStartIndex = index;
             break;
         }
 
@@ -246,47 +308,18 @@ public sealed class SdCardCsvFileParser
             FirmwareRevision: null,
             CalibrationValues: null);
 
-        var layout = new CsvColumnLayout(analogChannelCount, hasDigitalPair);
-
-        return (config, layout);
-    }
-
-    /// <summary>
-    /// Finds the index of the first data row (skipping comments and the column header).
-    /// </summary>
-    private static int FindDataStartIndex(List<string> lines)
-    {
-        for (var i = 0; i < lines.Count; i++)
-        {
-            var line = lines[i];
-            if (line.StartsWith('#'))
-            {
-                continue;  // Comment line
-            }
-
-            if (IsColumnHeaderLine(line))
-            {
-                continue;  // Column header line
-            }
-
-            if (IsHeaderNoiseLine(line))
-            {
-                // Malformed header-region noise (e.g. a stray "ch") — skip it rather than
-                // treating it as the first data row, so the scan lands on the real data.
-                continue;
-            }
-
-            return i;  // First data row
-        }
-
-        return lines.Count;  // No data found
+        return new CsvHeader(
+            sawAnyLine,
+            dataStartIndex,
+            config,
+            new CsvColumnLayout(analogChannelCount, hasDigitalPair));
     }
 
     /// <summary>
     /// Determines whether a line is a CSV column header
     /// (e.g. <c>ain0_ts,ain0_val,...,dio_ts,dio_val</c> or a <c>ch...</c>/<c>ain...</c> variant).
-    /// Shared by <see cref="ParseHeader"/> and <see cref="FindDataStartIndex"/> so both agree on
-    /// what a header looks like. The <c>line.Length &gt; 2</c> guard protects the <c>line[2]</c>
+    /// Used by <see cref="ReadHeaderAsync"/> both to read the layout and to find where the data
+    /// starts, so the two agree on what a header looks like. The <c>line.Length &gt; 2</c> guard protects the <c>line[2]</c>
     /// access: <c>StartsWith("ch")</c> only guarantees length &gt;= 2, so a bare "ch" line would
     /// otherwise throw <see cref="IndexOutOfRangeException"/> (closes #365).
     /// </summary>
@@ -305,16 +338,16 @@ public sealed class SdCardCsvFileParser
     private static bool IsHeaderNoiseLine(string line) =>
         line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && !IsColumnHeaderLine(line);
 
-#pragma warning disable CS1998 // Async iterator: yield return requires async; method has no real awaits.
     private static async IAsyncEnumerable<SdCardLogEntry> ParseCsvLines(
-        List<string> lines,
+        Func<CancellationToken, IAsyncEnumerable<string>> openLines,
         int dataStartIndex,
+        Func<long> totalBytesProvider,
         SdCardDeviceConfiguration config,
         CsvColumnLayout columnLayout,
-        DateTime? fileCreatedDate,
-        SdCardParseOptions options)
+        DateTime baseTime,
+        IProgress<SdCardParseProgress>? progress,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var baseTime = fileCreatedDate ?? DateTime.UtcNow;
         var timestampFreq = config.TimestampFrequency;
         var tickPeriod = timestampFreq > 0 ? 1.0 / timestampFreq : 0.0;
 
@@ -322,13 +355,21 @@ public sealed class SdCardCsvFileParser
         var elapsedSeconds = 0.0;
         var linesProcessed = 0;
         var bytesRead = 0L;
+        var totalBytes = totalBytesProvider();
+        var skipped = 0;
 
-        var progress = options.Progress;
-        var totalBytes = lines.Sum(l => l.Length + 1); // +1 for newline
-
-        for (var i = dataStartIndex; i < lines.Count; i++)
+        await foreach (var line in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
-            var line = lines[i];
+            // Re-reading the file means walking the header region again; it is bounded by the
+            // preamble, and skipping it costs nothing next to decoding a data row.
+            if (skipped < dataStartIndex)
+            {
+                skipped++;
+                continue;
+            }
+
+            ct.ThrowIfCancellationRequested();
+
             linesProcessed++;
             bytesRead += line.Length + 1;
 
@@ -378,7 +419,6 @@ public sealed class SdCardCsvFileParser
         // Final progress report
         progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
     }
-#pragma warning restore CS1998
 
     /// <summary>
     /// Parses a firmware CSV data row with interleaved per-channel timestamp/value pairs.
