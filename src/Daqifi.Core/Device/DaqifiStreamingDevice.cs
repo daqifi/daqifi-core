@@ -3,6 +3,7 @@ using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Diagnostics;
 using Daqifi.Core.Device.Internal;
 using Microsoft.Extensions.Logging;
@@ -129,6 +130,22 @@ namespace Daqifi.Core.Device
                 _streamingFrequency = value;
             }
         }
+
+        /// <summary>
+        /// Gets the highest streaming frequency in Hz this device can actually sustain with the
+        /// channels it has enabled right now.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately separate from the <see cref="StreamingFrequency"/> setter's own validation,
+        /// which stays on the absolute board ceiling: this figure moves with the channel set, and a
+        /// setter that rejected against it would fail a perfectly reasonable
+        /// "set the rate, then enable the channels" ordering. Call
+        /// <see cref="EnforceStreamingFrequencyCap"/> after changing the channel set instead.
+        /// </remarks>
+        public int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
+
+        /// <inheritdoc cref="IStreamingDevice.EnforceStreamingFrequencyCap" />
+        public int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
 
         /// <summary>
         /// Gets a value indicating whether the device is currently logging data to the SD card.

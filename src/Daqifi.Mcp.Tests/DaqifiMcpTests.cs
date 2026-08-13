@@ -193,3 +193,37 @@ public class DaqifiAgentTests
         Assert.Contains("read-only", ex.Message);
     }
 }
+
+/// <summary>
+/// The one piece of sample-rate policy this server still owns after #481 moved the device half
+/// into <c>Daqifi.Core</c>: the operator's <c>--max-sample-rate-hz</c> clamp. The cases below are
+/// the ones that survived from <c>SampleRateCapCalculatorTests</c>; the rest moved down to
+/// <c>SampleRateCapTests</c> with the logic.
+/// </summary>
+public class ServerRateClampTests
+{
+    [Fact]
+    public void NoServerOption_LeavesTheDeviceCapAlone()
+    {
+        Assert.Equal(7746, DaqifiAgent.ApplyServerRateClamp(7746, maxSampleRateHzOption: null));
+    }
+
+    [Fact]
+    public void ServerOptionBelowTheDeviceCap_Wins()
+    {
+        Assert.Equal(500, DaqifiAgent.ApplyServerRateClamp(7746, maxSampleRateHzOption: 500));
+    }
+
+    [Fact]
+    public void ServerOptionAboveTheDeviceCap_DoesNotRaiseIt()
+    {
+        Assert.Equal(7746, DaqifiAgent.ApplyServerRateClamp(7746, maxSampleRateHzOption: 50000));
+    }
+
+    [Fact]
+    public void ZeroDeviceCap_StaysZero()
+    {
+        // Nothing enabled: the server option cannot conjure capacity the device does not have.
+        Assert.Equal(0, DaqifiAgent.ApplyServerRateClamp(0, maxSampleRateHzOption: 500));
+    }
+}
