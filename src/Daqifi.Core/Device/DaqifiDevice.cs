@@ -272,6 +272,35 @@ namespace Daqifi.Core.Device
         protected IReadOnlyList<IChannel> SnapshotChannels() => GetChannelsSnapshot();
 
         /// <summary>
+        /// A counter that changes whenever this device's set of channels, or any of their enabled
+        /// states, changes.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Lets a caller that would otherwise re-derive something from <see cref="Channels"/> on
+        /// every frame cache that derivation instead and rebuild it only when this value moves. The
+        /// streaming decoder does exactly that with the sorted set of active analog channels, which
+        /// it used to snapshot, filter and sort a thousand times a second for a set that changes
+        /// when someone configures the device (issue #490).
+        /// </para>
+        /// <para>
+        /// It is a change token, not a count: only inequality with a previously observed value is
+        /// meaningful. Read it <em>before</em> taking the snapshot you intend to cache — a change
+        /// landing in between then makes the cached value merely stale-by-one-frame rather than
+        /// stale forever.
+        /// </para>
+        /// </remarks>
+        internal long ChannelStateVersion => Interlocked.Read(ref _channelStateVersion);
+
+        /// <summary>
+        /// Bumps <see cref="ChannelStateVersion"/>. Subscribed to every channel this device owns,
+        /// so that a caller writing <c>channel.IsEnabled = true</c> directly — which
+        /// <see cref="IChannel"/> permits and no device API observes — invalidates the same caches
+        /// that <see cref="PopulateChannelsFromStatus"/> does.
+        /// </summary>
+        private void OnChannelEnablementChanged() => Interlocked.Increment(ref _channelStateVersion);
+
+        /// <summary>
         /// Runs <paramref name="action"/> under the same lock that guards structural access to
         /// <see cref="_channels"/> and the status-driven <c>IsEnabled</c> resync in
         /// <see cref="PopulateChannelsFromStatus"/>. A subclass's channel-management API (e.g.
@@ -392,6 +421,10 @@ namespace Daqifi.Core.Device
         // (Clear/Add in PopulateChannelsFromStatus) while caller threads fold over a
         // snapshot via SnapshotChannels for the device-level channel-management API.
         private readonly object _channelsLock = new();
+
+        // Backing counter for ChannelStateVersion. Interlocked because it is bumped from whichever
+        // thread changed a channel and read from the message-consumer thread.
+        private long _channelStateVersion;
 
         // Translates a status frame's channel description into channel instances. Stateless, so
         // it is built once per device and reused for every population.
@@ -1893,7 +1926,7 @@ namespace Daqifi.Core.Device
             // Unsubscribe from message consumer/producer events
             if (_messageConsumer != null)
             {
-                _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                DetachInboundMessages(_messageConsumer);
                 _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
             }
 
@@ -2306,11 +2339,11 @@ namespace Daqifi.Core.Device
 
         /// <inheritdoc />
         void ITextExchangeHost.AttachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
-            consumer.MessageReceived += OnInboundMessageReceived;
+            AttachInboundMessages(consumer);
 
         /// <inheritdoc />
         void ITextExchangeHost.DetachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
-            consumer.MessageReceived -= OnInboundMessageReceived;
+            DetachInboundMessages(consumer);
 
         /// <inheritdoc />
         bool ITextExchangeHost.HoldsOperationLock => HoldsOperationLock;
@@ -2602,10 +2635,34 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Raises the <see cref="MessageReceived"/> event when a message is received from the device.
         /// </summary>
+        /// <remarks>
+        /// Not called for a device frame while <see cref="MessageReceived"/> has no subscribers: the
+        /// frame would have to be wrapped in an <see cref="IInboundMessage{T}"/> to be passed here,
+        /// and on a streaming device that is an allocation per frame with nowhere to go
+        /// (issue #490). An override that must see every frame regardless should use
+        /// <see cref="StatusMessageReceived"/>/<see cref="StreamMessageReceived"/> or override
+        /// <see cref="OnStatusMessageReceived"/>/<see cref="OnStreamMessageReceived"/>, which are
+        /// unconditional.
+        /// </remarks>
         /// <param name="message">The message received from the device.</param>
         protected virtual void OnMessageReceived(IInboundMessage<object> message)
         {
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(message));
+        }
+
+        /// <summary>
+        /// Wraps <paramref name="message"/> and hands it to <see cref="OnMessageReceived"/>, but
+        /// only when <see cref="MessageReceived"/> actually has a subscriber to receive it.
+        /// </summary>
+        /// <param name="message">The device frame to re-raise.</param>
+        private void RaiseUndifferentiatedMessage(DaqifiOutMessage message)
+        {
+            if (MessageReceived is null)
+            {
+                return;
+            }
+
+            OnMessageReceived(new ProtobufMessage(message));
         }
 
         /// <summary>
@@ -3475,8 +3532,8 @@ namespace Daqifi.Core.Device
                 // process every inbound message twice; '-=' is a no-op when not subscribed.
                 if (_messageConsumer != null)
                 {
-                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                    DetachInboundMessages(_messageConsumer);
+                    AttachInboundMessages(_messageConsumer);
                 }
 
                 // Snapshot into a local, once. Every retry attempt and the derived-class hook
@@ -3777,8 +3834,7 @@ namespace Daqifi.Core.Device
             RaiseClassifiedEvent(StatusMessageReceived, message, nameof(StatusMessageReceived));
 
             // Raise event for external consumers
-            var inboundMessage = new ProtobufMessage(message);
-            OnMessageReceived(inboundMessage);
+            RaiseUndifferentiatedMessage(message);
         }
 
         /// <summary>
@@ -3873,8 +3929,31 @@ namespace Daqifi.Core.Device
 
                 (analogCount, digitalCount) = _channelPopulator.Populate(message, _channels, updatedChannels);
 
+                // Re-point the enablement subscriptions at the channels this device is about to
+                // own. The populator reuses existing instances where it can, so most of these
+                // detach and immediately re-attach; doing it unconditionally is what keeps a
+                // dropped channel from holding a subscription and a brand-new one from missing it.
+                foreach (var channel in _channels)
+                {
+                    if (channel is IChannelEnablementNotifier notifier)
+                    {
+                        notifier.EnablementChanged -= OnChannelEnablementChanged;
+                    }
+                }
+
                 _channels.Clear();
                 _channels.AddRange(updatedChannels);
+
+                foreach (var channel in _channels)
+                {
+                    if (channel is IChannelEnablementNotifier notifier)
+                    {
+                        notifier.EnablementChanged += OnChannelEnablementChanged;
+                    }
+                }
+
+                // The membership itself changed, which no per-channel notification covers.
+                Interlocked.Increment(ref _channelStateVersion);
 
                 channelsSnapshot = _channels.ToArray();
             }
@@ -3901,8 +3980,46 @@ namespace Daqifi.Core.Device
             RaiseClassifiedEvent(StreamMessageReceived, message, nameof(StreamMessageReceived));
 
             // Raise event for external consumers
-            var inboundMessage = new ProtobufMessage(message);
-            OnMessageReceived(inboundMessage);
+            RaiseUndifferentiatedMessage(message);
+        }
+
+        /// <summary>
+        /// Subscribes this device's inbound routing to <paramref name="consumer"/>.
+        /// </summary>
+        /// <remarks>
+        /// Prefers <see cref="StreamMessageConsumer{T}.MessageParsed"/>, which carries the parsed
+        /// message and nothing else. The public <c>MessageReceived</c> event additionally carries a
+        /// snapshot of everything buffered at the time of the read, and taking that snapshot costs
+        /// a copy of the wire throughput on every read of a streaming device (issue #490) — a cost
+        /// this device has never had a use for. Any other consumer implementation falls back to the
+        /// interface event, which behaves exactly as before.
+        /// </remarks>
+        /// <param name="consumer">The consumer to subscribe to.</param>
+        private void AttachInboundMessages(IMessageConsumer<DaqifiOutMessage> consumer)
+        {
+            if (consumer is StreamMessageConsumer<DaqifiOutMessage> streamConsumer)
+            {
+                streamConsumer.MessageParsed += OnInboundMessageParsed;
+                return;
+            }
+
+            consumer.MessageReceived += OnInboundMessageReceived;
+        }
+
+        /// <summary>
+        /// Reverses <see cref="AttachInboundMessages"/>. Both events are detached rather than only
+        /// the one that would have been attached, so a consumer that somehow carries both
+        /// subscriptions cannot be left half-subscribed.
+        /// </summary>
+        /// <param name="consumer">The consumer to unsubscribe from.</param>
+        private void DetachInboundMessages(IMessageConsumer<DaqifiOutMessage> consumer)
+        {
+            if (consumer is StreamMessageConsumer<DaqifiOutMessage> streamConsumer)
+            {
+                streamConsumer.MessageParsed -= OnInboundMessageParsed;
+            }
+
+            consumer.MessageReceived -= OnInboundMessageReceived;
         }
 
         /// <summary>
@@ -3911,12 +4028,36 @@ namespace Daqifi.Core.Device
         /// <param name="sender">The message consumer that raised the event.</param>
         /// <param name="e">The message received event arguments.</param>
         private void OnInboundMessageReceived(object? sender, MessageReceivedEventArgs<DaqifiOutMessage> e)
-        {
-            // Convert to generic inbound message and route through protocol handler
-            var genericMessage = new GenericInboundMessage<object>(e.Message.Data);
+            => OnInboundMessageParsed(e.Message);
 
-            // Route through protocol handler if available
-            if (_protocolHandler != null && _protocolHandler.CanHandle(genericMessage))
+        /// <summary>
+        /// Routes a parsed inbound message through the protocol handler.
+        /// </summary>
+        /// <remarks>
+        /// The consumer is typed to <see cref="DaqifiOutMessage"/>, so the handler's type test can
+        /// never fail here — yet satisfying <see cref="IProtocolHandler.CanHandle"/> used to mean
+        /// boxing every single frame into a <c>GenericInboundMessage&lt;object&gt;</c> just to ask.
+        /// The typed entry point skips both the wrapper and the question (issue #490); a custom
+        /// <see cref="IProtocolHandler"/> still goes the long way round.
+        /// </remarks>
+        /// <param name="message">The parsed message.</param>
+        private void OnInboundMessageParsed(IInboundMessage<DaqifiOutMessage> message)
+        {
+            if (_protocolHandler is ProtobufProtocolHandler protobufHandler)
+            {
+                protobufHandler.Handle(message.Data);
+                return;
+            }
+
+            if (_protocolHandler == null)
+            {
+                return;
+            }
+
+            // Convert to generic inbound message and route through protocol handler
+            var genericMessage = new GenericInboundMessage<object>(message.Data);
+
+            if (_protocolHandler.CanHandle(genericMessage))
             {
                 // Fire and forget - we don't need to wait for the handler to complete
                 _ = _protocolHandler.HandleAsync(genericMessage);

@@ -3,12 +3,13 @@ namespace Daqifi.Core.Channel;
 /// <summary>
 /// Represents a digital input/output channel.
 /// </summary>
-public class DigitalChannel : IDigitalChannel
+public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
 {
     private readonly object _lock = new();
     private IDataSample? _activeSample;
     private string _name;
     private bool _isEnabled;
+    private Action? _enablementChanged;
     private ChannelDirection _direction;
     private bool _outputValue;
     private bool _isPwmEnabled;
@@ -46,13 +47,36 @@ public class DigitalChannel : IDigitalChannel
         set { lock (_lock) { _name = value; } }
     }
 
+    /// <inheritdoc />
+    event Action? IChannelEnablementNotifier.EnablementChanged
+    {
+        add { lock (_lock) { _enablementChanged += value; } }
+        remove { lock (_lock) { _enablementChanged -= value; } }
+    }
+
     /// <summary>
     /// Gets or sets whether the channel is enabled.
     /// </summary>
     public bool IsEnabled
     {
         get { lock (_lock) { return _isEnabled; } }
-        set { lock (_lock) { _isEnabled = value; } }
+        set
+        {
+            Action? subscribers;
+            lock (_lock)
+            {
+                if (_isEnabled == value)
+                {
+                    return;
+                }
+
+                _isEnabled = value;
+                subscribers = _enablementChanged;
+            }
+
+            // Raised outside the lock — see AnalogChannel.IsEnabled for why.
+            subscribers?.Invoke();
+        }
     }
 
     /// <summary>

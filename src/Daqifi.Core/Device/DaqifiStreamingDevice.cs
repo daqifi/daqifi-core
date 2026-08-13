@@ -1237,6 +1237,9 @@ namespace Daqifi.Core.Device
 
         IReadOnlyList<IChannel> IDeviceOperationHost.SnapshotChannels() => SnapshotChannels();
 
+        /// <inheritdoc />
+        long IDeviceOperationHost.ChannelStateVersion => ChannelStateVersion;
+
         void IDeviceOperationHost.WithChannelsLock(Action action) => WithChannelsLock(action);
 
 #pragma warning disable CA1068 // Matches the seam it forwards to.

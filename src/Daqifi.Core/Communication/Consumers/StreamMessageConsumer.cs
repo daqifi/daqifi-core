@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Daqifi.Core.Communication.Consumers;
@@ -104,7 +105,32 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// <summary>
     /// Occurs when a message is received and parsed from the device.
     /// </summary>
+    /// <remarks>
+    /// Subscribing to this event makes the consumer snapshot its accumulation buffer on every read
+    /// so that <see cref="MessageReceivedEventArgs{T}.RawData"/> can carry it. Consumers that only
+    /// need the parsed message should use <see cref="MessageParsed"/> instead, which costs nothing
+    /// per read — that is what Core's own subscribers do (issue #490).
+    /// <para>
+    /// A handler attached while a batch is already being dispatched can see an empty
+    /// <see cref="MessageReceivedEventArgs{T}.RawData"/> for the remainder of that batch, because
+    /// the decision to snapshot was taken before it subscribed. Every subsequent read carries the
+    /// snapshot as usual.
+    /// </para>
+    /// </remarks>
     public event EventHandler<MessageReceivedEventArgs<T>>? MessageReceived;
+
+    /// <summary>
+    /// Occurs when a message is received and parsed, carrying only the message itself.
+    /// </summary>
+    /// <remarks>
+    /// The raw-buffer snapshot that <see cref="MessageReceived"/> carries is a full copy of
+    /// everything buffered at the time of the read — on a device streaming at kilohertz rates that
+    /// is the entire wire throughput duplicated as garbage, and no subscriber inside Core has ever
+    /// looked at it. This event exists so those subscribers can stop paying for it; it fires for
+    /// exactly the same messages, immediately before <see cref="MessageReceived"/>, on the same
+    /// reader thread and with the same per-subscriber exception isolation.
+    /// </remarks>
+    internal event Action<IInboundMessage<T>>? MessageParsed;
 
     /// <summary>
     /// Occurs when an error occurs during message processing.
@@ -432,12 +458,11 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
 
                 // Add received data to message buffer (guarded: a caller may be reading
                 // QueuedMessageCount and ClearBuffer's drain runs on this same thread).
+                // Bulk-appended: the byte-at-a-time loop this replaced re-checked the list's
+                // capacity once per byte, on every read, for the life of the connection (#490).
                 lock (_bufferLock)
                 {
-                    for (int i = 0; i < bytesRead; i++)
-                    {
-                        _messageBuffer.Add(_buffer[i]);
-                    }
+                    _messageBuffer.AddRange(new ReadOnlySpan<byte>(_buffer, 0, bytesRead));
                 }
 
                 // Try to parse complete messages from buffer
@@ -629,8 +654,18 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
         // subscriber callback never runs while the lock is held.
         lock (_bufferLock)
         {
-            bufferData = _messageBuffer.ToArray();
-            messages = _messageParser.ParseMessages(bufferData, out var consumedBytes);
+            // Parse from a view over the accumulation buffer rather than a copy of it. The copy
+            // this replaced was the wire throughput duplicated as garbage on every single read
+            // (issue #490); it existed only because the parser entry point demanded an array.
+            var buffered = CollectionsMarshal.AsSpan(_messageBuffer);
+
+            // The snapshot MessageReceivedEventArgs<T>.RawData carries is taken only when someone
+            // is actually listening for it, and before the drain below, so it keeps its documented
+            // meaning: everything that was buffered when this batch was parsed. MessageParsed
+            // subscribers — which is all of Core — pay nothing.
+            bufferData = MessageReceived is null ? Array.Empty<byte>() : buffered.ToArray();
+
+            messages = _messageParser.ParseMessages(buffered, out var consumedBytes);
 
             // Remove consumed bytes from buffer
             if (consumedBytes > 0)
@@ -658,12 +693,19 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     }
 
     /// <summary>
-    /// Raises the MessageReceived event.
+    /// Raises the <see cref="MessageParsed"/> and <see cref="MessageReceived"/> events, in that
+    /// order.
     /// </summary>
     /// <param name="message">The received message.</param>
-    /// <param name="rawData">The raw data that was parsed.</param>
+    /// <param name="rawData">
+    /// The raw data that was parsed. Empty when <see cref="MessageReceived"/> has no subscribers:
+    /// the snapshot is only taken for that event, so nothing observable is lost, but an override
+    /// that reads it must attach a <see cref="MessageReceived"/> handler (or call
+    /// <c>base</c>) rather than assume it is always populated.
+    /// </param>
     protected virtual void OnMessageReceived(IInboundMessage<T> message, byte[] rawData)
     {
+        MessageParsed?.Invoke(message);
         MessageReceived?.Invoke(this, new MessageReceivedEventArgs<T>(message, rawData));
     }
 

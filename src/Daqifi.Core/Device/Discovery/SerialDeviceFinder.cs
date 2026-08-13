@@ -750,9 +750,12 @@ public class SerialDeviceFinder : DeviceFinderBase
             var statusReceived =
                 new TaskCompletionSource<DaqifiOutMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            consumer.MessageReceived += (_, args) =>
+            // MessageParsed rather than MessageReceived: the probe never looks at the raw buffer,
+            // and subscribing to the event that carries it would make the consumer snapshot the
+            // buffer on every read for nothing (issue #490).
+            consumer.MessageParsed += parsed =>
             {
-                if (args.Message.Data is DaqifiOutMessage message
+                if (parsed.Data is DaqifiOutMessage message
                     && ProtobufProtocolHandler.DetectMessageType(message) == ProtobufMessageType.Status)
                 {
                     // We have what we came for, so shorten the reader's next read before releasing

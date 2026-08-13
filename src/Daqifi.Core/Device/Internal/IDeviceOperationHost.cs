@@ -76,6 +76,9 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="DaqifiDevice.GetChannelsSnapshot"/>
         IReadOnlyList<IChannel> SnapshotChannels();
 
+        /// <inheritdoc cref="DaqifiDevice.ChannelStateVersion"/>
+        long ChannelStateVersion { get; }
+
         /// <summary>
         /// Runs <paramref name="action"/> under the device's channels lock, so a collaborator that
         /// mutates <see cref="IChannel.IsEnabled"/> and derives outbound state from it does both in
