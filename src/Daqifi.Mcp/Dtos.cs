@@ -175,3 +175,62 @@ public sealed record StartLoggingResult(
     string Format,
     int SampleRateHz,
     IReadOnlyList<int> EnabledAnalogChannels);
+
+/// <summary>
+/// One file in the device's SD-card directory listing. <see cref="SizeBytes"/> and
+/// <see cref="CreatedDate"/> are null when the listing carried neither — a size of 0 is a real
+/// (empty) file, which is why an unknown size is null rather than zero.
+/// </summary>
+public sealed record SdFileEntry(string FileName, long? SizeBytes, DateTime? CreatedDate)
+{
+    public static SdFileEntry From(SdCardFileInfo info) =>
+        new(info.FileName, info.SizeInBytes, info.CreatedDate);
+}
+
+/// <summary>
+/// The device's SD-card directory listing. An empty <see cref="Files"/> list always means an
+/// empty card: a device that did not answer the query fails the tool call instead (#396).
+/// </summary>
+public sealed record SdFileListing(string DeviceId, int FileCount, IReadOnlyList<SdFileEntry> Files);
+
+/// <summary>
+/// Free/used/total space on the device's SD card. <see cref="PercentFree"/> is rounded to one
+/// decimal and is 0 when the device reports a total of 0 bytes.
+/// </summary>
+public sealed record SdStorageReport(
+    string DeviceId, long FreeBytes, long UsedBytes, long TotalBytes, double PercentFree)
+{
+    public static SdStorageReport From(string deviceId, SdCardStorageInfo info) => new(
+        deviceId,
+        info.FreeBytes,
+        info.UsedBytes,
+        info.TotalBytes,
+        info.TotalBytes > 0 ? Math.Round(info.FreeBytes * 100.0 / info.TotalBytes, 1) : 0);
+}
+
+/// <summary>
+/// Result of downloading an SD-card file to this machine.
+/// </summary>
+/// <param name="FilePath">Where the raw file was written locally (a temporary file owned by this server).</param>
+/// <param name="CsvPath">Where the CSV was written, or null when CSV export was not requested or failed.</param>
+/// <param name="CsvRowCount">CSV lines written — one per distinct timestamp, not one per sample.</param>
+/// <param name="SampleCount">Log entries read out of the file.</param>
+/// <param name="CsvError">
+/// What went wrong in the CSV step while the download itself succeeded — an unparseable format, an
+/// empty log, or a CSV that was written but is missing columns. Reported rather than thrown so a
+/// download that can take minutes is not discarded along with the error. Worth reading even when
+/// <paramref name="CsvPath"/> is set: that combination means the CSV exists but is incomplete.
+/// </param>
+public sealed record SdDownloadReport(
+    string DeviceId,
+    string FileName,
+    long SizeBytes,
+    double DurationSeconds,
+    string FilePath,
+    string? CsvPath,
+    long? CsvRowCount,
+    long? SampleCount,
+    string? CsvError);
+
+/// <summary>Result of deleting a file from the SD card.</summary>
+public sealed record SdDeleteResult(string DeviceId, string FileName);

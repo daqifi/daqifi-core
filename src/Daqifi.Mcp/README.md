@@ -26,9 +26,18 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `set_sample_rate` | Set sample rate in Hz (ceiling depends on the enabled channel count; over-cap requests are rejected). |
 | `start_sd_logging` | Start on-device SD logging (**requires a USB/serial connection**). |
 | `stop_sd_logging` | Stop SD logging. |
+| `list_sd_files` | List the log files on the SD card, with size and creation date. |
+| `get_sd_storage` | Free/used/total space on the SD card. |
+| `download_sd_file` | Fetch a log file to this machine and (by default) parse it into a CSV. |
+| `delete_sd_file` | Delete a file from the SD card. Destructive; blocked by `--read-only`. |
 
-> SD logging is on-device: the device writes to its own SD card. Data does not stream back to the
-> agent in this version.
+> SD logging is on-device: the device writes to its own SD card while the log runs. Nothing streams
+> back live in this version — you retrieve the data afterwards with `download_sd_file`, which writes
+> the raw file and a CSV into this machine's temp directory and returns both paths.
+>
+> **Retrieve before you stream.** A live streaming session collapses the device's SD buffer
+> (firmware #703), after which downloads come back empty until the device is reconnected or another
+> SD recording re-arms it. Do the SD work first on a fresh connection.
 
 ## Run it
 
@@ -51,6 +60,12 @@ dotnet run --project src/Daqifi.Mcp
 --max-sample-rate-hz <n>  Reject set_sample_rate requests above <n> Hz.
 -h, --help                Show help.
 ```
+
+`--read-only` blocks anything that changes the device or the card: channel/rate configuration,
+DIO/PWM output, start/stop logging, and `delete_sd_file`. Reading data back is still allowed —
+`list_sd_files`, `get_sd_storage` and `download_sd_file` all work, since they change nothing on the
+device (the download does write its two files into this machine's temp directory, which is the only
+way the data can reach the agent at all).
 
 ## Point your agent at it
 
@@ -85,6 +100,7 @@ During development, point the client at the source build instead:
 
 Then plug in a DAQiFi over USB (or join its WiFi) and ask, e.g.:
 *"Discover my DAQiFi, connect, enable analog channels 0–3 at 1 kHz, and start logging to the SD card."*
+*"Stop the log, then download it and tell me the average on AI0."*
 
 ## Notes
 
