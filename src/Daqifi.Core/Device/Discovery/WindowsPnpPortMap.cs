@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
@@ -70,11 +71,11 @@ internal sealed class WindowsPnpPortMap
         @"\((COM\d+)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private static readonly IReadOnlyList<string> NoDeviceIds = [];
+    private static readonly ReadOnlyCollection<string> NoDeviceIds = ReadOnlyCollection<string>.Empty;
 
     private readonly Func<IEnumerable<PnpPortEntity>> _query;
     private readonly object _gate = new();
-    private Dictionary<string, List<string>> _map = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, ReadOnlyCollection<string>> _map = new(StringComparer.OrdinalIgnoreCase);
     private long _builtAtMs;
     private bool _hasMap;
     private long _queryCount;
@@ -149,7 +150,7 @@ internal sealed class WindowsPnpPortMap
     /// <summary>
     /// Rebuilds and publishes the map. Must be called holding <see cref="_gate"/>.
     /// </summary>
-    private Dictionary<string, List<string>> Rebuild()
+    private Dictionary<string, ReadOnlyCollection<string>> Rebuild()
     {
         // Published only after the query returns: a throwing query must leave the previous map and
         // its timestamp untouched rather than install an empty one, which would read as "every
@@ -167,17 +168,24 @@ internal sealed class WindowsPnpPortMap
     /// the caption parsing is unit testable on any platform without WMI access.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A port maps to a list rather than a single ID because the predicate this replaces matched a
     /// caption substring, not a whole caption: two entities can both mention "(COM9)", and the two
     /// callers pick different entries out of that set — the descriptor provider takes the first one
     /// carrying a VID/PID, the location provider the first one full stop.
+    /// </para>
+    /// <para>
+    /// Those lists are wrapped before they are published, so what a lookup hands out cannot be
+    /// mutated: a published map is shared by concurrent lookups, and a caller that cast one of its
+    /// lists back to the mutable type would be corrupting every other caller's view of it.
+    /// </para>
     /// </remarks>
-    internal static Dictionary<string, List<string>> BuildMap(IEnumerable<PnpPortEntity> entities)
+    internal static Dictionary<string, ReadOnlyCollection<string>> BuildMap(IEnumerable<PnpPortEntity> entities)
     {
         var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         if (entities == null)
         {
-            return map;
+            return Freeze(map);
         }
 
         foreach (var entity in entities)
@@ -206,7 +214,20 @@ internal sealed class WindowsPnpPortMap
             }
         }
 
-        return map;
+        return Freeze(map);
+    }
+
+    private static Dictionary<string, ReadOnlyCollection<string>> Freeze(Dictionary<string, List<string>> map)
+    {
+        var frozen = new Dictionary<string, ReadOnlyCollection<string>>(map.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (portName, deviceIds) in map)
+        {
+            // AsReadOnly wraps the list rather than copying it, and the only reference to the list
+            // itself goes out of scope with this method — nothing can reach it to mutate it.
+            frozen[portName] = deviceIds.AsReadOnly();
+        }
+
+        return frozen;
     }
 
     /// <summary>

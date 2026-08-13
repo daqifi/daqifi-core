@@ -149,6 +149,22 @@ public class WindowsPnpPortMapTests
         Assert.Equal(0, Volatile.Read(ref calls));
     }
 
+    /// <summary>
+    /// A lookup hands out part of a map several threads are reading, so it must hand out something
+    /// none of them can change: a caller that cast it back to a mutable list would be editing every
+    /// other caller's view of that port.
+    /// </summary>
+    [Fact]
+    public void WhatALookupReturns_CannotBeMutatedByItsCaller()
+    {
+        var map = new WindowsPnpPortMap(() => [Usb("COM3")]);
+
+        var deviceIds = map.GetDeviceIds("COM3");
+
+        Assert.Throws<NotSupportedException>(() => ((IList<string>)deviceIds).Add("injected"));
+        Assert.Single(map.GetDeviceIds("COM3"));
+    }
+
     // ---- caching ---------------------------------------------------------
 
     /// <summary>
