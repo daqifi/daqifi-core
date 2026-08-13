@@ -32,6 +32,13 @@ public sealed class SdCardCsvFileParser
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
+    /// read from it yourself until you have finished enumerating
+    /// <see cref="SdCardLogSession.Samples"/>. A seekable stream is re-read from its starting
+    /// position on each enumeration, and only one enumeration may be in flight at a time; a
+    /// forward-only stream cannot be re-read, so its contents are decoded up front instead.
+    /// </remarks>
     public async Task<SdCardLogSession> ParseAsync(
         Stream fileStream,
         string fileName,
@@ -56,7 +63,7 @@ public sealed class SdCardCsvFileParser
 
         // A forward-only stream can only be read once, so it has to be read up front.
         // Callers that want the streaming parse hand the parser a seekable stream or a path.
-        var lines = new List<string>();
+        var lines = new List<SdCardLogLine>();
         await foreach (var line in SdCardTextLineReader.ReadLinesAsync(fileStream, ct).ConfigureAwait(false))
         {
             lines.Add(line);
@@ -64,7 +71,7 @@ public sealed class SdCardCsvFileParser
 
         return await BuildSessionAsync(
             _ => SdCardTextLineReader.ToAsyncEnumerable(lines),
-            () => lines.Sum(l => (long)l.Length + 1),
+            () => lines.Count > 0 ? lines[^1].BytesRead : 0,
             fileName,
             options,
             ct).ConfigureAwait(false);
@@ -105,7 +112,7 @@ public sealed class SdCardCsvFileParser
     /// file lazily rather than holding its lines in memory.
     /// </summary>
     private static async Task<SdCardLogSession> BuildSessionAsync(
-        Func<CancellationToken, IAsyncEnumerable<string>> openLines,
+        Func<CancellationToken, IAsyncEnumerable<SdCardLogLine>> openLines,
         Func<long> totalBytes,
         string fileName,
         SdCardParseOptions options,
@@ -195,7 +202,7 @@ public sealed class SdCardCsvFileParser
     /// first data row. Stops at that row, so this never reads more than the file's preamble.
     /// </summary>
     private static async Task<CsvHeader> ReadHeaderAsync(
-        Func<CancellationToken, IAsyncEnumerable<string>> openLines,
+        Func<CancellationToken, IAsyncEnumerable<SdCardLogLine>> openLines,
         CancellationToken ct)
     {
         string? deviceName = null;
@@ -214,8 +221,9 @@ public sealed class SdCardCsvFileParser
         var sawAnyLine = false;
         var headerDone = false;
 
-        await foreach (var line in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
+        await foreach (var entry in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
+            var line = entry.Text;
             sawAnyLine = true;
 
             if (!headerDone && line.StartsWith('#'))
@@ -339,7 +347,7 @@ public sealed class SdCardCsvFileParser
         line.StartsWith("ch", StringComparison.OrdinalIgnoreCase) && !IsColumnHeaderLine(line);
 
     private static async IAsyncEnumerable<SdCardLogEntry> ParseCsvLines(
-        Func<CancellationToken, IAsyncEnumerable<string>> openLines,
+        Func<CancellationToken, IAsyncEnumerable<SdCardLogLine>> openLines,
         int dataStartIndex,
         Func<long> totalBytesProvider,
         SdCardDeviceConfiguration config,
@@ -358,8 +366,12 @@ public sealed class SdCardCsvFileParser
         var totalBytes = totalBytesProvider();
         var skipped = 0;
 
-        await foreach (var line in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
+        await foreach (var entry in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
+            // The preamble still counts towards bytes read — it is part of the file the caller
+            // is waiting on — so progress can reach the file's length.
+            bytesRead = entry.BytesRead;
+
             // Re-reading the file means walking the header region again; it is bounded by the
             // preamble, and skipping it costs nothing next to decoding a data row.
             if (skipped < dataStartIndex)
@@ -370,8 +382,8 @@ public sealed class SdCardCsvFileParser
 
             ct.ThrowIfCancellationRequested();
 
+            var line = entry.Text;
             linesProcessed++;
-            bytesRead += line.Length + 1;
 
             var parsed = TryParseCsvDataRow(line, columnLayout);
             if (parsed == null)

@@ -31,6 +31,13 @@ public sealed class SdCardFileParser
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <remarks>
+    /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
+    /// read from it yourself until you have finished enumerating
+    /// <see cref="SdCardLogSession.Samples"/>. A seekable stream is re-read from its starting
+    /// position on each enumeration, and only one enumeration may be in flight at a time; a
+    /// forward-only stream cannot be re-read, so its contents are decoded up front instead.
+    /// </remarks>
     public async Task<SdCardLogSession> ParseAsync(
         Stream fileStream,
         string fileName,

@@ -323,6 +323,109 @@ public class SdCardStreamingParseTests
 
     #endregion
 
+    #region Shared-stream safety and progress
+
+    [Fact]
+    public async Task ParseAsync_StreamBackedSession_RefusesOverlappingEnumerations()
+    {
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStatusMessage(timestampFreq: 1000))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(1000, analogFloatValues: new[] { 1.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(2000, analogFloatValues: new[] { 2.0f }));
+
+        using var stream = builder.Build();
+        var session = await new SdCardFileParser().ParseAsync(stream, "overlap.bin");
+
+        // One stream, one read position: a second reader while the first is mid-file would
+        // silently interleave, so it is refused instead.
+        var first = session.Samples.GetAsyncEnumerator();
+        await using (first.ConfigureAwait(false))
+        {
+            Assert.True(await first.MoveNextAsync());
+
+            var second = session.Samples.GetAsyncEnumerator();
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await second.MoveNextAsync());
+            await second.DisposeAsync();
+        }
+
+        // Once the first enumeration is disposed, the session is readable again.
+        Assert.Equal(2, (await ToListAsync(session.Samples)).Count);
+    }
+
+    [Fact]
+    public async Task ParseFileAsync_FileBackedSession_AllowsOverlappingEnumerations()
+    {
+        var builder = new SdCardTestFileBuilder()
+            .AddMessage(SdCardTestFileBuilder.CreateStatusMessage(timestampFreq: 1000))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(1000, analogFloatValues: new[] { 1.0f }))
+            .AddMessage(SdCardTestFileBuilder.CreateStreamMessage(2000, analogFloatValues: new[] { 2.0f }));
+
+        using var temp = new TempFile(".bin");
+        await File.WriteAllBytesAsync(temp.Path, builder.Build().ToArray());
+
+        var session = await new SdCardFileParser().ParseFileAsync(temp.Path);
+
+        // A path-backed session reads the file independently for each enumeration, so two
+        // readers cannot interfere.
+        var a = session.Samples.GetAsyncEnumerator();
+        var b = session.Samples.GetAsyncEnumerator();
+        await using (a.ConfigureAwait(false))
+        await using (b.ConfigureAwait(false))
+        {
+            Assert.True(await a.MoveNextAsync());
+            Assert.True(await b.MoveNextAsync());
+            Assert.Equal(a.Current.AnalogValues[0], b.Current.AnalogValues[0]);
+        }
+    }
+
+    [Theory]
+    [InlineData(".csv")]
+    [InlineData(".json")]
+    public async Task ParseAsync_TextProgress_ReachesTheFileLength(string extension)
+    {
+        var bytes = extension == ".csv"
+            ? BuildCsvRows(500)
+            : BuildJsonRows(500);
+
+        using var stream = new MemoryStream(bytes);
+
+        SdCardParseProgress? last = null;
+        var options = new SdCardParseOptions
+        {
+            FallbackTimestampFrequency = 1000,
+            Progress = new SynchronousProgress<SdCardParseProgress>(p => last = p)
+        };
+
+        var session = await SdCardFileParserFactory.ParseAsync(stream, $"log_20240101_120000{extension}", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(500, samples.Count);
+        Assert.NotNull(last);
+        Assert.Equal(500, last!.MessagesRead);
+
+        // Progress is in bytes and the preamble is part of the file, so a completed read has to
+        // land on the file's length rather than stopping short of it.
+        Assert.Equal(bytes.Length, last.TotalBytes);
+        Assert.Equal(bytes.Length, last.BytesRead);
+    }
+
+    private static byte[] BuildCsvRows(int rows)
+    {
+        using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
+            "Nq1", "SN1", 1000u,
+            Enumerable.Range(0, rows).Select(i => ((uint)(i * 10), new[] { (double)i })).ToArray());
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildJsonRows(int rows)
+    {
+        using var stream = SdCardTestJsonFileBuilder.BuildJsonFile(
+            Enumerable.Range(0, rows).Select(i => ((uint)(i * 10), new[] { (double)i }, "")).ToArray());
+        return stream.ToArray();
+    }
+
+    #endregion
+
     #region Factory
 
     [Theory]

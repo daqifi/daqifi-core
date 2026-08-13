@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Daqifi.Core.Device.SdCard;
@@ -19,6 +20,13 @@ internal sealed class SdCardParseSource
     private readonly long _origin;
     private readonly string? _filePath;
     private readonly int _bufferSize;
+
+    /// <summary>
+    /// 1 while a lease over the caller's stream is outstanding. A caller-supplied stream has a
+    /// single read cursor, so two overlapping reads would silently interleave and hand back
+    /// corrupt samples; refusing the second read turns that into an exception instead.
+    /// </summary>
+    private int _leaseHeld;
 
     private SdCardParseSource(Stream stream)
     {
@@ -69,6 +77,10 @@ internal sealed class SdCardParseSource
     /// is finished; it closes the stream only when the source owns it.
     /// </summary>
     /// <returns>A lease over a readable stream positioned at the start of the source.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// A read of a caller-supplied stream is already in flight. Two reads cannot share one
+    /// cursor, so the samples of a stream-backed session must be enumerated one at a time.
+    /// </exception>
     public Lease Open()
     {
         if (_filePath is not null)
@@ -82,22 +94,45 @@ internal sealed class SdCardParseSource
                 useAsync: true);
 
             TotalBytes = fileStream.CanSeek ? fileStream.Length : -1;
-            return new Lease(fileStream, ownsStream: true);
+            return new Lease(this, fileStream, ownsStream: true);
         }
 
-        _stream!.Position = _origin;
-        return new Lease(_stream, ownsStream: false);
+        if (Interlocked.CompareExchange(ref _leaseHeld, 1, 0) != 0)
+        {
+            throw new InvalidOperationException(
+                "The samples of a log parsed from a Stream are already being read. A stream has a " +
+                "single read position, so its samples cannot be enumerated twice at once; finish " +
+                "(or dispose) the first enumeration first, or parse from a file path, which reads " +
+                "the file independently for each enumeration.");
+        }
+
+        try
+        {
+            _stream!.Position = _origin;
+        }
+        catch
+        {
+            Volatile.Write(ref _leaseHeld, 0);
+            throw;
+        }
+
+        return new Lease(this, _stream, ownsStream: false);
     }
+
+    private void Release() => Volatile.Write(ref _leaseHeld, 0);
 
     /// <summary>
     /// A borrowed read over an <see cref="SdCardParseSource"/>.
     /// </summary>
-    internal readonly struct Lease : IAsyncDisposable
+    internal sealed class Lease : IAsyncDisposable
     {
+        private readonly SdCardParseSource _source;
         private readonly bool _ownsStream;
+        private bool _disposed;
 
-        internal Lease(Stream stream, bool ownsStream)
+        internal Lease(SdCardParseSource source, Stream stream, bool ownsStream)
         {
+            _source = source;
             Stream = stream;
             _ownsStream = ownsStream;
         }
@@ -108,6 +143,23 @@ internal sealed class SdCardParseSource
         public Stream Stream { get; }
 
         /// <inheritdoc />
-        public ValueTask DisposeAsync() => _ownsStream ? Stream.DisposeAsync() : default;
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+
+            if (_ownsStream)
+            {
+                await Stream.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                _source.Release();
+            }
+        }
     }
 }
