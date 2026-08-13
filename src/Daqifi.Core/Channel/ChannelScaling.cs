@@ -22,9 +22,11 @@ namespace Daqifi.Core.Channel;
 /// <para>
 /// <see cref="Gain"/> and <see cref="Offset"/> are validated when the instance is constructed —
 /// on the caller's thread, where an exception is a usable error message. <see cref="Apply"/> itself
-/// never throws and never returns a non-finite value: a configuration whose arithmetic overflows
-/// for a particular reading degrades to the unscaled value for that reading rather than poisoning
-/// the stream, because it runs on the decode thread where there is nobody to catch it.
+/// never throws and never <em>introduces</em> a non-finite value: a configuration whose arithmetic
+/// overflows for a particular reading degrades to the unscaled value for that reading rather than
+/// poisoning the stream, because it runs on the decode thread where there is nobody to catch it.
+/// It does not launder one either — a reading that arrives NaN or infinite comes back unchanged, so
+/// a caller who needs a finite number still has to check for one.
 /// </para>
 /// </remarks>
 public sealed record ChannelScaling
@@ -92,8 +94,9 @@ public sealed record ChannelScaling
     /// <param name="value">The channel value to convert, typically volts.</param>
     /// <returns>
     /// The converted value, or <paramref name="value"/> unchanged when the conversion would produce
-    /// a non-finite result (an overflow, or an infinite input). Raw values keep flowing rather than
-    /// the stream filling with NaN.
+    /// a non-finite result — so a finite reading is never turned into NaN or infinity by an
+    /// overflowing coefficient, and a reading that was already non-finite is handed back as it came
+    /// rather than being disguised as a real measurement.
     /// </returns>
     public double Apply(double value)
     {

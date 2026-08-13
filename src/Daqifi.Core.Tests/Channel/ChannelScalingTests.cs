@@ -100,6 +100,10 @@ public class ChannelScalingTests
     [Fact]
     public void Apply_OnANonFiniteInput_ReturnsTheInput()
     {
+        // The other half of the contract, and the half that is easy to overstate: Apply never
+        // *introduces* a non-finite value, but it does not launder one either. A reading that
+        // arrives broken comes back broken rather than being disguised as a real measurement, so a
+        // caller who needs a finite number still has to check for one.
         var scaling = new ChannelScaling(gain: 2.0);
 
         Assert.True(double.IsNaN(scaling.Apply(double.NaN)));
