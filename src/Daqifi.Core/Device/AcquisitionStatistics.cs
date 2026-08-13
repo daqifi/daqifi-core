@@ -322,7 +322,10 @@ namespace Daqifi.Core.Device
         /// high rates is telling the truth about its own clock.
         /// </remarks>
         /// <param name="state">The channel's accumulators.</param>
-        /// <param name="intervalTicks">The gap since the previously recorded sample, which may be negative.</param>
+        /// <param name="intervalTicks">
+        /// The gap since the furthest-advanced timestamp seen on this channel, which is negative
+        /// exactly when this sample's timestamp precedes it.
+        /// </param>
         private static void RecordInterval(ChannelState state, long intervalTicks)
         {
             if (intervalTicks < 0)
@@ -404,7 +407,12 @@ namespace Daqifi.Core.Device
                         state.MaxValue = value;
                     }
 
-                    RecordInterval(state, timestamp.Ticks - state.PreviousTimestamp.Ticks);
+                    // Measured against the furthest-advanced timestamp seen, not against whichever
+                    // sample happened to be recorded last. A stale frame rewinds the clock and the
+                    // frame after it jumps forward again to roughly where it was; measuring that
+                    // jump from the rewound value would report the whole rewind as a gap, which is
+                    // an artifact of the reordering rather than a stall in the data.
+                    RecordInterval(state, timestamp.Ticks - state.LatestTimestamp.Ticks);
 
                     // Extremes rather than first-and-last, so the span the device-clock rate is
                     // measured over survives a timestamp that moves backwards. Identical to
@@ -421,7 +429,6 @@ namespace Daqifi.Core.Device
                 }
 
                 state.ValueSum += value;
-                state.PreviousTimestamp = timestamp;
                 state.LastReceivedAt = now;
                 state.SampleCount++;
 
@@ -512,12 +519,6 @@ namespace Daqifi.Core.Device
             /// <summary>The extremes of the timestamps seen, which the device-clock span is measured over.</summary>
             internal DateTime EarliestTimestamp;
             internal DateTime LatestTimestamp;
-
-            /// <summary>
-            /// The previously recorded sample's timestamp — recording order, not time order, because
-            /// an interval is the gap between two samples as they arrived.
-            /// </summary>
-            internal DateTime PreviousTimestamp;
 
             internal DateTime FirstReceivedAt;
             internal DateTime LastReceivedAt;

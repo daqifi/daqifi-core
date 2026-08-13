@@ -226,6 +226,34 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public void Record_TheSampleAfterABackwardsStep_IsNotMeasuredFromTheRewoundTimestamp()
+        {
+            // What a stale frame actually looks like: the clock rewinds, then the next frame jumps
+            // forward again to roughly where it was. Measuring that jump from the rewound value
+            // would report the whole five-second rewind as the worst gap in the acquisition.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0);
+
+            foreach (var offset in new[]
+                     {
+                         TimeSpan.Zero,
+                         TimeSpan.FromMilliseconds(1),
+                         TimeSpan.FromSeconds(-5),      // stale frame
+                         TimeSpan.FromMilliseconds(2),  // the stream carrying on as if nothing happened
+                     })
+            {
+                stats.Record(channel, Sample(Epoch.Add(offset), 1.0));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            var ai0 = Assert.Single(stats.Snapshot().Channels);
+            Assert.Equal(1, ai0.OutOfOrderSampleCount);
+            Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinSampleInterval);
+            Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MaxSampleInterval);
+        }
+
+        [Fact]
         public void Record_ATimestampThatStepsFarBack_DoesNotCollapseTheDeviceClockRate()
         {
             // The damaging case: the most recently recorded sample is not the latest in time, so a
