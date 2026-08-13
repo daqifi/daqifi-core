@@ -238,3 +238,119 @@ public sealed record SdDownloadReport(
 
 /// <summary>Result of deleting a file from the SD card.</summary>
 public sealed record SdDeleteResult(string DeviceId, string FileName);
+
+/// <summary>
+/// The most recent live value on one channel.
+/// </summary>
+/// <param name="Column">The channel's label — <c>AI0</c>, <c>DIO3</c>.</param>
+/// <param name="Channel">The channel number, which repeats across types (AI0 and DIO0 both exist).</param>
+/// <param name="Type">Analog or Digital.</param>
+/// <param name="Value">
+/// The decoded value — volts for an analog channel, 0/1 for a digital one — or <c>null</c> when this
+/// channel produced no sample inside the read window. Null is not zero: it means no data arrived.
+/// </param>
+/// <param name="Timestamp">When the sample was taken, reconstructed from the device clock.</param>
+/// <param name="DeviceTimestamp">The device's own clock ticks for the sample, verbatim.</param>
+/// <param name="RawValue">
+/// The raw ADC count the value was decoded from, or <c>null</c> when the device sent an
+/// already-scaled value (the USB float path does) or the channel is digital.
+/// </param>
+public sealed record ChannelReading(
+    string Column,
+    int Channel,
+    string Type,
+    double? Value,
+    DateTime? Timestamp,
+    uint? DeviceTimestamp,
+    int? RawValue);
+
+/// <summary>
+/// A spot reading of every enabled channel.
+/// </summary>
+/// <param name="SampleRateHz">The device's streaming rate while the reading was taken.</param>
+/// <param name="StartedStream">
+/// Whether this call started the device's stream (and stopped it again afterwards). <c>false</c>
+/// means a stream was already running and was left running.
+/// </param>
+/// <param name="ChannelsReported">How many of the listed channels actually produced a value.</param>
+/// <param name="DurationSeconds">How long the read waited — well under the timeout once every channel has reported.</param>
+/// <param name="DroppedSampleCount">Samples the device produced faster than this server consumed them.</param>
+/// <param name="IgnoredSampleCount">
+/// Samples that arrived for a channel outside the enabled set this call snapshotted — someone
+/// enabled a channel while the read was running.
+/// </param>
+public sealed record ChannelReadings(
+    string DeviceId,
+    int SampleRateHz,
+    bool StartedStream,
+    int ChannelsReported,
+    double DurationSeconds,
+    long DroppedSampleCount,
+    long IgnoredSampleCount,
+    IReadOnlyList<ChannelReading> Channels);
+
+/// <summary>
+/// One row of a capture: a single sample tick, with one entry per column in
+/// <see cref="CaptureResult.Columns"/> order.
+/// </summary>
+/// <param name="Timestamp">The tick's timestamp, reconstructed from the device clock.</param>
+/// <param name="DeviceTimestamp">The device's own clock ticks for the row, verbatim.</param>
+/// <param name="Values">
+/// One value per column, in <see cref="CaptureResult.Columns"/> order. An entry is <c>null</c> when
+/// that channel had no value on this tick, which in practice happens only at the two ends: the
+/// device's first frame after a stream starts can carry the digital port without the analog
+/// readings, and a capture that runs out of time mid-tick keeps the part of the tick it got.
+/// </param>
+public sealed record CaptureRow(DateTime Timestamp, uint? DeviceTimestamp, IReadOnlyList<double?> Values);
+
+/// <summary>
+/// A bounded block of live data.
+/// </summary>
+/// <param name="SampleRateHz">The rate the device was asked to stream at.</param>
+/// <param name="StartedStream">
+/// Whether this call started the device's stream (and stopped it again afterwards). <c>false</c>
+/// means it attached to a stream that was already running and left it running.
+/// </param>
+/// <param name="DurationSeconds">How long the capture actually ran.</param>
+/// <param name="RowCount">Rows returned.</param>
+/// <param name="SampleCount">Individual channel samples those rows hold.</param>
+/// <param name="DroppedSampleCount">
+/// Samples the device produced faster than this server consumed them, so they never reached a row.
+/// Non-zero means the capture has gaps — the rows themselves cannot show that.
+/// </param>
+/// <param name="IgnoredSampleCount">
+/// Samples that arrived for a channel outside the enabled set this call snapshotted — someone
+/// enabled a channel while the capture was running.
+/// </param>
+/// <param name="MeasuredRateHz">
+/// Rows per second actually achieved, timed by this machine's clock from the first row to the last
+/// (so the wait for the device's stream to start is not counted against it). Compare it with
+/// <paramref name="SampleRateHz"/>: a large gap means the device is not streaming at the rate it
+/// was asked for.
+/// </param>
+/// <param name="DeviceClockRateHz">
+/// Rows per second according to the device's <b>own</b> clock — the timestamps on the rows rather
+/// than this machine's stopwatch. It is reported alongside <paramref name="MeasuredRateHz"/>
+/// because the two disagreeing is its own diagnosis: either alone can only say "slower than
+/// requested", while a device whose clock claims the full rate while real time says otherwise has a
+/// clock that is not keeping real time, and its timestamps cannot be trusted as durations. Zero
+/// when fewer than two rows were captured.
+/// </param>
+/// <param name="RowLimitReached">
+/// Whether the capture stopped because it filled its row budget rather than because its time ran
+/// out — so there was more data available.
+/// </param>
+public sealed record CaptureResult(
+    string DeviceId,
+    int SampleRateHz,
+    bool StartedStream,
+    double DurationSeconds,
+    int RowCount,
+    long SampleCount,
+    long DroppedSampleCount,
+    long IgnoredSampleCount,
+    double MeasuredRateHz,
+    double DeviceClockRateHz,
+    bool RowLimitReached,
+    IReadOnlyList<string> Columns,
+    IReadOnlyList<CaptureRow> Rows);

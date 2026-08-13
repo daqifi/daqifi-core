@@ -153,6 +153,48 @@ namespace Daqifi.Core.Tests.Device
             }
         }
 
+        // The live stream is reachable through a capability interface (#498) so a consumer holding a
+        // device — the MCP server, or any typed caller of the package — can read data without naming
+        // DaqifiStreamingDevice itself. Enumerating through that reference here is what proves the
+        // members are actually on it: an interface the device satisfied only by coincidence would
+        // still compile against a cast, but not against these calls.
+        [Fact]
+        public async Task LiveStream_IsReachableThroughTheCapabilityInterface()
+        {
+            var device = CreateStreaming(analogCount: 1);
+            var ai0 = AnalogChannel(device, 0);
+            ai0.IsEnabled = true;
+            device.StartStreaming();
+
+            var live = Assert.IsAssignableFrom<ILiveSampleSource>(device);
+
+            await using var e = live.StreamSamplesAsync(CancellationToken.None).GetAsyncEnumerator();
+            var moveNext = e.MoveNextAsync();
+            device.InvokeStreamMessage(AnalogFrame(1000, 1.5f));
+
+            Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
+            Assert.Same(ai0, e.Current.Channel);
+            Assert.Equal(1.5, e.Current.Sample.Value);
+        }
+
+        [Fact]
+        public async Task DroppedLiveSampleCount_IsVisibleThroughTheCapabilityInterface()
+        {
+            var device = CreateStreaming(analogCount: 1);
+            AnalogChannel(device, 0).IsEnabled = true;
+            device.StartStreaming();
+
+            ILiveSampleSource live = device;
+
+            await using var e = live.StreamSamplesAsync(CancellationToken.None, bufferCapacity: 2).GetAsyncEnumerator();
+            var moveNext = e.MoveNextAsync();
+            for (uint i = 0; i < 20; i++) device.InvokeStreamMessage(AnalogFrame(1000 + i * 10, i));
+
+            Assert.True(await moveNext.AsTask().WaitAsync(MoveNextTimeout));
+            Assert.Equal(device.DroppedLiveSampleCount, live.DroppedLiveSampleCount);
+            Assert.True(live.DroppedLiveSampleCount > 0);
+        }
+
         #region Helpers
 
         private static LiveStreamDevice CreateStreaming(int analogCount)
