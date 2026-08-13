@@ -82,8 +82,11 @@ public sealed record DeviceStatus(
 /// A single channel on a device. <see cref="OutputValue"/> is the last commanded output level
 /// for digital channels; <see cref="PwmCapable"/>/<see cref="PwmEnabled"/> report PWM hardware
 /// support and the last commanded PWM state (all three are null for analog channels).
+/// <see cref="Unit"/> is the engineering unit this channel's readings are expressed in — the
+/// device's own (typically <c>"V"</c>) until a caller configures a transducer conversion, and
+/// <c>null</c> until the capability document has been read.
 /// </summary>
-public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bool Enabled, string Direction, bool? OutputValue, bool? PwmCapable, bool? PwmEnabled)
+public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bool Enabled, string Direction, bool? OutputValue, bool? PwmCapable, bool? PwmEnabled, string? Unit = null)
 {
     public static ChannelInfo From(IChannel ch)
     {
@@ -96,7 +99,8 @@ public sealed record ChannelInfo(int ChannelNumber, string Type, string Name, bo
             ch.Direction.ToString(),
             digital?.OutputValue,
             digital?.IsPwmCapable,
-            digital?.IsPwmEnabled);
+            digital?.IsPwmEnabled,
+            (ch as IScaledChannel)?.Unit);
     }
 }
 

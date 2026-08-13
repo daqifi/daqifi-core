@@ -569,7 +569,15 @@ namespace Daqifi.Core.Device.Internal
                     raw = rawValue;
                 }
 
-                channel.SetActiveSample(new DataSample(hostTimestamp, scaled, raw, deviceTimestamp));
+                // The engineering-unit conversion, if the caller configured one. Stamped onto the
+                // sample rather than applied to its Value: the volts stay readable next to the
+                // converted reading, and nothing about the sample is mutated after the fact. Read
+                // per sample because scaling can change at any time without a channel-state version
+                // bump, which is what the cached channel array keys off (#501).
+                var scaling = channel is IScaledChannel scaledChannel ? scaledChannel.Scaling : null;
+
+                channel.SetActiveSample(
+                    new DataSample(hostTimestamp, scaled, raw, deviceTimestamp) { Scaling = scaling });
             }
         }
 

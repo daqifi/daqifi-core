@@ -823,6 +823,39 @@ arrives outside a streaming session is still re-raised via `MessageReceived` but
 samples. `GetChannelsSnapshot()` is used above (rather than the live `Channels` property) because the
 channel list can be repopulated concurrently when a new device status message arrives.
 
+#### Engineering units (`ChannelScaling`)
+
+A raw reading is volts; what the terminal is actually measuring depends on what is wired to it. Give
+an analog channel a `ChannelScaling` and every sample decoded from then on carries the converted
+reading and its unit alongside the volts:
+
+```csharp
+using Daqifi.Core.Channel;
+
+var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+
+// 0-5 V from a 0-100 PSI transducer.
+((IScaledChannel)ai0).Scaling = new ChannelScaling(gain: 20.0, offset: 0.0, unit: "PSI");
+
+ai0.SampleReceived += (sender, e) =>
+{
+    // e.g. "AI0: 49.6 PSI (2.48 V)"
+    Console.WriteLine($"{e.Channel.Name}: {e.Sample.ScaledValue} {e.Sample.Unit} ({e.Sample.Value} V)");
+};
+```
+
+- `Value` is unchanged — the volts the device reported. `ScaledValue` is `Value * Gain + Offset`, and
+  equals `Value` when no scaling is configured, so existing consumers see exactly what they saw before.
+- `Scaling` is immutable and is stamped onto each sample as it is decoded, so reconfiguring a channel
+  never retroactively reinterprets readings that were already taken. Nothing is mutated in place.
+- Reading the device's capability document (which `InitializeAsync` does on connect, firmware v3.5.0+)
+  fills in the device's own unit — `"V"` on a Nyquist — as an identity scaling, so `Unit` is populated
+  before anyone configures anything. It never overwrites a scaling you have set.
+- A configuration whose arithmetic overflows for a particular reading yields the unscaled value for
+  that reading rather than `NaN`/`Infinity`; the decode thread never throws over scaling.
+- `IScaledChannel` is a capability interface — test for it with `if (channel is IScaledChannel scaled)`.
+  Digital channels do not implement it (a pin's 0/1 state has no engineering quantity to convert).
+
 #### Live async stream (`await foreach`)
 
 `StreamSamplesAsync` exposes the same decoded samples as an `IAsyncEnumerable<LiveSample>`, so a
