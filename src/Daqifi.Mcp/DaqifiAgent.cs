@@ -1326,6 +1326,21 @@ public sealed class DaqifiAgent
 
     // ------------------------------------------------------------------ helpers
 
+    /// <summary>
+    /// Files an already-connected device under <paramref name="deviceId"/>, as if
+    /// <see cref="ConnectAsync"/> had produced it.
+    /// </summary>
+    /// <remarks>
+    /// Exists so the tool surface can be exercised against a device double (#465). Every tool
+    /// past <see cref="Require"/> — which is all of the configuration, digital, PWM and rate
+    /// logic — is otherwise reachable only with hardware attached, which is why the whole of
+    /// this server's test coverage used to stop at "nothing is connected". Deliberately
+    /// <c>internal</c>: the supported way in is <see cref="ConnectAsync"/>, which owns discovery
+    /// lookup and the duplicate-device policy this bypasses.
+    /// </remarks>
+    internal void RegisterConnectedDevice(string deviceId, DaqifiDevice device) =>
+        _registry.Register(device, deviceInfo: null, key: deviceId);
+
     private DaqifiDevice Require(string deviceId)
     {
         if (!_registry.TryGet(deviceId, out var registration))
