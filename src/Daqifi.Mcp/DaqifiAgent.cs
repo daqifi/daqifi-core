@@ -89,6 +89,42 @@ public sealed class DaqifiAgent
     internal const int MinDiscoveryTimeoutMs = 1000;
 
     /// <summary>
+    /// Bounds on <c>read_channel_values</c>' wait. The floor covers the one thing a caller cannot
+    /// see coming: a device that is not streaming yet sends nothing for the first
+    /// 85-110 ms after the start command (bench-measured on a Nyquist over USB, firmware 3.7.2,
+    /// six consecutive runs), so a shorter budget expires before the first frame could arrive and
+    /// reports every channel as silent — the same wrong answer <see cref="MinDiscoveryTimeoutMs"/>
+    /// exists to prevent, and it was measured the same way, by watching a 100 ms budget report
+    /// nothing on a healthy device. The ceiling keeps a spot check from holding the device's
+    /// operation lock for half a minute.
+    /// </summary>
+    internal const int MinReadTimeoutMs = 500;
+
+    /// <inheritdoc cref="MinReadTimeoutMs"/>
+    internal const int MaxReadTimeoutMs = 30_000;
+
+    /// <summary>
+    /// Bounds on a <c>capture_samples</c> window. The floor is the same stream-start cost
+    /// <see cref="MinReadTimeoutMs"/> covers: a capture that has to start the stream spends its
+    /// first ~100 ms with nothing arriving, so a window much shorter than this returns an empty
+    /// capture from a working device. A capture holds the device exclusively for its whole duration
+    /// (see <see cref="RunLiveCaptureAsync"/>), so the ceiling is what stops one tool call from
+    /// owning the device indefinitely; an agent wanting more takes several captures.
+    /// </summary>
+    internal const int MinCaptureDurationMs = 250;
+
+    /// <inheritdoc cref="MinCaptureDurationMs"/>
+    internal const int MaxCaptureDurationMs = 60_000;
+
+    /// <summary>
+    /// Ceiling on the rows one capture returns. Every row travels to the agent as JSON, so this is
+    /// a limit on the answer's size rather than on the device: 10,000 rows is a 10-second capture
+    /// at 1 kHz, and past that an agent wants a file (SD logging plus <c>download_sd_file</c>)
+    /// rather than a tool result.
+    /// </summary>
+    internal const int MaxCaptureRows = 10_000;
+
+    /// <summary>
     /// Write buffer for the CSV a download exports. An exported CSV is several times the size of
     /// the log it came from — a row per timestamp, a column per channel — so it is worth more than
     /// the 4 KB a <see cref="FileStream"/> defaults to.
@@ -993,6 +1029,268 @@ public sealed class DaqifiAgent
 
         return trimmed;
     }
+
+    // ------------------------------------------------------------------ live data
+
+    /// <summary>
+    /// Reads the most recent value on every enabled channel. Waits only as long as it has to: the
+    /// read ends as soon as every enabled channel has reported once, and gives up at
+    /// <paramref name="timeoutMs"/>.
+    /// </summary>
+    /// <remarks>
+    /// Attaches to the device's live stream, and starts one only if nothing is streaming yet — in
+    /// which case it stops it again afterwards, leaving the device as it found it. A session the
+    /// caller already had running is never stopped.
+    /// </remarks>
+    public async Task<ChannelReadings> ReadChannelValuesAsync(
+        string deviceId, int timeoutMs, CancellationToken cancellationToken)
+    {
+        var run = await RunLiveCaptureAsync(
+            deviceId,
+            channels => new LatestValueSink(channels),
+            ClampLiveWindow(timeoutMs, MinReadTimeoutMs, MaxReadTimeoutMs),
+            cancellationToken).ConfigureAwait(false);
+
+        var readings = run.Channels.Select(key =>
+        {
+            var sample = run.Sink.Latest(key);
+            return new ChannelReading(
+                key.Label,
+                key.Number,
+                key.Type.ToString(),
+                sample?.Value,
+                sample?.Timestamp,
+                sample?.DeviceTimestamp,
+                sample?.RawValue);
+        }).ToList();
+
+        return new ChannelReadings(
+            deviceId,
+            run.SampleRateHz,
+            run.StartedStream,
+            run.Sink.ReportedChannelCount,
+            Math.Round(run.Outcome.Elapsed.TotalSeconds, 3),
+            run.DroppedSampleCount,
+            run.Sink.UnexpectedSampleCount,
+            readings);
+    }
+
+    /// <summary>
+    /// Captures a bounded block of live data: one row per sample tick, one column per enabled
+    /// channel. Ends at whichever budget runs out first — <paramref name="durationMs"/> or
+    /// <paramref name="maxRows"/>.
+    /// </summary>
+    /// <inheritdoc cref="ReadChannelValuesAsync" path="/remarks"/>
+    public async Task<CaptureResult> CaptureSamplesAsync(
+        string deviceId, int durationMs, int maxRows, CancellationToken cancellationToken)
+    {
+        var rowBudget = Math.Clamp(maxRows, 1, MaxCaptureRows);
+
+        var run = await RunLiveCaptureAsync(
+            deviceId,
+            channels => new SampleRowSink(channels, rowBudget),
+            ClampLiveWindow(durationMs, MinCaptureDurationMs, MaxCaptureDurationMs),
+            cancellationToken).ConfigureAwait(false);
+
+        var rows = run.Sink.Complete();
+
+        return new CaptureResult(
+            deviceId,
+            run.SampleRateHz,
+            run.StartedStream,
+            Math.Round(run.Outcome.Elapsed.TotalSeconds, 3),
+            rows.Count,
+            run.Sink.SampleCount,
+            run.DroppedSampleCount,
+            run.Sink.UnexpectedSampleCount,
+            RateHz(rows.Count, run.Outcome.DataElapsed),
+            RateHz(rows.Count, rows.Count > 1 ? rows[^1].Timestamp - rows[0].Timestamp : TimeSpan.Zero),
+            rows.Count >= rowBudget,
+            run.Channels.Select(c => c.Label).ToList(),
+            rows);
+    }
+
+    /// <summary>
+    /// Rows per second over <paramref name="span"/>, which covers the gaps <i>between</i> the rows —
+    /// hence one interval fewer than there are rows. Zero when there is no span to divide by, which
+    /// is every capture short enough to hold one row or none.
+    /// </summary>
+    private static double RateHz(int rowCount, TimeSpan span) =>
+        rowCount > 1 && span > TimeSpan.Zero ? Math.Round((rowCount - 1) / span.TotalSeconds, 1) : 0;
+
+    /// <summary>Everything one live-data tool call comes back with, all of it decided under the device's lock.</summary>
+    private readonly record struct LiveRun<TSink>(
+        TSink Sink,
+        IReadOnlyList<ChannelKey> Channels,
+        LiveCaptureOutcome Outcome,
+        long DroppedSampleCount,
+        bool StartedStream,
+        int SampleRateHz);
+
+    /// <summary>
+    /// Runs one live-data tool call: takes the device exclusively, decides whether this call has to
+    /// start the stream, builds the sink over the channels that are enabled at that moment, reads
+    /// into it for <paramref name="window"/>, and stops the stream again if it started one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every decision is made <b>inside</b> the exclusive block on purpose. Deciding outside it —
+    /// the obvious shape, since the answers are all readable without the lock — leaves room for
+    /// another tool call to land in between and turn each answer stale: a capture would stop a
+    /// stream someone else had started, or align its columns to a channel set that was
+    /// reconfigured while it waited for the lock.
+    /// </para>
+    /// <para>
+    /// The device is held for the whole capture, which is far longer than the sequences the other
+    /// tools hold it for, and that is the point: a <c>configure_*</c> landing mid-capture would
+    /// change the channel set the rows are aligned to and the data would silently stop meaning what
+    /// its columns say. The budgets that bound a capture are what keep that block bounded.
+    /// </para>
+    /// </remarks>
+    private async Task<LiveRun<TSink>> RunLiveCaptureAsync<TSink>(
+        string deviceId,
+        Func<IReadOnlyList<ChannelKey>, TSink> createSink,
+        TimeSpan window,
+        CancellationToken cancellationToken)
+        where TSink : ILiveSampleSink
+    {
+        var (device, streaming, live) = RequireLiveSamples(deviceId);
+
+        return await device.RunExclusiveAsync(async ct =>
+        {
+            RequireNotLoggingToSdCard(device, deviceId);
+            var startStream = DecideStreamOwnership(streaming.IsStreaming, _options.ReadOnly);
+            var channels = RequireEnabledChannels(device, deviceId);
+            var sink = createSink(channels);
+
+            // A device-wide running total, so what this capture cost is the difference across it.
+            var droppedBefore = live.DroppedLiveSampleCount;
+            try
+            {
+                var outcome = await LiveSampleCapture.DrainAsync(
+                    live.StreamSamplesAsync(),
+                    sink,
+                    window,
+                    startStream ? streaming.StartStreaming : null,
+                    ct).ConfigureAwait(false);
+
+                return new LiveRun<TSink>(
+                    sink,
+                    channels,
+                    outcome,
+                    live.DroppedLiveSampleCount - droppedBefore,
+                    startStream,
+                    streaming.StreamingFrequency);
+            }
+            finally
+            {
+                if (startStream)
+                {
+                    try
+                    {
+                        streaming.StopStreaming();
+                    }
+                    catch (DeviceNotConnectedException)
+                    {
+                        // The device went away mid-capture, which the capture itself is already
+                        // throwing about. Nothing to stop, and that exception is the useful one.
+                    }
+                }
+            }
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves a device id to the three views the live-data tools need, failing when the device
+    /// cannot supply live samples at all. Only the parts that cannot change under a running
+    /// server — a device's identity and what it implements — are settled here; everything about its
+    /// current state is decided under its lock, in <see cref="RunLiveCaptureAsync"/>.
+    /// </summary>
+    private (DaqifiDevice Device, IStreamingDevice Streaming, ILiveSampleSource Live) RequireLiveSamples(string deviceId)
+    {
+        var (device, streaming) = RequireStreaming(deviceId);
+
+        if (device is not ILiveSampleSource live)
+        {
+            throw new InvalidOperationException(
+                $"Device '{deviceId}' does not support reading live samples.");
+        }
+
+        return (device, streaming, live);
+    }
+
+    /// <summary>
+    /// Refuses a live read while the device is recording to its SD card. A card recording routes
+    /// the device's data to the card instead of to this machine, so a capture would wait out its
+    /// whole window and return nothing — and, because a recording also reads as "streaming", it
+    /// would look to the rest of this path like a session someone else had started.
+    /// </summary>
+    private static void RequireNotLoggingToSdCard(DaqifiDevice device, string deviceId)
+    {
+        if (device is ISdCardOperations { IsLoggingToSdCard: true })
+        {
+            throw new InvalidOperationException(
+                $"Device '{deviceId}' is logging to its SD card, which sends the data to the card "
+                + "instead of to this machine, so no live samples arrive here. Call stop_sd_logging "
+                + "first, then read live values or download_sd_file to read what was recorded.");
+        }
+    }
+
+    /// <summary>
+    /// The whole of the live tools' <c>--read-only</c> rule, kept apart from the device so it can be
+    /// tested without one: reading a stream that is already running changes nothing on the device
+    /// and stays available; starting one does not.
+    /// </summary>
+    /// <returns><c>true</c> when the caller must start the stream (and stop it again afterwards).</returns>
+    internal static bool DecideStreamOwnership(bool isStreaming, bool readOnly)
+    {
+        if (isStreaming)
+        {
+            return false;
+        }
+
+        if (readOnly)
+        {
+            throw new InvalidOperationException(
+                "Server is running in --read-only mode and this device is not streaming, so there "
+                + "is nothing to read: starting its stream is a change this mode does not allow. "
+                + "Reading from a stream that is already running is still available.");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The enabled channels a capture reads, analog first and each type in channel order — the
+    /// column order every row is aligned to.
+    /// </summary>
+    private static IReadOnlyList<ChannelKey> RequireEnabledChannels(DaqifiDevice device, string deviceId)
+    {
+        var channels = Snapshot(device)
+            .Where(c => c.IsEnabled)
+            .Select(ChannelKey.For)
+            .OrderBy(k => k.Type == ChannelType.Analog ? 0 : 1)
+            .ThenBy(k => k.Number)
+            .ToList();
+
+        if (channels.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"No channels are enabled on '{deviceId}', so the device has nothing to send. "
+                + "Enable at least one with configure_analog_channels or configure_digital_channels.");
+        }
+
+        return channels;
+    }
+
+    /// <summary>
+    /// Clamps a caller-supplied millisecond budget into the range a capture supports. Clamped
+    /// rather than rejected: unlike a sample rate, a budget outside the range still has an obvious
+    /// intent ("as long as you'll give me"), and the result reports the duration actually used.
+    /// Internal for testing.
+    /// </summary>
+    internal static TimeSpan ClampLiveWindow(int milliseconds, int minimum, int maximum) =>
+        TimeSpan.FromMilliseconds(Math.Clamp(milliseconds, minimum, maximum));
 
     // ------------------------------------------------------------------ shutdown
 

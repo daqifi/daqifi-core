@@ -171,6 +171,25 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.DeleteSdFileAsync(deviceId, fileName, cancellationToken));
 
+    [McpServerTool(Name = "read_channel_values")]
+    [Description("Read the latest value on every enabled channel: volts for analog inputs, 0/1 for digital ones, each with the timestamp it was sampled at. Returns as soon as every enabled channel has reported, so it normally costs one sample period rather than the full timeout; a channel that reported nothing comes back with a null value rather than a zero. Configure and enable channels first — with none enabled the device sends nothing and the call is refused. If the device is not already streaming this starts its stream and stops it again afterwards (refused in --read-only mode, since that is a change); a stream that was already running is read and left running.")]
+    public static Task<ChannelReadings> ReadChannelValues(
+        DaqifiAgent agent,
+        [Description("The device_id to read.")] string deviceId,
+        [Description("How long to wait for every enabled channel to report, in milliseconds (default 2000; clamped to 500..30000). Reached only when a channel stays silent: a device already streaming at 1 kHz answers in a few milliseconds, and one that has to be started answers in about 100 ms — which is why the floor is where it is.")] int timeoutMs = 2000,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.ReadChannelValuesAsync(deviceId, timeoutMs, cancellationToken));
+
+    [McpServerTool(Name = "capture_samples")]
+    [Description("Capture a block of live data as rows: one row per sample tick, one column per enabled channel (columns are named AI0/DIO0 and listed in the result). The capture ends at whichever budget runs out first, the duration or the row count, and reports what it actually got — rows, the rate it achieved, and the number of samples dropped because this server could not keep up. Compare measuredRateHz (this machine's clock) with sampleRateHz to see whether the device is streaming as fast as it was asked to, and with deviceClockRateHz (the device's own timestamps) to see whether its clock is keeping real time. Configure channels and the sample rate first. If the device is not already streaming this starts its stream and stops it again afterwards (refused in --read-only mode); a stream that was already running is read and left running. The device is held exclusively for the whole capture, so other tool calls on it wait.")]
+    public static Task<CaptureResult> CaptureSamples(
+        DaqifiAgent agent,
+        [Description("The device_id to capture from.")] string deviceId,
+        [Description("How long to capture for, in milliseconds (default 1000; clamped to 250..60000). The floor is bench-measured: a device that is not streaming yet sends nothing for the first ~100 ms after the start command, so a shorter window would come back empty from a healthy device.")] int durationMs = 1000,
+        [Description("Most rows to return (default 500; clamped to 1..10000). A row is one sample tick across all enabled channels, so 1000 rows at 1 kHz is one second of data. rowLimitReached in the result tells you the capture stopped on this budget rather than on time — i.e. there was more data.")] int maxRows = 500,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.CaptureSamplesAsync(deviceId, durationMs, maxRows, cancellationToken));
+
     // Surface real exception messages (validation + Core errors) to the agent rather than a
     // generic "An error occurred". Cancellation is allowed to propagate untouched.
     private static T Guard<T>(Func<T> action)
