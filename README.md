@@ -80,6 +80,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **Auto-discovery** | Find any DAQiFi on WiFi or USB in seconds — no IP hunting, no config files |
 | **One-line connect** | `DaqifiDeviceFactory.ConnectTcpAsync(...)` wraps transport setup and device init; retries are opt-in via `DeviceConnectionOptions` |
 | **Real-time streaming** | Per-channel `IChannel.SampleReceived` events with decoded, scaled values — or subscribe to the raw protobuf frame directly; no polling loops to write |
+| **Acquisition health** | Attach `AcquisitionStatistics` to a stream and read back the rate you are really getting, per-channel jitter, value range, and how far behind the device's clock the host is |
 | **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
 | **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
 | **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
@@ -167,6 +168,38 @@ var devices = await wifiFinder.DiscoverAsync(cts.Token);
 
 using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
 ```
+
+### Acquisition statistics
+
+"Am I actually getting 1 kHz?" — attach an `AcquisitionStatistics` for the duration of a stream and
+read a snapshot whenever you want the answer. It observes the same per-channel sample events
+streaming already raises, so nothing changes for consumers that do not attach one.
+
+```csharp
+using Daqifi.Core.Device;
+
+using var stats = new AcquisitionStatistics(device);
+
+device.StreamingFrequency = 1000;
+device.StartStreaming();
+await Task.Delay(TimeSpan.FromSeconds(5));
+device.StopStreaming();
+
+var snapshot = stats.Snapshot();
+foreach (var channel in snapshot.Channels)
+{
+    Console.WriteLine(
+        $"{channel.Name}: {channel.SampleCount} samples, " +
+        $"{channel.MeasuredSampleRateHz:F1} Hz measured vs {channel.DeviceClockSampleRateHz:F1} Hz by the device clock, " +
+        $"{channel.MinValue:F3}..{channel.MaxValue:F3} V, worst gap {channel.MaxSampleInterval.TotalMilliseconds:F2} ms");
+}
+```
+
+The two rates are reported side by side on purpose. Both dropping below the commanded rate means
+samples went missing; the two disagreeing means the device's own clock is not keeping real time, and
+it is `MeasuredSampleRateHz` that describes what your application actually received. `Reset()` starts
+a fresh window mid-session, and `stats.Record(sample)` feeds one by hand from `StreamSamplesAsync`
+instead of attaching.
 
 ### Digital output
 
