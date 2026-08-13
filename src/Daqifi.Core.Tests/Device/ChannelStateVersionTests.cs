@@ -77,6 +77,54 @@ public class ChannelStateVersionTests
     }
 
     /// <summary>
+    /// A status that describes the same channels the device already has is not a change. The
+    /// populator reuses those instances, so nothing derived from them can have gone stale — moving
+    /// the version anyway would throw away a live stream's cache on every status poll.
+    /// </summary>
+    [Fact]
+    public void RepopulatingWithTheSameChannels_DoesNotMoveTheVersion()
+    {
+        var device = CreateDevice(analogCount: 2, digitalCount: 2);
+        var before = device.ChannelStateVersion;
+
+        device.PopulateChannelsFromStatus(Status(analogCount: 2, digitalCount: 2));
+        device.PopulateChannelsFromStatus(Status(analogCount: 2, digitalCount: 2));
+
+        Assert.Equal(before, device.ChannelStateVersion);
+    }
+
+    /// <summary>
+    /// …but a status that changes the enabled mask on those same instances still moves it, through
+    /// the channels' own notifications rather than through the membership check.
+    /// </summary>
+    [Fact]
+    public void RepopulatingWithADifferentEnabledMask_StillMovesTheVersion()
+    {
+        var device = CreateDevice(analogCount: 2);
+        var before = device.ChannelStateVersion;
+
+        var status = Status(analogCount: 2);
+        status.AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0011);
+        device.PopulateChannelsFromStatus(status);
+
+        Assert.NotEqual(before, device.ChannelStateVersion);
+    }
+
+    /// <summary>
+    /// A channel count change replaces the membership, which no per-channel notification covers.
+    /// </summary>
+    [Fact]
+    public void RepopulatingWithADifferentChannelCount_MovesTheVersion()
+    {
+        var device = CreateDevice(analogCount: 2);
+        var before = device.ChannelStateVersion;
+
+        device.PopulateChannelsFromStatus(Status(analogCount: 3));
+
+        Assert.NotEqual(before, device.ChannelStateVersion);
+    }
+
+    /// <summary>
     /// A channel the device no longer owns must not keep bumping the version — that is a
     /// subscription leak, and it would make every write to a long-discarded channel invalidate a
     /// live stream's cache.

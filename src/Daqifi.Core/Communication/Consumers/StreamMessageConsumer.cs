@@ -705,7 +705,22 @@ public class StreamMessageConsumer<T> : IMessageConsumer<T>
     /// </param>
     protected virtual void OnMessageReceived(IInboundMessage<T> message, byte[] rawData)
     {
-        MessageParsed?.Invoke(message);
+        try
+        {
+            MessageParsed?.Invoke(message);
+        }
+        catch (Exception ex)
+        {
+            // Isolated from the public event on purpose. MessageParsed is what Core's own
+            // subscribers ride, so without this an internal handler that threw would silently
+            // withhold the message from an external MessageReceived subscriber that had nothing to
+            // do with the failure. Reported through the same channel as any other dispatch fault.
+            SafeRaiseError(ex);
+        }
+
+        // Deliberately not wrapped: a throwing MessageReceived subscriber propagates to
+        // ProcessMessageBuffer's per-message catch exactly as it did before this event existed,
+        // which is where it has always been reported from.
         MessageReceived?.Invoke(this, new MessageReceivedEventArgs<T>(message, rawData));
     }
 

@@ -301,6 +301,34 @@ namespace Daqifi.Core.Device
         private void OnChannelEnablementChanged() => Interlocked.Increment(ref _channelStateVersion);
 
         /// <summary>
+        /// Whether <paramref name="updated"/> holds a different set of channel instances, in a
+        /// different order, from <paramref name="current"/>.
+        /// </summary>
+        /// <remarks>
+        /// Instance identity, not <c>(type, number)</c> identity. Two channels can carry the same
+        /// number and type and still be different objects — the populator builds a new one whenever
+        /// it cannot reuse the old — and anything caching the old instance would keep writing
+        /// samples into a channel the device has replaced.
+        /// </remarks>
+        private static bool MembershipChanged(List<IChannel> current, List<IChannel> updated)
+        {
+            if (current.Count != updated.Count)
+            {
+                return true;
+            }
+
+            for (var i = 0; i < current.Count; i++)
+            {
+                if (!ReferenceEquals(current[i], updated[i]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Runs <paramref name="action"/> under the same lock that guards structural access to
         /// <see cref="_channels"/> and the status-driven <c>IsEnabled</c> resync in
         /// <see cref="PopulateChannelsFromStatus"/>. A subclass's channel-management API (e.g.
@@ -3929,31 +3957,40 @@ namespace Daqifi.Core.Device
 
                 (analogCount, digitalCount) = _channelPopulator.Populate(message, _channels, updatedChannels);
 
-                // Re-point the enablement subscriptions at the channels this device is about to
-                // own. The populator reuses existing instances where it can, so most of these
-                // detach and immediately re-attach; doing it unconditionally is what keeps a
-                // dropped channel from holding a subscription and a brand-new one from missing it.
-                foreach (var channel in _channels)
+                // Only a change of *membership* needs handling here. A status that re-asserts a
+                // different enabled mask on channels the device already had has moved the version
+                // already, through those channels' own notifications — they were still subscribed
+                // while Populate ran, which is why the comparison and the swap happen after it.
+                //
+                // Compared by reference rather than by (type, number): the populator builds a fresh
+                // instance whenever it cannot reuse one, and a cache holding the instance it
+                // replaced would go on delivering samples to a channel the device no longer has.
+                // Identical by reference and in order means the list it just built is the list the
+                // device already holds, so there is nothing to swap, re-subscribe or invalidate.
+                if (MembershipChanged(_channels, updatedChannels))
                 {
-                    if (channel is IChannelEnablementNotifier notifier)
+                    foreach (var channel in _channels)
                     {
-                        notifier.EnablementChanged -= OnChannelEnablementChanged;
+                        if (channel is IChannelEnablementNotifier notifier)
+                        {
+                            notifier.EnablementChanged -= OnChannelEnablementChanged;
+                        }
                     }
-                }
 
-                _channels.Clear();
-                _channels.AddRange(updatedChannels);
+                    _channels.Clear();
+                    _channels.AddRange(updatedChannels);
 
-                foreach (var channel in _channels)
-                {
-                    if (channel is IChannelEnablementNotifier notifier)
+                    foreach (var channel in _channels)
                     {
-                        notifier.EnablementChanged += OnChannelEnablementChanged;
+                        if (channel is IChannelEnablementNotifier notifier)
+                        {
+                            notifier.EnablementChanged += OnChannelEnablementChanged;
+                        }
                     }
-                }
 
-                // The membership itself changed, which no per-channel notification covers.
-                Interlocked.Increment(ref _channelStateVersion);
+                    // No per-channel notification covers the set itself changing.
+                    Interlocked.Increment(ref _channelStateVersion);
+                }
 
                 channelsSnapshot = _channels.ToArray();
             }

@@ -153,6 +153,43 @@ public class StreamMessageConsumerBufferCopyTests
         Assert.Equal(new uint[] { 4242 }, messages);
     }
 
+    /// <summary>
+    /// The two events are independent deliveries. Core's own subscribers ride
+    /// <c>MessageParsed</c>, so one of them throwing must not withhold the message from an external
+    /// <c>MessageReceived</c> subscriber that had nothing to do with the failure — and the failure
+    /// must still be reported.
+    /// </summary>
+    [Fact]
+    public void AThrowingMessageParsedSubscriber_DoesNotWithholdMessageReceived()
+    {
+        using var stream = new MemoryStream(Frame(7).Concat(Frame(8)).ToArray());
+        using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, new ProtobufMessageParser());
+
+        var errors = new List<Exception>();
+        var delivered = new List<uint>();
+        var done = new ManualResetEventSlim(false);
+
+        consumer.MessageParsed += _ => throw new InvalidOperationException("bad internal handler");
+        consumer.ErrorOccurred += (_, e) => errors.Add(e.Error);
+        consumer.MessageReceived += (_, args) =>
+        {
+            delivered.Add(args.Message.Data.MsgTimeStamp);
+            if (delivered.Count == 2)
+            {
+                done.Set();
+            }
+        };
+
+        consumer.Start();
+        var fired = done.Wait(TimeSpan.FromSeconds(2));
+        consumer.Stop();
+
+        Assert.True(fired, "both messages should still have reached MessageReceived");
+        Assert.Equal(new uint[] { 7, 8 }, delivered);
+        Assert.Equal(2, errors.Count);
+        Assert.All(errors, error => Assert.IsType<InvalidOperationException>(error));
+    }
+
     private static byte[] Frame(uint timestamp)
     {
         var message = new DaqifiOutMessage { MsgTimeStamp = timestamp };
