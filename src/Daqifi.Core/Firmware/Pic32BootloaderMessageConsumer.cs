@@ -1,4 +1,5 @@
 using System.IO;
+using static Daqifi.Core.Firmware.Pic32BootloaderWireFormat;
 
 namespace Daqifi.Core.Firmware;
 
@@ -6,16 +7,12 @@ namespace Daqifi.Core.Firmware;
 /// Decodes PIC32 bootloader protocol response messages.
 /// Handles SOH framing validation and DLE-unescaping.
 /// </summary>
+/// <remarks>
+/// The framing bytes and opcodes matched here come from <see cref="Pic32BootloaderWireFormat"/>,
+/// shared with <see cref="Pic32BootloaderMessageProducer"/> so the two sides cannot drift apart.
+/// </remarks>
 public static class Pic32BootloaderMessageConsumer
 {
-    private const byte START_OF_HEADER = 0x01;
-    private const byte END_OF_TRANSMISSION = 0x04;
-    private const byte DATA_LINK_ESCAPE = 0x10;
-    private const byte REQUEST_VERSION_COMMAND = 0x01;
-    private const byte ERASE_FLASH_COMMAND = 0x02;
-    private const byte PROGRAM_FLASH_COMMAND = 0x03;
-    private const byte READ_CRC_COMMAND = 0x04;
-
     /// <summary>
     /// Decodes a version response from the bootloader.
     /// </summary>
@@ -28,24 +25,24 @@ public static class Pic32BootloaderMessageConsumer
 
         if (data.Length < 2) return "Error";
 
-        if (data[0] != START_OF_HEADER) return "Error";
+        if (data[0] != StartOfHeader) return "Error";
 
         // The command byte (0x01) matches SOH, so it will be DLE-escaped.
         // Minimum valid version response: SOH + DLE + cmd + major + minor = 5 bytes
         // With DLE-escaped version bytes it can be up to 7 bytes
-        if (data.Length >= 5 && data[1] == DATA_LINK_ESCAPE && data[2] == REQUEST_VERSION_COMMAND)
+        if (data.Length >= 5 && data[1] == DataLinkEscape && data[2] == RequestVersionCommand)
         {
             var pointer = 3;
 
             if (pointer < data.Length)
             {
-                majorVersion = data[pointer] == DATA_LINK_ESCAPE && pointer + 1 < data.Length ? data[++pointer] : data[pointer];
+                majorVersion = data[pointer] == DataLinkEscape && pointer + 1 < data.Length ? data[++pointer] : data[pointer];
                 pointer++;
             }
 
             if (pointer < data.Length)
             {
-                minorVersion = data[pointer] == DATA_LINK_ESCAPE && pointer + 1 < data.Length ? data[++pointer] : data[pointer];
+                minorVersion = data[pointer] == DataLinkEscape && pointer + 1 < data.Length ? data[++pointer] : data[pointer];
             }
         }
 
@@ -60,9 +57,9 @@ public static class Pic32BootloaderMessageConsumer
     public static bool DecodeProgramFlashResponse(byte[] data)
     {
         if (data.Length < 2) return false;
-        if (data[0] != START_OF_HEADER) return false;
+        if (data[0] != StartOfHeader) return false;
 
-        return data[1] == PROGRAM_FLASH_COMMAND;
+        return data[1] == ProgramFlashCommand;
     }
 
     /// <summary>
@@ -73,9 +70,9 @@ public static class Pic32BootloaderMessageConsumer
     public static bool DecodeEraseFlashResponse(byte[] data)
     {
         if (data.Length < 2) return false;
-        if (data[0] != START_OF_HEADER) return false;
+        if (data[0] != StartOfHeader) return false;
 
-        return data[1] == ERASE_FLASH_COMMAND;
+        return data[1] == EraseFlashCommand;
     }
 
     /// <summary>
@@ -95,7 +92,7 @@ public static class Pic32BootloaderMessageConsumer
     {
         ArgumentNullException.ThrowIfNull(data);
 
-        if (data.Length < 2 || data[0] != START_OF_HEADER)
+        if (data.Length < 2 || data[0] != StartOfHeader)
         {
             throw new InvalidDataException("READ_CRC response did not begin with SOH framing.");
         }
@@ -117,13 +114,13 @@ public static class Pic32BootloaderMessageConsumer
                 continue;
             }
 
-            if (b == DATA_LINK_ESCAPE)
+            if (b == DataLinkEscape)
             {
                 escaped = true;
                 continue;
             }
 
-            if (b == END_OF_TRANSMISSION)
+            if (b == EndOfTransmission)
             {
                 terminated = true;
                 break;
@@ -143,7 +140,7 @@ public static class Pic32BootloaderMessageConsumer
                 $"READ_CRC response was too short ({payload.Count} payload byte(s); expected 5).");
         }
 
-        if (payload[0] != READ_CRC_COMMAND)
+        if (payload[0] != ReadCrcCommand)
         {
             throw new InvalidDataException(
                 $"READ_CRC response had unexpected command byte 0x{payload[0]:X2}.");
