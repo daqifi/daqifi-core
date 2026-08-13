@@ -2674,6 +2674,19 @@ namespace Daqifi.Core.Device
             }
 
             Metadata.ApplyCapabilityDocument(document);
+
+            // The document is the only place the device says what its analog readings are measured
+            // in, so this is where a channel learns its unit (#501). Never overwrites a scaling a
+            // caller configured, which matters because this method is re-run on every capability
+            // refresh.
+            var unitsApplied = CapabilityChannelUnits.Apply(GetChannelsSnapshot(), document);
+            if (unitsApplied > 0)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] Applied the document's unit to {ChannelCount} analog channel(s).",
+                    unitsApplied));
+            }
+
             return document;
         }
 

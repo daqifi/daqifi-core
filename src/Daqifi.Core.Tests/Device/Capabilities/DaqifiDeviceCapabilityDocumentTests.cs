@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Capabilities;
@@ -212,6 +213,66 @@ public class DaqifiDeviceCapabilityDocumentTests
         {
             Assert.Equal(supported, device.Supports(feature));
         }
+    }
+
+    [Fact]
+    public async Task ReadCapabilityDocumentAsync_GivesAnalogChannelsTheDocumentsUnit()
+    {
+        // The document is the only place the device says what its readings are measured in, and
+        // until #501 nothing read it. On the bench Nq1 every analog input states "V".
+        var device = CreateSupportedDevice();
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, DigitalPortNum = 2 });
+        device.Responses[ApiVersionCommand] = ["2"];
+        device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
+
+        await device.ReadCapabilityDocumentAsync();
+
+        var analog = device.GetChannelsSnapshot().OfType<IAnalogChannel>().ToList();
+        Assert.Equal(2, analog.Count);
+        Assert.All(analog, c => Assert.Equal("V", ((IScaledChannel)c).Unit));
+
+        // A unit, not a conversion: readings must be untouched.
+        Assert.All(analog, c => Assert.True(((IScaledChannel)c).Scaling!.IsIdentity));
+
+        // Digital channels have no engineering quantity, so they stay bare.
+        Assert.All(
+            device.GetChannelsSnapshot().Where(c => c.Type == ChannelType.Digital),
+            c => Assert.False(c is IScaledChannel));
+    }
+
+    [Fact]
+    public async Task ReadCapabilityDocumentAsync_DoesNotOverwriteAConfiguredScaling()
+    {
+        // A refresh runs this again — the MCP layer re-reads the document after every
+        // channel-configuration call — so a caller's transducer conversion has to survive it.
+        var device = CreateSupportedDevice();
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, DigitalPortNum = 0 });
+        var ai0 = (IScaledChannel)device.GetChannelsSnapshot().OfType<IAnalogChannel>().First();
+        var configured = new ChannelScaling(gain: 20.0, unit: "PSI");
+        ai0.Scaling = configured;
+
+        device.Responses[ApiVersionCommand] = ["2"];
+        device.Responses[DocumentCommand] = [CapabilityDocumentSamples.Nyquist1Firmware372];
+        await device.ReadCapabilityDocumentAsync();
+        await device.ReadCapabilityDocumentAsync();
+
+        Assert.Same(configured, ai0.Scaling);
+    }
+
+    [Fact]
+    public async Task ReadCapabilityDocumentAsync_OnADocumentItDoesNotTrust_LeavesUnitsAlone()
+    {
+        // The units ride on the same "is this document trustworthy" decision as everything else:
+        // a document that was not applied must not have applied half of itself.
+        var device = CreateSupportedDevice();
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage { AnalogInPortNum = 2, DigitalPortNum = 0 });
+        device.Responses[ApiVersionCommand] = ["2"];
+        device.Responses[DocumentCommand] = ["not json"];
+
+        Assert.Null(await device.ReadCapabilityDocumentAsync());
+        Assert.All(
+            device.GetChannelsSnapshot().OfType<IAnalogChannel>(),
+            c => Assert.Null(((IScaledChannel)c).Scaling));
     }
 
     /// <summary>

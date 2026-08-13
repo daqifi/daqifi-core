@@ -498,6 +498,153 @@ public class StreamFrameDecoderTests
 
     #endregion
 
+    #region Engineering units (#501)
+
+    /// <summary>
+    /// The USB path is the one that bypasses <see cref="IAnalogChannel.GetScaledValue"/> entirely —
+    /// the firmware already sent volts — so it is the path an engineering-unit conversion is most
+    /// easily forgotten on.
+    /// </summary>
+    [Fact]
+    public void PreScaledFloatSample_CarriesTheChannelsScaling()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        ai0.Scaling = new ChannelScaling(gain: 20.0, offset: 1.0, unit: "PSI");
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 2.5f));
+
+        var sample = ai0.ActiveSample!;
+        Assert.Equal(2.5, sample.Value, 3);   // the volts the device reported, untouched
+        Assert.Equal(51.0, sample.ScaledValue, 3);
+        Assert.Equal("PSI", sample.Unit);
+    }
+
+    /// <summary>
+    /// The WiFi path, where the calibration conversion runs first. Both conversions must apply, in
+    /// that order.
+    /// </summary>
+    [Fact]
+    public void RawCountSample_IsCalibratedThenScaled()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        ai0.PortRange = 10.0;
+        ai0.Scaling = new ChannelScaling(gain: 2.0, unit: "PSI");
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(RawCountFrame(1000, 32768));
+
+        var sample = ai0.ActiveSample!;
+        var volts = ai0.GetScaledValue(32768);
+        Assert.Equal(volts, sample.Value, 6);
+        Assert.Equal(32768, sample.RawValue);
+        Assert.Equal(volts * 2.0, sample.ScaledValue, 6);
+    }
+
+    [Fact]
+    public void WithNoScalingConfigured_SamplesReportTheirValueUnchanged()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 2.5f));
+
+        Assert.Null(ai0.ActiveSample!.Scaling);
+        Assert.Equal(2.5, ai0.ActiveSample.ScaledValue, 3);
+        Assert.Null(ai0.ActiveSample.Unit);
+    }
+
+    /// <summary>
+    /// Scaling is per channel, and the decoder reads it per channel. One channel's transducer
+    /// conversion leaking onto its neighbours would be the worst kind of silent error.
+    /// </summary>
+    [Fact]
+    public void ScalingIsAppliedPerChannel()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var ai1 = host.AddAnalog(1, enabled: true);
+        ai0.Scaling = new ChannelScaling(gain: 10.0, unit: "PSI");
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(FullAnalogFrame(1000, 1.0f, 2.0f));
+
+        Assert.Equal(10.0, ai0.ActiveSample!.ScaledValue, 3);
+        Assert.Equal(2.0, ai1.ActiveSample!.ScaledValue, 3);
+        Assert.Null(ai1.ActiveSample.Unit);
+    }
+
+    /// <summary>
+    /// Scaling can be reconfigured at any time, and unlike enablement it does not bump the channel
+    /// state version the decoder's channel cache keys off — so reading it once per cache rebuild
+    /// would leave the change invisible until something else happened to invalidate the cache.
+    /// </summary>
+    [Fact]
+    public void ScalingChangedMidStream_TakesEffectOnTheNextFrame_WithoutAChannelStateChange()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 2.0f));
+        Assert.Equal(2.0, ai0.ActiveSample!.ScaledValue, 3);
+        var versionBefore = host.ChannelStateVersion;
+
+        ai0.Scaling = new ChannelScaling(gain: 100.0, unit: "PSI");
+        decoder.ProcessFrame(AnalogFrame(2000, 2.0f));
+
+        Assert.Equal(versionBefore, host.ChannelStateVersion); // nothing invalidated the cache
+        Assert.Equal(200.0, ai0.ActiveSample!.ScaledValue, 3);
+    }
+
+    /// <summary>
+    /// Decoding runs on the consumer thread, where a throw is a dropped stream. A scaling whose
+    /// arithmetic overflows for a reading has to degrade to that reading, not blow up the frame.
+    /// </summary>
+    [Fact]
+    public void AnOverflowingScaling_DoesNotDisturbTheDecode()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var ai0 = host.AddAnalog(0, enabled: true);
+        ai0.Scaling = new ChannelScaling(gain: 1e308, unit: "PSI");
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 1e10f));
+
+        Assert.Null(host.LastDecodeFailure);
+        Assert.Equal(1e10, ai0.ActiveSample!.ScaledValue, 0);
+    }
+
+    [Fact]
+    public void DigitalSamples_CarryNoScaling()
+    {
+        // A pin's 0/1 state has no engineering quantity to convert, so DigitalChannel deliberately
+        // does not implement IScaledChannel and its samples stay bare.
+        var host = new FakeHost { IsStreaming = true };
+        host.AddAnalog(0, enabled: true);
+        var di0 = host.AddDigital(0, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        var frame = AnalogFrame(1000, 1.0f);
+        frame.DigitalData = ByteString.CopyFrom(0x01);
+        decoder.ProcessFrame(frame);
+
+        Assert.Null(di0.ActiveSample!.Scaling);
+        Assert.Equal(1.0, di0.ActiveSample.ScaledValue);
+    }
+
+    #endregion
+
     #region Helpers
 
     private static ThrowSwitch AttachThrowingSubscriber(IChannel channel)
@@ -517,6 +664,20 @@ public class StreamFrameDecoderTests
     {
         var frame = new DaqifiOutMessage { MsgTimeStamp = timestamp };
         frame.AnalogInDataFloat.Add(value);
+        return frame;
+    }
+
+    /// <summary>
+    /// A frame carrying raw ADC counts rather than pre-scaled floats — the WiFi firmware's shape,
+    /// which is the branch that runs the per-channel calibration.
+    /// </summary>
+    private static DaqifiOutMessage RawCountFrame(uint timestamp, params int[] counts)
+    {
+        var frame = new DaqifiOutMessage { MsgTimeStamp = timestamp };
+        foreach (var count in counts)
+        {
+            frame.AnalogInData.Add(count);
+        }
         return frame;
     }
 

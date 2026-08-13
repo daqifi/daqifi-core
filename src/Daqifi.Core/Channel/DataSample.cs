@@ -28,6 +28,23 @@ public class DataSample : IDataSample
     public uint? DeviceTimestamp { get; init; }
 
     /// <summary>
+    /// Gets the engineering-unit conversion that was in force on the channel when this sample was
+    /// decoded, or <c>null</c> when the channel had none.
+    /// </summary>
+    public ChannelScaling? Scaling { get; init; }
+
+    /// <summary>
+    /// Gets <see cref="Value"/> converted into engineering units by <see cref="Scaling"/>, or
+    /// <see cref="Value"/> itself when there is no scaling.
+    /// </summary>
+    public double ScaledValue => Scaling is { } scaling ? scaling.Apply(Value) : Value;
+
+    /// <summary>
+    /// Gets the unit <see cref="ScaledValue"/> is expressed in, or <c>null</c> when no unit is known.
+    /// </summary>
+    public string? Unit => Scaling?.Unit;
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="DataSample"/> class.
     /// </summary>
     public DataSample()
