@@ -458,12 +458,34 @@ public class SampleRowSinkTests
         // the sample that triggered it is not kept, so no half-row rides along behind the budget.
         Assert.False(sink.Add(Sample(ChannelType.Analog, 0, 3.0, T0.AddMilliseconds(2))));
         Assert.True(sink.IsComplete);
+        Assert.True(sink.RowBudgetFilled, "this capture really did end on its budget, and says so");
 
         var rows = sink.Complete();
         Assert.Equal(2, rows.Count);
         Assert.Equal(new double?[] { 1.0 }, rows[0].Values);
         Assert.Equal(new double?[] { 2.0 }, rows[1].Values);
         Assert.Equal(2, sink.SampleCount);
+    }
+
+    // The final flush can bring the row count up to the budget on a capture the budget had nothing
+    // to do with. "Was there more data?" is the sink's state when the capture stopped, not the row
+    // count afterwards — a caller told rowLimitReached on a capture that simply ran out of time
+    // would go back for a continuation that does not exist.
+    [Fact]
+    public void ARowFlushedAfterTheCapture_DoesNotCountAsHavingFilledTheBudget()
+    {
+        var sink = NewSink(maxRows: 2, Key(ChannelType.Analog, 0));
+
+        // Where a window-bounded capture ends: one row closed, one still being filled.
+        sink.Add(Sample(ChannelType.Analog, 0, 1.0, T0));
+        sink.Add(Sample(ChannelType.Analog, 0, 2.0, T0.AddMilliseconds(1)));
+
+        // The flush brings the row count up to the budget all by itself...
+        Assert.Equal(2, sink.Complete().Count);
+        Assert.True(sink.IsComplete);
+
+        // ...but the budget is not why this capture ended, and the caller is not told it was.
+        Assert.False(sink.RowBudgetFilled);
     }
 
     // A capture bounded by time can stop part-way through a tick. That row is real data, one

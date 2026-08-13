@@ -1105,7 +1105,7 @@ public sealed class DaqifiAgent
             run.Sink.UnexpectedSampleCount,
             RateHz(rows.Count, run.Outcome.DataElapsed),
             RateHz(rows.Count, rows.Count > 1 ? rows[^1].Timestamp - rows[0].Timestamp : TimeSpan.Zero),
-            rows.Count >= rowBudget,
+            run.Sink.RowBudgetFilled,
             run.Channels.Select(c => c.Label).ToList(),
             rows);
     }

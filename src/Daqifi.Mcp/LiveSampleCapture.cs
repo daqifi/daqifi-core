@@ -229,6 +229,19 @@ internal sealed class SampleRowSink : ILiveSampleSink
 
     public bool IsComplete => _rows.Count >= _maxRows;
 
+    /// <summary>
+    /// Whether the row budget filled while the capture was <b>still running</b> — the honest answer
+    /// to "was there more data?".
+    /// </summary>
+    /// <remarks>
+    /// Latched here rather than left to be read off the row count afterwards, which is the same
+    /// number for two different outcomes: <see cref="Complete"/> closes the row that was still being
+    /// filled when the window ended, and that flush alone can bring the count up to the budget on a
+    /// capture the budget had nothing to do with. A caller told the budget stopped it would go back
+    /// for a continuation that does not exist.
+    /// </remarks>
+    internal bool RowBudgetFilled { get; private set; }
+
     /// <summary>Samples that landed in a row. Lower than the capture's sample count when channels were unexpected.</summary>
     internal long SampleCount { get; private set; }
 
@@ -253,7 +266,7 @@ internal sealed class SampleRowSink : ILiveSampleSink
         }
         else if (timestamp != _openTimestamp || _open[index].HasValue)
         {
-            CloseRow();
+            CloseRow(duringCapture: true);
             if (IsComplete)
             {
                 return false;
@@ -275,7 +288,7 @@ internal sealed class SampleRowSink : ILiveSampleSink
     {
         if (_open is not null && !IsComplete)
         {
-            CloseRow();
+            CloseRow(duringCapture: false);
         }
 
         return _rows;
@@ -288,9 +301,18 @@ internal sealed class SampleRowSink : ILiveSampleSink
         _openDeviceTimestamp = deviceTimestamp;
     }
 
-    private void CloseRow()
+    /// <param name="duringCapture">
+    /// False for the final flush from <see cref="Complete"/>, which is what keeps that row from
+    /// being mistaken for the budget filling — see <see cref="RowBudgetFilled"/>.
+    /// </param>
+    private void CloseRow(bool duringCapture)
     {
         _rows.Add(new CaptureRow(_openTimestamp, _openDeviceTimestamp, _open!));
         _open = null;
+
+        if (duringCapture && IsComplete)
+        {
+            RowBudgetFilled = true;
+        }
     }
 }
