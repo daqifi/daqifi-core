@@ -114,6 +114,34 @@ public class MessageProducerIdleWakeupTests
     }
 
     /// <summary>
+    /// The counter spans the instance, not a run: a restarted producer keeps counting from where it
+    /// was. Pinned because the alternative — zeroing it in <c>Start()</c> — races a previous
+    /// background thread that a timed-out join left alive and still incrementing.
+    /// </summary>
+    [Fact]
+    public void WakeCount_IsCumulativeAcrossRestarts()
+    {
+        using var stream = new MemoryStream();
+        using var producer = new MessageProducer<string>(stream);
+
+        producer.Start();
+        producer.Send(new ScpiMessage("TEST:BEFORE"));
+        WaitUntilIdle(producer);
+        Assert.True(producer.StopSafely(2000));
+
+        var wakesBeforeTheRestart = producer.WakeCount;
+        Assert.True(wakesBeforeTheRestart >= 1);
+
+        producer.Start();
+        producer.Send(new ScpiMessage("TEST:AFTER"));
+        WaitUntilIdle(producer);
+        Assert.True(producer.StopSafely(2000));
+
+        Assert.True(producer.WakeCount > wakesBeforeTheRestart,
+            $"Expected the count to carry over and grow; it went {wakesBeforeTheRestart} -> {producer.WakeCount}.");
+    }
+
+    /// <summary>
     /// The failure mode the removed timeout would have masked. A signal lost in the window between
     /// the drain's last look at the queue and the loop parking again strands whatever was enqueued
     /// there — and with an unbounded wait, strands it until the <em>next</em> send rather than for

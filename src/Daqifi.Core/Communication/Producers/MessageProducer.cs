@@ -79,10 +79,17 @@ public class MessageProducer<T> : IMessageProducer<T>
     public bool IsRunning => _isRunning;
 
     /// <summary>
-    /// Number of times the background loop has woken from its wait since <see cref="Start"/>.
+    /// Number of times the background loop has woken from its wait over the life of this instance.
     /// A producer with nothing to send must never wake at all, so this stays at its value for as
     /// long as the queue is empty and no stop has been requested.
     /// </summary>
+    /// <remarks>
+    /// Monotonic, and deliberately not reset by <see cref="Start"/>: a stop whose
+    /// <see cref="Thread.Join(int)"/> timed out leaves the previous background thread alive and
+    /// still able to increment this, so a per-run counter would be a counter with a race in it. The
+    /// property it exists to express — that an idle producer does not accumulate wakeups — is a
+    /// statement about the value not changing, which a cumulative count states just as well.
+    /// </remarks>
     internal long WakeCount => Interlocked.Read(ref _wakeCount);
 
     /// <inheritdoc />
