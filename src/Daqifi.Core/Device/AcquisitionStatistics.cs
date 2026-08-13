@@ -313,6 +313,7 @@ namespace Daqifi.Core.Device
         /// jitter bounds.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// A negative gap is not a gap. <c>TimestampProcessor</c> reconstructs a time that moves
         /// backwards when the device sends a frame out of order, and folding that in would report a
         /// negative minimum interval — a number that reads as jitter but is really a statement about
@@ -320,6 +321,15 @@ namespace Daqifi.Core.Device
         /// <see cref="TimestampGapDetector"/> already applies to non-positive deltas. Zero, on the
         /// other hand, is kept: firmware that stamps consecutive samples with the same tick value at
         /// high rates is telling the truth about its own clock.
+        /// </para>
+        /// <para>
+        /// "Out of order" here means behind the channel's high-water mark, not merely behind the
+        /// sample recorded immediately before — so a run of samples that all sit behind it is counted
+        /// once each. That is the definition
+        /// <see cref="ChannelAcquisitionStatistics.OutOfOrderSampleCount"/> documents, and the one
+        /// that keeps a rewind from being followed by a compensating forward jump that would be
+        /// reported as a gap.
+        /// </para>
         /// </remarks>
         /// <param name="state">The channel's accumulators.</param>
         /// <param name="intervalTicks">

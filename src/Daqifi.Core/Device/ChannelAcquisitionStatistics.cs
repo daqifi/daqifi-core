@@ -52,21 +52,21 @@ namespace Daqifi.Core.Device
     /// <param name="FirstReceivedAt">The host clock reading when the first sample was recorded.</param>
     /// <param name="LastReceivedAt">The host clock reading when the most recent sample was recorded.</param>
     /// <param name="MinSampleInterval">
-    /// The smallest gap between consecutive sample timestamps (device clock). Firmware that stamps
-    /// several samples with the same tick value reports <see cref="TimeSpan.Zero"/> here, which is a
-    /// true statement about the timestamps rather than a defect in the measurement. Backwards steps
-    /// are excluded — they are counted by <see cref="OutOfOrderSampleCount"/> instead, since a
-    /// negative number is not a gap.
+    /// The smallest gap between a sample's timestamp and the latest timestamp seen before it (device
+    /// clock). Firmware that stamps several samples with the same tick value reports
+    /// <see cref="TimeSpan.Zero"/> here, which is a true statement about the timestamps rather than a
+    /// defect in the measurement. Samples counted by <see cref="OutOfOrderSampleCount"/> contribute
+    /// no interval at all, since a negative number is not a gap.
     /// </param>
     /// <param name="MaxSampleInterval">
-    /// The largest gap between consecutive sample timestamps (device clock) — the jitter figure that
-    /// matters, since a single stalled interval is what a dropped block of samples looks like.
+    /// The largest such gap — the jitter figure that matters, since a single stalled interval is what
+    /// a dropped block of samples looks like.
     /// </param>
     /// <param name="OutOfOrderSampleCount">
-    /// How many samples carried a timestamp earlier than the sample before them. Normally zero; a
-    /// non-zero value means the device's timestamps did not advance monotonically, so every
-    /// device-clock figure here describes a stream that moved backwards at some point and should be
-    /// read as approximate. The host-clock figures are unaffected.
+    /// How many samples carried a timestamp earlier than the latest one already seen on this channel.
+    /// Normally zero; a non-zero value means the device's timestamps did not advance monotonically,
+    /// so every device-clock figure here describes a stream that moved backwards at some point and
+    /// should be read as approximate. The host-clock figures are unaffected.
     /// </param>
     /// <param name="MinValue">The smallest scaled value seen, seeded from the first sample.</param>
     /// <param name="MaxValue">The largest scaled value seen, seeded from the first sample.</param>
