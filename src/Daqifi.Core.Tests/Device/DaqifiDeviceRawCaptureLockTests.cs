@@ -29,6 +29,15 @@ public class DaqifiDeviceRawCaptureLockTests
     /// </summary>
     private static readonly TimeSpan WireSettleWait = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>
+    /// How many messages the send hammer fires. Derived from the deferral cap rather than picked,
+    /// because the relationship is what matters: the backlog overflows by discarding its
+    /// <b>oldest</b> entry, so a hammer allowed to park more than the cap evicts <c>HAMMER-0</c> —
+    /// the one message the test then waits for (#516). An eighth of the cap keeps every send
+    /// parked while still spanning several <c>MaxDeferredSendsPerFlush</c> replay batches.
+    /// </summary>
+    private const int HammerSendBudget = DaqifiDevice.DefaultMaxDeferredSends / 8;
+
     // ── Mutual exclusion against text exchanges ─────────────────────────────────────────────
 
     [Fact]
@@ -233,7 +242,7 @@ public class DaqifiDeviceRawCaptureLockTests
         transport.CaptureStream.Payload = payload;
 
         var captureEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var stopHammer = 0;
+        var hammerFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var received = new MemoryStream();
 
         var capture = Task.Run(() => device.RunRawCaptureAsync(async (stream, ct) =>
@@ -243,8 +252,11 @@ public class DaqifiDeviceRawCaptureLockTests
             {
                 captureEntered.SetResult();
 
+                // Holding the stream until the hammer is done is what makes the assertions below
+                // about the hammer's sends true by construction rather than by timing: every one
+                // of them is issued while the capture owns the device, however slow the machine.
                 var buffer = new byte[256];
-                while (received.Length < payload.Length)
+                while (received.Length < payload.Length || !hammerFinished.Task.IsCompleted)
                 {
                     var read = stream.Read(buffer, 0, buffer.Length);
                     if (read > 0)
@@ -266,21 +278,37 @@ public class DaqifiDeviceRawCaptureLockTests
 
         var hammer = Task.Run(() =>
         {
-            var sent = 0;
-            while (Volatile.Read(ref stopHammer) == 0)
+            var sentIntoTheOpenWindow = 0;
+            try
             {
-                device.Send(new TaggedBinaryMessage($"HAMMER-{sent++}"));
-                Thread.Sleep(1);
+                for (var sent = 0; sent < HammerSendBudget; sent++)
+                {
+                    if (transport.CaptureStream.CaptureWindowOpen)
+                    {
+                        sentIntoTheOpenWindow++;
+                    }
+
+                    device.Send(new TaggedBinaryMessage($"HAMMER-{sent}"));
+                    Thread.Sleep(1);
+                }
+            }
+            finally
+            {
+                // Always signalled, so a hammer that throws surfaces as its own failure instead of
+                // hanging the capture that is waiting on it.
+                hammerFinished.SetResult();
             }
 
-            return sent;
+            return sentIntoTheOpenWindow;
         });
 
         await capture.WaitAsync(DeadlockBudget);
-        Volatile.Write(ref stopHammer, 1);
-        var hammered = await hammer.WaitAsync(DeadlockBudget);
+        var hammeredIntoTheOpenWindow = await hammer.WaitAsync(DeadlockBudget);
 
-        Assert.True(hammered > 0, "The hammer never sent anything, so this proves nothing.");
+        Assert.True(
+            hammeredIntoTheOpenWindow == HammerSendBudget,
+            $"Only {hammeredIntoTheOpenWindow} of the hammer's {HammerSendBudget} sends were made "
+            + "while the capture owned the device, so the assertions below prove less than they claim.");
         Assert.Equal(payload, received.ToArray());
 
         var duringCapture = transport.Writes.Where(w => w.DuringCapture).ToList();
@@ -289,7 +317,10 @@ public class DaqifiDeviceRawCaptureLockTests
             $"{duringCapture.Count} write(s) reached the wire during the capture: "
             + string.Join(" | ", duringCapture.Take(5).Select(w => w.Text)));
 
-        // And they were parked, not dropped.
+        // And they were parked, not dropped. The budget keeps the backlog under its cap, so an
+        // eviction here means the two have drifted apart — worth saying so directly, because the
+        // symptom is otherwise the unrelated-looking "HAMMER-0 never reached the wire" (#516).
+        Assert.Equal(0, device.DroppedDeferredSendCount);
         await WaitForWriteAsync(transport, "HAMMER-0");
 
         device.Disconnect();
