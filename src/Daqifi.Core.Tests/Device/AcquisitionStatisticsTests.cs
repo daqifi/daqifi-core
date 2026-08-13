@@ -202,6 +202,69 @@ namespace Daqifi.Core.Tests.Device
             Assert.Equal(1000.0, ai0.MeasuredSampleRateHz, 6);
         }
 
+        [Fact]
+        public void Record_ATimestampThatMovesBackwards_IsCounted_AndKeptOutOfTheJitterBounds()
+        {
+            // TimestampProcessor reconstructs a time that moves backwards when the device sends a
+            // frame out of order, so a sample's timestamp can precede the one before it. A negative
+            // number is not a gap: it must not land in the interval bounds.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0);
+
+            foreach (var offsetMs in new[] { 0.0, 1.0, 3.0, 2.0, 4.0 }) // the 4th sample steps back
+            {
+                stats.Record(channel, Sample(Epoch.AddMilliseconds(offsetMs), 1.0));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            var ai0 = Assert.Single(stats.Snapshot().Channels);
+            Assert.Equal(1, ai0.OutOfOrderSampleCount);
+            Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinSampleInterval);
+            Assert.Equal(TimeSpan.FromMilliseconds(2), ai0.MaxSampleInterval);
+            Assert.True(ai0.MinSampleInterval >= TimeSpan.Zero, "a backwards step must not be reported as a gap");
+        }
+
+        [Fact]
+        public void Record_ATimestampThatStepsFarBack_DoesNotCollapseTheDeviceClockRate()
+        {
+            // The damaging case: the most recently recorded sample is not the latest in time, so a
+            // span taken from first-and-last would be negative and the reported rate would drop to
+            // zero — a device that looked stopped because one frame arrived late.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0);
+
+            stats.Record(channel, Sample(Epoch, 1.0));
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            stats.Record(channel, Sample(Epoch.AddMilliseconds(2), 1.0));
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            stats.Record(channel, Sample(Epoch.AddSeconds(-5), 1.0));
+
+            var ai0 = Assert.Single(stats.Snapshot().Channels);
+            Assert.Equal(1, ai0.OutOfOrderSampleCount);
+            Assert.Equal(Epoch.AddSeconds(-5), ai0.EarliestSampleTimestamp);
+            Assert.Equal(Epoch.AddMilliseconds(2), ai0.LatestSampleTimestamp);
+            Assert.Equal(2 / 5.002, ai0.DeviceClockSampleRateHz, 6);
+            Assert.True(ai0.MeanSampleInterval > TimeSpan.Zero);
+        }
+
+        [Fact]
+        public void Record_MonotonicTimestamps_ReportNoOutOfOrderSamples()
+        {
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0);
+
+            for (var i = 0; i < 10; i++)
+            {
+                stats.Record(channel, Sample(Epoch.AddMilliseconds(i), 1.0));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            Assert.Equal(0, Assert.Single(stats.Snapshot().Channels).OutOfOrderSampleCount);
+        }
+
         #endregion
 
         #region Latency and window

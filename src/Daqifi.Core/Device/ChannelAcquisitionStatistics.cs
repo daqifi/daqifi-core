@@ -23,6 +23,14 @@ namespace Daqifi.Core.Device
     /// interval is <see cref="TimeSpan.Zero"/>, since <c>n - 1</c> intervals exist for <c>n</c>
     /// samples.
     /// </para>
+    /// <para>
+    /// Device timestamps are not guaranteed to advance. <c>TimestampProcessor</c> deliberately
+    /// reconstructs a time that moves <em>backwards</em> when the device sends a frame out of order,
+    /// so the device-clock figures here are built to survive that: the span they are measured over
+    /// runs between the earliest and latest timestamps seen rather than the first and last recorded,
+    /// which is the same thing for a well-behaved stream but cannot collapse to zero or go negative
+    /// for a misbehaving one. <see cref="OutOfOrderSampleCount"/> says whether it happened at all.
+    /// </para>
     /// </remarks>
     /// <param name="ChannelType">The type of the channel these statistics describe.</param>
     /// <param name="ChannelNumber">The channel number these statistics describe.</param>
@@ -33,21 +41,32 @@ namespace Daqifi.Core.Device
     /// channel's statistics intact when a status message replaces the channel objects mid-session.
     /// </param>
     /// <param name="SampleCount">The number of samples recorded for this channel in the window.</param>
-    /// <param name="FirstSampleTimestamp">
-    /// The <see cref="IDataSample.Timestamp"/> of the first sample recorded — device time, not
-    /// arrival time.
+    /// <param name="EarliestSampleTimestamp">
+    /// The earliest <see cref="IDataSample.Timestamp"/> seen — device time, not arrival time. The
+    /// timestamp of the first sample recorded unless the device sent one out of order.
     /// </param>
-    /// <param name="LastSampleTimestamp">The <see cref="IDataSample.Timestamp"/> of the most recent sample recorded.</param>
+    /// <param name="LatestSampleTimestamp">
+    /// The latest <see cref="IDataSample.Timestamp"/> seen, likewise the most recent one recorded
+    /// unless the device sent one out of order.
+    /// </param>
     /// <param name="FirstReceivedAt">The host clock reading when the first sample was recorded.</param>
     /// <param name="LastReceivedAt">The host clock reading when the most recent sample was recorded.</param>
     /// <param name="MinSampleInterval">
     /// The smallest gap between consecutive sample timestamps (device clock). Firmware that stamps
     /// several samples with the same tick value reports <see cref="TimeSpan.Zero"/> here, which is a
-    /// true statement about the timestamps rather than a defect in the measurement.
+    /// true statement about the timestamps rather than a defect in the measurement. Backwards steps
+    /// are excluded — they are counted by <see cref="OutOfOrderSampleCount"/> instead, since a
+    /// negative number is not a gap.
     /// </param>
     /// <param name="MaxSampleInterval">
     /// The largest gap between consecutive sample timestamps (device clock) — the jitter figure that
     /// matters, since a single stalled interval is what a dropped block of samples looks like.
+    /// </param>
+    /// <param name="OutOfOrderSampleCount">
+    /// How many samples carried a timestamp earlier than the sample before them. Normally zero; a
+    /// non-zero value means the device's timestamps did not advance monotonically, so every
+    /// device-clock figure here describes a stream that moved backwards at some point and should be
+    /// read as approximate. The host-clock figures are unaffected.
     /// </param>
     /// <param name="MinValue">The smallest scaled value seen, seeded from the first sample.</param>
     /// <param name="MaxValue">The largest scaled value seen, seeded from the first sample.</param>
@@ -57,12 +76,13 @@ namespace Daqifi.Core.Device
         int ChannelNumber,
         string Name,
         long SampleCount,
-        DateTime FirstSampleTimestamp,
-        DateTime LastSampleTimestamp,
+        DateTime EarliestSampleTimestamp,
+        DateTime LatestSampleTimestamp,
         DateTime FirstReceivedAt,
         DateTime LastReceivedAt,
         TimeSpan MinSampleInterval,
         TimeSpan MaxSampleInterval,
+        long OutOfOrderSampleCount,
         double MinValue,
         double MaxValue,
         double MeanValue)
@@ -80,22 +100,25 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Gets the sample rate the device's own timestamps claim, in Hz:
-        /// <c>(SampleCount - 1) / (LastSampleTimestamp - FirstSampleTimestamp)</c>.
+        /// <c>(SampleCount - 1) / (LatestSampleTimestamp - EarliestSampleTimestamp)</c>.
         /// </summary>
         /// <remarks>
         /// Compare against <see cref="MeasuredSampleRateHz"/>. The two agreeing but sitting below the
         /// commanded rate means samples went missing; the two disagreeing means the device's clock and
         /// real time have parted company, and it is the measured rate that describes what the host got.
         /// </remarks>
-        public double DeviceClockSampleRateHz => Rate(SampleCount, LastSampleTimestamp - FirstSampleTimestamp);
+        public double DeviceClockSampleRateHz => Rate(SampleCount, LatestSampleTimestamp - EarliestSampleTimestamp);
 
         /// <summary>
         /// Gets the mean gap between consecutive sample timestamps (device clock) — the exact mean of
         /// the intervals <see cref="MinSampleInterval"/> and <see cref="MaxSampleInterval"/> bound,
-        /// since consecutive intervals telescope to <c>(Last - First) / (SampleCount - 1)</c>.
+        /// since consecutive intervals telescope to
+        /// <c>(Latest - Earliest) / (SampleCount - 1)</c>. Approximate rather than exact once
+        /// <see cref="OutOfOrderSampleCount"/> is non-zero, because a timestamp that moved backwards
+        /// is still counted in the denominator.
         /// </summary>
         public TimeSpan MeanSampleInterval => SampleCount > 1
-            ? (LastSampleTimestamp - FirstSampleTimestamp) / (SampleCount - 1)
+            ? (LatestSampleTimestamp - EarliestSampleTimestamp) / (SampleCount - 1)
             : TimeSpan.Zero;
 
         /// <summary>

@@ -55,6 +55,13 @@ namespace Daqifi.Core.Device
     /// <see cref="Snapshot"/> and <see cref="Reset"/> are called from wherever the consumer lives.
     /// </para>
     /// <para>
+    /// A device that sends a frame out of order gets a reconstructed timestamp that moves backwards
+    /// (see <c>TimestampProcessor</c>), which the device-clock figures are built to survive rather
+    /// than to hide: the backwards step is excluded from the jitter bounds, the span the device-clock
+    /// rate is measured over runs between the earliest and latest timestamps seen, and
+    /// <see cref="ChannelAcquisitionStatistics.OutOfOrderSampleCount"/> reports that it happened.
+    /// </para>
+    /// <para>
     /// <b>Deliberate departures from the desktop original</b>, each a defect there rather than a
     /// design choice: minimum and maximum value are seeded from the first sample (desktop left them
     /// at zero, so a channel sitting at 4.5 V reported a minimum of 0); means divide by the number of
@@ -182,12 +189,13 @@ namespace Daqifi.Core.Device
                         pair.Key.Number,
                         state.Name,
                         state.SampleCount,
-                        state.FirstTimestamp,
-                        state.LastTimestamp,
+                        state.EarliestTimestamp,
+                        state.LatestTimestamp,
                         state.FirstReceivedAt,
                         state.LastReceivedAt,
                         new TimeSpan(state.MinIntervalTicks),
                         new TimeSpan(state.MaxIntervalTicks),
+                        state.OutOfOrderCount,
                         state.MinValue,
                         state.MaxValue,
 
@@ -301,6 +309,46 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Folds the gap between one sample's timestamp and the previous one's into a channel's
+        /// jitter bounds.
+        /// </summary>
+        /// <remarks>
+        /// A negative gap is not a gap. <c>TimestampProcessor</c> reconstructs a time that moves
+        /// backwards when the device sends a frame out of order, and folding that in would report a
+        /// negative minimum interval — a number that reads as jitter but is really a statement about
+        /// frame ordering. It is counted instead, which is the same policy
+        /// <see cref="TimestampGapDetector"/> already applies to non-positive deltas. Zero, on the
+        /// other hand, is kept: firmware that stamps consecutive samples with the same tick value at
+        /// high rates is telling the truth about its own clock.
+        /// </remarks>
+        /// <param name="state">The channel's accumulators.</param>
+        /// <param name="intervalTicks">The gap since the previously recorded sample, which may be negative.</param>
+        private static void RecordInterval(ChannelState state, long intervalTicks)
+        {
+            if (intervalTicks < 0)
+            {
+                state.OutOfOrderCount++;
+                return;
+            }
+
+            if (state.ForwardIntervalCount == 0)
+            {
+                state.MinIntervalTicks = intervalTicks;
+                state.MaxIntervalTicks = intervalTicks;
+            }
+            else if (intervalTicks < state.MinIntervalTicks)
+            {
+                state.MinIntervalTicks = intervalTicks;
+            }
+            else if (intervalTicks > state.MaxIntervalTicks)
+            {
+                state.MaxIntervalTicks = intervalTicks;
+            }
+
+            state.ForwardIntervalCount++;
+        }
+
+        /// <summary>
         /// Orders channel types the way a device lists its channels: analog first, then digital.
         /// </summary>
         private static int TypeRank(ChannelType type) => type == ChannelType.Analog ? 0 : 1;
@@ -335,7 +383,8 @@ namespace Daqifi.Core.Device
 
                 if (state.SampleCount == 0)
                 {
-                    state.FirstTimestamp = timestamp;
+                    state.EarliestTimestamp = timestamp;
+                    state.LatestTimestamp = timestamp;
                     state.FirstReceivedAt = now;
 
                     // Seeded from the first sample, not left at zero: a channel that never reads
@@ -355,28 +404,24 @@ namespace Daqifi.Core.Device
                         state.MaxValue = value;
                     }
 
-                    var intervalTicks = timestamp.Ticks - state.LastTimestamp.Ticks;
-                    if (state.SampleCount == 1)
-                    {
-                        state.MinIntervalTicks = intervalTicks;
-                        state.MaxIntervalTicks = intervalTicks;
-                    }
-                    else
-                    {
-                        if (intervalTicks < state.MinIntervalTicks)
-                        {
-                            state.MinIntervalTicks = intervalTicks;
-                        }
+                    RecordInterval(state, timestamp.Ticks - state.PreviousTimestamp.Ticks);
 
-                        if (intervalTicks > state.MaxIntervalTicks)
-                        {
-                            state.MaxIntervalTicks = intervalTicks;
-                        }
+                    // Extremes rather than first-and-last, so the span the device-clock rate is
+                    // measured over survives a timestamp that moves backwards. Identical to
+                    // first-and-last whenever the device's timestamps advance, which is the norm.
+                    if (timestamp < state.EarliestTimestamp)
+                    {
+                        state.EarliestTimestamp = timestamp;
+                    }
+
+                    if (timestamp > state.LatestTimestamp)
+                    {
+                        state.LatestTimestamp = timestamp;
                     }
                 }
 
                 state.ValueSum += value;
-                state.LastTimestamp = timestamp;
+                state.PreviousTimestamp = timestamp;
                 state.LastReceivedAt = now;
                 state.SampleCount++;
 
@@ -463,12 +508,30 @@ namespace Daqifi.Core.Device
         {
             internal string Name = string.Empty;
             internal long SampleCount;
-            internal DateTime FirstTimestamp;
-            internal DateTime LastTimestamp;
+
+            /// <summary>The extremes of the timestamps seen, which the device-clock span is measured over.</summary>
+            internal DateTime EarliestTimestamp;
+            internal DateTime LatestTimestamp;
+
+            /// <summary>
+            /// The previously recorded sample's timestamp — recording order, not time order, because
+            /// an interval is the gap between two samples as they arrived.
+            /// </summary>
+            internal DateTime PreviousTimestamp;
+
             internal DateTime FirstReceivedAt;
             internal DateTime LastReceivedAt;
             internal long MinIntervalTicks;
             internal long MaxIntervalTicks;
+
+            /// <summary>
+            /// How many non-negative intervals have been folded in; zero means the bounds above are
+            /// unseeded. Not the same as <see cref="SampleCount"/> minus one once
+            /// <see cref="OutOfOrderCount"/> is non-zero.
+            /// </summary>
+            internal long ForwardIntervalCount;
+
+            internal long OutOfOrderCount;
             internal double MinValue;
             internal double MaxValue;
             internal double ValueSum;
