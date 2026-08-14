@@ -1057,10 +1057,18 @@ Notes:
   `Key=Value` lines whose membership grows between firmware versions, so every numeric pair is exposed
   through `Values` and the typed properties return `null` for fields the running firmware omits.
 - Each call runs as a text command (the protobuf consumer is paused for the exchange, like the SD and
-  LAN-chip queries). They do **not** stop streaming, so you can sample live counters — but parsing is
-  most reliable when the device is not actively streaming. Avoid issuing them concurrently.
+  LAN-chip queries). Avoid issuing them concurrently.
+- **Query while the device is not streaming.** These calls do not stop an active capture, but the
+  firmware does not stop either: pausing Core's protobuf reader leaves the device emitting frames, and
+  whatever is in flight lands on the front of the reply and destroys its first line. A mid-capture call
+  is therefore opportunistic — it may fail, and stopping the stream is the only way to be sure of a
+  clean read.
 - A `DeviceDiagnosticsException` (carrying `RawDeviceResponse`) is thrown when the device returns a
-  SCPI error or an unparseable response for the structured queries.
+  SCPI error or an unparseable response for the structured queries. Its subclass
+  `DeviceDiagnosticsCorruptedResponseException` is thrown by the four counter queries
+  (`GetStreamStatsAsync`, `GetMemoryDiagnosticsAsync`, `GetSystemErrorCountAsync`, `SetLogLevelAsync`)
+  when the reply arrived with stream frames welded into it — previously those queries silently dropped
+  the mangled line and reported the rest as a complete reading.
 - `SYSTem:OS:Stats?` (FreeRTOS task stats) is intentionally **not** wrapped: it is commented out in the
   current firmware. It can be added once the firmware re-enables it.
 
