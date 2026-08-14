@@ -95,12 +95,14 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task WaitForBootloaderDevice_WithNoTargetRequested_TakesTheFirstOneEnumerated()
     {
+        using var poll = PollBudget();
+
         var (session, _) = CreateSession(
             new FakeHidTransport(),
             new FakeBootloaderProtocol([[0xA1]]),
             new FakeHidDeviceEnumerator([], [Bootloader("path-1"), Bootloader("path-2")]));
 
-        var found = await session.WaitForBootloaderDeviceAsync(null, null, CancellationToken.None);
+        var found = await session.WaitForBootloaderDeviceAsync(null, null, poll.Token);
 
         Assert.Equal("path-1", found.DevicePath);
     }
@@ -108,6 +110,8 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task WaitForBootloaderDevice_KeepsPollingUntilTheBootloaderEnumerates()
     {
+        using var poll = PollBudget();
+
         // Re-enumeration after SYSTem:FORceBoot is not instant; an empty first sweep is normal.
         var (session, _) = CreateSession(
             new FakeHidTransport(),
@@ -118,7 +122,7 @@ public class Pic32BootloaderSessionTests
                 [Bootloader("path-1")]
             ]));
 
-        var found = await session.WaitForBootloaderDeviceAsync(null, null, CancellationToken.None);
+        var found = await session.WaitForBootloaderDeviceAsync(null, null, poll.Token);
 
         Assert.Equal("path-1", found.DevicePath);
         Assert.Contains("after 3 poll attempt(s)", session.DescribeBootloaderSearch(), StringComparison.Ordinal);
@@ -127,6 +131,8 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task WaitForBootloaderDevice_WithATargetPath_NeverAsksWhereTheCandidatesArePluggedIn()
     {
+        using var poll = PollBudget();
+
         // Resolving a physical location is a WMI query per candidate per poll on Windows. A path
         // is already a unique identity, so targeting by path must not pay for it.
         var locations = new FakeUsbLocationProvider(new Dictionary<string, string>
@@ -141,7 +147,7 @@ public class Pic32BootloaderSessionTests
             new FakeHidDeviceEnumerator([], [Bootloader("path-1"), Bootloader("path-2")]),
             locations);
 
-        var found = await session.WaitForBootloaderDeviceAsync("path-2", null, CancellationToken.None);
+        var found = await session.WaitForBootloaderDeviceAsync("path-2", null, poll.Token);
 
         Assert.Equal("path-2", found.DevicePath);
         Assert.Empty(locations.Requests);
@@ -166,6 +172,8 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task WaitForBootloaderDevice_WhenEnumerationFails_SaysWhichAttemptAndKeepsTheCause()
     {
+        using var poll = PollBudget();
+
         var cause = new UnauthorizedAccessException("HID enumeration denied.");
         var (session, _) = CreateSession(
             new FakeHidTransport(),
@@ -173,7 +181,7 @@ public class Pic32BootloaderSessionTests
             new ThrowingHidDeviceEnumerator(cause));
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => session.WaitForBootloaderDeviceAsync(null, null, CancellationToken.None));
+            () => session.WaitForBootloaderDeviceAsync(null, null, poll.Token));
 
         // An enumeration fault is not "no bootloader yet" — it is a host-side problem and must not
         // be retried into a silent timeout.
@@ -239,6 +247,8 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task DescribeBootloaderSearch_WhenEnumerationFailed_IncludesTheWholeErrorChain()
     {
+        using var poll = PollBudget();
+
         var cause = new UnauthorizedAccessException(
             "HID enumeration denied.",
             new InvalidOperationException("Underlying platform refusal."));
@@ -249,7 +259,7 @@ public class Pic32BootloaderSessionTests
             new ThrowingHidDeviceEnumerator(cause));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => session.WaitForBootloaderDeviceAsync(null, null, CancellationToken.None));
+            () => session.WaitForBootloaderDeviceAsync(null, null, poll.Token));
 
         var description = session.DescribeBootloaderSearch();
 
@@ -261,6 +271,8 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task DescribeBootloaderSearch_AfterEnumerationRecovers_DropsTheEarlierError()
     {
+        using var poll = PollBudget();
+
         // The soft-reset recovery searches a second time. If the first search's error were still
         // reported, a later timeout would blame a fault that has already cleared.
         var enumerator = new SequencedHidDeviceEnumerator(
@@ -273,10 +285,10 @@ public class Pic32BootloaderSessionTests
             enumerator);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => session.WaitForBootloaderDeviceAsync(null, null, CancellationToken.None));
+            () => session.WaitForBootloaderDeviceAsync(null, null, poll.Token));
         Assert.Contains("Last HID enumeration error", session.DescribeBootloaderSearch(), StringComparison.Ordinal);
 
-        await session.WaitForBootloaderDeviceAsync(null, null, CancellationToken.None);
+        await session.WaitForBootloaderDeviceAsync(null, null, poll.Token);
 
         Assert.DoesNotContain("Last HID enumeration error", session.DescribeBootloaderSearch(), StringComparison.Ordinal);
     }
@@ -284,6 +296,8 @@ public class Pic32BootloaderSessionTests
     [Fact]
     public async Task ResetTargetingState_ClearsThePreviousRunsPollCountTargetAndError()
     {
+        using var poll = PollBudget();
+
         // Without this, a second update's timeout message would describe the first update's
         // search — wrong attempt count, a target the caller never asked for this time, and an
         // enumeration error that is no longer current.
@@ -294,7 +308,7 @@ public class Pic32BootloaderSessionTests
 
         session.SetRequestedTarget("path-9", "USB(4)");
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => session.WaitForBootloaderDeviceAsync("path-9", "USB(4)", CancellationToken.None));
+            () => session.WaitForBootloaderDeviceAsync("path-9", "USB(4)", poll.Token));
 
         session.ResetTargetingState();
         var description = session.DescribeBootloaderSearch();
@@ -419,6 +433,10 @@ public class Pic32BootloaderSessionTests
 
         Assert.Equal("attempt 3", error.Message);
         Assert.Equal(3, transport.ConnectAttempts);
+
+        // The soft-reset recovery reads exactly this to decide whether there is a handle worth
+        // resetting, so an exhausted connect must not leave the session looking connected.
+        Assert.False(session.IsConnected);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -743,6 +761,16 @@ public class Pic32BootloaderSessionTests
 
         return (session, context);
     }
+
+    /// <summary>
+    /// Bounds a direct call into <see cref="Pic32BootloaderSession.WaitForBootloaderDeviceAsync"/>.
+    /// That method polls until it matches or its token is canceled; in production the bound comes
+    /// from the caller's per-state timeout (<c>Pic32FirmwareUpdater</c> runs it inside
+    /// <c>ExecuteWithStateTimeoutAsync</c>), which a test calling the collaborator directly does not
+    /// get. Without a budget, a regression in the matching logic would hang the run instead of
+    /// failing it. Generous next to the 5 ms poll interval, so it can only fire on a real defect.
+    /// </summary>
+    private static CancellationTokenSource PollBudget() => new(TimeSpan.FromSeconds(10));
 
     private static FakeHidTransport ConnectedTransport()
     {

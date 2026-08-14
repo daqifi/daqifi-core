@@ -350,7 +350,22 @@ internal sealed class FakeHidTransport : IHidTransport
     /// observable: which failure kinds buy another attempt and which fail on the spot is only
     /// visible when a connect can actually fail, and with a chosen exception type.
     /// </summary>
+    /// <remarks>
+    /// An injected failure clears the connection state first. A real transport that fails to
+    /// connect is left holding no handle, and leaving the fake reporting <c>IsConnected == true</c>
+    /// after a connect that threw would be a state the device can never be in — one where a later
+    /// write would succeed against a connection the test believes failed.
+    /// </remarks>
     public Queue<Exception> ConnectFailures { get; } = new();
+
+    private void ClearConnectionState()
+    {
+        IsConnected = false;
+        VendorId = null;
+        ProductId = null;
+        SerialNumber = null;
+        DevicePath = null;
+    }
 
     public Task ConnectAsync(int vendorId, int productId, string? serialNumber = null, CancellationToken cancellationToken = default)
     {
@@ -358,6 +373,7 @@ internal sealed class FakeHidTransport : IHidTransport
         ConnectAttempts++;
         if (ConnectFailures.Count > 0)
         {
+            ClearConnectionState();
             return Task.FromException(ConnectFailures.Dequeue());
         }
 
@@ -384,6 +400,7 @@ internal sealed class FakeHidTransport : IHidTransport
         LastConnectByPath = devicePath;
         if (ConnectFailures.Count > 0)
         {
+            ClearConnectionState();
             return Task.FromException(ConnectFailures.Dequeue());
         }
 
@@ -473,11 +490,7 @@ internal sealed class FakeHidTransport : IHidTransport
     public Task DisconnectAsync()
     {
         DisconnectCalls++;
-        IsConnected = false;
-        VendorId = null;
-        ProductId = null;
-        SerialNumber = null;
-        DevicePath = null;
+        ClearConnectionState();
 
         return DisconnectFailure is { } failure
             ? Task.FromException(failure)
