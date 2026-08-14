@@ -173,26 +173,22 @@ public class StreamFrameDecoderTests
     }
 
     [Theory]
-    // The widths a bench Nq1 running firmware 3.7.2 actually emitted (#544). The enabled *mask*
-    // sets the width, not the channel count — {0,1,2} led with 1 value and {0,1,10} with 2, both
-    // three channels — so every row here is a real observation rather than a permutation. Before
-    // this test every discard-asserting test in the suite used a one-value frame, which meant
-    // narrowing the guard to `analogValueCount == 1` passed the whole suite while silently letting
-    // a wide capture's leading frame through (issue #351 again, at a plausible-looking width).
-    [InlineData(3, 1)]
-    [InlineData(3, 2)]
-    [InlineData(8, 2)]
-    [InlineData(8, 5)]
-    [InlineData(16, 7)]
-    public void ShortLeadingFrame_IsDiscarded_AtEveryWidthTheFirmwareEmits(
-        int enabledChannelCount, int leadingValueCount)
+    // The masks and widths a bench Nq1 running firmware 3.7.2 actually emitted (#544). The channel
+    // numbers are part of the observation, not filler: the enabled *mask* sets the width, not the
+    // channel count, which is why {0,1,2} leads with 1 value and {0,1,10} with 2 despite both
+    // being three channels. Before this test every discard-asserting test in the suite used a
+    // one-value frame, which meant narrowing the guard to `analogValueCount == 1` passed the whole
+    // suite while silently letting a wide capture's leading frame through (issue #351 again, at a
+    // plausible-looking width).
+    [InlineData(new[] { 0, 1, 2 }, 1)]
+    [InlineData(new[] { 0, 1, 10 }, 2)]
+    [InlineData(new[] { 0, 1, 2, 3, 4, 5, 6, 7 }, 2)]
+    [InlineData(new[] { 8, 9, 10, 11, 12, 13, 14, 15 }, 5)]
+    [InlineData(new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }, 7)]
+    public void ShortLeadingFrame_IsDiscarded_AtEveryMaskTheFirmwareBreaksOn(
+        int[] enabledChannelNumbers, int leadingValueCount)
     {
-        var host = new FakeHost { IsStreaming = true };
-        var channels = new List<AnalogChannel>();
-        for (var i = 0; i < enabledChannelCount; i++)
-        {
-            channels.Add(host.AddAnalog(i, enabled: true));
-        }
+        var (host, channels) = MaskedAnalogHost(enabledChannelNumbers);
 
         StreamFrameDiscardedEventArgs? reported = null;
         host.OnDiscard = e => reported = e;
@@ -215,40 +211,37 @@ public class StreamFrameDecoderTests
         Assert.NotNull(reported);
         Assert.Equal(StreamFrameDiscardReason.PartialAnalogFrame, reported!.Reason);
         Assert.Equal(leadingValueCount, reported.AnalogValueCount);
-        Assert.Equal(enabledChannelCount, reported.EnabledAnalogChannelCount);
+        Assert.Equal(enabledChannelNumbers.Length, reported.EnabledAnalogChannelCount);
 
         // No channel may take a sample from a short frame — not even the leading ones the payload
         // does cover, since the values are not guaranteed to belong to them.
         Assert.All(channels, channel => Assert.Null(channel.ActiveSample));
     }
 
-    [Fact]
-    public void AfterAWideShortLeadingFrame_TheFirstFullWidthFrameIsDeliveredIntact()
+    [Theory]
+    // The bench counterpart to the theory above: on hardware the frame after the malformed one was
+    // full width in every session, so the guard has to disarm and hand the whole payload over.
+    // {8..15} is here because a mask that does not start at channel 0 is the only way to tell
+    // "mapped in ascending channel-number order" apart from "mapped by array index" — under the
+    // latter the first value would land on AI0, which is not even enabled.
+    [InlineData(new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }, 7)]
+    [InlineData(new[] { 8, 9, 10, 11, 12, 13, 14, 15 }, 5)]
+    public void AfterAShortLeadingFrame_TheFirstFullWidthFrameLandsOnTheRightChannels(
+        int[] enabledChannelNumbers, int leadingValueCount)
     {
-        // The bench counterpart to the theory above: on hardware the frame after the malformed one
-        // was full width in every session, so the guard has to disarm and hand the whole payload
-        // over. Run at sixteen channels because that is where a mis-mapped value is invisible —
-        // the analog payload is matched to channels in ascending channel-number order, and only a
-        // per-channel assertion at full width proves the wide case still lands on the right ones.
-        var host = new FakeHost { IsStreaming = true };
-        var channels = new List<AnalogChannel>();
-        for (var i = 0; i < 16; i++)
-        {
-            channels.Add(host.AddAnalog(i, enabled: true));
-        }
-
+        var (host, channels) = MaskedAnalogHost(enabledChannelNumbers);
         var decoder = new StreamFrameDecoder(host);
         decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
 
         var partial = new DaqifiOutMessage { MsgTimeStamp = 1000 };
-        for (var i = 0; i < 7; i++)
+        for (var i = 0; i < leadingValueCount; i++)
         {
             partial.AnalogInDataFloat.Add(99f);
         }
         decoder.ProcessFrame(partial);
 
         var full = new DaqifiOutMessage { MsgTimeStamp = 2000 };
-        for (var i = 0; i < 16; i++)
+        for (var i = 0; i < enabledChannelNumbers.Length; i++)
         {
             full.AnalogInDataFloat.Add(i * 0.5f);
         }
@@ -256,9 +249,20 @@ public class StreamFrameDecoderTests
 
         Assert.Equal(new[] { "discard", "raw" }, host.Calls);
         Assert.Equal(1, decoder.DiscardedStreamFrameCount);
-        for (var i = 0; i < 16; i++)
+
+        // The rows list their channel numbers in ascending order, which is the order the device
+        // streams values in, so the payload's i-th value belongs to the i-th listed channel.
+        for (var i = 0; i < enabledChannelNumbers.Length; i++)
         {
-            Assert.Equal(i * 0.5, channels[i].ActiveSample!.Value);
+            Assert.Equal(i * 0.5, channels[enabledChannelNumbers[i]].ActiveSample!.Value);
+        }
+
+        foreach (var channel in channels)
+        {
+            if (!channel.IsEnabled)
+            {
+                Assert.Null(channel.ActiveSample);
+            }
         }
     }
 
@@ -748,6 +752,28 @@ public class StreamFrameDecoderTests
             }
         };
         return thrower;
+    }
+
+    /// <summary>
+    /// A full sixteen-channel analog device with only <paramref name="enabledChannelNumbers"/>
+    /// enabled — the shape the bench observations in #544 were taken against.
+    /// </summary>
+    /// <remarks>
+    /// The disabled channels are the point. Adding only the enabled ones would make every mask
+    /// contiguous from zero, which cannot distinguish "the decoder counted and ordered the enabled
+    /// channels" from "the decoder used the array index as the channel number" — the two agree for
+    /// {0..N-1} and disagree for every real mask that skips a channel.
+    /// </remarks>
+    private static (FakeHost Host, AnalogChannel[] Channels) MaskedAnalogHost(int[] enabledChannelNumbers)
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var enabled = new HashSet<int>(enabledChannelNumbers);
+        var channels = new AnalogChannel[16];
+        for (var i = 0; i < channels.Length; i++)
+        {
+            channels[i] = host.AddAnalog(i, enabled: enabled.Contains(i));
+        }
+        return (host, channels);
     }
 
     private static DaqifiOutMessage AnalogFrame(uint timestamp, float value)
