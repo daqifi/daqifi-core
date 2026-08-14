@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 #nullable enable
 
@@ -28,6 +30,12 @@ namespace Daqifi.Core.Device.Internal
         /// Shared with the device's tracking of a raw ADC-enable command, which decodes the same mask.
         /// </summary>
         internal const int MaxAdcBitmaskChannel = 31;
+
+        /// <summary>
+        /// How long to wait for the device's answer to an analog-output readback. The query reads
+        /// a value already held in RAM, so this only needs to cover the round trip.
+        /// </summary>
+        private const int AnalogOutputResponseTimeoutMs = 2000;
 
         private readonly IDeviceOperationHost _host;
 
@@ -313,19 +321,111 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="IStreamingDevice.SetAnalogOutput" />
         internal void SetAnalogOutput(int channelNumber, double voltage)
         {
+            StageAnalogOutput(channelNumber, voltage);
+            LatchAnalogOutputs();
+        }
+
+        /// <inheritdoc cref="DaqifiStreamingDevice.StageAnalogOutput" />
+        internal void StageAnalogOutput(int channelNumber, double voltage)
+        {
             if (channelNumber < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
             }
 
+            // Range-check against the device's own description of the channel before anything
+            // reaches the wire. A device that never described its DAC channels (no capability
+            // document, or firmware that does not report them) models none, and the command is
+            // still sent by number — refusing it would break the only analog-output path this
+            // library has ever had.
+            var channel = FindAnalogOutputChannel(channelNumber);
+
+            if (channel is not null && !channel.IsInRange(voltage))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(voltage),
+                    voltage,
+                    $"Analog output {channelNumber} accepts {channel.MinimumVoltage} to {channel.MaximumVoltage} V"
+                    + (channel.RangeIsAssumed ? " (assumed; the device stated no range)." : "."));
+            }
+
             _host.EnsureConnected();
 
-            // Analog-output (DAC) channels are addressed by number; they are not part of the
-            // populated Channels collection (PopulateChannelsFromStatus creates analog *input*
-            // channels only). Stage the level, then latch it.
             _host.Send(ScpiMessageProducer.SetAnalogOutputVoltage(channelNumber, voltage));
-            _host.Send(ScpiMessageProducer.UpdateDacOutputs);
+            channel?.Stage(voltage);
         }
+
+        /// <inheritdoc cref="DaqifiStreamingDevice.LatchAnalogOutputs" />
+        internal void LatchAnalogOutputs()
+        {
+            _host.EnsureConnected();
+
+            _host.Send(ScpiMessageProducer.UpdateDacOutputs);
+
+            // The device latches every staged channel at once, so every modelled channel with a
+            // pending value now reflects what the hardware is driving.
+            var latchedAt = DateTime.Now;
+            foreach (var channel in _host.SnapshotChannels())
+            {
+                (channel as AnalogOutputChannel)?.Latch(latchedAt);
+            }
+        }
+
+        /// <inheritdoc cref="DaqifiStreamingDevice.GetAnalogOutputAsync" />
+        internal async Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
+        {
+            // Build the query first so argument validation surfaces the same exception type
+            // regardless of connection state (matches SetDioDirection / the diagnostics ops).
+            var query = ScpiMessageProducer.GetAnalogOutputVoltage(channelNumber);
+
+            _host.EnsureConnected();
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = await _host.ExecuteTextCommandAsync(
+                () => _host.Send(query),
+                responseTimeoutMs: AnalogOutputResponseTimeoutMs,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (ScpiResponseClassifier.ContainsScpiError(lines))
+            {
+                throw new InvalidOperationException(
+                    $"The device rejected a readback of analog output {channelNumber}. It answered: {DescribeLines(lines)}");
+            }
+
+            foreach (var line in lines)
+            {
+                if (double.TryParse(line?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var volts)
+                    && double.IsFinite(volts))
+                {
+                    FindAnalogOutputChannel(channelNumber)?.SetOutputVoltage(volts, DateTime.Now);
+                    return volts;
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"The device's readback of analog output {channelNumber} was not a voltage. It answered: {DescribeLines(lines)}");
+        }
+
+        /// <summary>
+        /// Finds the modelled analog-output channel with this number, or <c>null</c> when the
+        /// device has not described one.
+        /// </summary>
+        private AnalogOutputChannel? FindAnalogOutputChannel(int channelNumber)
+        {
+            foreach (var channel in _host.SnapshotChannels())
+            {
+                if (channel is AnalogOutputChannel output && output.ChannelNumber == channelNumber)
+                {
+                    return output;
+                }
+            }
+
+            return null;
+        }
+
+        private static string DescribeLines(IReadOnlyList<string> lines)
+            => lines.Count == 0 ? "(nothing)" : string.Join(" | ", lines);
 
         /// <summary>
         /// Sets the enabled state for a set of channels, then sends one device command per affected
@@ -342,6 +442,16 @@ namespace Daqifi.Core.Device.Internal
                 if (channel is null)
                 {
                     throw new ArgumentException("The channel collection contains a null entry.", nameof(channels));
+                }
+
+                // An analog output is driven by writing a voltage to it, not by being enabled for
+                // acquisition — it appears in neither the ADC enable bitmask nor the DIO enable,
+                // so letting it through here would set a flag that no command ever acts on.
+                if (channel.Type == ChannelType.AnalogOutput)
+                {
+                    throw new ArgumentException(
+                        $"Analog output {channel.ChannelNumber} is not an acquisition channel and cannot be enabled or disabled; write to it with SetAnalogOutput instead.",
+                        nameof(channels));
                 }
 
                 EnsureChannelBelongs(channel);

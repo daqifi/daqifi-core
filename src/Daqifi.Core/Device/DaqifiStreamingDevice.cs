@@ -925,6 +925,61 @@ namespace Daqifi.Core.Device
             return Task.CompletedTask;
         }
 
+        /// <summary>
+        /// Stages an analog output (DAC) voltage without applying it. The value takes effect on the
+        /// next <see cref="LatchAnalogOutputs"/>, so several channels can be made to change together.
+        /// </summary>
+        /// <param name="channelNumber">The analog output channel number.</param>
+        /// <param name="voltage">
+        /// The output voltage, in volts. Must be finite, and within the channel's range when the
+        /// device described one.
+        /// </param>
+        /// <remarks>
+        /// This is the device's own two-step protocol made explicit:
+        /// <see cref="SetAnalogOutput"/> is exactly a stage followed by a latch. Until the latch,
+        /// <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.PendingVoltage"/> reports the staged
+        /// value and <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.OutputVoltage"/> still
+        /// reports what the pin is driving. Analog output is available on NQ3 hardware only.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The channel number is negative, or the voltage falls outside the channel's stated range.
+        /// </exception>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        public void StageAnalogOutput(int channelNumber, double voltage)
+            => _channelControl.StageAnalogOutput(channelNumber, voltage);
+
+        /// <summary>
+        /// Applies every analog output (DAC) voltage staged since the last latch, so the staged
+        /// channels change together.
+        /// </summary>
+        /// <remarks>
+        /// Latching with nothing staged is harmless — the device re-applies what it already holds.
+        /// Analog output is available on NQ3 hardware only.
+        /// </remarks>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        public void LatchAnalogOutputs() => _channelControl.LatchAnalogOutputs();
+
+        /// <summary>
+        /// Asks the device what voltage an analog output (DAC) channel is holding, and records it
+        /// on the modelled channel.
+        /// </summary>
+        /// <param name="channelNumber">The analog output channel number.</param>
+        /// <param name="cancellationToken">Cancels the exchange.</param>
+        /// <returns>The voltage the device reports, in volts.</returns>
+        /// <remarks>
+        /// The DAC has no hardware readback, so the device answers with the value it was last told
+        /// to drive. That still makes this the authoritative round-trip: it reflects what the
+        /// device actually accepted, including a write made before this session connected.
+        /// Analog output is available on NQ3 hardware only.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="channelNumber"/> is negative.</exception>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// The device rejected the query or answered with something that is not a voltage.
+        /// </exception>
+        public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
+            => _channelControl.GetAnalogOutputAsync(channelNumber, cancellationToken);
+
         /// <inheritdoc />
         public void Reboot() => _administration.Reboot();
 
