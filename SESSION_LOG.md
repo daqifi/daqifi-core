@@ -1617,3 +1617,62 @@ The first pass of this fire **edited, built and tested in the main checkout** (`
 **Worktree hygiene:** finished on `fix/sdcard-truncated-download-539` in worktree `mystifying-yonath-1c82a7`, then returned to the starting branch `claude/daqifi-loop-beff8d`. Main checkout left clean on `main`. Harness lived in the scratchpad. Never `git stash`.
 
 **End-of-fire state: 3 open loop PRs — #515, #530, #540** — all Qodo-clean, CI green, ready-noted, **not merged**. (**#529 was merged by the user mid-fire**, on top of #527/#528 before it.) **Two slots free under the 5/5 cap**, so the next fire can start another ticket. Best next candidates, in order: **#537** (diagnostics silently corrupted mid-stream; reproduced 4/4, cause pinned to `TextExchangeEngine.SuspendInboundConsumer`), then **#538** (two small independent fixes), **#536** (now carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
+
+---
+
+## Fire — 2026-08-14 (implemented #537 → PR #541; Qodo-clean in 1 round; before/after proved on the bench)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench work non-destructive: connect / read counters / one 100 Hz stream of ~5 s / stop / disconnect. **No SD op, no delete, no format, no firmware, no reboot, no power-state change.**
+
+**Priorities 1–3: vacuous.** `origin/main` now `a554430` (#529 landed). Three open loop PRs re-derived live — **#515 `5937454`, #530 `b01b4d0`, #540 `f965e8e`** — all `build` pass, **0 unresolved qodo review threads**, all already ready-noted, no new user comments. **3/5 on the cap → two slots free**, so priority 4 applied.
+
+**Priority 4 → #537 implemented and shipped as PR #541** (`fix/diagnostics-stream-corruption-537`, head `1946128`). Branch off `origin/main`, "closes #537", not merged.
+
+### The decision, and why
+
+The issue offered three options. Took **option 1 (fail loudly)** and deliberately did **not** attempt option 2 (resync). Resync was considered and rejected on a concrete argument worth not re-litigating: the recovery would be "drop everything up to the last control character", which works only because protobuf junk is dense with sub-0x20 bytes — when the junk's tail happens to decode to printable characters, the recovered key is *still* wrong and the loss is *still* silent. A recovery that sometimes silently lies is worse than an honest failure, and it would undermine the guarantee the fix exists to provide. Option 3 (quiesce) would break the documented "does not stop streaming" contract.
+
+### The fix
+
+`ScpiResponseClassifier` gained `IsBinaryCorruptedLine` / `ContainsBinaryCorruptedLine` — a line carrying a control char other than tab, or U+FFFD from a UTF-8 decode failure, cannot be SCPI text. `DeviceDiagnosticsOperations` checks that before parsing and throws the new **`DeviceDiagnosticsCorruptedResponseException`** (sealed, under `DeviceDiagnosticsException`, raw reply attached).
+
+Four properties documented in-code so they don't get "fixed" later:
+
+- **Evidence-driven, not state-driven.** Fires only on a line that actually arrived mangled — so an idle read can never trip it, and a mid-stream read that comes through clean still succeeds. Proven both directions on the bench.
+- **One-sided.** Junk that decodes to printable characters still passes. Narrows the failure, doesn't eliminate it; the XML doc says so rather than overclaiming.
+- **Guarded surface is exactly four calls** — `GetStreamStatsAsync`, `GetMemoryDiagnosticsAsync`, `GetSystemErrorCountAsync`, `SetLogLevelAsync`. **Excluded on purpose:** the log/history readers (firmware text, one lost line is visible, and `SYSTem:LOG?` *clears the buffer as it reads*, so throwing away survivors destroys more than it protects) and `ClearSystemLogAsync`/`TestSystemLogAsync` (ack, not result — failing them would report a failure that did not happen). **Do not "complete" the guard by applying it uniformly.**
+- **Not retried** — the interference lasts as long as the stream does.
+
+In `SetLogLevelAsync` the guard sits **after** the SCPI-rejection check: a device that answered "no" gave a real answer, and that diagnosis outranks "your reply was mangled". Test `SetLogLevelAsync_WhenTheDeviceRejectedTheRequest_ReportsTheRejectionNotTheCorruption` pins that ordering.
+
+**Tests:** 26 new (15 classifier-level, 11 end-to-end, including the deliberate-exclusion cases so the scope is pinned by tests, not just comments). **FULL suite green on net9 + net10: 3448 Core + 192 MCP.**
+
+### Bench validation — a real before/after, same board, same session shape
+
+Wrote a scratchpad harness running the issue's own experiment (3 analog channels @ 100 Hz; the five calls idle → mid-stream → idle), built it **twice** — once against this branch, once against a **throwaway detached worktree at `origin/main`** (`git worktree add --detach`, removed after; never `git stash`).
+
+| | idle (control) | mid-stream | after stop (control) |
+|---|---|---|---|
+| **`origin/main` `a554430`** | all 5 OK, `TotalSamplesStreamed=308` | **OK, 54 fields, `TotalSamplesStreamed=NULL`** + error-count/log-level threw the vague "unparseable response" | all 5 OK |
+| **PR #541** | all 5 OK, `TotalSamplesStreamed=388` | **all four guarded calls throw `DeviceDiagnosticsCorruptedResponseException`**, naming the cause | all 5 OK |
+
+**#537 reproduced exactly as filed on the first try** — the exception's `RawDeviceResponse[0]` was a long run of protobuf frame bytes with `TotalSamplesStreamed=193` welded onto the end, while the untouched `TotalBytesStreamed=4627` on the next line survived. That is the whole bug in one string. The issue's timing signature also held: **~375 ms mid-stream vs ~1055 ms idle**, because the junk satisfies the first-response-line wait immediately.
+
+**The idle controls are the check that actually mattered** (the risk of this change is false rejection) and they are identical and clean before and after, on both sides of the stream. `GetCommandHistoryAsync` came through OK mid-stream in both runs — consistent with leaving it unguarded.
+
+**Contrast with #540:** there the dangerous shape never reproduced through Core and the PR had to say so. Here it reproduced through Core's own public API, first attempt, both runs.
+
+### Gotchas that cost a cycle
+
+- **Literal control characters cannot be typed into tool calls** — Bash rejects them outright, and Write/Edit silently pass them through as *raw bytes* into the C# source instead of `\uXXXX` escapes. Cost three attempts. **Fix: build the escape text in Python from `chr(92)` + `"u%04X"`, use placeholder tokens (`@NUL@`) in the literal block, and assert `not re.search(r"[^\x20-\x7e\n]", block)` before writing.** The sources are verified 0 raw control chars.
+- `DeviceMetadata` has **`SerialNumber`**, not `DeviceSerialNumber` (this bit #540 too — same class, same mistake).
+- The solution file is at the **repo root** (`Daqifi.Core.sln`), not `src/`.
+- The test project is `Nullable=enable` **and** `TreatWarningsAsErrors=true`, so `string?` params are fine but any new warning is fatal. Dropped a redundant `lines != null` check to match the sibling `ContainsScpiError` exactly rather than risk a style flag.
+
+**Qodo: 1 round.** Round 1 on head `1946128` → **Bugs (0) / Rule violations (0) / Requirement gaps (0)**, "Great, no issues found!", **0 review threads at all** (not merely 0 unresolved). Re-checked both surfaces after a ~4-minute settle against the same SHA — still clean, `build` pass, MERGEABLE. Ready-noted.
+
+**Bench hygiene:** nothing written to the card, no file created. The stream was stopped and the device disconnected by the harness; the final control pass is itself the health check — all five diagnostics OK, `GetSystemErrorCountAsync` → 0, `SetLogLevelAsync(STREAM,1)` → `Level=1 Ceiling=3` (level 1 is the standing value, so this re-applied what was already set rather than changing device state). Channel mask left at `111`.
+
+**Worktree hygiene:** worked in `mystifying-yonath-1c82a7`, finished on `fix/diagnostics-stream-corruption-537`, then returned to the starting branch `claude/daqifi-loop-beff8d`. The baseline worktree was created under the scratchpad and removed. Harness lived in the scratchpad. Never `git stash`.
+
+**End-of-fire state: 4 open loop PRs — #515, #530, #540, #541** — all Qodo-clean, CI green, ready-noted, **not merged**. **One slot free under the 5/5 cap**, so the next fire can start one more ticket. Best next candidates, in order: **#538** (two small independent fixes, one near-unarguable), then **#536** (carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. Note **#533 is now adjacent to this fire's work** — same "one operation quietly damages another" family — and the harness pattern here (build the same probe against a detached `origin/main` worktree for a true before/after) is worth reusing on it.
