@@ -51,6 +51,13 @@ public class SdCardOperationsCollaboratorTests
     /// data followed by the EOF marker, so the held-open transfer completes as a normal download.</summary>
     private static readonly byte[] ReleasedPayload = Concat(new byte[] { 0x2A }, EofMarker);
 
+    /// <summary>
+    /// Upper bound for the two tests that park a transfer on a stream which ignores cancellation.
+    /// Both assert something the production code should reach in well under a second; the bound is
+    /// only there so a regression that never returns fails the one test instead of hanging the run.
+    /// </summary>
+    private static readonly TimeSpan ParkedTestBudget = TimeSpan.FromSeconds(30);
+
     private const string DisableLan = "SYSTem:COMMunicate:LAN:ENAbled 0";
     private const string EnableLan = "SYSTem:COMMunicate:LAN:ENAbled 1";
     private const string EnableSd = "SYSTem:STORage:SD:ENAble 1";
@@ -821,10 +828,13 @@ public class SdCardOperationsCollaboratorTests
         var first = ops.DownloadSdCardFileAsync("data.bin", firstDestination);
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await entered.Task.WaitAsync(ParkedTestBudget);
 
+            // Bounded: the gate is supposed to answer immediately (it never blocks — it either
+            // takes the semaphore or reports the state). A regression that made it wait instead
+            // must fail this test, not hang the run.
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => ops.DownloadSdCardFileAsync("other.bin", secondDestination));
+                () => ops.DownloadSdCardFileAsync("other.bin", secondDestination).WaitAsync(ParkedTestBudget));
 
             Assert.Contains("still in flight", ex.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("send:SYSTem:STORage:SD:GET \"other.bin\"", host.Calls);
@@ -832,7 +842,7 @@ public class SdCardOperationsCollaboratorTests
         finally
         {
             release.TrySetResult(true);
-            await first;
+            await first.WaitAsync(ParkedTestBudget);
         }
     }
 
@@ -857,10 +867,18 @@ public class SdCardOperationsCollaboratorTests
         // MemoryStream needs no disposal, and disposing it here would only manufacture a race.
         var destination = new MemoryStream();
 
+        // Bounded well above the ~300ms hard deadline this test asserts. The stream deliberately
+        // ignores its token, so if the deadline itself regressed the download would never return,
+        // and an unbounded await would hang the whole run instead of failing the one test that
+        // caught it. The bound is a token rather than WaitAsync(TimeSpan) on purpose: the latter
+        // reports a TimeoutException, which is the very type this asserts, so a hang would have
+        // passed as a success. A cancelled token surfaces as TaskCanceledException and fails.
+        using var guard = new CancellationTokenSource(ParkedTestBudget);
+
         try
         {
             await Assert.ThrowsAsync<TimeoutException>(
-                () => ops.DownloadSdCardFileAsync("data.bin", destination));
+                () => ops.DownloadSdCardFileAsync("data.bin", destination).WaitAsync(guard.Token));
 
             Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
             Assert.DoesNotContain("send:" + DisableSd, host.Calls);
