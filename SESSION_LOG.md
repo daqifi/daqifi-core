@@ -1569,3 +1569,51 @@ Driven by **raw SCPI over pyserial, no Core in the path**, so device behaviour i
 **Worktree hygiene:** worked in `mystifying-yonath-1c82a7` on `claude/daqifi-loop-beff8d` at `origin/main` `e9591be`; harness lived in the scratchpad. Tree ends clean on its starting branch. Never `git stash`.
 
 **End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, ready-noted, **not merged**. **Still at the 5/5 cap**; the next fire shepherds only until the user merges or closes something. When a slot frees, **#539 is now the strongest candidate** — a real bug, hardware-evidenced, with the fix location pinned to one method and the guard already half-written (the receiver has the listed size in hand; it just needs to check it). Then **#537**, **#538**, **#536**, **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. **The SD surface is now materially covered** — the remaining gap there is a large-file download verified against a build carrying the #703 fix. Surfaces still without hardware evidence: `Communication/Transport`'s HID half (destructive, skip), `DeviceErrorThrottle`/`DeviceErrorEventArgs` (needs a physical unplug), `Device/Network`'s write path (churn-risky, do not).
+
+---
+
+## Fire — 2026-08-14 (cap freed by two merges; implemented #539 → PR #540; Qodo-clean in 1 round)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench work non-destructive: connect / SD list / SD GET (read-only) / one short SD recording / disconnect. **No delete, no format, no firmware, no reboot, no power-state change.**
+
+**Priorities 1–3: vacuous.** The user merged **#527 and #528** since the last fire (`origin/main` now `444dc0f`), dropping the loop to **3/5 open PRs** — #515 `5937454`, #529 `26582e1`, #530 `b01b4d0`. All three re-derived live: `build` SUCCESS, **0 unresolved qodo review threads**, all already ready-noted, no new user comments. Under the cap → priority 4 applied.
+
+**Priority 4 → #539 implemented and shipped as PR #540** (`fix/sdcard-truncated-download-539`, head `f965e8e`). Branch off `origin/main`, "closes #539", not merged.
+
+### The fix
+
+`SdCardFileReceiver.ReceiveAsync` accepted **any** non-zero byte count as a completed download. It already held `listedFileSizeBytes` but used it only to separate a wedged subsystem from a genuinely 0-byte file. Now a transfer that ends at the EOF marker **short of the listed size** raises a new **`SdCardTruncatedTransferException`** (`FileName` / `ListedSizeInBytes` / `BytesReceived`), sibling to `SdCardEmptyTransferException` under `SdCardOperationException`.
+
+Two deliberate calls, both documented in-code so they don't get "fixed" later:
+
+- **One-sided.** A transfer LONGER than the listed size still succeeds — a listing goes stale the moment an active logging session appends to the file, and the extra bytes are real content.
+- **Not retried**, unlike the marker-only case beside it in `SdCardOperations`. By detection time the partial bytes are already in the caller's `destinationStream`, which Core cannot rewind; a retry would append to garbage and could even reach the listed size by accumulation. The end-to-end test asserts exactly **one** `SD:GET` for the truncated case.
+
+Also documented on `ISdCardOperations`: **the guard needs a prior `GetSdCardFilesAsync`** — with no listing there is no size to compare against. Worth knowing: **the example CLI's `--sd-download` does NOT list first** (it's an `else if` branch), so a one-shot CLI download gets `listedFileSizeBytes: null` and the guard cannot fire. That is why the CLI could not be used to bench-validate this, and it may be worth a small example-app change later.
+
+**Tests:** 9 new (5 receiver-level, 2 end-to-end, plus the exact-size and over-run success cases). **FULL suite green on net9 + net10: 3395 Core + 192 MCP.**
+
+### Bench validation — and a correction to how the board behaves
+
+The board's SD subsystem was found **fully collapsed** at fire start (fw#703): every `SD:GET` returned no EOF marker at all, so Core correctly reported `SdCardTransferStalledException` for every file, small and large. **The documented "SD recording re-arms it" trick DID work this time** (5 s protobuf capture, channel mask "1") — contrary to the previous fire's note that it was unreliable. Treat it as *worth trying*, not as dead. After the re-arm:
+
+- **Healthy downloads are unaffected** — the check that actually matters, since the risk of this change is false rejection. `log_20260802_153435.bin` (1539 B) and `log_20260718_151901.bin` (285 B) both downloaded through Core **byte-exact against their listed sizes** and reported plain success.
+- **Marker-only still raises `SdCardEmptyTransferException`** with the listed size in the message (verified on six separate files), and the no-marker case still stalls. Neither path moved.
+- **The dangerous shape WAS reproduced raw** — and this **refutes the "it's just a stale queued error" hypothesis** that the interleaved probe results suggest. Controlled trial, error queue drained to `0,"No error"` immediately before each GET: trial 1 → 0 bytes, queue clean after; **trials 2 and 3 → the GET's own payload was the 34-byte `**ERROR: -200, "Execution error"` line, and trial 3 delivered it followed by `__END_OF_FILE__`** on a file listed at 14318 bytes. That is exactly the input the new guard rejects, so **#539's evidence stands as filed** — do not "correct" that issue.
+- **Through Core's own download path the error line never appeared** — every failing GET came back marker-only across ~10 attempts, including repeated runs on the same file that produced it raw. So the truncated shape is covered by tests rather than by a live Core run, and the PR says so plainly. Unexplained; the difference is somewhere in Core's `PrepareSdInterface` + settle sequencing versus a hand-driven probe. Worth a look if someone revisits.
+
+**Gotcha worth keeping (cost a cleanup round):** the LAN enable/disable command is **`SYSTem:COMMunicate:LAN:ENAbled`**, not `SYSTem:LAN:ENAbled` — the short form answers `-113,"Undefined header"` and silently does nothing, so every raw probe using it never actually switched the bus. Copy the string from `ScpiMessageProducer.DisableNetworkLan`.
+
+**Also: `DaqifiStreamingDevice` has no `StartSdCardLoggingWithSessionAsync`** — it is `StartSdCardLoggingSessionAsync`. And `DeviceMetadata` has no `DeviceName`/`DeviceSerialNo`. Both cost a build cycle.
+
+### PROCESS FAILURE worth not repeating
+
+The first pass of this fire **edited, built and tested in the main checkout** (`/Users/tylerkron/projects/daqifi/daqifi-core`) instead of the fire's worktree, because `cd`-ing to the repo root lands on the **main checkout, whose local `main` is 59 commits behind `origin/main`** (it exists to carry this journal). The build and a full SD-test run both passed there — on a stale tree — which is exactly why it wasn't noticed sooner. Recovered without `git stash`: `git diff` to a scratchpad patch + copy of the untracked file, `git checkout -- src/` to restore the main checkout, then `git apply --3way` onto a fresh branch off `origin/main` in the worktree (applied cleanly), and the **full suite re-run there from scratch**. **Always confirm `git status -sb` shows the fire's branch before the first edit** — the main checkout being on `main` and clean looks perfectly normal.
+
+**Qodo: 1 round.** Round 1 on head `f965e8e` → **Bugs (0) / Rule violations (0) / Requirement gaps (0)**, review anchored to `f965e8ef`, **0 unresolved review threads**. Re-checked both surfaces after a settle interval against the same SHA — still clean, `build` SUCCESS, MERGEABLE. Ready-noted.
+
+**Bench hygiene:** left one extra file on the card (`log_20260814_122106.bin`) from the re-arm recording — additive only. Nothing deleted. **Device verified restored**: `SD:ENAble 0`, `SYSTem:COMMunicate:LAN:ENAbled 1`, error queue `0,"No error"`, `*IDN?` → `DAQiFi,Nq1,7E2815916200E898,01-02`.
+
+**Worktree hygiene:** finished on `fix/sdcard-truncated-download-539` in worktree `mystifying-yonath-1c82a7`, then returned to the starting branch `claude/daqifi-loop-beff8d`. Main checkout left clean on `main`. Harness lived in the scratchpad. Never `git stash`.
+
+**End-of-fire state: 3 open loop PRs — #515, #530, #540** — all Qodo-clean, CI green, ready-noted, **not merged**. (**#529 was merged by the user mid-fire**, on top of #527/#528 before it.) **Two slots free under the 5/5 cap**, so the next fire can start another ticket. Best next candidates, in order: **#537** (diagnostics silently corrupted mid-stream; reproduced 4/4, cause pinned to `TextExchangeEngine.SuspendInboundConsumer`), then **#538** (two small independent fixes), **#536** (now carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
