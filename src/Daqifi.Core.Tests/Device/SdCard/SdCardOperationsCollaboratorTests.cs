@@ -53,10 +53,17 @@ public class SdCardOperationsCollaboratorTests
 
     /// <summary>
     /// Upper bound for the two tests that park a transfer on a stream which ignores cancellation.
-    /// Both assert something the production code should reach in well under a second; the bound is
-    /// only there so a regression that never returns fails the one test instead of hanging the run.
+    /// The bound is only there so a regression that never returns fails the one test instead of
+    /// hanging the run — it is not a performance assertion, so it is deliberately far above what
+    /// these paths take.
     /// </summary>
-    private static readonly TimeSpan ParkedTestBudget = TimeSpan.FromSeconds(30);
+    /// <remarks>
+    /// The longest thing under it is the ~300 ms hard deadline the abandon test asserts; the rest
+    /// (the entry signal, the gate's non-blocking answer, the release) are immediate. 10 s leaves
+    /// about thirty times the headroom a loaded CI runner could plausibly need, while keeping the
+    /// feedback on an actual regression to seconds rather than a minute.
+    /// </remarks>
+    private static readonly TimeSpan ParkedTestBudget = TimeSpan.FromSeconds(10);
 
     private const string DisableLan = "SYSTem:COMMunicate:LAN:ENAbled 0";
     private const string EnableLan = "SYSTem:COMMunicate:LAN:ENAbled 1";
