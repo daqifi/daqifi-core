@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -335,6 +336,99 @@ public class SdCardFileReceiverTests
 
         Assert.Equal(fileData.Length, bytesReceived);
         Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ScpiErrorLineInsteadOfFile_ThrowsSdCardTruncatedTransferException()
+    {
+        // The exact shape the bench Nq1 emits for a file its SD buffer can no longer serve: a
+        // SCPI error line, then the end-of-file marker. Nothing on the wire distinguishes that
+        // from a finished download, so before #539 this returned 34 "successful" bytes and the
+        // caller wrote the error text to disk as the log file.
+        var errorLine = Encoding.ASCII.GetBytes("**ERROR: -200, \"Execution error\"\r\n");
+        using var sourceStream = new MemoryStream(Combine(errorLine, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var ex = await Assert.ThrowsAsync<SdCardTruncatedTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "log.bin", listedFileSizeBytes: 6159));
+
+        Assert.Equal("log.bin", ex.FileName);
+        Assert.Equal(6159, ex.ListedSizeInBytes);
+        Assert.Equal(errorLine.Length, ex.BytesReceived);
+        Assert.Contains("6159", ex.Message);
+        Assert.Contains(errorLine.Length.ToString(CultureInfo.InvariantCulture), ex.Message);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ShortTransferSpanningChunks_ThrowsWithTheTotalItActuallyReceived()
+    {
+        // A short transfer that arrives in several reads exercises the trailing-window accounting:
+        // the reported byte count has to be the whole transfer, not just the final chunk.
+        var partial = new byte[100];
+        new Random(539).NextBytes(partial);
+        using var sourceStream = new ChunkedMemoryStream(Combine(partial, EofMarker), chunkSize: 16);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, bufferSize: 16);
+
+        var ex = await Assert.ThrowsAsync<SdCardTruncatedTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "partial.bin", listedFileSizeBytes: 20118));
+
+        Assert.Equal(100, ex.BytesReceived);
+        Assert.Equal(20118, ex.ListedSizeInBytes);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransferMatchingListedSize_Succeeds()
+    {
+        // The ordinary case, and the one the bench confirms byte-exact for every file the device
+        // can actually serve: received == listed is a completed download and must not throw.
+        var fileData = new byte[1539];
+        new Random(1539).NextBytes(fileData);
+        using var sourceStream = new MemoryStream(Combine(fileData, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "log.bin", listedFileSizeBytes: 1539);
+
+        Assert.Equal(1539, bytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransferLongerThanListedSize_StillSucceeds()
+    {
+        // The size check is deliberately one-sided. A listing goes stale the moment an active
+        // logging session appends to the file, and the extra bytes are real content — rejecting
+        // them would turn a good download into a failure.
+        var fileData = Encoding.ASCII.GetBytes("this file grew after it was listed");
+        using var sourceStream = new MemoryStream(Combine(fileData, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "growing.bin", listedFileSizeBytes: 10);
+
+        Assert.Equal(fileData.Length, bytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ShortTransferWithUnknownListedSize_CannotBeDetected()
+    {
+        // Documents the limit of the guard: with no listing there is nothing to compare against,
+        // so a short transfer is indistinguishable from a small file and still returns. Fetching
+        // a listing before downloading is what buys the check.
+        var partial = Encoding.ASCII.GetBytes("**ERROR: -200, \"Execution error\"\r\n");
+        using var sourceStream = new MemoryStream(Combine(partial, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "unlisted.bin", listedFileSizeBytes: null);
+
+        Assert.Equal(partial.Length, bytesReceived);
     }
 
     [Fact]

@@ -194,6 +194,14 @@ namespace Daqifi.Core.Device.SdCard
         /// listing reported as non-empty (or whose listed size is unknown). A file the listing
         /// reports as 0 bytes downloads successfully as a legitimate empty file.
         /// </exception>
+        /// <exception cref="SdCardTruncatedTransferException">
+        /// Thrown when the transfer ends at the end-of-file marker with fewer bytes than the last
+        /// listing reported for the file — the device served a short reply, such as a SCPI error
+        /// line, in place of the file. Anything already written to
+        /// <paramref name="destinationStream"/> is not the file and must be discarded. The check
+        /// needs a size to compare against, so call <see cref="GetSdCardFilesAsync"/> before
+        /// downloading; with no listing the download cannot tell a short reply from a small file.
+        /// </exception>
         /// <exception cref="SdCardTransferStalledException">
         /// Thrown when the transfer stops making progress before the end-of-file marker arrives;
         /// <see cref="SdCardTransferStalledException.Reason"/> distinguishes a stalled read from a

@@ -805,6 +805,12 @@ namespace Daqifi.Core.Device.SdCard
         /// whose listed size is unknown), indicating its SD subsystem is not ready. A file the
         /// listing reports as 0 bytes downloads successfully as a legitimate empty file.
         /// </exception>
+        /// <exception cref="SdCardTruncatedTransferException">
+        /// Thrown when the transfer ends at the end-of-file marker with fewer bytes than the last
+        /// <see cref="GetSdCardFilesAsync"/> listing reported for the file — the device served a
+        /// short reply, such as a SCPI error line, in place of the file. Anything already written
+        /// to <paramref name="destinationStream"/> is not the file and must be discarded.
+        /// </exception>
         /// <exception cref="SdCardTransferStalledException">
         /// Thrown when the transfer stops making progress before the end-of-file marker arrives:
         /// the transport returned an empty read, closed, or — the only signal a socket gives —
@@ -952,6 +958,14 @@ namespace Daqifi.Core.Device.SdCard
                                     listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
                                 break;
                             }
+                            // Only the marker-only case is retried. A SHORT transfer
+                            // (SdCardTruncatedTransferException, #539) is not, even though it is
+                            // the same kind of transient device condition: by then those bytes
+                            // have already been written to the caller's destinationStream, which
+                            // this method cannot rewind, so a second attempt would append to the
+                            // garbage rather than replace it and could land on the listed size by
+                            // sheer accumulation. Letting it out is the honest answer — the caller
+                            // discards the stream and retries the download.
                             catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
                             {
                                 attempt++;

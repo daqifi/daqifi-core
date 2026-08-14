@@ -2114,6 +2114,55 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DownloadSdCardFileAsync_ShortTransferForListedFile_ThrowsInsteadOfReportingSuccess()
+        {
+            // Arrange — the listing says 6159 bytes and the device answers the GET with a SCPI
+            // error line followed by the end-of-file marker, which is what the bench Nq1 actually
+            // does for a file its SD buffer can no longer serve. That used to come back as a
+            // successful 34-byte download with the error text standing in for the log (#539).
+            var errorLine = Encoding.ASCII.GetBytes("**ERROR: -200, \"Execution error\"\r\n");
+            var device = new TestableRetryDownloadDevice(errorLine, errorLine);
+            device.ListingLines.Add("Daqifi/data.bin 6159");
+            device.Connect();
+            await device.GetSdCardFilesAsync();
+            device.SentMessages.Clear();
+
+            using var destinationStream = new MemoryStream();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SdCardTruncatedTransferException>(
+                () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
+            Assert.Equal("data.bin", ex.FileName);
+            Assert.Equal(6159, ex.ListedSizeInBytes);
+            Assert.Equal(errorLine.Length, ex.BytesReceived);
+
+            // A single GET: unlike the marker-only case this is NOT retried, because the partial
+            // bytes are already in the caller's stream and a second attempt would append to them.
+            var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
+            Assert.Equal(1, getCommands);
+        }
+
+        [Fact]
+        public async Task DownloadSdCardFileAsync_TransferMatchingListedSize_Succeeds()
+        {
+            // The companion to the case above: a device that serves the whole file still reports a
+            // plain success, so the guard cannot be rejecting good downloads.
+            var fileData = new byte[512];
+            new Random(539).NextBytes(fileData);
+            var device = new TestableRetryDownloadDevice(fileData);
+            device.ListingLines.Add("Daqifi/data.bin 512");
+            device.Connect();
+            await device.GetSdCardFilesAsync();
+
+            using var destinationStream = new MemoryStream();
+
+            var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
+
+            Assert.Equal(512, result.FileSize);
+            Assert.Equal(fileData, destinationStream.ToArray());
+        }
+
+        [Fact]
         public async Task DownloadSdCardFileAsync_AmbiguousListedName_FallsBackToConservativeBehavior()
         {
             // Arrange — the listing keeps only leaf names, so the same name can appear twice from
