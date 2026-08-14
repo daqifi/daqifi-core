@@ -253,11 +253,13 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     public void Resolve_RealSysfsShape_ReadsIdsFromTheUsbDeviceNodeAboveTheInterface()
     {
         // What the kernel actually lays out: the tty's device symlink points at the *interface*
-        // node (1-1.2:1.0) under /sys/devices, and only its parent — the USB device node — carries
-        // idVendor/idProduct.
+        // node under /sys/devices, and only its parent — the USB device node — carries
+        // idVendor/idProduct. The kernel spells that interface node "1-1.2:1.0"; the fixture drops
+        // the colon, which is not a legal path segment character on Windows and carries no meaning
+        // for the walk, since nothing here parses the node's name.
         var deviceNode = CreateDeviceTree("usb1", "1-1", "1-1.2");
         WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        LinkTty("ttyACM0", CreateSubdirectory(deviceNode, "1-1.2:1.0"));
+        LinkTty("ttyACM0", CreateSubdirectory(deviceNode, "1-1.2_1.0"));
 
         var descriptor = Resolve("/dev/ttyACM0");
 
