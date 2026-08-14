@@ -339,6 +339,24 @@ namespace Daqifi.Core.Device.Internal
                 await _host.DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
 
                 var collectedLines = new List<string>();
+
+                // The list is appended to from the text consumer's reader thread and read from
+                // this one, so every touch of it goes through this gate. Stopping the consumer is
+                // not enough on its own: StopSafely and Dispose are both time-bounded and can
+                // return with the reader still parked in an un-returning read, which the remarks
+                // on RestartMessageConsumerAfterSwap already say out loud. Without the gate, a
+                // line arriving in that window while the result is being projected throws
+                // "collection was modified" out of an exchange that had otherwise succeeded.
+                var collectedLinesGate = new object();
+
+                int CollectedLineCount()
+                {
+                    lock (collectedLinesGate)
+                    {
+                        return collectedLines.Count;
+                    }
+                }
+
                 var stream = transport.Stream;
                 int? originalReadTimeout = null;
 
@@ -398,7 +416,10 @@ namespace Daqifi.Core.Device.Internal
                     // nothing would read (issue #490).
                     textConsumer.MessageParsed += parsed =>
                     {
-                        collectedLines.Add(parsed.Data);
+                        lock (collectedLinesGate)
+                        {
+                            collectedLines.Add(parsed.Data);
+                        }
                     };
 
                     // The protobuf consumer is stopped for the duration of this exchange, so
@@ -431,7 +452,7 @@ namespace Daqifi.Core.Device.Internal
                     // e.g. the SD listing's end-of-listing terminator (#396) — would otherwise accept
                     // a stale line as proof that the device answered a query it never even received,
                     // and report a complete listing for a device that has gone silent.
-                    staleLineCount = collectedLines.Count;
+                    staleLineCount = CollectedLineCount();
                     if (staleLineCount > 0)
                     {
                         Log(logger => logger.LogDebug(
@@ -455,9 +476,9 @@ namespace Daqifi.Core.Device.Internal
 
                     while (DateTime.UtcNow - startTime < maxWait)
                     {
-                        var previousCount = collectedLines.Count;
+                        var previousCount = CollectedLineCount();
                         await Task.Delay(50, cancellationToken).ConfigureAwait(false);
-                        if (collectedLines.Count > previousCount)
+                        if (CollectedLineCount() > previousCount)
                         {
                             lastMessageTime = DateTime.UtcNow;
                             if (!hasReceivedAny)
@@ -487,7 +508,8 @@ namespace Daqifi.Core.Device.Internal
                         }
                     }
 
-                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", sw.ElapsedMilliseconds, collectedLines.Count));
+                    var collectedLineCount = CollectedLineCount();
+                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", sw.ElapsedMilliseconds, collectedLineCount));
 
                     // Stop the text consumer
                     textConsumer.StopSafely();
@@ -512,18 +534,23 @@ namespace Daqifi.Core.Device.Internal
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
                 }
 
-                // The text consumer is stopped by this point, so the list is no longer being
-                // appended to concurrently and can be re-projected safely.
+                // The text consumer has been stopped and disposed by this point, but both are
+                // time-bounded, so the projection takes the gate rather than trusting that the
+                // reader thread is really gone — see the note where the gate is declared.
                 //
                 // The blank lines the parser was asked to emit are dropped here. They are evidence
                 // for the wait loop above and nothing more: every caller of this seam parses
                 // content, and none of them ever saw a blank line before (#538). The stale skip
                 // runs first, so a blank line that arrived before this exchange sent anything is
                 // discarded as stale rather than counted as content — same rule as any other line.
-                var result = collectedLines
-                    .Skip(staleLineCount)
-                    .Where(line => line.Length > 0)
-                    .ToList();
+                List<string> result;
+                lock (collectedLinesGate)
+                {
+                    result = collectedLines
+                        .Skip(staleLineCount)
+                        .Where(line => line.Length > 0)
+                        .ToList();
+                }
 
                 completedNormally = true;
                 return result;
