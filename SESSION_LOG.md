@@ -1242,3 +1242,44 @@ Notes worth keeping:
 **Worktree hygiene:** read source from a fresh detached worktree at `origin/main` `e9591be` (per the standing note that the main checkout sits on a stale local `main`); removed and pruned at end of fire. Never `git stash`.
 
 **End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, the strongest candidates are now **#532** (fresh, well-scoped, bench-reproduced — but wants the user's call on the two open questions) and **#480 extraction 1** (`ReconnectSupervisor`, needs an opt-in to drop two `protected virtual` members from a public base class). Otherwise unchanged: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
+
+---
+
+## Fire — 2026-08-14 (at the PR cap; bench-validation pass on the MCP tool surface; issue #533 filed)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench steps non-destructive — discover/connect/configure/read/capture/SD-read only. No SD writes, no logging, no PWM, no digital outputs driven, no firmware/reboot.
+
+**Priorities 1–3: vacuous, verified live at both ends of the fire.** All five open PRs re-derived from `gh` — #515 `5937454`, #527 `56a47c8`, #528 `f6c3243`, #529 `26582e1`, #530 `b01b4d0`. Each: `build` SUCCESS, MERGEABLE/CLEAN, **0 unresolved `qodo-code-review` threads**, ready-note already posted, no new user comments. Re-checked after the bench work: unchanged. **No Qodo rounds run this fire** — nothing was pushed.
+
+**At the 5/5 cap → no new ticket, no new PR.** Per the saturation rule the unit of work was ONE light bench-validation pass on an untested surface.
+
+**Surface chosen: the MCP server itself (`src/Daqifi.Mcp`), driven as a real stdio JSON-RPC client against the board.** Picked because #524 (`read_channel_values`/`capture_samples`) and #525 (tool-layer tests) both landed recently with **fake-device tests only** — nothing had ever driven the actual MCP server against real hardware. Note the globally-installed `daqifi-mcp` tool is **0.28.0 (10 tools)**; `origin/main` builds **21 tools**, so the released binary could not have validated this surface either.
+
+- Harness: `dotnet src/Daqifi.Mcp/bin/Release/net9.0/daqifi-mcp.dll` over stdio, hand-rolled JSON-RPC in Python (`initialize` → `notifications/initialized` → `tools/list` → `tools/call`). Kept in scratchpad, not committed.
+- **Gotcha:** tool results come back as a **text content block containing JSON**, not `structuredContent`, for both list- and object-returning tools. A harness reading only `structuredContent` sees every call as empty. Parse `content[].text` as JSON.
+
+**Everything on the happy path passed.** discover (serial-only) → connect → `list_connected_devices` → `list_channels` (16 AI + 16 DIO, `pwmCapable` true on exactly {0,3,4,5,6,7}, matching the memory note) → `list_sd_files` (49 files) → `get_sd_storage` → `configure_analog_channels` → `set_sample_rate` → `read_channel_values` → `capture_samples` → `disconnect`. Validation errors surface with real messages, not "An error occurred" (bad device id, `rate_hz must be >= 1`, "No channels are enabled…"). DIO-only and mixed AI+DIO streams both started and returned correctly labelled columns.
+
+- **`measuredRateHz` is computed correctly** — `(rows-1)/DataElapsed`, so it excludes stream-startup dead time and does not use the row count over the whole window. The 79.4% it reports is the genuine **fw #716 clock mismatch** (device timestamps advance at exactly 100 Hz while wall-clock delivery runs at 79.4%), and the tool's three-rate diagnostic surfaces it exactly as documented. Not a Core bug; do not re-file.
+- **DIO-only streams started fine here**, twice, contradicting the standing "DIO-only streams often don't start" note. That note may be conditional (this device had streamed analog earlier in the session). Worth not treating as absolute.
+
+**Result: found a real, deterministic, three-times-reproduced bug — filed as #533.** An SD-card query silently blanks a live capture that is running at the same time, and the capture reports itself perfectly healthy.
+
+- 7-tool bisect at two fire delays, with controls before and after. **Only `list_sd_files` and `get_sd_storage` do it.** `get_device_status`, `list_channels`, `configure_analog_channels`, `read_channel_values`, `set_sample_rate` fired mid-capture are all harmless (316 rows, same as control).
+- The cut tracks the arrival time exactly: fire at +0.3 s → 0.21 s of data; fire at +2.0 s → 1.56 s of data (≈2.0 s of wall clock at the 79.4% delivery rate). Healthy control = 316 rows / 3.15 s.
+- Every truncated capture reported `droppedSampleCount: 0`, `ignoredSampleCount: 0`, `rowLimitReached: false`, `measuredRateHz: 79.4` — **byte-identical health fields to a good run.** Only the row count betrays it.
+
+**Root cause, pinned to two lines and confirmed in source:** all six SD entry points in `Device/SdCard/SdCardOperations.cs` (lines 219, 425, 652, 710, 780, 888 — Files/Storage/StopLogging/Delete/Format/Download) open with `_host.Send(StopStreaming); _host.IsStreaming = false;` **before entering the operation lock**. The `Send` is harmless (an operation is in flight, so it defers and replays later). The **flag write** is the damage: `Device/Internal/StreamFrameDecoder.cs:236` gates decoding on `_host.IsStreaming`, so the instant it clears, arriving frames stop being decoded into channel samples and are re-raised as raw frames instead. `SampleReceived` stops firing, the capture's drain sees nothing more, and nothing counts a drop — which is exactly why the health fields stay clean.
+
+- The text exchange itself is **well behaved** — `TextExchangeEngine.ExecuteTextCommandAsync` takes the lock (line 243-266) *before* `SuspendInboundConsumer` (368), and the SD call does correctly wait its turn (it returned only after the capture ended). The bug is solely the pre-lock state mutation.
+- **Second-order effect:** with `IsStreaming` already false, the capture's own teardown no-ops (`StopStreaming()` early-returns on `if (!IsStreaming) return;`), so the stream it started is never stopped. Plausible contributor to the bench's "wedged stream" / empty-`SD:GET` folklore.
+- Dead ends worth not repeating: `LiveSampleCapture.DrainAsync` has no `IsStreaming` gate; `LiveSampleStream` never reads `IsStreaming`; `TryDeferSend`/`OwnsCurrentSession` correctly park the SD `Send`. The decoder gate is the only path that explains the evidence.
+- No duplicate: the unconditional pre-lock stop is the **fix for #118**, so any repair must keep that guarantee. Same shape as **#385** (a second connection's unconditional StopStreaming killing the first session), mirror image of **#493** (raw-capture download as victim rather than cause). Nothing open covers it.
+
+**Deliberately filed, not fixed:** at the PR cap, and #533 carries a design question that is the user's call — whether a live-sample consumer should be able to *tell* its stream was stopped out from under it (today a cut-short capture is indistinguishable from a complete one, which is the more dangerous half).
+
+**No production code changed this fire**, so no test run was owed and there is nothing to re-validate on the open PRs.
+
+**Worktree hygiene:** worked in the fire's own worktree `mystifying-yonath-1c82a7` at `origin/main` `e9591be` (Release build of `src/Daqifi.Mcp` only; `bin`/`obj` are ignored, tree left clean). Never `git stash`. **Note: the main checkout at `/Users/tylerkron/projects/daqifi/daqifi-core` is on local `main` 2 commits AHEAD of `origin/main`** (the SESSION_LOG journal commits) — reading `src/` there gives a stale tree that is missing `read_channel_values`/`capture_samples`; that cost a few minutes early on. Read source from the fire's own worktree.
+
+**End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, the strongest candidates are **#533** (fresh, bench-reproduced, root-caused to two lines — but wants the user's call on the detectability question) and **#532**, then **#480 extraction 1** (`ReconnectSupervisor`, needs an API-break opt-in).
