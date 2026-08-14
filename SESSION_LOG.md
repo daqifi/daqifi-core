@@ -1676,3 +1676,73 @@ Wrote a scratchpad harness running the issue's own experiment (3 analog channels
 **Worktree hygiene:** worked in `mystifying-yonath-1c82a7`, finished on `fix/diagnostics-stream-corruption-537`, then returned to the starting branch `claude/daqifi-loop-beff8d`. The baseline worktree was created under the scratchpad and removed. Harness lived in the scratchpad. Never `git stash`.
 
 **End-of-fire state: 4 open loop PRs — #515, #530, #540, #541** — all Qodo-clean, CI green, ready-noted, **not merged**. **One slot free under the 5/5 cap**, so the next fire can start one more ticket. Best next candidates, in order: **#538** (two small independent fixes, one near-unarguable), then **#536** (carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. Note **#533 is now adjacent to this fire's work** — same "one operation quietly damages another" family — and the harness pattern here (build the same probe against a detached `origin/main` worktree for a true before/after) is worth reusing on it.
+
+---
+
+## Fire — 2026-08-14 (implemented #538 → PR #542; 2 Qodo rounds; the issue's own diagnosis was half wrong, and the bench said so)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench work non-destructive: connect / raw SCPI probe / diagnostics timing runs / disconnect. **No SD op, no firmware, no reboot, no power-state change.** The volatile system LOG ring buffer was cleared and re-populated — that is the subject of the issue, and it is the only device state touched.
+
+**Priorities 1–3: vacuous.** `origin/main` still `a554430`. Four open loop PRs re-derived live — **#515 `5937454`, #530 `b01b4d0`, #540 `f965e8e`, #541 `1946128`** — all `build` SUCCESS, **0 unresolved qodo threads**, all already ready-noted, no new user comments. **4/5 on the cap → one slot free**, so priority 4 applied.
+
+**Priority 4 → #538 implemented and shipped as PR #542** (`fix/text-exchange-line-framing-538`, head `0116313`). Branch off `origin/main`, "closes #538", not merged.
+
+### THE IMPORTANT FINDING: #538's cause 2 was wrong, and getting it right made the fix smaller
+
+#538 offered two causes and framed cause 2 as a judgement call needing a design decision (shorter timeout, or a `SYSTem:ERRor?` terminator like the SD listing's). Both options were unattractive — one makes a wrong answer arrive faster, the other **pops an entry off the device's error queue** on a diagnostics read whose own interface also exposes `GetSystemErrorCountAsync`. Rather than pick, went to the board first with a raw pyserial probe.
+
+**The issue says an empty `SYSTem:LOG?` "produces no bytes at all". It does not — it answers `b'\r\n'` in 6 ms, 3 trials out of 3.** A populated dump answers its entries then the same trailing `\r\n`. So:
+
+| command | raw reply |
+|---|---|
+| `SYSTem:LOG?` (empty) | `b'\r\n'` |
+| `SYSTem:LOG?` (populated) | `b'Test error message\r\n\r\n'` |
+| `SYSTem:LOG:CLEar` | `b'Log cleared\n'` |
+| `SYSTem:LOG:TEST` | `b'Added test log messages\n'` |
+| `SYSTem:ERRor:COUNt?` | `b'0\r\n'` |
+
+**That collapses both causes into ONE bug: Core was discarding the evidence that the device had answered.** Cause 1 dropped a bare-LF line because the parser only recognised CRLF; cause 2 dropped a complete CRLF line because it was *empty* (`IsNullOrWhiteSpace`). Either way `collectedLines.Count` never moved, `hasReceivedAny` stayed false, and phase 1 burned the full 2 s. No protocol change, no terminator, no timeout tuning needed.
+
+### The fix
+
+Two small changes, both in the framing layer:
+
+- `TextExchangeEngine` builds its parser with **`lineEnding: "\n"`** instead of the CRLF default. **This reads BOTH endings** — the CR lands at the end of the line's slice and comes off with the existing `Trim()`. Pinned by a test so nobody removes the trim.
+- `LineBasedMessageParser` gained an **`internal bool EmitEmptyLines { get; init; }`** (default false, so the public default behaviour is untouched). The exchange opts in, counts the blank line as an arrival, and **filters blanks back out of the result** — so every caller sees exactly the lines it saw before.
+
+**Deliberately NOT done: the empty-vs-silent distinction.** That changes what `GetSystemLogAsync` throws, which is a public behaviour decision, not a framing bug. But the probe proved the trailing blank line is an **unconditional end-of-dump terminator**, so it is now cheap and side-effect-free — **filed as #543** with the evidence, and a correction comment left on **#538** so nobody re-derives the wrong cause.
+
+**Tests:** 15 new (9 parser, 6 end-to-end). **FULL suite green on net9 + net10: 3437 Core + 192 MCP.**
+
+### Bench validation — real before/after, same board, same session shape
+
+Harness built twice: against the branch, and against a **throwaway detached worktree at `origin/main`** (`git worktree add --detach`, removed after; never `git stash`). Empty and populated log reads interleaved so they cannot drift apart.
+
+| call | `origin/main` `a554430` | PR #542 |
+|---|---|---|
+| `ClearSystemLogAsync` | 2560–3064 ms | **1057–1059 ms** |
+| `GetSystemLogAsync` (EMPTY) | 3063–3064 ms | **1056–1058 ms** |
+| `TestSystemLogAsync` | 2562–3062 ms | **1055–1058 ms** |
+| `GetSystemLogAsync` (populated) | 1055–1057 ms | 1056–1063 ms |
+| the 4 CRLF baselines | 1053–1065 ms | 1054–1064 ms |
+
+**The controls are what mattered** — the risk of this change is mangling replies that already worked — and they are identical before and after, content included (`HeapFree=7544`, `TotalSamplesStreamed=308`, 10 history entries, `Level=1 Ceiling=3`). Re-run again after the Qodo fix: unchanged.
+
+**The end-to-end tests were confirmed to be real regression detectors** by reverting the one wiring line and re-running: **4 of 6 fail, and the 2 that pass are exactly the 2 controls** (a CRLF reply, and a silent device still using its full response window). Worth reusing — a test suite that passes both before and after proves nothing.
+
+### Qodo: 2 rounds
+
+- **Round 1** on `12a7cfd` → **1 real bug, accepted.** *"Racy result enumeration"*: filtering blanks made the exchange enumerate `collectedLines` on **every** call where it previously did so only when stale lines had to be skipped — widening a narrow pre-existing race into the common path. The reasoning holds and this file's own remarks admit it: `StopSafely`/`Dispose` are time-bounded and can return with the reader thread still parked. Fixed in `0116313` with **one gate around every touch of the list** (append, wait-loop count reads, stale boundary, final projection), never held across an await. Declined Qodo's third suggestion (unsubscribe `MessageParsed` before stopping) — a callback already in flight is unaffected by unsubscribing, so it buys nothing on top of the gate. **This also closes the same race on the pre-existing stale-line path.**
+- **Round 2** on `0116313` → **Bugs (0) / Rule violations (0) / Requirement gaps (0)**, 0 unresolved threads, round-1 finding struck through as `✓ Resolved`. Re-checked **both** surfaces after a 4-minute settle against the same SHA — still clean, `build` SUCCESS, MERGEABLE. Ready-noted.
+
+### Gotchas worth keeping
+
+- **The PR took number #542, which the body had already used for the follow-up issue.** Filed the issue after the PR, got #543, then had to patch the PR body. **File the follow-up issue BEFORE opening the PR** when the body references it.
+- `DaqifiStreamingDevice` has **no `Diagnostics` property** — it implements `IDeviceDiagnostics` directly, so cast: `IDeviceDiagnostics diagnostics = device;`. And `MemoryDiagnostics` exposes **`HeapFree`**, not `HeapFreeBytes`. Both cost a build cycle (the same family of mistake that bit #540 and #541 — **check the member list before writing a harness**).
+- The only production consumer of `LineBasedMessageParser` is `TextExchangeEngine`; every other reference is a test. That is what made the LF switch safe to reason about.
+
+**Bench hygiene:** nothing written to the SD card, no file created. **Device verified restored**: log cleared, error queue drained to `0,"No error"`, `SYSTem:COMMunicate:LAN:ENAbled 1`, `*IDN?` → `DAQiFi,Nq1,7E2815916200E898,01-02`, `SYSTem:ERRor:COUNt?` → 0.
+
+**Worktree hygiene:** worked in `mystifying-yonath-1c82a7`, finished on `fix/text-exchange-line-framing-538`, then returned to the starting branch `claude/daqifi-loop-beff8d`. The baseline worktree lived under the scratchpad and was removed. Harness and probe lived in the scratchpad. Never `git stash`.
+
+**End-of-fire state: 5 open loop PRs — #515, #530, #540, #541, #542** — all Qodo-clean, CI green, ready-noted, **not merged**. **AT THE 5/5 CAP**: the next fire shepherds only until the user merges or closes something. When a slot frees, best candidates in order: **#543** (new — the empty-vs-silent distinction, mechanism already proven, one guard plus tests), **#536** (carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
