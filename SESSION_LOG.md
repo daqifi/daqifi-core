@@ -1520,3 +1520,52 @@ Also noted: an empty log and a device that never answered are **indistinguishabl
 **Worktree hygiene:** worked in the fire's own worktree `mystifying-yonath-1c82a7` on `claude/daqifi-loop-beff8d` at `origin/main` `e9591be`; the harness lived entirely in the scratchpad, never in the repo. Both trees left clean, branch unchanged. Never `git stash`. **Bench device verified restored**: all 10 log modules back at level 1, `SYSTem:ERRor?` → `0,"No error"`, `*IDN?` healthy.
 
 **End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, **#537 is now the strongest candidate** — freshly filed, reproduced 4/4 and 2/2 across two independent experiments, cause pinned to a named method, and option 1 on the issue (make the parse fail loudly instead of silently dropping a corrupt first line) is a small, self-contained fix. Then **#538** (two small independent fixes, one of them near-unarguable), then **#536** (now carrying the log-level-getter gap too), then **#533** (most evidence of any open bug), then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Otherwise unchanged: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. **Owed on the SD surface: an actual `SD:GET` round-trip through all three parsers.** Surfaces still without hardware evidence: `Communication/Transport`'s HID half (destructive, skip), `DeviceErrorThrottle`/`DeviceErrorEventArgs` (needs a physical unplug), `Device/Network`'s write path (churn-risky, do not).
+
+---
+
+## Fire — 2026-08-14 (at the PR cap; bench-validation pass on the SD **download** surface; issue #539 filed — a failed download reports success)
+
+**Priorities 1–3: nothing actionable.** All five loop PRs (#515, #527, #528, #529, #530) re-derived live: `build` SUCCESS on every one, **0 unresolved qodo review threads** on every one, head SHAs unchanged from the previous fire (`5937454`, `56a47c8`, `f6c3243`, `26582e1`, `b01b4d0`), all already ready-noted. Re-checked both surfaces again at the end of the fire — still clean, still the same heads. **Still 5/5 on the cap**, so no new ticket was started. No Qodo rounds were owed or run this fire.
+
+**Priority 4 → true saturation: took the SD download round-trip that has been "owed" for several fires.** It found a real Core bug on the first serious look.
+
+### FINDING → issue #539 (filed)
+
+**A failed SD download is reported as a successful one.** `SdCardFileReceiver.ReceiveAsync` is handed `listedFileSizeBytes` — the size `SD:LIST?` reported — but only uses it to decide whether a **zero**-byte transfer is a legitimately empty file or a wedged subsystem (`totalBytesReceived == 0 && listedFileSizeBytes != 0`, the #264 / #398-gap-2 guard). **Any non-zero count is accepted, however far short of the listed size**, and the payload is never inspected. So when the device answers a GET with `**ERROR: -200, "Execution error"\r\n` followed by `__END_OF_FILE__`, Core returns a "successful" 34-byte download and writes the error text to disk as the file. Proved deterministically with two throwaway tests against `SdCardFileReceiver` on `main` — both **pass today**: error-line + EOF with `listedFileSizeBytes: 6159` → returns 34; 100 arbitrary bytes + EOF with `listedFileSizeBytes: 20118` → returns 100. (Scratch test file was deleted; the worktree ends clean.)
+
+### Hardware evidence — a hard size cliff, measured raw
+
+Driven by **raw SCPI over pyserial, no Core in the path**, so device behaviour is unambiguous. Same session, error queue drained first, `SD:ENAble 1`, `SD:LIST?` healthy and reporting sizes:
+
+| listed | received | EOF | | listed | received | EOF |
+|---|---|---|---|---|---|---|
+| 85 | 85 | yes | | 3195 | 0 | no |
+| 186 | 186 | yes | | 3424 | 34 (error line) | no |
+| 296 (.csv) | 296 | yes | | 6159 | **34 (error line)** | **yes** |
+| 1539 | 1539 | yes | | 10062 (.csv) | 0 | no |
+| | | | | 10594 (.json) | 34 (error line) | no |
+| | | | | 14318 | **34 (error line)** | **yes** |
+| | | | | 20118 | 0 | no |
+| | | | | 63528 (.json) | 34 (error line) | no |
+
+**Everything ≤1539 B came back byte-exact in ~0.1 s, across all three formats (.bin/.csv/.json); everything ≥3195 B failed.** Format-independent — a 296-byte `.csv` succeeds, a 3424-byte `.csv` fails. The bolded rows are the dangerous ones: error line **plus** EOF marker, exactly the shape the receiver accepts as a complete file. After a failed GET, `SYSTem:ERRor?` → `0,"No error"`, so there is **no out-of-band signal** either.
+
+**The cliff is firmware, already fixed, NOT worth a new firmware issue** — it is firmware **#703** (SD circular buffer collapses 32 KB→512 B after any non-SD stream), **closed COMPLETED 2026-07-26, which is after the newest release v3.7.2 (2026-07-13)**. The fix is merged but **unreleased**; the bench runs 3.7.2, which is why it still reproduces. Recorded that correction as a comment on #539 so nobody files a duplicate. The 1539-OK / 3195-fail boundary is a useful before/after marker when #703 is verified on a build carrying the fix.
+
+### Corrections to standing notes — read these before the next SD fire
+
+- **"An SD recording re-arms the collapsed buffer without a power cycle" did NOT hold.** Tried it (6 s JSON recording), and the very next GET still returned nothing — including for the 63 KB file that recording had just created. What the recording *did* change was the failure mode (stall → marker-only). Treat the re-arm as unreliable; the size cliff is the real predictor.
+- **Raw `SD:LIST?` is flaky on the first try after `SD:ENAble 1`** — it comes back as a bare `**ERROR: -200`, and succeeds on a retry. This is exactly why `SdCardOperations` retries LIST, and it is why an early version of the probe wrongly concluded the device was broken. **Core's retry is doing real work here.**
+- **The device's error queue silently accumulates and overflows** (`-350, "Queue overflow"`). A probe that doesn't drain it first reads *stale* `-200`s and misattributes them to the command it just sent — this cost a full misdiagnosis round. **Drain `SYSTem:ERRor?` to `0,"No error"` before trusting any raw reply** (took 18 reads at one point).
+- **`SD:GET` wants the BARE file name.** `SD:LIST?` reports `DAQiFi/log_x.bin 20118`, but `GET "DAQiFi/log_x.bin"` answers `-200`; `GET "log_x.bin"` works. Core already sends the bare form — **correct, don't "fix" it.**
+- **A raw probe must replicate Core's full connect handshake** (`SYSTem:ECHO -1` / `StopStreamData` / `POWer:STATe 1` / `STReam:FORmat 0`) **and its line settings (9600 8N1, DTR on, RTS off** — pyserial asserts RTS by default). Without the handshake every SD command answers `-200`.
+
+**What HELD UP:** `--sd-list` and `--sd-storage` through Core are solid (50 files, 7.44 GiB free / 0.0% used, correct formats and dates). Core's two download failure modes are correctly distinguished and both messages are accurate (`SdCardTransferStalledException` names the 20 s idle window and the 0 bytes; `SdCardEmptyTransferException` names the marker-only transfer). The bare-name argument form is right. The LIST retry is load-bearing.
+
+**No production code changed this fire** — the only repo edit was a scratch test that was deleted — so no `dotnet test` run was owed and there is nothing to re-validate on the open PRs.
+
+**Bench hygiene:** left one extra file on the card (`log_20260814_114608.json`, 63 KB) from the re-arm attempt — additive only, card still at 0.0% used. Nothing deleted, no format, no firmware op, no reboot, no power cycle. **Device verified restored**: stream stopped, `SD:ENAble 0`, `LAN:ENAbled 1`, error queue drained to `0,"No error"`, `*IDN?` → `DAQiFi,Nq1,7E2815916200E898,01-02`, fw 3.7.2.
+
+**Worktree hygiene:** worked in `mystifying-yonath-1c82a7` on `claude/daqifi-loop-beff8d` at `origin/main` `e9591be`; harness lived in the scratchpad. Tree ends clean on its starting branch. Never `git stash`.
+
+**End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, ready-noted, **not merged**. **Still at the 5/5 cap**; the next fire shepherds only until the user merges or closes something. When a slot frees, **#539 is now the strongest candidate** — a real bug, hardware-evidenced, with the fix location pinned to one method and the guard already half-written (the receiver has the listed size in hand; it just needs to check it). Then **#537**, **#538**, **#536**, **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. **The SD surface is now materially covered** — the remaining gap there is a large-file download verified against a build carrying the #703 fix. Surfaces still without hardware evidence: `Communication/Transport`'s HID half (destructive, skip), `DeviceErrorThrottle`/`DeviceErrorEventArgs` (needs a physical unplug), `Device/Network`'s write path (churn-risky, do not).
