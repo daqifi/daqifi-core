@@ -1795,3 +1795,55 @@ Every row reproduced ≥2×; the 16-channel case held over 6 repeats at 100 Hz a
 **Worktree hygiene:** worked in `mystifying-yonath-1c82a7`, stayed on the starting branch `claude/daqifi-loop-beff8d` throughout (**no source file in the repo was modified this fire**). The baseline detached worktree lived under the scratchpad and was removed + pruned. Harness lived in the scratchpad. Never `git stash`. **Note the standing trap held again:** `cd`-ing to the repo root lands on the **main checkout**, which sits on `main` 63 behind `origin/main` — the first `git status -sb` of the fire caught it, and the SESSION_LOG grep had to be re-run with an absolute path because the worktree's own `SESSION_LOG.md` is a 0-byte placeholder.
 
 **End-of-fire state: 5 open loop PRs — #515, #530, #540, #541, #542** — all Qodo-clean, CI green, ready-noted, **not merged**. **STILL AT THE 5/5 CAP**: the next fire shepherds only until the user merges or closes something. When a slot frees, best candidates in order: **#544** (new — docs + one decoder test, evidence already gathered above, the smallest well-specified item on the board), **#543** (empty-vs-silent distinction, mechanism already proven), **#536** (carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
+
+---
+
+## Fire — 2026-08-14 (implemented #544 → PR #545; 2 Qodo rounds; Qodo caught that my own test rows lied about their masks)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench work non-destructive: connect / channel enable-disable / stream start-stop / disconnect. **No SD op, no file written, no pin driven, no firmware, no reboot, no power-state change, no `LAN:*` write.**
+
+**Priorities 1–3: vacuous — and the cap opened up.** The user **merged #530, #540, #541**; `origin/main` moved `a554430` → **`9be194d`**. Two open loop PRs re-derived live — **#515 `5937454`, #542 `0116313`** — both `build` SUCCESS, **0 unresolved qodo threads**, both already ready-noted, no new user comments. **2/5 on the cap → three slots free**, so priority 4 applied.
+
+**Priority 4 → #544 implemented and shipped as PR #545** (`fix/partial-analog-frame-docs-544`, head `9b431a3`). Branch off `origin/main`, "closes #544", not merged. Docs + tests only, **no behaviour change** — the guard was already correct.
+
+### Hardware re-confirmation: every number in the docs reproduced from scratch
+
+Did not trust the previous fire's table. Built a fresh harness (`scratchpad/widthbench`, `ProjectReference` at the branch, assembly named `Daqifi.Core.Tests`) driving Core's public `StreamFrameDiscarded` + `StreamMessageReceived`. **14 streaming sessions, every mask repeated:**
+
+| mask | count | leading width | | mask | count | leading width |
+|---|---|---|---|---|---|---|
+| `{0,1,2}` | 3 | 1 | | `{0..7}` | 8 | 2 |
+| `{0,1,10}` | 3 | **2** | | `{8..15}` | 8 | **5** |
+| `{15}` | 1 | none | | `{0..15}` | 16 | **7** |
+| `{14,15}` | 2 | none | | | | |
+
+Identical to the previous fire, including the load-bearing `{0,1,2}`-vs-`{0,1,10}` pair. Also re-confirmed: **exactly one discard per session** and **first delivered frame full width in 14/14**.
+
+### THE LESSON: prove the test detects the thing it exists to prevent
+
+The whole point of #544 is that narrowing `analogValueCount < enabledAnalogChannelCount` to `== 1` would pass the suite. **Verified rather than asserted** — and the first attempt at verifying was wrong:
+
+- Replacing the comparison outright with `== 1` broke **22 tests**, because it also suppresses a 1-value frame with 1 channel enabled. That is not the narrowing a reader would make.
+- The **faithful** narrowing is `analogValueCount == 1 && analogValueCount < enabledAnalogChannelCount`. Under it: **only the new multi-value tests fail (5, later 6), and all 3456 others pass.** That is the blind spot, demonstrated. The 1-value theory row keeps passing and is the control.
+
+**Re-ran this check after the Qodo fix too** — still exactly the new rows and nothing else.
+
+### Qodo: 2 rounds
+
+- **Round 1** on `c8a3ef8` → **1 finding, accepted, and it was right about something I had missed.** *"Mask cases not exercised"*: the theory was parameterised `(enabledChannelCount, leadingValueCount)` and enabled channels `0..N-1`, so **the row labelled `{0,1,10}` actually ran `{0,1,2}`** — a mask that leads with 1 value on hardware, not 2. The test asserted a width against a mask that does not produce it and disagreed with the enum docs it exists to back. Fixed in `9b431a3`: rows carry their real channel numbers and run against a **full sixteen-channel device with only the mask enabled** (`MaskedAnalogHost` helper), so `{8..15}` is genuinely sparse rather than "eight channels". **The deeper gap Qodo named is real:** a mask contiguous from zero cannot distinguish *"the decoder ordered enabled channels by channel number"* from *"the decoder used the array index as the channel number"* — they agree for `{0..N-1}` and disagree for any mask that skips a channel. So the delivery test became a theory over `{0..15}` and `{8..15}`, asserting the payload's first value lands on **AI8**; under index-based mapping AI8 would take no sample at all. Disabled channels asserted unsampled.
+- **Round 2** on `9b431a3` → **Bugs (0) / Rule violations (0)**, round-1 finding struck through `✓ Resolved`, 0 unresolved threads. Qodo posted "updated up to the latest commit `9b431a3`" explicitly. Re-checked **both** surfaces after a settle interval against the same SHA — still clean, `build` SUCCESS, MERGEABLE. Ready-noted.
+
+**Tests:** 7 new (5-row mask theory + 2-row delivery theory). **FULL suite green on net9 + net10: 3462 Core + 192 MCP** after every push.
+
+### Gotchas worth keeping
+
+- **`DaqifiOutMessage` has NO namespace — it is in the global namespace.** `Daqifi.Core.Communication.Messages.DaqifiOutMessage` does not resolve; reference it unqualified. The `using Daqifi.Core.Communication.Messages;` in the test files is unrelated to it.
+- The public raw-frame event is **`StreamMessageReceived`, an `Action<DaqifiOutMessage>`** — not `MessageReceived`, whose `MessageReceivedEventArgs` (in `Daqifi.Core.Device`) is **non-generic**; the generic `MessageReceivedEventArgs<T>` is a different type in `Communication.Consumers`. **The member-list mistake has now cost a build cycle in five consecutive fires (#540, #541, #542, the discard bench, this one).**
+- `xUnit [InlineData(new[] { 0, 1, 10 }, 2)]` works fine for `int[]` parameters — no need for `MemberData`.
+- Harness must enumerate analog channels with `OrderBy(c => c.ChannelNumber)` and filter `c.Direction == ChannelDirection.Input`; the standing name-sort trap (AI0, AI1, AI10) still applies.
+
+**Bench hygiene:** nothing written to the SD card, no file created, no pin driven. **Device verified restored**: `enabled=0`, `streaming=False`. Harness lived in the scratchpad.
+
+**Worktree hygiene:** worked in `mystifying-yonath-1c82a7`, finished on `fix/partial-analog-frame-docs-544`, then returned to the starting branch `claude/daqifi-loop-beff8d`. Never `git stash`. A backup copy of `StreamFrameDecoder.cs` was kept in the scratchpad across the two narrowing experiments and restored from it both times (verified by `git diff` afterwards).
+
+**End-of-fire state: 3 open loop PRs — #515, #542, #545** — all Qodo-clean, CI green, ready-noted, **not merged**. **3/5 on the cap → two slots free**, so the next fire should start another ticket. Best candidates in order: **#543** (empty-vs-silent distinction on `GetSystemLogAsync`, mechanism already proven on the bench), **#536** (carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
