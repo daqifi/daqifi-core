@@ -1746,3 +1746,52 @@ Harness built twice: against the branch, and against a **throwaway detached work
 **Worktree hygiene:** worked in `mystifying-yonath-1c82a7`, finished on `fix/text-exchange-line-framing-538`, then returned to the starting branch `claude/daqifi-loop-beff8d`. The baseline worktree lived under the scratchpad and was removed. Harness and probe lived in the scratchpad. Never `git stash`.
 
 **End-of-fire state: 5 open loop PRs — #515, #530, #540, #541, #542** — all Qodo-clean, CI green, ready-noted, **not merged**. **AT THE 5/5 CAP**: the next fire shepherds only until the user merges or closes something. When a slot frees, best candidates in order: **#543** (new — the empty-vs-silent distinction, mechanism already proven, one guard plus tests), **#536** (carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
+
+---
+
+## Fire — 2026-08-14 (at the PR cap; bench-validation pass on the frame-discard surface; issue #544 filed)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench work non-destructive: channel enable/disable, stream start/stop, and read-only diagnostics. **No SD op, no file written, no pin driven, no PWM, no firmware, no reboot, no power-state change, no `LAN:*` write.**
+
+**Priorities 1–3: vacuous.** `origin/main` still `a554430`. Five open loop PRs re-derived live — **#515 `5937454`, #530 `b01b4d0`, #540 `f965e8e`, #541 `1946128`, #542 `0116313`** — all `build` SUCCESS, **0 unresolved qodo threads**, all already ready-noted, no new user comments. Re-verified again at end of fire: unchanged. **5/5, AT THE CAP** → no new ticket, no new PR. Per the saturation rule the fire's unit of work was ONE bench-validation pass on an untested surface.
+
+**Surface chosen: the stream-frame discard telemetry — `StreamFrameDiscarded` / `StreamFrameDiscardReason` / `DiscardedStreamFrameCount`, and the two guards behind them (`StreamFrameDecoder.ShouldSuppressPartialAnalog`, `StreamFrameGate`).** Picked by grepping this journal for every public type in `Device/`: **`StreamFrameDiscarded` had zero mentions across the whole log** — never benched, never even discussed. It was the right pick for a second reason: both discard reasons are *claims about firmware ≤ 3.7.2 behaviour* (core #351 / fw #707, and fw #533), and the bench unit runs exactly 3.7.2 — yet every test builds the frames by hand. Harness: `scratchpad/discardbench`, `ProjectReference` at a **throwaway detached worktree of `origin/main`** (`git worktree add --detach`, removed after; never `git stash`), assembly named `Daqifi.Core.Tests`. Four passes, **61 streaming sessions**.
+
+### THE FINDING (filed as #544): the malformed leading frame is not "a single value", and it is mask-dependent
+
+`StreamFrameDiscardReason.PartialAnalogFrame`'s remarks say the frame's analog payload "holds **a single value regardless of the enabled channel mask**". Both halves are false on real 3.7.2. The width is **deterministic per mask, 1..7 observed, and varies with the mask — not the count**:
+
+| mask | count | leading width | mask | count | leading width |
+|---|---|---|---|---|---|
+| `{0,1,2}` | 3 | 1 | `{0,1}` | 2 | 1 |
+| `{0,1,10}` | 3 | **2** | `{0,15}` | 2 | 1 |
+| `{0,1,15}` | 3 | 1 | `{14,15}` | 2 | **none emitted** |
+| `{13,14,15}` | 3 | **2** | `{15}` | 1 | **none emitted** |
+| `{0..7}` | 8 | **2** | `{8..15}` | 8 | **5** |
+| `{0..15}` | 16 | **7** | | | |
+
+Every row reproduced ≥2×; the 16-channel case held over 6 repeats at 100 Hz and 3 at 500 Hz, so width is **independent of sample rate**. **How the mask-dependence was found is worth keeping:** pass 1 and pass 3 disagreed on "3 channels" (2 values vs 1). The cause was the harness, not the device — pass 1 did `OrderBy(c => c.Name)`, which sorts `AI0, AI1, AI10, AI11, …` lexicographically, so it had actually enabled **{0,1,10}**, not {0,1,2}. That accident is what exposed the real variable. **Enumerate analog channels in device order, never by name.**
+
+**The guard itself is correct and stays correct** — `analogValueCount < enabledAnalogChannelCount` caught the frame in every session that emitted one. The defect is the *documented rationale* plus a **total absence of test coverage for the multi-value shape**: every discard-asserting test builds a **one-value** short frame (`DiscardEventCarriesTheCountsTheDecisionWasMadeOn` 3-enabled/1-value, `SuppressedWarmupFrame_IsNotReRaised_…`, `WarmupSuppression_IsBounded`, `Decode_WarmupFrame_ReportsDiscardWithCounts`, `Decode_CombinedWarmupFrame_…`). So narrowing the check to `== 1` on the strength of the comment would **pass the entire suite** and silently reintroduce #351 on wide captures — a 16-channel stream would hand raw consumers a 7-value frame, and the example CLI's offline export (the consumer #425 names) would infer width 7 and truncate. Docs+test fix only, no behaviour change; suggested test is 16 enabled / 7-value leading frame.
+
+### Greens, all on hardware — so they are not re-derived
+
+- **Exactly one discard per session, never more, 61/61.** Matches `DiscardedStreamFrameCount`'s "on 3.7.2 it is typically one".
+- **The first *delivered* frame was full width in 61/61 sessions.** The guard does its job; `MaxSuppressedWarmupFrames = 5` is never approached.
+- **The documented "digital payload still delivered, timestamp still anchors the clock" guarantee is CONFIRMED** — the claim only hardware can settle. With 3 analog + 4 DIO: **DIO 198 samples vs analog 197**, and the extra digital sample's device timestamp sits exactly **one sample period (420001 ticks) before** the first analog sample. The N=1-analog control has diff=0, which is what makes the diff=1 meaningful.
+- `DiscardedStreamFrameCount` read **inside** the handler already includes the frame being reported (documented guarantee), and `EnabledAnalogChannelCount` matched the true enabled count every time. Zero decode failures in any session.
+- **Tick rate confirmed 42 MHz** (420000 ticks per 10 ms period), consistent with the standing fw#716 note.
+- **The guard's arithmetic blind spot is real but NOT exercised by this firmware.** With exactly 1 analog channel enabled, `analogValueCount < 1` requires 0, and a 0-value frame returns early — the guard *cannot* fire. Decisive DIO probe says the device simply **emits no leading partial frame at N=1** (AI==DIO==198, diff 0), and the same at mask `{14,15}`. **Do not "fix" the N=1 case** — there is nothing there to catch on 3.7.2.
+- **`StaleLeftoverFrame` never fired once in 61 sessions**, all but the first being stop/start restarts — the exact case fw #533 describes, with the gate armed and in-window (2.5 sample periods = 25 ms at 100 Hz, against a ~1.2 s inter-session gap). The gate is harmless but has **zero hardware evidence** on 3.7.2. Recorded in #544 as unexercised, not confirmed.
+
+### Gotchas that cost a cycle
+
+- `DaqifiOutMessage` has **no `HasDigitalData`** — test `m.DigitalData.Length > 0`. The decode-failure counter is **`DecodeFailureCount`**, not `FailedStreamFrameDecodeCount`.
+- `IDeviceDiagnostics` lives in **`Daqifi.Core.Device.Diagnostics`**, not `Daqifi.Core.Device`. And `DeviceMetadata` has no `DeviceName` (only `SerialNumber`) — **the same member-list mistake has now cost a build cycle in four consecutive fires (#540, #541, #542, this one). Check the member list before writing a harness.**
+- `timeout(1)` does not exist on this macOS box; don't wrap bench runs in it.
+
+**Bench hygiene:** nothing written to the SD card, no file created, no pin driven. **Device verified restored**: all channels disabled (32 present, 0 enabled), `IsStreaming` false, **error count 0**, fw `3.7.2`, serial `9090539562006014104`, `HeapFree=7544` (the standing pre-existing low-heap state, unchanged).
+
+**Worktree hygiene:** worked in `mystifying-yonath-1c82a7`, stayed on the starting branch `claude/daqifi-loop-beff8d` throughout (**no source file in the repo was modified this fire**). The baseline detached worktree lived under the scratchpad and was removed + pruned. Harness lived in the scratchpad. Never `git stash`. **Note the standing trap held again:** `cd`-ing to the repo root lands on the **main checkout**, which sits on `main` 63 behind `origin/main` — the first `git status -sb` of the fire caught it, and the SESSION_LOG grep had to be re-run with an absolute path because the worktree's own `SESSION_LOG.md` is a 0-byte placeholder.
+
+**End-of-fire state: 5 open loop PRs — #515, #530, #540, #541, #542** — all Qodo-clean, CI green, ready-noted, **not merged**. **STILL AT THE 5/5 CAP**: the next fire shepherds only until the user merges or closes something. When a slot frees, best candidates in order: **#544** (new — docs + one decoder test, evidence already gathered above, the smallest well-specified item on the board), **#543** (empty-vs-silent distinction, mechanism already proven), **#536** (carrying the log-level-getter gap), **#533**, then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Unchanged otherwise: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
