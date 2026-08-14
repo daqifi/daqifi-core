@@ -16,11 +16,11 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 /// probed again.
 /// </para>
 /// <para>
-/// The fixtures reproduce the shape sysfs actually has: <c>&lt;root&gt;/&lt;tty&gt;/device</c> is a
-/// symlink into a device tree whose <c>idVendor</c>/<c>idProduct</c> files sit some levels above
-/// the interface node it points at, holding lowercase hex with a trailing newline. Where a test
-/// only needs the walk and not the symlink, <c>device</c> is a real directory — which is also the
-/// case the fallback in the provider covers.
+/// Most fixtures build <c>&lt;root&gt;/&lt;tty&gt;/device</c> as a real directory, because what
+/// those tests are about is the walk and the parsing, and the provider treats a real directory as
+/// the plain case. The four tests that are specifically about the link — the realistic sysfs shape,
+/// the physical-vs-logical parent chain, and the two depth bounds — need a real directory symlink;
+/// they are grouped together and noted as such.
 /// </para>
 /// </remarks>
 public class LinuxUsbPortDescriptorProviderTests : IDisposable
@@ -58,45 +58,22 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     #region The happy path
 
     [Fact]
-    public void Resolve_UsbCdcPort_ReadsVidPidFromTheUsbDeviceNodeAboveTheInterface()
-    {
-        // The real layout: the tty's device symlink points at the *interface* node (1-1.2:1.0),
-        // and only its parent — the USB device node — carries idVendor/idProduct.
-        var deviceNode = CreateDeviceTree("usb1", "1-1", "1-1.2");
-        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        LinkTty("ttyACM0", CreateSubdirectory(deviceNode, "1-1.2:1.0"));
-
-        var descriptor = Resolve("/dev/ttyACM0");
-
-        Assert.NotNull(descriptor);
-        Assert.Equal(0x04D8, descriptor!.VendorId);
-        Assert.Equal(0xF794, descriptor.ProductId);
-    }
-
-    [Fact]
     public void Resolve_IdsOnTheNodeItself_IsFoundWithoutWalkingUp()
     {
-        var deviceNode = CreateDeviceTree("usb1", "1-2");
-        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        LinkTty("ttyUSB0", deviceNode);
+        WriteIds(MountTty("ttyUSB0"), DaqifiVendorText, DaqifiProductText);
 
-        var descriptor = Resolve("/dev/ttyUSB0");
-
-        Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), descriptor);
+        Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyUSB0"));
     }
 
     [Fact]
-    public void Resolve_DeviceEntryIsARealDirectoryRatherThanASymlink_StillWalksUp()
+    public void Resolve_IdsOnTheNodeAbove_AreWalkedUpTo()
     {
-        // Not the shape the kernel produces, but it is the branch the provider's `?? dirInfo`
-        // fallback exists for — and it is the shape every non-symlink fixture below relies on.
-        var ttyEntry = CreateSubdirectory(_root, "ttyACM1");
-        WriteIds(ttyEntry, DaqifiVendorText, DaqifiProductText);
-        Directory.CreateDirectory(Path.Combine(ttyEntry, "device"));
+        // The usual shape: the tty hangs off an interface node, and only the USB device node above
+        // it carries idVendor/idProduct.
+        var node = MountTty("ttyACM0");
+        WriteIds(Directory.GetParent(node)!.FullName, DaqifiVendorText, DaqifiProductText);
 
-        var descriptor = Resolve("/dev/ttyACM1");
-
-        Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), descriptor);
+        Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
 
     [Fact]
@@ -104,50 +81,19 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     {
         // SerialPort.GetPortNames() yields full device paths on Linux, but nothing in the contract
         // requires one — a caller passing the bare tty name must resolve the same port.
-        var deviceNode = CreateDeviceTree("usb1", "1-3");
-        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        LinkTty("ttyACM2", deviceNode);
+        WriteIds(MountTty("ttyACM2"), DaqifiVendorText, DaqifiProductText);
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("ttyACM2"));
     }
 
     [Fact]
-    public void Resolve_TwoPortsOnOneTree_AnswerIndependently()
+    public void Resolve_TwoPorts_AnswerIndependently()
     {
-        var daqifi = CreateDeviceTree("usb1", "1-1");
-        WriteIds(daqifi, DaqifiVendorText, DaqifiProductText);
-        LinkTty("ttyACM0", CreateSubdirectory(daqifi, "1-1:1.0"));
-
-        var other = CreateDeviceTree("usb1", "1-4");
-        WriteIds(other, "1a86\n", "7523\n");
-        LinkTty("ttyUSB0", CreateSubdirectory(other, "1-4:1.0"));
+        WriteIds(MountTty("ttyACM0"), DaqifiVendorText, DaqifiProductText);
+        WriteIds(MountTty("ttyUSB0"), "1a86\n", "7523\n");
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
         Assert.Equal(new UsbPortDescriptor(0x1A86, 0x7523), Resolve("/dev/ttyUSB0"));
-    }
-
-    #endregion
-
-    #region Symlink resolution
-
-    [Fact]
-    public void Resolve_FollowsThePhysicalTargetRatherThanTheLogicalPath()
-    {
-        // The whole reason the provider resolves the link first. Walking the *logical* parents of
-        // <root>/ttyACM0/device climbs back through the tty class directory; walking the resolved
-        // target climbs the real device tree. Both chains are populated here with different IDs,
-        // so a provider that forgot to resolve would answer — just with the wrong device.
-        var deviceNode = CreateDeviceTree("usb1", "1-1", "1-1.2");
-        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        var ttyEntry = CreateSubdirectory(_root, "ttyACM0");
-        WriteIds(ttyEntry, "1a86\n", "7523\n");
-
-        if (!TryLinkDeviceNode(Path.Combine(ttyEntry, "device"), deviceNode))
-        {
-            return;
-        }
-
-        Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
 
     #endregion
@@ -169,7 +115,7 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_TtyEntryWithoutADeviceLink_ReturnsNull()
+    public void Resolve_TtyEntryWithoutADeviceNode_ReturnsNull()
     {
         // A virtual tty (pty, console) has a class entry but no device node behind it.
         CreateSubdirectory(_root, "tty0");
@@ -180,8 +126,8 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     [Fact]
     public void Resolve_NonUsbSerialPort_ReturnsNull()
     {
-        // A device tree with no idVendor/idProduct anywhere in reach — e.g. an on-board 16550.
-        LinkTty("ttyS0", CreateDeviceTree("platform", "serial8250", "serial8250.0"));
+        // A device node with no idVendor/idProduct anywhere in reach — e.g. an on-board 16550.
+        MountTty("ttyS0");
 
         Assert.Null(Resolve("/dev/ttyS0"));
     }
@@ -219,19 +165,15 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     [Fact]
     public void Resolve_UppercaseHexValues_AreParsed()
     {
-        var deviceNode = CreateDeviceTree("usb1", "1-1");
-        WriteIds(deviceNode, "04D8\n", "F794\n");
-        LinkTty("ttyACM0", deviceNode);
+        WriteIds(MountTty("ttyACM0"), "04D8\n", "F794\n");
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
 
     [Fact]
-    public void Resolve_ValuesWithSurroundingWhitespace_AreTrimmed()
+    public void Resolve_ValuesWithSurroundingWhitespace_AreAccepted()
     {
-        var deviceNode = CreateDeviceTree("usb1", "1-1");
-        WriteIds(deviceNode, "  04d8\r\n", "\tf794  \n");
-        LinkTty("ttyACM0", deviceNode);
+        WriteIds(MountTty("ttyACM0"), "  04d8\r\n", "\tf794  \n");
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
@@ -241,9 +183,7 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     {
         // 0000/0000 is a real (if unusual) descriptor. It must not be confused with "not found",
         // which is why the provider distinguishes null from a zero-valued descriptor.
-        var deviceNode = CreateDeviceTree("usb1", "1-1");
-        WriteIds(deviceNode, "0000\n", "0000\n");
-        LinkTty("ttyACM0", deviceNode);
+        WriteIds(MountTty("ttyACM0"), "0000\n", "0000\n");
 
         Assert.Equal(new UsbPortDescriptor(0, 0), Resolve("/dev/ttyACM0"));
     }
@@ -259,11 +199,9 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
         // The node that holds both files is the USB device node by definition. If its values do
         // not parse, the answer is "unknown" — continuing up would report the *hub's* IDs as the
         // port's, which is worse than no answer.
-        var hub = CreateDeviceTree("usb1", "1-1");
-        WriteIds(hub, "1d6b\n", "0002\n");
-        var deviceNode = CreateSubdirectory(hub, "1-1.2");
-        WriteIds(deviceNode, vendorText, productText);
-        LinkTty("ttyACM0", deviceNode);
+        var node = MountTty("ttyACM0");
+        WriteIds(Directory.GetParent(node)!.FullName, "1d6b\n", "0002\n");
+        WriteIds(node, vendorText, productText);
 
         Assert.Null(Resolve("/dev/ttyACM0"));
     }
@@ -273,11 +211,9 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     {
         // Both files have to be present for a node to count. A partial node is not the USB device
         // node, so the walk must continue rather than give up or answer from half a descriptor.
-        var deviceNode = CreateDeviceTree("usb1", "1-1");
-        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        var partial = CreateSubdirectory(deviceNode, "1-1:1.0");
-        File.WriteAllText(Path.Combine(partial, "idVendor"), "1a86\n");
-        LinkTty("ttyACM0", partial);
+        var node = MountTty("ttyACM0");
+        WriteIds(Directory.GetParent(node)!.FullName, DaqifiVendorText, DaqifiProductText);
+        File.WriteAllText(Path.Combine(node, "idVendor"), "1a86\n");
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
@@ -285,11 +221,9 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     [Fact]
     public void Resolve_NodeWithOnlyAProductId_KeepsWalkingUp()
     {
-        var deviceNode = CreateDeviceTree("usb1", "1-1");
-        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        var partial = CreateSubdirectory(deviceNode, "1-1:1.0");
-        File.WriteAllText(Path.Combine(partial, "idProduct"), "7523\n");
-        LinkTty("ttyACM0", partial);
+        var node = MountTty("ttyACM0");
+        WriteIds(Directory.GetParent(node)!.FullName, DaqifiVendorText, DaqifiProductText);
+        File.WriteAllText(Path.Combine(node, "idProduct"), "7523\n");
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
@@ -297,19 +231,56 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     [Fact]
     public void Resolve_IdEntryIsADirectory_IsNotMistakenForTheValueFile()
     {
-        var deviceNode = CreateDeviceTree("usb1", "1-1");
-        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
-        var decoy = CreateSubdirectory(deviceNode, "1-1:1.0");
-        Directory.CreateDirectory(Path.Combine(decoy, "idVendor"));
-        Directory.CreateDirectory(Path.Combine(decoy, "idProduct"));
-        LinkTty("ttyACM0", decoy);
+        var node = MountTty("ttyACM0");
+        WriteIds(Directory.GetParent(node)!.FullName, DaqifiVendorText, DaqifiProductText);
+        Directory.CreateDirectory(Path.Combine(node, "idVendor"));
+        Directory.CreateDirectory(Path.Combine(node, "idProduct"));
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
 
     #endregion
 
-    #region The depth bound
+    #region What the device symlink is for
+
+    // The four tests below are the ones that are actually about the link, so they create a real
+    // directory symlink and let a failure to do so fail the test. That is unprivileged on Linux
+    // and macOS — CI runs ubuntu-latest — and needs Developer Mode or an elevated shell on
+    // Windows, which is not a platform this suite runs on. Everything else above deliberately
+    // needs no symlink at all.
+
+    [Fact]
+    public void Resolve_RealSysfsShape_ReadsIdsFromTheUsbDeviceNodeAboveTheInterface()
+    {
+        // What the kernel actually lays out: the tty's device symlink points at the *interface*
+        // node (1-1.2:1.0) under /sys/devices, and only its parent — the USB device node — carries
+        // idVendor/idProduct.
+        var deviceNode = CreateDeviceTree("usb1", "1-1", "1-1.2");
+        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
+        LinkTty("ttyACM0", CreateSubdirectory(deviceNode, "1-1.2:1.0"));
+
+        var descriptor = Resolve("/dev/ttyACM0");
+
+        Assert.NotNull(descriptor);
+        Assert.Equal(0x04D8, descriptor!.VendorId);
+        Assert.Equal(0xF794, descriptor.ProductId);
+    }
+
+    [Fact]
+    public void Resolve_FollowsThePhysicalTargetRatherThanTheLogicalPath()
+    {
+        // The whole reason the provider resolves the link first. Walking the *logical* parents of
+        // <root>/ttyACM0/device climbs back through the tty class directory; walking the resolved
+        // target climbs the real device tree. Both chains are populated here with different IDs,
+        // so a provider that forgot to resolve would answer — just with the wrong device.
+        var deviceNode = CreateDeviceTree("usb1", "1-1", "1-1.2");
+        WriteIds(deviceNode, DaqifiVendorText, DaqifiProductText);
+        var ttyEntry = CreateSubdirectory(_root, "ttyACM0");
+        WriteIds(ttyEntry, "1a86\n", "7523\n");
+        Directory.CreateSymbolicLink(Path.Combine(ttyEntry, "device"), deviceNode);
+
+        Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
+    }
 
     [Fact]
     public void MaxDeviceTreeLevels_IsTheBoundTheseTestsAssume()
@@ -324,11 +295,7 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
         // it — the last level the provider looks at.
         var chain = CreateChain(ExpectedDeviceTreeLevels);
         WriteIds(chain[1], DaqifiVendorText, DaqifiProductText);
-
-        if (!TryLinkTty("ttyACM0", chain[^1]))
-        {
-            return;
-        }
+        LinkTty("ttyACM0", chain[^1]);
 
         Assert.Equal(new UsbPortDescriptor(0x04D8, 0xF794), Resolve("/dev/ttyACM0"));
     }
@@ -340,11 +307,7 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
         // bound is not doing its job; answering null is the documented behavior.
         var chain = CreateChain(ExpectedDeviceTreeLevels);
         WriteIds(chain[0], DaqifiVendorText, DaqifiProductText);
-
-        if (!TryLinkTty("ttyACM0", chain[^1]))
-        {
-            return;
-        }
+        LinkTty("ttyACM0", chain[^1]);
 
         Assert.Null(Resolve("/dev/ttyACM0"));
     }
@@ -392,6 +355,14 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
     private UsbPortDescriptor? Resolve(string portName)
         => LinuxUsbPortDescriptorProvider.Resolve(portName, _root);
 
+    /// <summary>
+    /// Creates the tty class entry for <paramref name="ttyName"/> with a real <c>device</c>
+    /// directory, and returns that directory — the node the walk starts from. Its parent is the
+    /// tty entry, which is where a test puts the IDs it wants found one level up.
+    /// </summary>
+    private string MountTty(string ttyName)
+        => CreateSubdirectory(CreateSubdirectory(_root, ttyName), "device");
+
     /// <summary>Creates a nested device-tree path under the fixture root and returns the leaf.</summary>
     private string CreateDeviceTree(params string[] segments)
     {
@@ -436,33 +407,12 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
         File.WriteAllText(Path.Combine(deviceNode, "idProduct"), productText);
     }
 
-    /// <summary>Creates the tty class entry for <paramref name="ttyName"/> with its device symlink.</summary>
-    private void LinkTty(string ttyName, string target)
-    {
-        Assert.True(TryLinkTty(ttyName, target), "the fixture symlink could not be created");
-    }
-
-    private bool TryLinkTty(string ttyName, string target)
-        => TryLinkDeviceNode(Path.Combine(CreateSubdirectory(_root, ttyName), "device"), target);
-
     /// <summary>
-    /// Creates the <c>device</c> symlink, reporting failure only on Windows — where an
-    /// unprivileged process cannot create one and the caller has nothing left to assert. On Linux
-    /// and macOS a failure is a broken fixture and fails the test.
+    /// Creates the tty class entry for <paramref name="ttyName"/> with its <c>device</c> entry as a
+    /// symlink to <paramref name="target"/>, the way the kernel lays it out.
     /// </summary>
-    private static bool TryLinkDeviceNode(string linkPath, string target)
-    {
-        try
-        {
-            Directory.CreateSymbolicLink(linkPath, target);
-            return true;
-        }
-        catch (Exception ex) when (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                                   && (ex is IOException or UnauthorizedAccessException))
-        {
-            return false;
-        }
-    }
+    private void LinkTty(string ttyName, string target)
+        => Directory.CreateSymbolicLink(Path.Combine(CreateSubdirectory(_root, ttyName), "device"), target);
 
     #endregion
 }
