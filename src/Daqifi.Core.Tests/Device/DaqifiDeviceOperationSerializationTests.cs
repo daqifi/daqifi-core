@@ -699,12 +699,28 @@ public class DaqifiDeviceOperationSerializationTests
         device.Disconnect();
     }
 
-    /// <summary>The live backlog length, read straight off the device's own queue.</summary>
+    /// <summary>
+    /// The live backlog length, read straight off the serializer's own queue.
+    /// </summary>
+    /// <remarks>
+    /// Both hops fail loudly rather than with a <see cref="NullReferenceException"/> (or, worse, a
+    /// silent zero that would let every backlog assertion pass vacuously) if the field it names is
+    /// ever renamed or moved again.
+    /// </remarks>
     private static int DeferredBacklogCount(DaqifiDevice device)
     {
-        var backlog = (System.Collections.ICollection?)typeof(DaqifiDevice)
-            .GetField("_deferredSends", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(device);
+        var serializer = typeof(DaqifiDevice)
+                .GetField("_operations", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(device)
+            ?? throw new InvalidOperationException(
+                "DaqifiDevice no longer has an _operations field to read the backlog from.");
+
+        var backlogField = serializer.GetType()
+                .GetField("_deferredSends", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                "OperationSerializer no longer has a _deferredSends field.");
+
+        var backlog = (System.Collections.ICollection?)backlogField.GetValue(serializer);
 
         return backlog?.Count ?? 0;
     }

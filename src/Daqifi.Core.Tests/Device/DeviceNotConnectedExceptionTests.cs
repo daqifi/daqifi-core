@@ -236,9 +236,16 @@ namespace Daqifi.Core.Tests.Device
             // on it. That path is also "the device went away", so it carries the same flag rather
             // than leaking a low-level ObjectDisposedException.
             var device = new TextCommandTestableDevice("TestDevice");
-            var semaphore = (SemaphoreSlim)typeof(DaqifiDevice)
-                .GetField("_textExchangeLock", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(device)!;
+            var serializer = typeof(DaqifiDevice)
+                    .GetField("_operations", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.GetValue(device)
+                ?? throw new InvalidOperationException(
+                    "DaqifiDevice no longer has an _operations field to reach the lock through.");
+            var lockField = serializer.GetType()
+                    .GetField("_operationLock", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException(
+                    "OperationSerializer no longer has an _operationLock field.");
+            var semaphore = (SemaphoreSlim)lockField.GetValue(serializer)!;
             semaphore.Dispose();
 
             var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(

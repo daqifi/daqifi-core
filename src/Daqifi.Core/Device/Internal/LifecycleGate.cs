@@ -47,7 +47,7 @@ namespace Daqifi.Core.Device.Internal
     /// Narrow on purpose. This is an internal lifecycle invariant — the device never drives its own
     /// transport from two threads at once — and deliberately <b>not</b> the general per-device
     /// operation serialization of issue #342, which has to decide ordering across the whole public
-    /// API and interacts with <c>_textExchangeLock</c>. Nothing here changes what any public method
+    /// API and interacts with the device operation lock. Nothing here changes what any public method
     /// does when uncontended.
     /// </para>
     /// <para>
