@@ -119,7 +119,7 @@ namespace Daqifi.Core.Device.Internal
         /// </remarks>
         bool IsInsideTextExchange { get; set; }
 
-        /// <inheritdoc cref="DaqifiDevice.DrainOutboundQueueAsync"/>
+        /// <inheritdoc cref="OperationSerializer.DrainOutboundQueueAsync"/>
         Task DrainOutboundQueueAsync(CancellationToken cancellationToken);
 
         /// <summary>
