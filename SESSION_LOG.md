@@ -1208,3 +1208,37 @@ Notes worth keeping:
 **Worktree hygiene:** worked in `scratchpad/fire-491` (name is a leftover from the rejected first candidate; branch pushed as `refactor/operation-serializer-480`) branched from `origin/main` `e9591be`, plus a throwaway detached `scratchpad/baseline` for the flake bisect — never `git stash`. Both removed and pruned at end of fire.
 
 **End-of-fire state: 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **At the 5-PR cap**, so the next fire shepherds only and does not start a new ticket until the user merges or closes something. When a slot frees, the strongest remaining candidate is **#480 extraction 1** (`ReconnectSupervisor`) — but it needs the user to opt in to dropping the two `protected virtual` snapshot/restore members from the public base class; ask before starting it. After that the eligible list is genuinely exhausted: #491 item 3 rejected above, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, #499/#502 need closing by the user.
+
+---
+
+## Fire — 2026-08-14 (at the PR cap; bench-validation pass on `--watch-serial`; issue #532 filed)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). Bench pass ran; all steps non-destructive (watch/discover/stream only).
+
+**Priorities 1–3: vacuous, verified live.** All five open PRs re-derived from `gh`, not from these notes — #515 `5937454`, #527 `56a47c8`, #528 `f6c3243`, #529 `26582e1`, #530 `b01b4d0`. Each: `build` SUCCESS, MERGEABLE/CLEAN, **0 unresolved `qodo-code-review` threads**, ready-note already posted. No new user comments on any of them.
+
+**At the 5/5 cap → no new ticket, no new PR.** Per the saturation rule, the fire's unit of work was ONE light bench-validation pass on an untested surface.
+
+**Surface chosen: `--watch-serial` (`ContinuousDeviceFinder` over `SerialDeviceFinder`).** Picked by grepping this log for every CLI flag — `--watch-serial`, `--output` and `--keep-connected` were the only ones with zero prior mentions. `--watch-serial` was the valuable one: it drives the continuous watcher plus the macOS descriptor provider (which shells out to `ioreg`) in a repeated sweep loop, and had never been run against real hardware.
+
+**Result: found a real, deterministic bug — filed as #532.** A device that is connected and streaming is reported **lost** by the continuous watcher, and returns **zero devices** from one-shot discovery, purely because discovery cannot open a port the caller already holds.
+
+- Control (watcher alone, 20 s / ~20 sweeps): one `[+]`, zero `[-]`. No watcher instability.
+- Test (watcher 45 s + a 12 s 100 Hz stream on the same device), timestamps from the run:
+  `09:59:22 [+] discovered` → `09:59:31 stream opens port` → **`09:59:33 [-] lost`** → `09:59:48 stream ends (exit 0, ~950 samples)` → `09:59:49 [+] discovered`.
+- One-shot `--discover-serial` while the port was held: `Discovered 0 DAQiFi device(s)`, **but `/dev/cu.usbmodem1101` still listed under "Available serial ports"** — and after release, found normally as `Nq1 ... FW:3.7.2`.
+
+**Root cause, and why the fix is tractable:** `SerialDeviceFinder.cs:665` catches `UnauthorizedAccessException` with the comment `// Port is in use by another application` and returns `null` — the identical answer to "no DAQiFi device on this port". `ContinuousDeviceFinder` counts that `null` as a miss and raises `DeviceLost` after `MissThreshold` passes. **Core already knows the difference at exactly the right place and discards it.** The port never stops enumerating and no descriptor provider opens the port, so the candidate is still in hand when the probe fails — which is what makes a fix feasible rather than a redesign.
+
+**Deliberately filed, not fixed:** at the PR cap, and #532 carries a genuine open question for the user (whether one-shot `DiscoverAsync` should surface locked ports at all, given it has no prior identity to reuse; plus Windows raising different exception types for a locked port, so detection cannot key on `UnauthorizedAccessException` alone). Not a loop decision.
+
+**Gotchas worth keeping:**
+- **`--channels` is a decimal bitmask, not a channel list.** `--channels 0,1` fails with `Invalid channel mask: 0,1`; channels 0+1 is `--channels 3`. Cost one wasted bench run — though that run still reproduced the bug, since even a ~5 s port hold tripped the watcher.
+- Neither `timeout` nor `gtimeout` exists on this Mac. Bound bench runs with the CLI's own `--duration` and poll a done-flag file.
+- No duplicate issue: searched all 300 open+closed issues for discovery/watcher/lost. #245 is the continuous-discovery feature, #382 is unplug-not-reporting-Lost — neither covers a busy port. Nothing in `Daqifi.Core.Tests` exercises a locked port.
+
+**No production code changed this fire**, so no test run was owed; nothing to re-validate on the open PRs.
+
+**Worktree hygiene:** read source from a fresh detached worktree at `origin/main` `e9591be` (per the standing note that the main checkout sits on a stale local `main`); removed and pruned at end of fire. Never `git stash`.
+
+**End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, the strongest candidates are now **#532** (fresh, well-scoped, bench-reproduced — but wants the user's call on the two open questions) and **#480 extraction 1** (`ReconnectSupervisor`, needs an opt-in to drop two `protected virtual` members from a public base class). Otherwise unchanged: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake.
