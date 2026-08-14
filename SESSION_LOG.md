@@ -1399,3 +1399,63 @@ Notes worth keeping:
 **Worktree hygiene:** worked in the fire's own worktree `mystifying-yonath-1c82a7` at `origin/main` `e9591be`; the harness lived entirely in the scratchpad (`scratchpad/livebench`, `ProjectReference` at the worktree's `Daqifi.Core.csproj`, assembly named `Daqifi.Core.Tests` to inherit `InternalsVisibleTo`), never in the repo. Both trees left clean. Never `git stash`. The standing note holds: **`/Users/tylerkron/projects/daqifi/daqifi-core` is on a stale local `main`** — read source from the fire's own worktree.
 
 **End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, **#533 is now the strongest candidate** — it has the most evidence of any open bug, and this fire's recoverability finding suggests a smaller fix than the issue originally proposed, though the "move the stop inside the lock" vs "restore the flag afterwards" choice is still the user's. Then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1** (`ReconnectSupervisor`, needs an API-break opt-in). Otherwise unchanged: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. **The `ChannelsPopulated` mid-stream path is no longer untested** — it passed. Surfaces still without hardware evidence: `Communication/Transport`'s HID half (destructive, skip), `DeviceErrorThrottle`/`DeviceErrorEventArgs` (needs a physical unplug), `Device/Network`'s write path (churn-risky, do not), and `Logging/Export`'s `ISampleSource` side (caller-fed — Core ships no producer, so there is nothing of Core's to validate).
+
+---
+
+## Fire — 2026-08-14 (at the PR cap; bench-validation pass on the SD-card listing surface; issue #536 filed; a standing folklore note corrected)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench work non-destructive and **read-only**: connect / initialize / `SYSTem:MEMory:FREE?` / `SD:LIST?` / `SD:SPACe?` / disconnect. **No `SD:GET`, no SD write, no delete, no format, no logging, no streaming, no PWM, no DIO driven, no firmware, no reboot, no power-state change.**
+
+**Priorities 1–3: vacuous, verified live at both ends of the fire.** All five open PRs re-derived from `gh` — #515 `5937454`, #527 `56a47c8`, #528 `f6c3243`, #529 `26582e1`, #530 `b01b4d0`. Each: `build` SUCCESS, MERGEABLE/CLEAN, **0 unresolved review threads**, ready-note already posted, no new user comments. Re-checked at end of fire: byte-identical. **No Qodo rounds run this fire** — nothing was pushed.
+
+**At the 5/5 cap → no new ticket, no new PR.** Per the saturation rule the unit of work was ONE bench-validation pass on an untested surface.
+
+**Surface chosen: the SD-card *listing* path — `GetSdCardFilesAsync` / `SdCardFileListParser` / `SdCardFileInfo`, plus `SdCardStorageInfo`, `SdCardCaptureEstimate`/`CheckSdCardSpaceAsync`, and `MemoryDiagnostics`.** Picked because exactly one real SD file (430 B) has ever been round-tripped in this journal (2026-08-12) and the *listing* parser had never been checked against a real corpus — while the card holds 49 files with three different extensions and a genuine 0-byte entry. Harness: `scratchpad/sdbench`, `ProjectReference` at the worktree's `Daqifi.Core.csproj`, assembly named `Daqifi.Core.Tests` to inherit `InternalsVisibleTo`.
+
+### THE CORRECTION THAT MATTERS MOST — a standing note in this journal is wrong
+
+**A bare `SYSTem:STORage:SD:LIST?` over raw serial answers `**ERROR: -200, "Execution error"` on a USB-connected device *always*, regardless of heap** — because the LAN interface owns the shared SPI bus until something switches it to the card. It is not a low-heap signature and not a wedged device.
+
+Proven in one run, both arms back to back on the same open port:
+
+| arm | sequence | result |
+|---|---|---|
+| A / control | `SD:LIST?` bare | **34 bytes**, `**ERROR: -200` |
+| B | `LAN:ENAbled 0` → `SD:ENAble 1` → settle 1 s → `SD:LIST?` | **1789 bytes, 49 complete lines** |
+
+The 2026-08-02 entry above (line ~395) attributes `SD:LIST?`/`SD:BENCHmark?` `-200` responses to fw#703 low heap. That fire drove a 50-command raw sweep with no bus switch, so **the attribution is unsafe** — arm A reproduces the identical `-200` on a device whose SD subsystem is provably healthy. Future fires: before concluding "the SD subsystem is wedged" from a raw-serial `-200`, re-run it through Core (which switches the bus) or reproduce arm B by hand. Cost of the check: ~10 s.
+
+**Related, and equally worth keeping: `HeapFree=7544 / 75000` is this unit's steady state, not a degraded one.** `HeapMinEverFree == HeapFree == LargestFreeBlock` with `HeapFreeBlocks=1`, identical before and after all SD work, and identical to the figures the 2026-08-02 fire recorded twelve days earlier. Every SD operation attempted this fire succeeded at that heap level. The `[[project_sd_download_low_heap]]` note is still right that a *stream* collapses the SD buffer — but "heap is low" on its own does not mean SD is unavailable, and on this unit heap is *always* "low".
+
+**`SD:GET` was still skipped, deliberately**, per the fire's standing rule ("skip live `SD:GET` while heap is low") — heap is genuinely at 10% and there is no recorded healthy baseline for `SdCircularSize` (512 here) to judge the buffer against. Downloading is the one thing this pass leaves owed.
+
+### The listing surface is SOUND — verified against independently-derived ground truth
+
+Core's parse was diffed field-by-field against the raw 49 listing lines from arm B (name, size, date recomputed in Python from `DAQiFi/log_YYYYMMDD_HHMMSS.ext <size>`):
+
+- **0 mismatches / 49 entries** on all three fields.
+- `DAQiFi/` prefix stripped on **49/49**. `SizeInBytes` non-null on **49/49**; byte total **442,374** matches the raw sum exactly.
+- `CreatedDate` correct on all 45 `log_*` names and correctly **null** on exactly the 4 non-conforming ones (`iso_A_1.bin`, `bench_pr2.bin`, `bench_compat.bin`, `p703probe.bin`) — the null-date path is exercised by real data, not by a synthetic name.
+- **A real 0-byte file exists on the card** (`log_20260728_190448.bin`) and the listing reports its size as `0`, not null. That is precisely the distinction `SdCardEmptyTransferException` is documented to depend on ("a real 0-byte size is meaningful"), and it is now confirmed on hardware rather than assumed.
+- **Deterministic:** three consecutive `GetSdCardFilesAsync` calls returned identical 49-entry listings in 2105 / 2085 / 2099 ms. The ~2.1 s is the fixed cost (two settle delays + the 1000 ms terminator window), **not** a retry — the retry loop never fired.
+- All three log formats are present (**45 `.bin`, 3 `.csv`, 1 `.json`**) and `SdCardFileParserFactory.TryDetectFormat` resolves each to Protobuf / Csv / Json. The parser trio is reachable from real data; only the download step is owed.
+- `SdCardStorageInfo` Free 7,799,799,808 / Total 7,800,356,864 / Used 557,056. Used exceeds the listing's 442,374 by 114,682 — **FAT cluster slack across 49 files (~2.3 KB each), not a discrepancy.** Don't re-file it.
+- Error queue **`0,"No error"`** after the entire pass, and the raw-serial arm restored `SD:ENAble 0` / `LAN:ENAbled 1` and re-checked clean.
+- `MemoryDiagnostics` parses **all 17** firmware fields into `Values` with correct numbers; all 9 typed accessors resolve.
+
+### FINDING → #536 (filed)
+
+**`MemoryDiagnostics` exposes 9 typed accessors for the 17 fields firmware 3.7.2 actually emits**, and the 8 without properties include the only ones that describe *fragmentation*: `LargestFreeBlock`, `SmallestFreeBlock`, `HeapFreeBlocks`, plus `SdCircularSize`. Through Core's typed surface the bench device reads "7544 of 75000 free — a bit tight"; the full answer is `HeapFreeBlocks=1` with `LargestFreeBlock == HeapFree`, i.e. one fragment, 7.5 KB max allocation, no room for a second concurrent one. A consumer wanting that today must write `m.Values["LargestFreeBlock"]` with a magic string. Additive, non-breaking fix; the type already documents "the field set varies by firmware version", so `ulong?`-via-`GetValue` accessors fit the existing shape exactly. Filed with the measured 17-field table.
+
+**Recorded but NOT filed (deliberately):** `SdCardCaptureEstimate.DefaultBytesPerSamplePerChannel = 2` is ~5× optimistic for the format the device writes by default — the one real protobuf log with a known sample count (`log_20260812_165615.bin`, 430 B / 43 samples / 1 analog channel, from the 2026-08-12 fire) works out to **~10 B/sample/channel**. This is *documented* behaviour ("a floor, not an exact figure", callers told to pass a larger value), and one data point is not enough to propose a real per-format constant. Revisit if a later fire gets `SD:GET` back and can measure several files. `CheckSdCardSpaceAsync` itself is correct: the 22 kHz × 16 ch × 24 h plan warned properly with a sensible truncation ETA ("~56.65 GB … will not fit in the 7.26 GB free … truncating after about 3.1 hours").
+
+**Gotchas worth keeping:**
+- The SD/diagnostics methods are on the **device facade directly** (`device.GetSdCardFilesAsync()`), not under `device.SdCard` / `device.Diagnostics` — `DaqifiStreamingDevice` implements `ISdCardOperations` and `IDeviceDiagnostics`. Cost one build cycle.
+- **`SdCardFileInfo` has no `ToString()` override**, so logging one prints `Daqifi.Core.Device.SdCard.SdCardFileInfo`. `SdCardStorageInfo` is a record and prints usefully. Papercut only; not filed.
+- The fire's own worktree carries an **empty** `SESSION_LOG.md` (0 lines) at `e9591be`; the real 1401-line journal lives in the main checkout on local `main`. Append there.
+
+**No production code changed this fire**, so no test run was owed and there is nothing to re-validate on the open PRs.
+
+**Worktree hygiene:** worked in the fire's own worktree `mystifying-yonath-1c82a7` on `claude/daqifi-loop-beff8d` at `origin/main` `e9591be`; the harness lived entirely in the scratchpad (`scratchpad/sdbench`, plus the `probe.py`/`list.py`/`heap.py`/`rawlist.py`/`diff.py` raw-serial arms), never in the repo. Both trees left clean, branch unchanged. Never `git stash`.
+
+**End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, the strongest candidates are **#536** (fresh, hardware-measured, purely additive, and the smallest of the open bugs by a distance — a good first pick), then **#533** (most evidence of any open bug; the recoverability finding suggests a smaller fix than the issue proposes), then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1** (`ReconnectSupervisor`, needs an API-break opt-in). Otherwise unchanged: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. **Owed on this surface: an actual `SD:GET` round-trip through all three parsers** — 45 `.bin`, 3 `.csv` and 1 `.json` are sitting on the card ready for it, and a fire that finds the heap healthier (or gets permission for a short re-arming SD recording) should take it.
