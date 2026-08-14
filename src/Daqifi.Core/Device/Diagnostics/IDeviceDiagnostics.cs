@@ -11,11 +11,20 @@ namespace Daqifi.Core.Device.Diagnostics
     /// levels, SCPI command history, error-queue depth, and streaming/memory performance counters.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// These values originate on the device; this interface is a typed wrapper over the corresponding
     /// SCPI queries, not a client-side instrumentation framework. All methods require an established
     /// connection and run as text commands, so avoid issuing them concurrently with each other or with
-    /// other text-mode operations on the same device. For reliable parsing, prefer querying while the
-    /// device is not actively streaming.
+    /// other text-mode operations on the same device.
+    /// </para>
+    /// <para>
+    /// <b>Query while the device is not streaming.</b> These calls do not stop an active capture, but
+    /// the firmware does not stop either: its stream frames interleave with the reply and can destroy
+    /// the front of it. The counter queries detect that and throw
+    /// <see cref="DeviceDiagnosticsCorruptedResponseException"/> rather than return a partial reading
+    /// as a complete one, so a mid-capture call is best treated as opportunistic — it may fail, and
+    /// stopping the stream is the only way to be sure of a clean read.
+    /// </para>
     /// </remarks>
     public interface IDeviceDiagnostics
     {
@@ -46,6 +55,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <exception cref="System.ArgumentException">Thrown when <paramref name="module"/> is null, empty, or contains invalid characters.</exception>
         /// <exception cref="System.ArgumentOutOfRangeException">Thrown when <paramref name="level"/> is outside 0–3.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device rejected the request or returned an unparseable response.</exception>
+        /// <exception cref="DeviceDiagnosticsCorruptedResponseException">Thrown when the reply arrived corrupted by an active stream's frames; stop streaming and query again.</exception>
         Task<LogLevelSetting> SetLogLevelAsync(string module, int level, CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -78,6 +88,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <returns>The current error-queue depth.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device returned an unparseable response.</exception>
+        /// <exception cref="DeviceDiagnosticsCorruptedResponseException">Thrown when the reply arrived corrupted by an active stream's frames; stop streaming and query again.</exception>
         Task<int> GetSystemErrorCountAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -87,6 +98,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <returns>The parsed streaming statistics.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device returned an unparseable response.</exception>
+        /// <exception cref="DeviceDiagnosticsCorruptedResponseException">Thrown when the reply arrived corrupted by an active stream's frames; stop streaming and query again.</exception>
         Task<StreamStats> GetStreamStatsAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
@@ -96,6 +108,7 @@ namespace Daqifi.Core.Device.Diagnostics
         /// <returns>The parsed memory diagnostics.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="DeviceDiagnosticsException">Thrown when the device returned an unparseable response.</exception>
+        /// <exception cref="DeviceDiagnosticsCorruptedResponseException">Thrown when the reply arrived corrupted by an active stream's frames; stop streaming and query again.</exception>
         Task<MemoryDiagnostics> GetMemoryDiagnosticsAsync(CancellationToken cancellationToken = default);
     }
 }
