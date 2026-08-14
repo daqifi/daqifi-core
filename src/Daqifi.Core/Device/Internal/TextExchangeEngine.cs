@@ -369,10 +369,28 @@ namespace Daqifi.Core.Device.Internal
 
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", sw.ElapsedMilliseconds));
 
-                    // Create a temporary text consumer on the same stream
+                    // Create a temporary text consumer on the same stream.
+                    //
+                    // Both parser settings exist because this loop decides that the device has
+                    // answered by counting the lines the parser produces, so any reply the parser
+                    // does not turn into a line is a reply this exchange cannot see — and it then
+                    // waits out its whole first-response timeout for an answer already sitting in
+                    // the buffer (issue #538). The firmware sends two shapes that used to vanish:
+                    //
+                    //  * a bare-LF reply. Most replies are CRLF, but SYSTem:LOG:CLEar and
+                    //    SYSTem:LOG:TEST answer "Log cleared\n" / "Added test log messages\n".
+                    //    Splitting on "\n" reads those AND the CRLF ones — the CR ends up at the
+                    //    end of the line and is trimmed off with the surrounding whitespace.
+                    //  * a blank line. SYSTem:LOG? terminates its dump with one, so an empty log
+                    //    arrives as a lone CRLF and nothing else.
+                    //
+                    // The blanks are filtered out of the result below, so callers see the same
+                    // lines they always did; only this loop's "did anything arrive?" question sees
+                    // them. Splitting on LF also means an embedded bare LF now ends a line rather
+                    // than sitting inside one, which is what a line-based text protocol means by it.
                     using var textConsumer = new StreamMessageConsumer<string>(
                         transport.Stream,
-                        new LineBasedMessageParser(),
+                        new LineBasedMessageParser(lineEnding: "\n") { EmitEmptyLines = true },
                         healthSink: transport as ITransportHealthSink);
 
                     // MessageParsed rather than MessageReceived: only the parsed line matters here,
@@ -496,9 +514,16 @@ namespace Daqifi.Core.Device.Internal
 
                 // The text consumer is stopped by this point, so the list is no longer being
                 // appended to concurrently and can be re-projected safely.
-                var result = staleLineCount > 0
-                    ? collectedLines.Skip(staleLineCount).ToList()
-                    : collectedLines;
+                //
+                // The blank lines the parser was asked to emit are dropped here. They are evidence
+                // for the wait loop above and nothing more: every caller of this seam parses
+                // content, and none of them ever saw a blank line before (#538). The stale skip
+                // runs first, so a blank line that arrived before this exchange sent anything is
+                // discarded as stale rather than counted as content — same rule as any other line.
+                var result = collectedLines
+                    .Skip(staleLineCount)
+                    .Where(line => line.Length > 0)
+                    .ToList();
 
                 completedNormally = true;
                 return result;
