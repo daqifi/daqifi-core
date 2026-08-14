@@ -172,6 +172,96 @@ public class StreamFrameDecoderTests
         Assert.Equal(3, reported.EnabledAnalogChannelCount);
     }
 
+    [Theory]
+    // The widths a bench Nq1 running firmware 3.7.2 actually emitted (#544). The enabled *mask*
+    // sets the width, not the channel count — {0,1,2} led with 1 value and {0,1,10} with 2, both
+    // three channels — so every row here is a real observation rather than a permutation. Before
+    // this test every discard-asserting test in the suite used a one-value frame, which meant
+    // narrowing the guard to `analogValueCount == 1` passed the whole suite while silently letting
+    // a wide capture's leading frame through (issue #351 again, at a plausible-looking width).
+    [InlineData(3, 1)]
+    [InlineData(3, 2)]
+    [InlineData(8, 2)]
+    [InlineData(8, 5)]
+    [InlineData(16, 7)]
+    public void ShortLeadingFrame_IsDiscarded_AtEveryWidthTheFirmwareEmits(
+        int enabledChannelCount, int leadingValueCount)
+    {
+        var host = new FakeHost { IsStreaming = true };
+        var channels = new List<AnalogChannel>();
+        for (var i = 0; i < enabledChannelCount; i++)
+        {
+            channels.Add(host.AddAnalog(i, enabled: true));
+        }
+
+        StreamFrameDiscardedEventArgs? reported = null;
+        host.OnDiscard = e => reported = e;
+
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        for (var i = 0; i < leadingValueCount; i++)
+        {
+            frame.AnalogInDataFloat.Add(i + 1f);
+        }
+        decoder.ProcessFrame(frame);
+
+        // Withheld from raw consumers too — they read AnalogInData straight off the frame, so a
+        // 7-of-16 payload is exactly as unusable to them as a 1-of-3 one.
+        Assert.Equal(new[] { "discard" }, host.Calls);
+        Assert.Equal(1, decoder.DiscardedStreamFrameCount);
+
+        Assert.NotNull(reported);
+        Assert.Equal(StreamFrameDiscardReason.PartialAnalogFrame, reported!.Reason);
+        Assert.Equal(leadingValueCount, reported.AnalogValueCount);
+        Assert.Equal(enabledChannelCount, reported.EnabledAnalogChannelCount);
+
+        // No channel may take a sample from a short frame — not even the leading ones the payload
+        // does cover, since the values are not guaranteed to belong to them.
+        Assert.All(channels, channel => Assert.Null(channel.ActiveSample));
+    }
+
+    [Fact]
+    public void AfterAWideShortLeadingFrame_TheFirstFullWidthFrameIsDeliveredIntact()
+    {
+        // The bench counterpart to the theory above: on hardware the frame after the malformed one
+        // was full width in every session, so the guard has to disarm and hand the whole payload
+        // over. Run at sixteen channels because that is where a mis-mapped value is invisible —
+        // the analog payload is matched to channels in ascending channel-number order, and only a
+        // per-channel assertion at full width proves the wide case still lands on the right ones.
+        var host = new FakeHost { IsStreaming = true };
+        var channels = new List<AnalogChannel>();
+        for (var i = 0; i < 16; i++)
+        {
+            channels.Add(host.AddAnalog(i, enabled: true));
+        }
+
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        var partial = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        for (var i = 0; i < 7; i++)
+        {
+            partial.AnalogInDataFloat.Add(99f);
+        }
+        decoder.ProcessFrame(partial);
+
+        var full = new DaqifiOutMessage { MsgTimeStamp = 2000 };
+        for (var i = 0; i < 16; i++)
+        {
+            full.AnalogInDataFloat.Add(i * 0.5f);
+        }
+        decoder.ProcessFrame(full);
+
+        Assert.Equal(new[] { "discard", "raw" }, host.Calls);
+        Assert.Equal(1, decoder.DiscardedStreamFrameCount);
+        for (var i = 0; i < 16; i++)
+        {
+            Assert.Equal(i * 0.5, channels[i].ActiveSample!.Value);
+        }
+    }
+
     #endregion
 
     #region Decode-failure isolation

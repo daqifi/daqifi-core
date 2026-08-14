@@ -310,6 +310,14 @@ namespace Daqifi.Core.Device.Internal
         /// guard on the first analog-bearing frame that is not short, or once
         /// <see cref="MaxSuppressedWarmupFrames"/> have been suppressed.
         /// </summary>
+        /// <remarks>
+        /// The comparison below has to stay a "fewer than" rather than an equality against one. The
+        /// malformed frame's width follows the enabled channel mask instead of a fixed shape — on a
+        /// bench Nq1 at 3.7.2 it ran from 1 value up to 7 for a sixteen-channel capture (see
+        /// <see cref="StreamFrameDiscardReason.PartialAnalogFrame"/> and issue #544). Narrowing this
+        /// to <c>analogValueCount == 1</c> would pass a 7-value leading frame straight through on a
+        /// wide capture, reintroducing issue #351 at a width plausible enough to go unnoticed.
+        /// </remarks>
         /// <param name="message">The frame about to be delivered.</param>
         /// <param name="analogValueCount">The number of analog values the frame carried.</param>
         /// <param name="enabledAnalogChannelCount">
