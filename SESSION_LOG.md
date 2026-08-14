@@ -1459,3 +1459,64 @@ Core's parse was diffed field-by-field against the raw 49 listing lines from arm
 **Worktree hygiene:** worked in the fire's own worktree `mystifying-yonath-1c82a7` on `claude/daqifi-loop-beff8d` at `origin/main` `e9591be`; the harness lived entirely in the scratchpad (`scratchpad/sdbench`, plus the `probe.py`/`list.py`/`heap.py`/`rawlist.py`/`diff.py` raw-serial arms), never in the repo. Both trees left clean, branch unchanged. Never `git stash`.
 
 **End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, the strongest candidates are **#536** (fresh, hardware-measured, purely additive, and the smallest of the open bugs by a distance — a good first pick), then **#533** (most evidence of any open bug; the recoverability finding suggests a smaller fix than the issue proposes), then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1** (`ReconnectSupervisor`, needs an API-break opt-in). Otherwise unchanged: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. **Owed on this surface: an actual `SD:GET` round-trip through all three parsers** — 45 `.bin`, 3 `.csv` and 1 `.json` are sitting on the card ready for it, and a fire that finds the heap healthier (or gets permission for a short re-arming SD recording) should take it.
+
+---
+
+## Fire — 2026-08-14 (at the PR cap; bench-validation pass on `Device/Diagnostics`; issues #537 + #538 filed, evidence added to #536)
+
+**Board:** attached at `/dev/cu.usbmodem1101` (glob re-resolved at fire start). All bench work non-destructive: connect / SCPI diagnostic queries / stream 3 analog channels at 100 Hz / stop / disconnect. **No SD ops of any kind, no firmware, no reboot, no power-state change, no DIO driven, no PWM.** The only writes were runtime log levels (`gLogLevels` is RAM-only, no NVM) and the volatile log ring buffer — both restored and verified at end of fire.
+
+**Priorities 1-3: vacuous, verified live at both ends of the fire.** All five open PRs re-derived from `gh` — #515 `5937454`, #527 `56a47c8`, #528 `f6c3243`, #529 `26582e1`, #530 `b01b4d0`. Each: `build` SUCCESS, CLEAN, **0 unresolved review threads**, ready-noted, no new user comments. Re-checked at end of fire: byte-identical. **No Qodo rounds run this fire** — nothing was pushed.
+
+**At the 5/5 cap → no new ticket, no new PR.** Per the saturation rule the unit of work was ONE bench-validation pass on an untested surface.
+
+**Surface chosen: `Device/Diagnostics` — the 8 `IDeviceDiagnostics` methods.** Picked by cross-referencing every public type against this journal: the folder is a set of read-only SCPI query parsers, and the *one* type from it that had ever seen hardware (`MemoryDiagnostics`, last fire) yielded a real finding — a strong prior that the rest of the folder had similar gaps. Harness: `scratchpad/diagbench`, `ProjectReference` at the worktree's `Daqifi.Core.csproj`, assembly named `Daqifi.Core.Tests` to inherit `InternalsVisibleTo`, plus raw-serial arms (`raw.py`, `raw2.py`) for independent ground truth.
+
+**Method that paid off again: read the firmware encoder FIRST, form falsifiable hypotheses, then go to the bench to confirm.** Seven hypotheses went in; two cheap negatives came straight out of the firmware source before any hardware ran.
+
+### FINDING 1 → #537 (filed) — the headline
+
+**Diagnostics queries do not survive a live stream, and the worst case is silent.** `IDeviceDiagnostics`' own remarks say they "intentionally do not stop streaming, so callers can sample live counters" — that use case is broken on real hardware.
+
+- **`GetStreamStatsAsync` silently loses `TotalSamplesStreamed`** — the call succeeds, `Values.Count` reads a healthy **54**, no exception, but the typed accessor is **`null`**. Indistinguishable from "this firmware doesn't report that field."
+- **`GetSystemErrorCountAsync` and `SetLogLevelAsync` throw** `DeviceDiagnosticsException` every time.
+- **`GetMemoryDiagnosticsAsync` (17 fields) and `GetCommandHistoryAsync` (10 entries) come through intact.** All five clean again the moment streaming stops.
+
+**Cause, pinned:** `TextExchangeEngine.SuspendInboundConsumer()` stops the *protobuf consumer*, but the firmware is never told a text exchange began, so protobuf frame bytes keep arriving and are the first thing the text reader sees — welded onto the **first line** of the SCPI reply. That is why the damage is always to whatever is first: `TotalSamplesStreamed=` is `SCPI_GetStreamStats`' first emitted line (key corrupted, **value intact**), while the error-count and log-level replies are single-line and are destroyed outright. `KeyValueResponseParser` then does exactly what it's designed to do — skip the unparseable, keep the rest — which is what converts a corrupt response into a healthy-looking one. Captured key: `"\x08\xFF…\x12\x03\x08\x10\x00TotalSamplesStreamed" = 203`.
+
+**Evidence:** idle → mid-stream → idle matrix, two trials byte-identical; a separate four-trial isolation lost `TotalSamplesStreamed` **4/4**, each time exactly one key missing + one corrupt key added, value intact. Corroborating timing signature: mid-stream calls return in **~375 ms** vs the usual **~1055 ms**, because the junk satisfies the first-line wait immediately. The stream itself is unharmed (`IsStreaming` stays True, samples keep flowing). **Explicitly distinguished from #533 on the issue** — #533 is an SD query blanking a live capture; this is the opposite direction (capture fine, diagnostics response is the casualty). #493 (closed) is the same family on the SD raw-capture path.
+
+### FINDING 2 → #538 (filed)
+
+**Three log calls stall 2.5–3.1 s holding the operation lock**, versus ~1.05 s for the rest. Two distinct causes that look identical:
+
+1. **A bare `\n` isn't recognised as a line terminator.** Exact correlation, measured raw: `SYSTem:ERRor:COUNt?` → `b'0\r\n'` → 1056 ms; `SYSTem:LOG?` → `b'…\r\n\r\n'` → 1060 ms; **`SYSTem:LOG:CLEar` → `b'Log cleared\n'` → 3068 ms**; **`SYSTem:LOG:TEST` → `b'Added test log messages\n'` → 2561 ms**. The device answers instantly in all four; Core waits out the full 2000 ms `DIAGNOSTICS_RESPONSE_TIMEOUT_MS` then surfaces the content anyway on teardown. Pure dead time.
+2. **An empty log buffer produces zero bytes** — `LogMessageDump()` is a pop-and-print loop that writes nothing when empty — so `GetSystemLogAsync` on a quiet device (the normal case) always burns the full 2 s. Interleaved trials: EMPTY 3064/2565/2564 ms vs WITH CONTENT 1060/1058/1058 ms.
+
+Also noted: an empty log and a device that never answered are **indistinguishable** (both empty list after ~3 s). `IsErrorOnlyResponse` correctly returns false for a no-line response (verified in source), so the "empty vs failed" distinction the comments reason about only covers the device answering *with an error*. **Scoped against #485 on the issue** — #485 is the ~1.05 s baseline; this is only the extra 1.5–2.0 s on top, different cause, neither fix subsumes the other.
+
+### FINDING 3 → comment on #536 (not filed separately)
+
+**You cannot read a log level without changing it.** Core exposes only `SetLogLevelAsync`; firmware has had `SYSTem:LOG:LEVel?` the whole time, and with no argument it dumps all 10 modules in **exactly the format `LogLevelParser` already parses** (measured, 216 bytes). Missing `ScpiMessageProducer` entry + interface method; parsing already written. Folded into #536 because it is the same shape as that issue (typed surface hides what firmware offers). **Trap recorded for whoever takes it:** `LogLevelParser.TryParseLines` returns on the *first* parseable line, so it would yield `POWER` and discard nine; and the sibling `SYSTem:LOG:LEVel:ALL` echoes a *different* format (`POWER: 3`, no `(ceiling N)`) that the regex rejects.
+
+### What HELD UP — negatives worth keeping so no one re-hunts them
+
+- **All four `StreamStats` typed accessors match firmware key names on every supported tag** (`TotalSamplesStreamed`, `TotalBytesStreamed`, `QueueDroppedSamples`, `TimerISRCalls` — swept v3.5.0/3.6.0/3.7.0/3.7.1/3.7.2). The #536-shaped "wrong key name" hypothesis is **dead**; don't re-file it.
+- **No truncation risk on multi-line responses.** A full 64-entry log dump (4116 B) arrives with a **max inter-chunk gap of 8 ms** — nowhere near the 250 ms `completionTimeoutMs`. All 54 stats fields and all 17 memory fields parse through Core at idle. The "long response gets silently cut off" hypothesis is **dead**.
+- **Firmware's own invariant `TimerISRCalls == TotalSamplesStreamed + QueueDroppedSamples` holds exactly** (933 vs 933, and 476 vs 476 on an earlier run).
+- **`SYSTem:LOG?` really is read-and-clear** (`LogMessageDump` pops as it prints — verified in source and on hardware: 1 entry, then 0 on immediate re-read). Core's doc is correct.
+- **`GetCommandHistoryAsync` matches its documented contract exactly** — oldest-first, `<n>:` prefix stripped, descending device numbering, and the history query itself is the last entry. Verified against the raw reply.
+- **The fw#716 79.4% clock mismatch reproduced independently again**: 476 ticks over 6 s at a requested 100 Hz = 79.3 Hz.
+- **`SetLogLevelAsync` echo parses correctly** (Module/Level/Ceiling). The **ceiling-capping path is untestable on this unit** — every module has ceiling 3, which is also the max level, so a request can never exceed it.
+
+**Gotchas worth keeping:**
+- `DaqifiStreamingDevice` has **no `SetSampleRate`** — it's the `StreamingFrequency` property. Cost one build cycle.
+- Stats counters are **per-session and reset at stream start**, not cumulative — an idle reading is the *previous* session's leftover, so don't subtract it as a baseline.
+- At log level 3 the SCPI module logs **every command** (`SCPI CMD: …`), so raising levels to fill the log buffer floods it with your own traffic.
+- `SYSTem:LOG:TEST` stores only the messages at/below each module's level — at the default level 1 it yields exactly **1** entry (`Test error message`), not 8.
+
+**No production code changed this fire**, so no test run was owed and there is nothing to re-validate on the open PRs.
+
+**Worktree hygiene:** worked in the fire's own worktree `mystifying-yonath-1c82a7` on `claude/daqifi-loop-beff8d` at `origin/main` `e9591be`; the harness lived entirely in the scratchpad, never in the repo. Both trees left clean, branch unchanged. Never `git stash`. **Bench device verified restored**: all 10 log modules back at level 1, `SYSTem:ERRor?` → `0,"No error"`, `*IDN?` healthy.
+
+**End-of-fire state: still 5 open loop PRs (#515, #527, #528, #529, #530)** — all Qodo-clean, CI green, mergeable, ready-noted, **not merged**. **Still at the 5/5 cap**, so the next fire shepherds only until the user merges or closes something. When a slot frees, **#537 is now the strongest candidate** — freshly filed, reproduced 4/4 and 2/2 across two independent experiments, cause pinned to a named method, and option 1 on the issue (make the parse fail loudly instead of silently dropping a corrupt first line) is a small, self-contained fix. Then **#538** (two small independent fixes, one of them near-unarguable), then **#536** (now carrying the log-level-getter gap too), then **#533** (most evidence of any open bug), then **#535**, **#534**, **#532** (all want a design decision), then **#480 extraction 1**. Otherwise unchanged: #491 item 3 rejected, #485 wants a decision, #484 breaking, #183/#271 ineligible, #464 close to done, **#499/#502 delivered and only need closing by the user**, #531 is the named pre-existing flake. **Owed on the SD surface: an actual `SD:GET` round-trip through all three parsers.** Surfaces still without hardware evidence: `Communication/Transport`'s HID half (destructive, skip), `DeviceErrorThrottle`/`DeviceErrorEventArgs` (needs a physical unplug), `Device/Network`'s write path (churn-risky, do not).
