@@ -197,15 +197,36 @@ public class AnalogOutputToolContractTests
             device.Sent);
     }
 
-    [Fact]
-    public async Task SetAnalogOutput_OnANegativeChannel_IsRefusedEvenWithNothingToCheckAgainst()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task SetAnalogOutput_OnANegativeChannel_SaysWhatAChannelNumberMayBe(int describedOutputs)
     {
-        var (agent, device) = AgentHarness.WithConnectedDevice();
+        // The same answer whatever the device described. Folded into the modelled-channel checks
+        // this reads as "-1 is not one of 0, 1" on one device and as something else on the other —
+        // the same mistake explained two ways, neither of them saying what is actually allowed.
+        var (agent, device) = AgentHarness.WithConnectedDevice(analogOutputs: describedOutputs);
         device.ClearSent();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.SetAnalogOutputAsync(AgentHarness.DeviceId, -1, 1.0, latch: true));
 
+        Assert.Contains("0 or greater", ex.Message);
+        Assert.Empty(device.Sent);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ReadAnalogOutput_OnANegativeChannel_SaysWhatAChannelNumberMayBe(int describedOutputs)
+    {
+        var (agent, device) = AgentHarness.WithConnectedDevice(analogOutputs: describedOutputs);
+        device.ClearSent();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.ReadAnalogOutputAsync(AgentHarness.DeviceId, -1, CancellationToken.None));
+
+        Assert.Contains("0 or greater", ex.Message);
         Assert.Empty(device.Sent);
     }
 

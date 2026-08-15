@@ -111,7 +111,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.DisablePwmAsync(deviceId, channel));
 
     [McpServerTool(Name = "list_analog_outputs")]
-    [Description("List the device's analog output (DAC) channels with the voltage range each accepts, its resolution, and the value it is driving. Call this before set_analog_output to learn the legal range. An empty list means this device drives no analog outputs — the hardware is Nyquist 3 only. Available in --read-only mode; costs no device round-trip.")]
+    [Description("List the device's analog output (DAC) channels with the voltage range each accepts, its resolution, and the value it is driving. Call this before set_analog_output to learn the legal range. An empty list means no DAC channel is modelled, which happens two ways: the board has none (analog output is Nyquist 3 hardware), or it has them but did not describe them in its capability document (firmware below v3.5.0). Do not read an empty list as 'writing is impossible' — in the second case set_analog_output still drives the channel by number and answers with rangeChecked false, saying that nothing validated the voltage; only in the first is it refused. Available in --read-only mode; costs no device round-trip, so `volts` is only what this server has written or read back this session — a null there means this server has not touched the channel, NOT that the pin is at 0 V. Use read_analog_output to ask the device itself.")]
     public static IReadOnlyList<AnalogOutputState> ListAnalogOutputs(
         DaqifiAgent agent,
         [Description("The device_id to inspect.")] string deviceId)

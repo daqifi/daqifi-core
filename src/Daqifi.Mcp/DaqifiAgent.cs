@@ -1613,6 +1613,16 @@ public sealed class DaqifiAgent
     /// </returns>
     private static bool RequireKnownAnalogOutput(DaqifiDevice device, string deviceId, int channelNumber)
     {
+        // Ahead of the modelled-channel checks, so a negative number is answered the same way
+        // whatever the device happens to have described. Left inside them it reads as "-1 is not
+        // one of 0, 1" on a device with outputs and as something else entirely on one without —
+        // the same mistake explained two ways, and neither says what a channel number may be.
+        if (channelNumber < 0)
+        {
+            throw new InvalidOperationException(
+                $"Analog output channel {channelNumber} is not a channel number; it must be 0 or greater.");
+        }
+
         var outputs = AnalogOutputs(device);
         if (outputs.Count == 0)
         {
@@ -1620,12 +1630,6 @@ public sealed class DaqifiAgent
             // only place a device describes its DACs. Refusing here would leave those boards with
             // no analog-output path at all, so the number is taken at face value — the caller is
             // told through AnalogOutputResult.RangeChecked that nothing vouched for it.
-            if (channelNumber < 0)
-            {
-                throw new InvalidOperationException(
-                    $"Analog output channel {channelNumber} is not a channel number; it must be 0 or greater.");
-            }
-
             return false;
         }
 
