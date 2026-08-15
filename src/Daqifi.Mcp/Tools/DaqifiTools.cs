@@ -118,7 +118,7 @@ public static class DaqifiTools
         => Guard(() => agent.ListAnalogOutputs(deviceId));
 
     [McpServerTool(Name = "set_analog_output")]
-    [Description("Drive an analog output (DAC) channel to a voltage. Nyquist 3 hardware only; on any other board the call is refused rather than silently discarded by the firmware. A voltage outside the channel's range is rejected before anything is sent — call list_analog_outputs for the range. By default the value takes effect immediately; pass latch=false to stage it instead and apply several channels together with latch_analog_outputs.")]
+    [Description("Drive an analog output (DAC) channel to a voltage. Nyquist 3 hardware only; on any other board the call is refused rather than silently discarded by the firmware. A voltage outside the channel's range is rejected before anything is sent — call list_analog_outputs for the range. By default the value takes effect immediately; pass latch=false to stage it instead and apply several channels together with latch_analog_outputs. Note that the latch is device-wide, not per-channel: a call with latch=true also applies anything staged earlier on OTHER channels, and the result reports only the channel written — call list_analog_outputs afterwards to see them all.")]
     public static Task<AnalogOutputResult> SetAnalogOutput(
         DaqifiAgent agent,
         [Description("The device_id to control.")] string deviceId,

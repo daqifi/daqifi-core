@@ -113,6 +113,23 @@ public class AnalogOutputToolContractTests
     }
 
     [Fact]
+    public async Task SetAnalogOutput_WithLatch_AlsoAppliesAnotherChannelStagedEarlier()
+    {
+        // The latch is device-wide, not per-channel. A caller that staged channel 0 and then wrote
+        // channel 1 outright has moved both pins, and the result it gets back names only channel 1
+        // — which is why the tool description sends it to list_analog_outputs to see them all.
+        var (agent, _) = AgentHarness.WithConnectedDevice(analogOutputs: 2);
+        await agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 0, 3.0, latch: false);
+
+        var result = await agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 1, 6.0, latch: true);
+
+        Assert.Equal(6.0, result.State!.Volts);
+        var outputs = agent.ListAnalogOutputs(AgentHarness.DeviceId);
+        Assert.Equal(3.0, outputs[0].Volts);
+        Assert.Null(outputs[0].PendingVolts);
+    }
+
+    [Fact]
     public async Task LatchAnalogOutputs_WithNothingStaged_StillCommandsTheDevice()
     {
         // A caller that has lost track of what it staged can always land the device in a known
