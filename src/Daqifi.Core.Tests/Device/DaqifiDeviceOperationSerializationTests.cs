@@ -941,6 +941,47 @@ public class DaqifiDeviceOperationSerializationTests
         stream.ReleaseWrites();
     }
 
+    /// <summary>
+    /// The same guarantee, sampled at the moment it is hardest to keep. <c>IsIdle</c> is two field
+    /// reads, so a caller can straddle the background loop's handover from "queued" to "being
+    /// written". Read in the wrong order, those reads land on the queue's after-value and
+    /// <c>_draining</c>'s before-value and report idle with a write still in flight — the same
+    /// false "all quiet" as <c>QueuedMessageCount == 0</c>, and one
+    /// <c>DrainOutboundQueueAsync</c> would act on by swapping consumers mid-write. The test above
+    /// holds the producer still and cannot see this; only sampling the handover can, so this
+    /// hammers it.
+    /// </summary>
+    [Fact]
+    public void Producer_AtTheHandoverFromQueuedToWriting_NeverReportsAPhantomIdle()
+    {
+        const int attempts = 20000;
+        var phantomIdles = 0;
+
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            using var stream = new MemoryStream();
+            using var producer = new MessageProducer<string>(stream);
+
+            producer.Start();
+            producer.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+
+            // Spun rather than slept: the window is a handful of instructions wide, and a poll
+            // that sleeps between reads steps straight over it.
+            while (!producer.IsIdle)
+            {
+            }
+
+            // Nothing has been sent since, and the one wake that drained it is spent, so a
+            // producer that reports idle here must still be idle a moment later.
+            if (!producer.IsIdle)
+            {
+                phantomIdles++;
+            }
+        }
+
+        Assert.Equal(0, phantomIdles);
+    }
+
     [Fact]
     public async Task TextExchange_DoesNotTakeTheStreamWhileAWriteIsStillInFlight()
     {
