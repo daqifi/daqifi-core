@@ -24,6 +24,10 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `set_digital_output` | Drive a digital channel high or low (switches it to output if needed). |
 | `set_pwm_output` | Start PWM on a capable channel: duty 1-100%, shared frequency 6-50000 Hz. |
 | `disable_pwm` | Stop PWM on a channel (pin is left high-impedance). |
+| `list_analog_outputs` | The DAC channels with the voltage range each accepts and the value it is driving. |
+| `set_analog_output` | Drive a DAC channel to a voltage (**Nyquist 3 only**); range-checked before it is sent. |
+| `latch_analog_outputs` | Apply the voltages staged with `set_analog_output latch=false`, together. |
+| `read_analog_output` | Ask the device what a DAC channel is holding. |
 | `set_sample_rate` | Set sample rate in Hz (ceiling depends on the enabled channel count; over-cap requests are rejected). |
 | `read_channel_values` | Latest value on every enabled channel, with the timestamp it was sampled at. |
 | `capture_samples` | A block of live data as rows: one row per sample tick, one column per channel. |
@@ -49,6 +53,14 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 > (firmware #703), after which downloads come back empty until the device is reconnected or another
 > SD recording re-arms it. Do the SD work first on a fresh connection.
 
+> **Analog output is Nyquist 3 hardware.** On any other board `set_analog_output` is refused
+> outright, because the firmware would otherwise discard the command without saying so and the call
+> would look like a success. `set_analog_output` applies the voltage immediately unless you pass
+> `latch=false`, which stages it instead so several channels can be made to change together on one
+> `latch_analog_outputs`. Neither the staged value nor `read_analog_output` is a measurement of the
+> pin — the DAC has no readback path, so the device answers with the value it was last told to
+> drive.
+
 ## Run it
 
 ### Option A — install as a .NET global tool (recommended)
@@ -72,10 +84,11 @@ dotnet run --project src/Daqifi.Mcp
 ```
 
 `--read-only` blocks anything that changes the device or the card: channel/rate configuration,
-DIO/PWM output, start/stop logging, and `delete_sd_file`. Reading data back is still allowed —
-`list_sd_files`, `get_sd_storage` and `download_sd_file` all work, since they change nothing on the
-device (the download does write its two files into this machine's temp directory, which is the only
-way the data can reach the agent at all).
+DIO/PWM output, analog output (`set_analog_output`, `latch_analog_outputs`), start/stop logging, and
+`delete_sd_file`. Reading data back is still allowed — `list_sd_files`, `get_sd_storage`,
+`download_sd_file`, `list_analog_outputs` and `read_analog_output` all work, since they change
+nothing on the device (the download does write its two files into this machine's temp directory,
+which is the only way the data can reach the agent at all).
 
 The live tools sit on the line: reading a stream that is **already** running changes nothing and is
 allowed, but starting one is a change, so `read_channel_values` and `capture_samples` are refused

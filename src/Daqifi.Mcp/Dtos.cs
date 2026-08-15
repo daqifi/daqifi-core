@@ -25,24 +25,33 @@ public sealed record DiscoveredDevice(
         info.Type.ToString());
 }
 
-/// <summary>Summary of a currently-connected device.</summary>
+/// <summary>
+/// Summary of a currently-connected device. <see cref="AnalogOutputChannelCount"/> counts DAC
+/// channels, which are reported separately from <see cref="AnalogChannelCount"/> because they are
+/// driven rather than measured — they never appear in an acquisition and are written with
+/// set_analog_output. It is 0 on every board but Nyquist 3, and also on a Nyquist 3 whose
+/// capability document did not describe them (see <see cref="AnalogOutputState"/>).
+/// </summary>
 public sealed record ConnectedDeviceInfo(
     string DeviceId,
     string Name,
     bool Connected,
     int AnalogChannelCount,
-    int DigitalChannelCount)
+    int DigitalChannelCount,
+    int AnalogOutputChannelCount)
 {
     public static ConnectedDeviceInfo From(string id, DaqifiDevice device)
     {
         var analog = 0;
         var digital = 0;
+        var analogOutput = 0;
         foreach (var ch in device.GetChannelsSnapshot())
         {
             if (ch.Type == ChannelType.Analog) analog++;
             else if (ch.Type == ChannelType.Digital) digital++;
+            else if (ch.Type == ChannelType.AnalogOutput) analogOutput++;
         }
-        return new ConnectedDeviceInfo(id, device.Name, device.IsConnected, analog, digital);
+        return new ConnectedDeviceInfo(id, device.Name, device.IsConnected, analog, digital, analogOutput);
     }
 }
 
@@ -164,6 +173,91 @@ public sealed record PwmResult(string DeviceId, int Channel, bool Enabled, int? 
             frequencyCommanded ? device.PwmFrequencyHz : null);
     }
 }
+
+/// <summary>
+/// One analog-output (DAC) channel: what it accepts and what it is driving.
+/// </summary>
+/// <param name="Channel">The channel number, as set_analog_output takes it.</param>
+/// <param name="Name">The channel's display name.</param>
+/// <param name="Volts">
+/// The voltage this channel is driving, or <c>null</c> when nothing has driven it yet. It is what
+/// this server last latched or last read back — the DAC has no hardware readback, so no value
+/// anywhere is a measurement of the pin.
+/// </param>
+/// <param name="PendingVolts">
+/// A voltage staged by set_analog_output with <c>latch=false</c> and not yet applied, or
+/// <c>null</c> when nothing is waiting. It reaches the pin on the next latch_analog_outputs.
+/// </param>
+/// <param name="MinVolts">The lowest voltage the channel accepts.</param>
+/// <param name="MaxVolts">The highest voltage the channel accepts.</param>
+/// <param name="RangeIsAssumed">
+/// Whether the range above is this library's fallback rather than the device's own statement. When
+/// <c>true</c> the device described the channel but not its range, so a rejected write may reflect
+/// an assumption rather than the hardware's real limit.
+/// </param>
+/// <param name="ResolutionBits">The DAC resolution in bits.</param>
+public sealed record AnalogOutputState(
+    int Channel,
+    string Name,
+    double? Volts,
+    double? PendingVolts,
+    double MinVolts,
+    double MaxVolts,
+    bool RangeIsAssumed,
+    int ResolutionBits)
+{
+    public static AnalogOutputState From(IAnalogOutputChannel ch) => new(
+        ch.ChannelNumber,
+        ch.Name,
+        ch.OutputVoltage,
+        ch.PendingVoltage,
+        ch.MinimumVoltage,
+        ch.MaximumVoltage,
+        ch.RangeIsAssumed,
+        ch.ResolutionBits);
+}
+
+/// <summary>
+/// Result of writing an analog-output voltage.
+/// </summary>
+/// <param name="Applied">
+/// Whether the value is now on the pin. <c>false</c> means it was staged only and is waiting for
+/// latch_analog_outputs.
+/// </param>
+/// <param name="RangeChecked">
+/// Whether the voltage was validated against a range the device stated. <c>false</c> means the
+/// device described no analog outputs at all — the command was addressed by channel number and
+/// nothing here can vouch for it (see <see cref="DaqifiAgent.SetAnalogOutputAsync"/>).
+/// </param>
+/// <param name="State">
+/// The channel afterwards, or <c>null</c> when the device described no analog outputs and there is
+/// therefore no modelled channel to report.
+/// </param>
+public sealed record AnalogOutputResult(
+    string DeviceId,
+    int Channel,
+    double RequestedVolts,
+    bool Applied,
+    bool RangeChecked,
+    AnalogOutputState? State);
+
+/// <summary>
+/// Result of latching the staged analog outputs: every modelled analog-output channel afterwards,
+/// so a caller that staged several sees them all take effect together. <see cref="Outputs"/> is
+/// empty when the device described no analog outputs — the latch command was still sent.
+/// </summary>
+public sealed record AnalogOutputLatchResult(string DeviceId, IReadOnlyList<AnalogOutputState> Outputs);
+
+/// <summary>
+/// What the device answered when asked what an analog output is holding.
+/// </summary>
+/// <param name="Volts">
+/// The voltage the device reports. Not a measurement of the pin: the DAC has no readback path, so
+/// the firmware answers with the value it was last told to drive. It is still the authoritative
+/// round-trip — it reflects what the device accepted, including a write made before this server
+/// connected.
+/// </param>
+public sealed record AnalogOutputReading(string DeviceId, int Channel, double Volts);
 
 /// <summary>
 /// Result of a sample-rate change. A request exceeding the effective ceiling (the device's cap
