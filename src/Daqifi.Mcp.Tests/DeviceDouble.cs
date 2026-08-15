@@ -59,11 +59,31 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     }
 
     /// <summary>
+    /// The analog outputs this device's capability document describes, in document order. Empty by
+    /// default, which is what every board but a Nyquist 3 reports.
+    /// </summary>
+    internal List<CapabilityChannel> AnalogOutputDescriptors { get; } = new();
+
+    /// <summary>
+    /// Canned answers for <c>SOURce:VOLTage:LEVel?</c>, keyed by channel number — what the firmware
+    /// says it is holding. A channel with no entry answers nothing, which is how a device that
+    /// ignores the query behaves.
+    /// </summary>
+    internal Dictionary<int, string> AnalogOutputReadbacks { get; } = new();
+
+    /// <summary>
     /// Builds a connected device with <paramref name="analogChannels"/> analog inputs and
     /// <paramref name="digitalChannels"/> digital channels, and its capability document already
     /// read once — the state a device is in the moment <c>connect_device</c> returns.
     /// </summary>
-    internal static FakeStreamingDevice CreateConnected(int analogChannels = 4, int digitalChannels = 8)
+    /// <param name="analogOutputs">
+    /// Analog-output (DAC) channels for the capability document to describe, each 0-10 V at 12 bits.
+    /// Defaults to none, matching the Nyquist 1 the rest of these tests model; the board is left
+    /// <see cref="DeviceType.Unknown"/> either way, so the analog-output feature gate lets a write
+    /// through (an unidentified board is not a refusal — see <c>DaqifiDevice.Supports</c>).
+    /// </param>
+    internal static FakeStreamingDevice CreateConnected(
+        int analogChannels = 4, int digitalChannels = 8, int analogOutputs = 0)
     {
         var device = new FakeStreamingDevice("Fake Nq1");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
@@ -72,6 +92,20 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
             AnalogInRes = 65535,
             DigitalPortNum = (uint)digitalChannels,
         });
+
+        for (var id = 0; id < analogOutputs; id++)
+        {
+            device.AnalogOutputDescriptors.Add(new CapabilityChannel
+            {
+                Id = id,
+                Kind = CapabilityChannelKind.AnalogOutput,
+                SignalType = "voltage",
+                Unit = "V",
+                ResolutionBits = 12,
+                RangeMinimum = 0,
+                RangeMaximum = 10,
+            });
+        }
 
         device.Metadata.Capabilities.MaxSamplingRate = HardwareMaximumRateHz;
         device.Connect();
@@ -98,6 +132,35 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     {
         CapabilityReads++;
         return Task.FromResult<CapabilityDocument?>(ApplyCapabilityDocumentForCurrentChannels());
+    }
+
+    /// <summary>
+    /// Answers a text exchange the way the firmware would: the query still goes into
+    /// <see cref="Sent"/> (so the tests can assert what reached the wire), and the reply comes from
+    /// <see cref="AnalogOutputReadbacks"/>. A channel with no canned answer replies with nothing,
+    /// which is a device that ignored the query rather than one that answered zero.
+    /// </summary>
+    protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+        Action setupAction,
+        int responseTimeoutMs = 1000,
+        int completionTimeoutMs = 250,
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? prepareAsync = null,
+        Func<Task>? finalizeAsync = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        setupAction();
+
+        var query = Sent.LastOrDefault() ?? string.Empty;
+        const string readbackPrefix = "SOURce:VOLTage:LEVel? ";
+        if (query.StartsWith(readbackPrefix, StringComparison.Ordinal)
+            && int.TryParse(query[readbackPrefix.Length..], out var channel)
+            && AnalogOutputReadbacks.TryGetValue(channel, out var answer))
+        {
+            return Task.FromResult<IReadOnlyList<string>>(new[] { answer });
+        }
+
+        return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
     }
 
     // --------------------------------------------------------------------- SD card
@@ -161,6 +224,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
         var document = new CapabilityDocument
         {
             SchemaVersion = 1,
+            Channels = AnalogOutputDescriptors.ToList(),
             Streaming = new CapabilityStreaming
             {
                 MaximumSampleRateHz = HardwareMaximumRateHz,
@@ -169,6 +233,11 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
         };
 
         Metadata.ApplyCapabilityDocument(document);
+
+        // Both halves of what the real ReadCapabilityDocumentAsync does: the document is the only
+        // place a device describes its DACs, so applying it without this sync would leave the
+        // outputs unmodelled and the analog-output tools with nothing to find.
+        SyncAnalogOutputChannelsFromCapabilities();
         return document;
     }
 }
@@ -191,7 +260,8 @@ internal static class AgentHarness
         bool readOnly = false,
         int? maxSampleRateHz = null,
         int analogChannels = 4,
-        int digitalChannels = 8)
+        int digitalChannels = 8,
+        int analogOutputs = 0)
     {
         var agent = new DaqifiAgent(new ServerOptions
         {
@@ -199,7 +269,7 @@ internal static class AgentHarness
             MaxSampleRateHz = maxSampleRateHz,
         });
 
-        var device = FakeStreamingDevice.CreateConnected(analogChannels, digitalChannels);
+        var device = FakeStreamingDevice.CreateConnected(analogChannels, digitalChannels, analogOutputs);
         agent.RegisterConnectedDevice(DeviceId, device);
         return (agent, device);
     }

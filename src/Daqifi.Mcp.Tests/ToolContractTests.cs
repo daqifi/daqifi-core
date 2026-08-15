@@ -607,6 +607,8 @@ public class ReadOnlyModeContractTests
         "set_digital_output",
         "set_pwm_output",
         "disable_pwm",
+        "set_analog_output",
+        "latch_analog_outputs",
         "set_sample_rate",
     };
 
@@ -614,7 +616,7 @@ public class ReadOnlyModeContractTests
     [MemberData(nameof(MutatingTools))]
     public async Task MutatingTools_AreRefusedAndSendNothing(string tool)
     {
-        var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
+        var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true, analogOutputs: 2);
         device.ClearSent();
 
         Task Call() => tool switch
@@ -625,6 +627,8 @@ public class ReadOnlyModeContractTests
             "set_digital_output" => agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 0, high: true),
             "set_pwm_output" => agent.SetPwmOutputAsync(AgentHarness.DeviceId, 4, 50, 1000),
             "disable_pwm" => agent.DisablePwmAsync(AgentHarness.DeviceId, 4),
+            "set_analog_output" => agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 0, 2.5, latch: true),
+            "latch_analog_outputs" => agent.LatchAnalogOutputsAsync(AgentHarness.DeviceId),
             _ => agent.SetSampleRateAsync(AgentHarness.DeviceId, 100),
         };
 
@@ -636,10 +640,11 @@ public class ReadOnlyModeContractTests
     [Theory]
     [InlineData("status")]
     [InlineData("channels")]
+    [InlineData("analog_outputs")]
     [InlineData("list")]
     public void Introspection_StillWorksInReadOnlyMode(string tool)
     {
-        var (agent, _) = AgentHarness.WithConnectedDevice(readOnly: true);
+        var (agent, _) = AgentHarness.WithConnectedDevice(readOnly: true, analogOutputs: 2);
 
         switch (tool)
         {
@@ -648,6 +653,9 @@ public class ReadOnlyModeContractTests
                 break;
             case "channels":
                 Assert.NotEmpty(agent.ListChannels(AgentHarness.DeviceId));
+                break;
+            case "analog_outputs":
+                Assert.Equal(2, agent.ListAnalogOutputs(AgentHarness.DeviceId).Count);
                 break;
             default:
                 Assert.Single(agent.ListConnected());

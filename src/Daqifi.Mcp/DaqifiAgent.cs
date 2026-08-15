@@ -516,6 +516,127 @@ public sealed class DaqifiAgent
         }).ConfigureAwait(false);
     }
 
+    // ----------------------------------------------------------- analog output
+
+    /// <summary>
+    /// Lists the device's analog-output (DAC) channels with their range, resolution, and the value
+    /// each is driving. Read-only: available even under <c>--read-only</c>, and it touches no wire.
+    /// </summary>
+    /// <remarks>
+    /// Empty on every board without DACs, and on a board with them whose capability document did
+    /// not describe them. Deliberately not an error: an agent asking what a device can drive is
+    /// entitled to the answer "nothing", and <see cref="SetAnalogOutputAsync"/> is where an attempt
+    /// to drive one anyway is explained.
+    /// </remarks>
+    public IReadOnlyList<AnalogOutputState> ListAnalogOutputs(string deviceId) =>
+        AnalogOutputs(Require(deviceId)).Select(AnalogOutputState.From).ToList();
+
+    /// <summary>
+    /// Writes a voltage to an analog-output (DAC) channel: staged, then latched immediately unless
+    /// <paramref name="latch"/> is false.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The stage-and-latch pair is the device's own protocol, and both halves run inside one
+    /// exclusive section so no concurrent tool call can latch a half-written set.
+    /// </para>
+    /// <para>
+    /// A voltage outside the channel's stated range is refused here, before anything reaches the
+    /// wire (Core's check, on the channel the device described). The exception is a device that
+    /// described no analog outputs at all: Core still addresses those by channel number — that is
+    /// the only analog-output path the SDK has ever had — so the write proceeds with
+    /// <see cref="AnalogOutputResult.RangeChecked"/> false rather than being refused. What that
+    /// case does <i>not</i> include is a board with no DACs: <see cref="RequireAnalogOutput"/>
+    /// stops those up front, so an agent cannot get a silent success out of hardware that has
+    /// nothing to drive.
+    /// </para>
+    /// </remarks>
+    public async Task<AnalogOutputResult> SetAnalogOutputAsync(string deviceId, int channel, double volts, bool latch)
+    {
+        RequireControl();
+        var (device, streaming) = RequireAnalogOutput(deviceId);
+
+        return await device.RunExclusiveAsync(_ =>
+        {
+            // Checked inside the exclusive section, with the write it guards: a capability re-read
+            // runs under this same lock and rebuilds the analog-output channels, so an outer check
+            // could vouch for a channel that no longer exists by the time the value is staged —
+            // the shape of #449.
+            var known = RequireKnownAnalogOutput(device, deviceId, channel);
+
+            streaming.StageAnalogOutput(channel, volts);
+            if (latch)
+            {
+                streaming.LatchAnalogOutputs();
+            }
+
+            return Task.FromResult(new AnalogOutputResult(
+                deviceId,
+                channel,
+                volts,
+                Applied: latch,
+                RangeChecked: known,
+                State: FindAnalogOutput(device, channel) is { } state ? AnalogOutputState.From(state) : null));
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Applies every analog-output voltage staged since the last latch, so channels staged
+    /// separately change together.
+    /// </summary>
+    /// <remarks>
+    /// Latching with nothing staged is harmless — the device re-applies what it already holds — so
+    /// this is not refused when no value is pending; a caller that has lost track of what it staged
+    /// can always land the device in a known state.
+    /// </remarks>
+    public async Task<AnalogOutputLatchResult> LatchAnalogOutputsAsync(string deviceId)
+    {
+        RequireControl();
+        var (device, streaming) = RequireAnalogOutput(deviceId);
+
+        return await device.RunExclusiveAsync(_ =>
+        {
+            streaming.LatchAnalogOutputs();
+
+            return Task.FromResult(new AnalogOutputLatchResult(
+                deviceId,
+                AnalogOutputs(device).Select(AnalogOutputState.From).ToList()));
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Asks the device what voltage an analog output is holding. Read-only: it changes nothing on
+    /// the device, so it stays available under <c>--read-only</c>.
+    /// </summary>
+    /// <remarks>
+    /// Refused while the device is streaming. This is a text-mode exchange, and pausing Core's
+    /// protobuf reader does not stop the firmware: its binary frames land on the front of the reply,
+    /// so the readback would fail as "not a voltage" — a parse error that describes the collision
+    /// rather than naming it.
+    /// </remarks>
+    public async Task<AnalogOutputReading> ReadAnalogOutputAsync(
+        string deviceId, int channel, CancellationToken cancellationToken)
+    {
+        var (device, streaming) = RequireAnalogOutput(deviceId);
+
+        return await device.RunExclusiveAsync(async ct =>
+        {
+            RequireKnownAnalogOutput(device, deviceId, channel);
+
+            if (streaming.IsStreaming)
+            {
+                throw new InvalidOperationException(
+                    $"Device '{deviceId}' is streaming, and the analog-output readback is a text-mode query "
+                    + "whose reply the device's binary stream would corrupt. Stop the stream (or the SD "
+                    + "log) and read again; list_analog_outputs reports the last value this server wrote "
+                    + "without touching the device.");
+            }
+
+            var volts = await streaming.GetAnalogOutputAsync(channel, ct).ConfigureAwait(false);
+            return new AnalogOutputReading(deviceId, channel, volts);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<SampleRateResult> SetSampleRateAsync(string deviceId, int rateHz)
     {
         if (rateHz < 1)
@@ -1437,6 +1558,90 @@ public sealed class DaqifiAgent
         .Select(c => c.ChannelNumber)
         .OrderBy(n => n)
         .ToList();
+
+    private static IReadOnlyList<IAnalogOutputChannel> AnalogOutputs(DaqifiDevice device) => Snapshot(device)
+        .OfType<IAnalogOutputChannel>()
+        .OrderBy(c => c.ChannelNumber)
+        .ToList();
+
+    private static IAnalogOutputChannel? FindAnalogOutput(DaqifiDevice device, int channelNumber) => Snapshot(device)
+        .OfType<IAnalogOutputChannel>()
+        .FirstOrDefault(c => c.ChannelNumber == channelNumber);
+
+    /// <summary>
+    /// Resolves a device for analog output, refusing hardware that has none.
+    /// </summary>
+    /// <remarks>
+    /// The board gate is what keeps an agent honest here. Core sends an analog-output command by
+    /// channel number whether or not a channel was ever described, and never reads the device's
+    /// error queue back, so on a board without DACs the write would look like a success to the
+    /// agent while the firmware discarded it. <see cref="DaqifiDevice.Supports"/> answers <c>true</c>
+    /// for a device that has not reported its part number yet, so this refuses only boards that
+    /// have actually identified themselves as something other than a Nyquist 3.
+    /// </remarks>
+    private (DaqifiDevice device, DaqifiStreamingDevice streaming) RequireAnalogOutput(string deviceId)
+    {
+        var device = Require(deviceId);
+
+        // Narrower than RequireStreaming's IStreamingDevice: the stage/latch/readback trio lives on
+        // the concrete class, since only SetAnalogOutput is on the interface.
+        if (device is not DaqifiStreamingDevice streaming)
+        {
+            throw new InvalidOperationException(
+                $"Device '{deviceId}' does not support analog-output operations.");
+        }
+
+        if (!device.Supports(DeviceFeature.AnalogOutput))
+        {
+            throw new InvalidOperationException(
+                $"Device '{deviceId}' has no analog outputs. Analog output (DAC) is fitted to Nyquist 3 "
+                + $"hardware only, and this device reports itself as {device.Metadata.DeviceType}. Use "
+                + "set_digital_output or set_pwm_output to drive a pin on this board.");
+        }
+
+        return (device, streaming);
+    }
+
+    /// <summary>
+    /// Checks a channel number against the analog outputs the device described, and reports whether
+    /// there was anything to check it against.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> when the channel is one the device described (so Core will range-check the
+    /// write); <c>false</c> when the device described no analog outputs at all and the command can
+    /// only be addressed by number.
+    /// </returns>
+    private static bool RequireKnownAnalogOutput(DaqifiDevice device, string deviceId, int channelNumber)
+    {
+        // Ahead of the modelled-channel checks, so a negative number is answered the same way
+        // whatever the device happens to have described. Left inside them it reads as "-1 is not
+        // one of 0, 1" on a device with outputs and as something else entirely on one without —
+        // the same mistake explained two ways, and neither says what a channel number may be.
+        if (channelNumber < 0)
+        {
+            throw new InvalidOperationException(
+                $"Analog output channel {channelNumber} is not a channel number; it must be 0 or greater.");
+        }
+
+        var outputs = AnalogOutputs(device);
+        if (outputs.Count == 0)
+        {
+            // Nyquist 3 firmware below v3.5.0 has no capability document, and the document is the
+            // only place a device describes its DACs. Refusing here would leave those boards with
+            // no analog-output path at all, so the number is taken at face value — the caller is
+            // told through AnalogOutputResult.RangeChecked that nothing vouched for it.
+            return false;
+        }
+
+        if (outputs.All(c => c.ChannelNumber != channelNumber))
+        {
+            throw new InvalidOperationException(
+                $"Unknown analog output channel {channelNumber} on device '{deviceId}'. This device has "
+                + $"analog outputs: {string.Join(", ", outputs.Select(c => c.ChannelNumber))}.");
+        }
+
+        return true;
+    }
 
     private static IChannel RequireDigitalChannel(DaqifiDevice device, int channelNumber)
     {

@@ -110,6 +110,39 @@ public static class DaqifiTools
         [Description("The digital channel number to stop PWM on.")] int channel)
         => GuardAsync(() => agent.DisablePwmAsync(deviceId, channel));
 
+    [McpServerTool(Name = "list_analog_outputs")]
+    [Description("List the device's analog output (DAC) channels with the voltage range each accepts, its resolution, and the value it is driving. Call this before set_analog_output to learn the legal range. An empty list means no DAC channel is modelled, which happens two ways: the board has none (analog output is Nyquist 3 hardware), or it has them but did not describe them in its capability document (firmware below v3.5.0). Do not read an empty list as 'writing is impossible' — in the second case set_analog_output still drives the channel by number and answers with rangeChecked false, saying that nothing validated the voltage; only in the first is it refused. Available in --read-only mode; costs no device round-trip, so `volts` is only what this server has written or read back this session — a null there means this server has not touched the channel, NOT that the pin is at 0 V. Use read_analog_output to ask the device itself.")]
+    public static IReadOnlyList<AnalogOutputState> ListAnalogOutputs(
+        DaqifiAgent agent,
+        [Description("The device_id to inspect.")] string deviceId)
+        => Guard(() => agent.ListAnalogOutputs(deviceId));
+
+    [McpServerTool(Name = "set_analog_output")]
+    [Description("Drive an analog output (DAC) channel to a voltage. Nyquist 3 hardware only; on any other board the call is refused rather than silently discarded by the firmware. A voltage outside the channel's range is rejected before anything is sent — call list_analog_outputs for the range. By default the value takes effect immediately; pass latch=false to stage it instead and apply several channels together with latch_analog_outputs. Note that the latch is device-wide, not per-channel: a call with latch=true also applies anything staged earlier on OTHER channels, and the result reports only the channel written — call list_analog_outputs afterwards to see them all.")]
+    public static Task<AnalogOutputResult> SetAnalogOutput(
+        DaqifiAgent agent,
+        [Description("The device_id to control.")] string deviceId,
+        [Description("The analog output channel number, as list_analog_outputs reports it.")] int channel,
+        [Description("The output voltage in volts. Must lie inside the channel's range (commonly 0-10 V).")] double volts,
+        [Description("Apply the value now (default). Pass false to stage it without changing the pin; it takes effect on the next latch_analog_outputs, which is how several outputs are made to change together.")] bool latch = true)
+        => GuardAsync(() => agent.SetAnalogOutputAsync(deviceId, channel, volts, latch));
+
+    [McpServerTool(Name = "latch_analog_outputs")]
+    [Description("Apply every analog output voltage staged with set_analog_output latch=false, so the staged channels change together. Returns the state of every analog output afterwards. Harmless with nothing staged — the device re-applies what it already holds.")]
+    public static Task<AnalogOutputLatchResult> LatchAnalogOutputs(
+        DaqifiAgent agent,
+        [Description("The device_id to latch.")] string deviceId)
+        => GuardAsync(() => agent.LatchAnalogOutputsAsync(deviceId));
+
+    [McpServerTool(Name = "read_analog_output")]
+    [Description("Ask the device what voltage an analog output channel is holding. This is a round-trip to the firmware, so it reflects what the device actually accepted — including a value written before this server connected — but it is not a measurement of the pin: the DAC has no readback path, so the device answers with the value it was last told to drive. Refused while the device is streaming, because the binary stream corrupts the reply. Available in --read-only mode.")]
+    public static Task<AnalogOutputReading> ReadAnalogOutput(
+        DaqifiAgent agent,
+        [Description("The device_id to query.")] string deviceId,
+        [Description("The analog output channel number.")] int channel,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.ReadAnalogOutputAsync(deviceId, channel, cancellationToken));
+
     [McpServerTool(Name = "set_sample_rate")]
     [Description("Set the device sample (streaming) rate in Hz, applied to streaming and SD-card logging. The achievable maximum depends on how many channels are currently enabled (configure channels first for an accurate ceiling) and is further capped by --max-sample-rate-hz if set; a request above the effective cap is rejected — the call throws rather than silently applying a lower rate.")]
     public static Task<SampleRateResult> SetSampleRate(
