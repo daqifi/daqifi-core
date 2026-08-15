@@ -1564,8 +1564,9 @@ public sealed class DaqifiAgent
         .OrderBy(c => c.ChannelNumber)
         .ToList();
 
-    private static IAnalogOutputChannel? FindAnalogOutput(DaqifiDevice device, int channelNumber) =>
-        AnalogOutputs(device).FirstOrDefault(c => c.ChannelNumber == channelNumber);
+    private static IAnalogOutputChannel? FindAnalogOutput(DaqifiDevice device, int channelNumber) => Snapshot(device)
+        .OfType<IAnalogOutputChannel>()
+        .FirstOrDefault(c => c.ChannelNumber == channelNumber);
 
     /// <summary>
     /// Resolves a device for analog output, refusing hardware that has none.
