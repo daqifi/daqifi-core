@@ -772,8 +772,10 @@ namespace Daqifi.Core.Tests.Device.SdCard
             };
             device.Connect();
 
-            await Assert.ThrowsAnyAsync<Exception>(
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
                 () => device.DeleteSdCardFileAsync("locked.bin"));
+            // The device's own words, not a generic "listing incomplete".
+            Assert.Contains("-200", ex.Message);
 
             Assert.Empty(device.SdCardFiles);
         }
@@ -800,6 +802,32 @@ namespace Daqifi.Core.Tests.Device.SdCard
             await Assert.ThrowsAsync<SdCardOperationException>(
                 () => device.DeleteSdCardFileAsync("fileA.csv"));
 
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_RefusedAndUnterminated_ReportsTheDeviceError()
+        {
+            // Both failures at once: the device refuses the delete AND the
+            // confirmation exchange never terminates. The completeness throw
+            // used to fire first, so the caller was told "the listing did not
+            // complete -- check the connection and retry" for a delete the
+            // device had explicitly refused, with LastScpiError null. The
+            // delete's own outcome is judged first now, so the reported error
+            // is the one the device actually gave.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+            };
+            device.UnterminatedAttempts = int.MaxValue;
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("locked.bin"));
+
+            Assert.IsNotType<SdCardListIncompleteException>(ex);
+            Assert.Contains("-200", ex.Message);
             Assert.Empty(device.SdCardFiles);
         }
 

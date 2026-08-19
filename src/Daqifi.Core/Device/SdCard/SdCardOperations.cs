@@ -841,11 +841,6 @@ namespace Daqifi.Core.Device.SdCard
                 }
             }
 
-            if (!refreshComplete)
-            {
-                throw new SdCardListIncompleteException(lines);
-            }
-
             // The DELETE's own outcome, judged before anything about the
             // listing. The retry loop above exits either way, so a delete the
             // device refused on BOTH attempts arrives here with its error line
@@ -867,6 +862,12 @@ namespace Daqifi.Core.Device.SdCard
                     lines,
                     deleteError);
             }
+
+            if (!refreshComplete)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
 
             // And the error guard the read path has always applied to its own
             // listing. Without it a delete that FAILED on the device twice --
