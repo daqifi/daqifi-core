@@ -285,8 +285,16 @@ namespace Daqifi.Core.Device.SdCard
             // to prevent, one level deeper. Unterminated is the pre-#794 firmware and
             // is not an error: the reply framing already told us the exchange
             // completed, we simply learn nothing more from the device.
-            if (SdCardFileListParser.GetListingStatus(listing) == SdCardListingStatus.Failed)
+            var listingStatus = SdCardFileListParser.GetListingStatus(listing);
+            if (listingStatus == SdCardListingStatus.Failed
+                || listingStatus == SdCardListingStatus.Incomplete)
             {
+                // INCOMPLETE throws for the same reason a missing transport
+                // terminator does, a few lines above: the caller is about to
+                // cache this list and answer "is my file on the card?" from it.
+                // A device-truncated listing and a transport-truncated one are
+                // the same class of wrong answer, so they raise the same
+                // exception -- a client that handles one already handles this.
                 throw new SdCardListIncompleteException(lines);
             }
 

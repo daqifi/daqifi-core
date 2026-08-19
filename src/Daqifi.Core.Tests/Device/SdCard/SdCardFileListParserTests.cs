@@ -24,6 +24,34 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal("data.csv", result[0].FileName);
         }
 
+        [Fact]
+        public void ParseFileList_WithFileNamedLikeTheMarker_KeepsTheFile()
+        {
+            // The marker is matched as a whole token, not as a prefix: a file
+            // whose name merely starts with the marker text is still a file, and
+            // hiding it would be the same defect as inventing one.
+            // No "Daqifi/" prefix on purpose: with one, the line does not start
+            // with the marker text at all and the exactness guard is never
+            // reached -- the test would pass whether or not the guard exists.
+            var lines = new[] { "__END_OF_LIST__notes.csv 12", "__END_OF_LIST__ OK" };
+
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            Assert.Single(result);
+            Assert.Equal("__END_OF_LIST__notes.csv", result[0].FileName);
+        }
+
+        [Fact]
+        public void GetListingStatus_WithFileNamedLikeTheMarker_IsUnterminated()
+        {
+            // Same rule from the other side: a filename starting with the marker
+            // text must not be read as the listing's terminator.
+            var status = SdCardFileListParser.GetListingStatus(
+                new[] { "__END_OF_LIST__notes.csv 12" });
+
+            Assert.Equal(SdCardListingStatus.Unterminated, status);
+        }
+
         [Theory]
         [InlineData("__END_OF_LIST__ OK", SdCardListingStatus.Complete)]
         [InlineData("__END_OF_LIST__ INCOMPLETE", SdCardListingStatus.Incomplete)]

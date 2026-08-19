@@ -60,7 +60,7 @@ namespace Daqifi.Core.Device.SdCard
                 // it survives every filter below -- it is not blank, not an error
                 // shape, and its first token is not empty -- and the device would
                 // appear to be carrying a file called "__END_OF_LIST__".
-                if (path.StartsWith(ListEndMarker, StringComparison.Ordinal))
+                if (IsListEndMarker(path, out _))
                 {
                     continue;
                 }
@@ -126,6 +126,44 @@ namespace Daqifi.Core.Device.SdCard
         }
 
         /// <summary>
+        /// True when <paramref name="line"/> IS the end-of-listing marker, as
+        /// opposed to merely starting with its text.
+        /// </summary>
+        /// <remarks>
+        /// The marker is either the token alone or the token followed by
+        /// whitespace and a status word. A prefix match would swallow a file
+        /// legitimately named <c>__END_OF_LIST__notes.csv</c> -- unlikely, but the
+        /// cost of being exact is one comparison and the cost of being loose is a
+        /// file the user cannot see.
+        /// </remarks>
+        /// <param name="line">The raw line, trimmed internally.</param>
+        /// <param name="statusWord">The status word, or empty when there is none.</param>
+        /// <returns>True when the line is the marker.</returns>
+        private static bool IsListEndMarker(string line, out string statusWord)
+        {
+            statusWord = string.Empty;
+
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith(ListEndMarker, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (trimmed.Length == ListEndMarker.Length)
+            {
+                return true;
+            }
+
+            if (!char.IsWhiteSpace(trimmed[ListEndMarker.Length]))
+            {
+                return false;
+            }
+
+            statusWord = trimmed.Substring(ListEndMarker.Length).Trim();
+            return true;
+        }
+
+        /// <summary>
         /// How a directory listing ended, read from the device's end-of-listing
         /// marker (firmware #794).
         /// </summary>
@@ -151,13 +189,11 @@ namespace Daqifi.Core.Device.SdCard
             var status = SdCardListingStatus.Unterminated;
             foreach (var line in lines)
             {
-                var trimmed = (line ?? string.Empty).Trim();
-                if (!trimmed.StartsWith(ListEndMarker, StringComparison.Ordinal))
+                if (!IsListEndMarker(line ?? string.Empty, out var word))
                 {
                     continue;
                 }
 
-                var word = trimmed.Substring(ListEndMarker.Length).Trim();
                 if (word.Equals("OK", StringComparison.OrdinalIgnoreCase))
                 {
                     status = SdCardListingStatus.Complete;
