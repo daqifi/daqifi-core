@@ -56,11 +56,16 @@ internal sealed class WindowsUsbLocationProvider : IUsbLocationProvider
 
     private static string? QueryLocationByCaption(string portName)
     {
-        // Match COM-port entities by Caption suffix, e.g. "USB Serial Device (COM9)",
-        // same query shape as WindowsUsbPortDescriptorProvider.
-        using var searcher = new System.Management.ManagementObjectSearcher(
-            $"SELECT DeviceID FROM Win32_PnPEntity WHERE PNPClass = 'Ports' AND Caption LIKE '%({portName})%'");
-        var deviceId = FindDeviceId(searcher)?.ToUpperInvariant();
+        // Resolved from the shared port map, the same one WindowsUsbPortDescriptorProvider reads,
+        // rather than by re-running the per-port entity query it already ran this pass.
+        // refreshOnMiss because a miss is a real answer here: unlike the descriptor provider — for
+        // which "unknown" simply means "probe it" — an unresolved port yields no location key at
+        // all, and this runs for a port that has just been probed as a DAQiFi device, i.e. exactly
+        // the freshly-appeared port a map built moments earlier could be missing.
+        var deviceId = WindowsPnpPortMap.Shared
+            .GetDeviceIds(portName, refreshOnMiss: true)
+            .FirstOrDefault()?
+            .ToUpperInvariant();
         return deviceId != null ? QueryLocationByDeviceId(deviceId) : null;
     }
 
@@ -100,20 +105,6 @@ internal sealed class WindowsUsbLocationProvider : IUsbLocationProvider
         }
 
         return (null, null);
-    }
-
-    private static string? FindDeviceId(System.Management.ManagementObjectSearcher searcher)
-    {
-        using var results = searcher.Get();
-        foreach (var entity in results)
-        {
-            using (entity)
-            {
-                return entity["DeviceID"] as string;
-            }
-        }
-
-        return null;
     }
 
     private static (string? Location, string? ParentId) GetDeviceProperties(System.Management.ManagementObject entity)
