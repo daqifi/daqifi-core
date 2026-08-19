@@ -1455,6 +1455,69 @@ namespace Daqifi.Core.Device.SdCard
 
 
         /// <summary>
+        /// Harmony <c>SYS_FS_ERROR</c> codes meaning "that path is not on the card":
+        /// <c>SYS_FS_ERROR_NO_FILE = 4</c> and <c>SYS_FS_ERROR_NO_PATH = 5</c>. The
+        /// enum runs sequentially from <c>SYS_FS_ERROR_OK = 0</c> — see the
+        /// firmware's <c>config/default/system/fs/sys_fs.h</c>.
+        /// </summary>
+        private static readonly int[] DirectoryNotFoundFsErrors = { 4, 5 };
+
+        /// <summary>
+        /// Reads the <c>N</c> out of a <c>"[Error:N]Failed to open directory [path]"</c>
+        /// line and reports whether it is a not-found code. An unparsable or
+        /// unrecognised code answers false, so anything unfamiliar keeps the broader
+        /// <see cref="SdCardFilesystemException"/> rather than being narrowed on a guess.
+        /// </summary>
+        private static bool IsDirectoryNotFound(string deviceMessage)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                deviceMessage, @"^\[Error:(\d+)\]");
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            return int.TryParse(match.Groups[1].Value, out var code)
+                && System.Array.IndexOf(DirectoryNotFoundFsErrors, code) >= 0;
+        }
+
+        /// <summary>
+        /// Pulls the path out of the trailing <c>[path]</c> of a firmware directory
+        /// error line, or null when there is none.
+        /// </summary>
+        /// <remarks>
+        /// Searches only AFTER the leading <c>[Error:N]</c>. Taking the last bracket
+        /// pair in the whole line looks equivalent and is not: on the older phrasing
+        /// <c>"[Error:5]Failed to open directory /Daqifi"</c>, which has no bracketed
+        /// path at all, the last pair IS the error prefix and the path comes back as
+        /// <c>"Error:5"</c>. Caught by the test that pins that phrasing.
+        /// </remarks>
+        private static string? ExtractBracketedPath(string deviceMessage)
+        {
+            var prefixEnd = deviceMessage.IndexOf(']');
+            var searchFrom = prefixEnd >= 0 ? prefixEnd + 1 : 0;
+            if (searchFrom >= deviceMessage.Length)
+            {
+                return null;
+            }
+
+            var close = deviceMessage.LastIndexOf(']');
+            if (close < searchFrom)
+            {
+                return null;
+            }
+
+            var open = deviceMessage.LastIndexOf('[', close - 1);
+            if (open < searchFrom)
+            {
+                return null;
+            }
+
+            var path = deviceMessage.Substring(open + 1, close - open - 1).Trim();
+            return path.Length == 0 ? null : path;
+        }
+
+        /// <summary>
         /// Inspects the final response from a <c>SYSTem:STORage:SD:LISt?</c> exchange
         /// and throws a typed <see cref="SdCardOperationException"/> when the device
         /// reported a real failure (no SD card, filesystem error, generic SCPI error).
@@ -1482,7 +1545,22 @@ namespace Daqifi.Core.Device.SdCard
                 l.IndexOf("Failed to open directory", StringComparison.OrdinalIgnoreCase) >= 0);
             if (filesystemErrorLine != null)
             {
-                throw new SdCardFilesystemException(lines, lastScpiError, filesystemErrorLine.Trim());
+                var trimmed = filesystemErrorLine.Trim();
+
+                // "The directory is not there" is a normal state, not a fault, and
+                // it is worth telling apart: a freshly formatted card has no log
+                // directory until the first capture writes one, so a caller that
+                // renders every filesystem error identically shows a scary message
+                // for "you have not logged anything yet". Firmware #798 is what
+                // makes this observable at all -- before it, listing a directory
+                // that did not exist created it and reported it empty.
+                if (IsDirectoryNotFound(trimmed))
+                {
+                    throw new SdCardDirectoryNotFoundException(
+                        lines, lastScpiError, trimmed, ExtractBracketedPath(trimmed));
+                }
+
+                throw new SdCardFilesystemException(lines, lastScpiError, trimmed);
             }
 
             // If any line looks like a real result (non-empty, not an error or
