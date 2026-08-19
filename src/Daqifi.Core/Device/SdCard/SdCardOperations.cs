@@ -846,6 +846,16 @@ namespace Daqifi.Core.Device.SdCard
                 throw new SdCardListIncompleteException(lines);
             }
 
+            // And the error guard the read path has always applied to its own
+            // listing. Without it a delete that FAILED on the device twice --
+            // the retry above exhausts without throwing -- came back here with
+            // an "**ERROR: -200" line, a valid transport terminator and no
+            // device marker, so nothing fired: ParseFileList skips the error
+            // line, the cache became an EMPTY list, and the method returned
+            // success. The caller was told the delete worked and the card is
+            // empty, in the one case where the device had said neither.
+            ThrowIfSdCardListError(refreshListing);
+
             // Same guard as the read path: a listing the device itself called
             // INCOMPLETE or FAILED must not become the cached answer to "what
             // is on the card?". This refresh follows a DELETE, so the cache it

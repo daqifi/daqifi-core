@@ -756,6 +756,29 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DeleteSdCardFileAsync_WithPersistentDeviceError_ThrowsAndKeepsTheCache()
+        {
+            // A delete the device refuses on every attempt: the retry above
+            // exhausts without throwing, and the reply that reaches the cache
+            // logic carries an error line, a valid transport terminator and no
+            // device marker. Nothing in the status guards fires, ParseFileList
+            // skips the error line, and the cache would become an EMPTY list --
+            // telling the caller the delete worked and the card is empty, in
+            // the one case where the device said neither.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+            };
+            device.Connect();
+
+            await Assert.ThrowsAnyAsync<Exception>(
+                () => device.DeleteSdCardFileAsync("locked.bin"));
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_WithCompleteListing_UpdatesTheCache()
         {
             // The same path with an OK marker still refreshes, and the marker
