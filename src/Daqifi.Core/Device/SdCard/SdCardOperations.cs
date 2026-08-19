@@ -278,6 +278,18 @@ namespace Daqifi.Core.Device.SdCard
 
             ThrowIfSdCardListError(listing);
 
+            // The device's own end-of-listing marker (firmware #794), when it sends
+            // one. FAILED means the walk could not open the directory at all, so an
+            // empty result would report "there is nothing there" for what was really
+            // "I could not look" -- the exact confusion the terminator above exists
+            // to prevent, one level deeper. Unterminated is the pre-#794 firmware and
+            // is not an error: the reply framing already told us the exchange
+            // completed, we simply learn nothing more from the device.
+            if (SdCardFileListParser.GetListingStatus(listing) == SdCardListingStatus.Failed)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
             var files = SdCardFileListParser.ParseFileList(listing);
             _sdCardFiles = files;
             return files;
