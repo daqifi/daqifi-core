@@ -799,6 +799,17 @@ namespace Daqifi.Core.Device.SdCard
                 }
             }
 
+            // The error from an exchange that actually SENT the delete, taken
+            // before the relist retry below can reassign `lines`. Without this
+            // capture the check further down reads whichever reply came last,
+            // and a transient error from a LIST-only retry -- a bus still
+            // settling, the -200 this file documents elsewhere -- was reported
+            // as "the delete operation failed" for a delete that had already
+            // succeeded and was never re-sent.
+            var deleteExchangeError = ScpiResponseClassifier.ContainsScpiError(lines)
+                ? lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim()
+                : null;
+
             // Prove the EXCHANGE finished before judging what it contained. A
             // reply cut short by the completion window loses the device's
             // marker too, so it would otherwise read as Unterminated -- which
@@ -852,15 +863,12 @@ namespace Daqifi.Core.Device.SdCard
             // here, where the error line IS the answer to "did the delete
             // happen?". Reproduced: a card holding fileA and fileB, a DELETE
             // refused twice, returned success with fileA still in the cache.
-            if (ScpiResponseClassifier.ContainsScpiError(lines))
+            if (deleteExchangeError != null)
             {
-                var deleteError = lines
-                    .LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
                 throw new SdCardOperationException(
-                    "The SD card delete operation failed: "
-                        + (deleteError ?? "the device reported an error"),
+                    "The SD card delete operation failed: " + deleteExchangeError,
                     lines,
-                    deleteError);
+                    deleteExchangeError);
             }
 
             if (!refreshComplete)

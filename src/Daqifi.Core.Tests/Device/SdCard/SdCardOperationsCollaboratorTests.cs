@@ -688,6 +688,26 @@ public class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task DeleteSdCardFileAsync_RelistRetryError_IsNotBlamedOnTheDelete()
+    {
+        // The delete SUCCEEDED -- its exchange came back with no error at all,
+        // just an unterminated listing. The relist-only retry then hits a
+        // transient bus error of its own. That error belongs to a LIST that
+        // never carried a DELETE, so it must not be reported as "the delete
+        // operation failed"; the honest answer is that the listing could not
+        // be confirmed.
+        var host = new FakeHost();
+        host.EnqueueResponse("Daqifi/keep.bin 10");                         // no terminator
+        host.EnqueueResponse("**ERROR: -200,\"Execution error\"", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        var ex = await Assert.ThrowsAsync<SdCardListIncompleteException>(
+            () => ops.DeleteSdCardFileAsync("gone.bin"));
+
+        Assert.DoesNotContain("delete operation failed", ex.Message);
+    }
+
+    [Fact]
     public async Task DeleteSdCardFileAsync_ScpiError_RetriesExactlyOnce()
     {
         var host = new FakeHost();
