@@ -745,6 +745,15 @@ namespace Daqifi.Core.Device.SdCard
                     _host.Send(ScpiMessageProducer.GetSdFileList);
                 },
                 responseTimeoutMs: 3000,
+                // Same completion window the read path uses for the same
+                // command. Without it this exchange takes the 250 ms default,
+                // and the firmware walks the directory tree between chunks --
+                // so a merely-slow listing is cut off BEFORE its terminator
+                // arrives, reads as Unterminated (which by design does not
+                // throw) and slips past the guard below to overwrite the cache
+                // with a partial list. The guard can only judge a marker it
+                // was given time to receive.
+                completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
                 finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
@@ -764,6 +773,11 @@ namespace Daqifi.Core.Device.SdCard
                             _host.Send(ScpiMessageProducer.GetSdFileList);
                         },
                         responseTimeoutMs: 3000,
+                        // The retry needs the window as much as the first
+                        // attempt: it is the same listing, and a retry that
+                        // truncates hands the same partial list to the same
+                        // cache.
+                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
                         finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
