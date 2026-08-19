@@ -832,6 +832,29 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DeleteSdCardFileAsync_ErrorButFileGone_TreatsTheDeleteAsDone()
+        {
+            // The error line carries no origin: DELETE, LIST and SYST:ERRor?
+            // travel together, and the LIST has failure modes of its own. Here
+            // the file the caller asked to delete is ABSENT from a listing that
+            // rendered completely -- so it was deleted, whatever the error was
+            // about. Reporting failure would send the caller to delete a file
+            // that is already gone.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ OK",
+            };
+            device.Connect();
+
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            Assert.Equal("remaining.bin", Assert.Single(device.SdCardFiles).FileName);
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_WithCompleteListing_UpdatesTheCache()
         {
             // The same path with an OK marker still refreshes, and the marker

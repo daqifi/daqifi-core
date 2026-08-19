@@ -865,10 +865,33 @@ namespace Daqifi.Core.Device.SdCard
             // refused twice, returned success with fileA still in the cache.
             if (deleteExchangeError != null)
             {
-                throw new SdCardOperationException(
-                    "The SD card delete operation failed: " + deleteExchangeError,
-                    lines,
-                    deleteExchangeError);
+                // ...unless the card itself says the file is gone. An error
+                // line carries no origin: the exchange sends DELETE, LIST and
+                // SYSTem:ERRor? together, and the LIST has failure modes of
+                // its own (busy, the 10 s large-directory timeout) that have
+                // nothing to do with the delete. The retry then re-sends the
+                // DELETE for a file the first attempt already removed, the
+                // device answers "delete operation failed" because it is not
+                // there, and that second, genuine error would be reported as
+                // the delete failing.
+                //
+                // The listing in the same exchange settles it. If it rendered
+                // completely and the file is absent, the delete happened --
+                // whatever the error line was about. Verifying the outcome
+                // beats attributing the error, which the wire format does not
+                // let us do.
+                var target = System.IO.Path.GetFileName(fileName);
+                var goneFromCard = refreshComplete
+                    && !SdCardFileListParser.ParseFileList(refreshListing).Any(
+                        f => string.Equals(f.FileName, target,
+                                           StringComparison.OrdinalIgnoreCase));
+                if (!goneFromCard)
+                {
+                    throw new SdCardOperationException(
+                        "The SD card delete operation failed: " + deleteExchangeError,
+                        lines,
+                        deleteExchangeError);
+                }
             }
 
             if (!refreshComplete)
