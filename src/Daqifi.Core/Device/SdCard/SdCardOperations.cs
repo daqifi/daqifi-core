@@ -846,6 +846,28 @@ namespace Daqifi.Core.Device.SdCard
                 throw new SdCardListIncompleteException(lines);
             }
 
+            // The DELETE's own outcome, judged before anything about the
+            // listing. The retry loop above exits either way, so a delete the
+            // device refused on BOTH attempts arrives here with its error line
+            // intact -- and ThrowIfSdCardListError alone will not catch it: its
+            // hasContentLine escape returns silently whenever the reply carries
+            // real entries, which is the normal case (you deleted one file, the
+            // others are still there). That escape is right for the read path,
+            // where a stray error has no bearing on the listing; it is wrong
+            // here, where the error line IS the answer to "did the delete
+            // happen?". Reproduced: a card holding fileA and fileB, a DELETE
+            // refused twice, returned success with fileA still in the cache.
+            if (ScpiResponseClassifier.ContainsScpiError(lines))
+            {
+                var deleteError = lines
+                    .LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
+                throw new SdCardOperationException(
+                    "The SD card delete operation failed: "
+                        + (deleteError ?? "the device reported an error"),
+                    lines,
+                    deleteError);
+            }
+
             // And the error guard the read path has always applied to its own
             // listing. Without it a delete that FAILED on the device twice --
             // the retry above exhausts without throwing -- came back here with

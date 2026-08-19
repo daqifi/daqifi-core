@@ -779,6 +779,31 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DeleteSdCardFileAsync_RefusedWithOtherFilesPresent_Throws()
+        {
+            // The realistic shape of a refused delete: the card still holds
+            // other files, so the reply carries an error line AND real entries.
+            // ThrowIfSdCardListError returns silently on that (its content
+            // escape is right for the read path), so the delete's own error is
+            // what has to be judged -- otherwise the caller is told the delete
+            // worked while the file is still listed.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/fileA.csv 100",
+                "Daqifi/fileB.csv 200",
+                "__END_OF_LIST__ OK",
+            };
+            device.Connect();
+
+            await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("fileA.csv"));
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_WithCompleteListing_UpdatesTheCache()
         {
             // The same path with an OK marker still refreshes, and the marker
