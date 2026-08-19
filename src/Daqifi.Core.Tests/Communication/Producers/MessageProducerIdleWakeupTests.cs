@@ -19,6 +19,17 @@ public class MessageProducerIdleWakeupTests
     /// </summary>
     private const int IdleObservationMs = 400;
 
+    /// <summary>
+    /// Gap between checks of <see cref="MessageProducer{T}.IsIdle"/> in <see cref="WaitUntilIdle"/>.
+    /// </summary>
+    private const int IdlePollIntervalMs = 5;
+
+    /// <summary>
+    /// How long <see cref="WaitUntilIdle"/> waits before calling the producer hung. The drain lands
+    /// on the first or second poll in practice; this is only ever spent by a test that is failing.
+    /// </summary>
+    private const int IdleDrainTimeoutMs = 5000;
+
     [Fact]
     public void AnIdleProducer_NeverWakes()
     {
@@ -230,15 +241,27 @@ public class MessageProducerIdleWakeupTests
             $"StopSafely() took {sw.ElapsedMilliseconds} ms from a parked loop.");
     }
 
+    /// <summary>
+    /// One read of <see cref="MessageProducer{T}.IsIdle"/> decides the outcome. Polling on one read
+    /// and then asserting on a second is what made this flake: the producer is free to start
+    /// draining again between the two — a wake with an empty queue still claims
+    /// <c>_draining</c> — so a helper that re-reads can watch the producer reach idle and then fail
+    /// anyway. The wait itself is unchanged: the producer must still reach idle inside the deadline.
+    /// </summary>
     private static void WaitUntilIdle(MessageProducer<string> producer)
     {
         var deadline = Stopwatch.StartNew();
-        while (!producer.IsIdle && deadline.ElapsedMilliseconds < 5000)
+        while (deadline.ElapsedMilliseconds < IdleDrainTimeoutMs)
         {
-            Thread.Sleep(5);
+            if (producer.IsIdle)
+            {
+                return;
+            }
+
+            Thread.Sleep(IdlePollIntervalMs);
         }
 
-        Assert.True(producer.IsIdle, "The producer never drained its queue.");
+        Assert.Fail($"The producer never drained its queue within {IdleDrainTimeoutMs} ms.");
     }
 
     /// <summary>

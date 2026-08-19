@@ -28,7 +28,8 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// Claimed <b>before</b> the dequeue that starts a batch, not after: a message leaves the queue
     /// before it is written, so setting this afterwards would leave an instant where the queue is
     /// empty and nothing yet reports a write in progress — exactly the gap
-    /// <see cref="IsIdle"/> exists to close.
+    /// <see cref="IsIdle"/> exists to close. Claiming it early is only half of that guarantee; the
+    /// other half is the order <see cref="IsIdle"/> reads the two fields in.
     /// </remarks>
     private volatile bool _draining;
     private bool _disposed;
@@ -71,7 +72,19 @@ public class MessageProducer<T> : IMessageProducer<T>
     public int QueuedMessageCount => _messageQueue.Count;
 
     /// <inheritdoc />
-    public bool IsIdle => !_draining && _messageQueue.IsEmpty;
+    /// <remarks>
+    /// The queue is read <b>before</b> the draining flag, and the order is load-bearing.
+    /// These are two separate reads, so a caller can straddle the background thread's handover
+    /// from "queued" to "being written"; only this order makes the straddle report busy rather
+    /// than idle. Read the other way round, a caller could see <c>_draining</c> still false (the
+    /// loop has woken but not yet claimed the batch), then — after the loop claims it and
+    /// dequeues — see an empty queue, and conclude the producer was idle while a write was
+    /// actually in flight. That is the same false "all quiet" that
+    /// <see cref="QueuedMessageCount"/> gives on its own, which is the gap this property exists
+    /// to close. In this order the straddle is harmless: whichever side of the handover the reads
+    /// land on, one of them still reports work outstanding.
+    /// </remarks>
+    public bool IsIdle => _messageQueue.IsEmpty && !_draining;
 
     /// <summary>
     /// Gets a value indicating whether the producer is currently running.

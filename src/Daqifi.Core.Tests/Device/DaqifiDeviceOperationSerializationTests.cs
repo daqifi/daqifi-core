@@ -941,6 +941,71 @@ public class DaqifiDeviceOperationSerializationTests
         stream.ReleaseWrites();
     }
 
+    /// <summary>
+    /// The same guarantee, sampled at the moment it is hardest to keep. <c>IsIdle</c> is two field
+    /// reads, so a caller can straddle the background loop's handover from "queued" to "being
+    /// written". Read in the wrong order, those reads land on the queue's after-value and
+    /// <c>_draining</c>'s before-value and report idle with a write still in flight — the same
+    /// false "all quiet" as <c>QueuedMessageCount == 0</c>, and one
+    /// <c>DrainOutboundQueueAsync</c> would act on by swapping consumers mid-write. The test above
+    /// holds the producer still and cannot see this; only sampling the handover can, so this
+    /// hammers it.
+    /// </summary>
+    [Fact]
+    public void Producer_AtTheHandoverFromQueuedToWriting_NeverReportsAPhantomIdle()
+    {
+        // ONE producer, sent to many times, rather than a fresh one per attempt. Every
+        // MessageProducer.Start() creates a Thread, so an attempt-per-producer loop of any
+        // useful density spawns thousands of them for no extra coverage: the background loop
+        // returns to waiting on _messageAvailable after each drain, so the next Send re-enters
+        // the same queued -> writing handover this is here to sample.
+        using var stream = new MemoryStream();
+        using var producer = new MessageProducer<string>(stream);
+        producer.Start();
+
+        // Bounded by TIME, not by a fixed count. A count is the wrong knob for a race sampler:
+        // it makes a slow CI runner pay for the fast one's density. This keeps the cost fixed
+        // and lets a fast machine take more samples inside it.
+        var samplingBudget = TimeSpan.FromSeconds(2);
+        var clock = Stopwatch.StartNew();
+        var attempts = 0;
+        var phantomIdles = 0;
+
+        while (clock.Elapsed < samplingBudget)
+        {
+            attempts++;
+            producer.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+
+            // Spun rather than slept: the window is a handful of instructions wide, and a poll
+            // that sleeps between reads steps straight over it. Bounded all the same -- an empty
+            // spin with no deadline turns a regression that stops the producer idling into a
+            // hung CI job burning a core, instead of a failure with a name.
+            var spin = Stopwatch.StartNew();
+            while (!producer.IsIdle)
+            {
+                Assert.True(spin.Elapsed < DeadlockBudget,
+                    $"The producer never reported idle within {DeadlockBudget.TotalSeconds:0}s on "
+                    + $"attempt {attempts}. Something is keeping it draining, which is a different "
+                    + "bug from the phantom idle this test samples for.");
+            }
+
+            // Nothing has been sent since, and the one wake that drained it is spent, so a
+            // producer that reports idle here must still be idle a moment later.
+            if (!producer.IsIdle)
+            {
+                phantomIdles++;
+            }
+        }
+
+        Assert.Equal(0, phantomIdles);
+
+        // A race sampler that took almost no samples is not evidence of anything, and would pass
+        // silently if the loop above ever became a no-op.
+        Assert.True(attempts > 100,
+            $"Only {attempts} handover samples fit in {samplingBudget.TotalSeconds:0}s; that is "
+            + "too few for the absence of a phantom idle to mean much.");
+    }
+
     [Fact]
     public async Task TextExchange_DoesNotTakeTheStreamWhileAWriteIsStillInFlight()
     {
