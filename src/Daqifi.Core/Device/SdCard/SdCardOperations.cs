@@ -880,8 +880,20 @@ namespace Daqifi.Core.Device.SdCard
                 // whatever the error line was about. Verifying the outcome
                 // beats attributing the error, which the wire format does not
                 // let us do.
+                // Absence only proves anything if the listing is WHOLE.
+                // refreshComplete says the transport delivered a terminated
+                // reply; it says nothing about whether the device's walk
+                // reached the end of the tree. A listing the device called
+                // INCOMPLETE, or an Unterminated one, can be missing the
+                // target because it stopped early -- reading that as "deleted"
+                // is the same wrong answer pointed the other way. Only the
+                // device's own Complete marker rules it out, so against
+                // firmware that sends no marker the error stands, exactly as
+                // it did before this check existed.
                 var target = System.IO.Path.GetFileName(fileName);
                 var goneFromCard = refreshComplete
+                    && SdCardFileListParser.GetListingStatus(refreshListing)
+                        == SdCardListingStatus.Complete
                     && !SdCardFileListParser.ParseFileList(refreshListing).Any(
                         f => string.Equals(f.FileName, target,
                                            StringComparison.OrdinalIgnoreCase));

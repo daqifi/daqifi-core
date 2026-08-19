@@ -855,6 +855,48 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DeleteSdCardFileAsync_ErrorAndFileAbsentFromUnterminatedListing_Throws()
+        {
+            // Absence is only evidence if the listing is whole. Here the reply
+            // is transport-terminated -- so the exchange finished -- but the
+            // device sent no end-of-listing marker, which is exactly the case
+            // where a walk cut short and a walk that reached the end look
+            // identical. The target is missing, and that means nothing.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/remaining.bin 12",
+            };
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Contains("-200", ex.Message);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_ErrorAndFileAbsentFromIncompleteListing_Throws()
+        {
+            // The device said outright that it did not finish the walk, so the
+            // file it never reached cannot be reported as deleted.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ INCOMPLETE",
+            };
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Contains("-200", ex.Message);
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_WithCompleteListing_UpdatesTheCache()
         {
             // The same path with an OK marker still refreshes, and the marker
