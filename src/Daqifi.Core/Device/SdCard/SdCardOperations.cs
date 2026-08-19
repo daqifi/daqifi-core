@@ -278,6 +278,26 @@ namespace Daqifi.Core.Device.SdCard
 
             ThrowIfSdCardListError(listing);
 
+            // The device's own end-of-listing marker (firmware #794), when it sends
+            // one. FAILED means the walk could not open the directory at all, so an
+            // empty result would report "there is nothing there" for what was really
+            // "I could not look" -- the exact confusion the terminator above exists
+            // to prevent, one level deeper. Unterminated is the pre-#794 firmware and
+            // is not an error: the reply framing already told us the exchange
+            // completed, we simply learn nothing more from the device.
+            var listingStatus = SdCardFileListParser.GetListingStatus(listing);
+            if (listingStatus == SdCardListingStatus.Failed
+                || listingStatus == SdCardListingStatus.Incomplete)
+            {
+                // INCOMPLETE throws for the same reason a missing transport
+                // terminator does, a few lines above: the caller is about to
+                // cache this list and answer "is my file on the card?" from it.
+                // A device-truncated listing and a transport-truncated one are
+                // the same class of wrong answer, so they raise the same
+                // exception -- a client that handles one already handles this.
+                throw new SdCardListIncompleteException(lines);
+            }
+
             var files = SdCardFileListParser.ParseFileList(listing);
             _sdCardFiles = files;
             return files;
@@ -723,8 +743,26 @@ namespace Daqifi.Core.Device.SdCard
                 {
                     _host.Send(ScpiMessageProducer.DeleteSdFile(fileName));
                     _host.Send(ScpiMessageProducer.GetSdFileList);
+
+                    // Transport terminator, exactly as the read path sends it.
+                    // Without it a reply cut short by the completion window is
+                    // indistinguishable from a complete one that carried no
+                    // device marker -- and the second of those is legitimate
+                    // (pre-#796 firmware), so the status alone cannot tell them
+                    // apart. This is what makes "the exchange finished" a fact
+                    // rather than an assumption.
+                    _host.Send(ScpiMessageProducer.GetSystemError);
                 },
                 responseTimeoutMs: 3000,
+                // Same completion window the read path uses for the same
+                // command. Without it this exchange takes the 250 ms default,
+                // and the firmware walks the directory tree between chunks --
+                // so a merely-slow listing is cut off BEFORE its terminator
+                // arrives, reads as Unterminated (which by design does not
+                // throw) and slips past the guard below to overwrite the cache
+                // with a partial list. The guard can only judge a marker it
+                // was given time to receive.
+                completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
                 finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
@@ -742,8 +780,14 @@ namespace Daqifi.Core.Device.SdCard
                         {
                             _host.Send(ScpiMessageProducer.DeleteSdFile(fileName));
                             _host.Send(ScpiMessageProducer.GetSdFileList);
+                            _host.Send(ScpiMessageProducer.GetSystemError);
                         },
                         responseTimeoutMs: 3000,
+                        // The retry needs the window as much as the first
+                        // attempt: it is the same listing, and a retry that
+                        // truncates hands the same partial list to the same
+                        // cache.
+                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
                         finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
@@ -755,7 +799,144 @@ namespace Daqifi.Core.Device.SdCard
                 }
             }
 
-            _sdCardFiles = SdCardFileListParser.ParseFileList(lines);
+            // The error from an exchange that actually SENT the delete, taken
+            // before the relist retry below can reassign `lines`. Without this
+            // capture the check further down reads whichever reply came last,
+            // and a transient error from a LIST-only retry -- a bus still
+            // settling, the -200 this file documents elsewhere -- was reported
+            // as "the delete operation failed" for a delete that had already
+            // succeeded and was never re-sent.
+            var deleteExchangeError = ScpiResponseClassifier.ContainsScpiError(lines)
+                ? lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim()
+                : null;
+
+            // Prove the EXCHANGE finished before judging what it contained. A
+            // reply cut short by the completion window loses the device's
+            // marker too, so it would otherwise read as Unterminated -- which
+            // is legitimate on pre-#796 firmware and therefore cannot be
+            // treated as an error on its own. The transport terminator is what
+            // separates the two, and the read path has always required it.
+            var refreshComplete = TrySplitAtSdListTerminator(lines, out var refreshListing);
+
+            if (!refreshComplete && !ScpiResponseClassifier.ContainsScpiError(lines))
+            {
+                // An unterminated reply with no error is a one-off stall, and
+                // the read path gives that a second attempt for the same
+                // reason. Re-LIST only: the DELETE was accepted -- nothing
+                // reported otherwise -- so re-sending it would ask the device
+                // to remove a file that is already gone and turn a transient
+                // stall into a hard error. That is also why this is a separate
+                // loop from the error retry above, which re-sends both
+                // deliberately because there the delete itself may not have
+                // landed.
+                for (var retry = 0; retry < SD_LIST_MAX_RETRIES && !refreshComplete; retry++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+
+                    lines = await _host.ExecuteTextCommandAsync(
+                        () =>
+                        {
+                            _host.Send(ScpiMessageProducer.GetSdFileList);
+                            _host.Send(ScpiMessageProducer.GetSystemError);
+                        },
+                        responseTimeoutMs: 3000,
+                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                        cancellationToken: cancellationToken,
+                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
+
+                    refreshComplete = TrySplitAtSdListTerminator(lines, out refreshListing)
+                                      && !ScpiResponseClassifier.ContainsScpiError(refreshListing);
+                }
+            }
+
+            // The DELETE's own outcome, judged before anything about the
+            // listing. The retry loop above exits either way, so a delete the
+            // device refused on BOTH attempts arrives here with its error line
+            // intact -- and ThrowIfSdCardListError alone will not catch it: its
+            // hasContentLine escape returns silently whenever the reply carries
+            // real entries, which is the normal case (you deleted one file, the
+            // others are still there). That escape is right for the read path,
+            // where a stray error has no bearing on the listing; it is wrong
+            // here, where the error line IS the answer to "did the delete
+            // happen?". Reproduced: a card holding fileA and fileB, a DELETE
+            // refused twice, returned success with fileA still in the cache.
+            if (deleteExchangeError != null)
+            {
+                // ...unless the card itself says the file is gone. An error
+                // line carries no origin: the exchange sends DELETE, LIST and
+                // SYSTem:ERRor? together, and the LIST has failure modes of
+                // its own (busy, the 10 s large-directory timeout) that have
+                // nothing to do with the delete. The retry then re-sends the
+                // DELETE for a file the first attempt already removed, the
+                // device answers "delete operation failed" because it is not
+                // there, and that second, genuine error would be reported as
+                // the delete failing.
+                //
+                // The listing in the same exchange settles it. If it rendered
+                // completely and the file is absent, the delete happened --
+                // whatever the error line was about. Verifying the outcome
+                // beats attributing the error, which the wire format does not
+                // let us do.
+                // Absence only proves anything if the listing is WHOLE.
+                // refreshComplete says the transport delivered a terminated
+                // reply; it says nothing about whether the device's walk
+                // reached the end of the tree. A listing the device called
+                // INCOMPLETE, or an Unterminated one, can be missing the
+                // target because it stopped early -- reading that as "deleted"
+                // is the same wrong answer pointed the other way. Only the
+                // device's own Complete marker rules it out, so against
+                // firmware that sends no marker the error stands, exactly as
+                // it did before this check existed.
+                var target = System.IO.Path.GetFileName(fileName);
+                var goneFromCard = refreshComplete
+                    && SdCardFileListParser.GetListingStatus(refreshListing)
+                        == SdCardListingStatus.Complete
+                    && !SdCardFileListParser.ParseFileList(refreshListing).Any(
+                        f => string.Equals(f.FileName, target,
+                                           StringComparison.OrdinalIgnoreCase));
+                if (!goneFromCard)
+                {
+                    throw new SdCardOperationException(
+                        "The SD card delete operation failed: " + deleteExchangeError,
+                        lines,
+                        deleteExchangeError);
+                }
+            }
+
+            if (!refreshComplete)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
+
+            // And the error guard the read path has always applied to its own
+            // listing. Without it a delete that FAILED on the device twice --
+            // the retry above exhausts without throwing -- came back here with
+            // an "**ERROR: -200" line, a valid transport terminator and no
+            // device marker, so nothing fired: ParseFileList skips the error
+            // line, the cache became an EMPTY list, and the method returned
+            // success. The caller was told the delete worked and the card is
+            // empty, in the one case where the device had said neither.
+            ThrowIfSdCardListError(refreshListing);
+
+            // Same guard as the read path: a listing the device itself called
+            // INCOMPLETE or FAILED must not become the cached answer to "what
+            // is on the card?". This refresh follows a DELETE, so the cache it
+            // overwrites is exactly what a caller consults next to decide
+            // whether the file is gone -- and a partial list makes every
+            // absence look confirmed. The cache is left untouched rather than
+            // replaced with a list we know is short.
+            var refreshStatus = SdCardFileListParser.GetListingStatus(refreshListing);
+            if (refreshStatus == SdCardListingStatus.Failed
+                || refreshStatus == SdCardListingStatus.Incomplete)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
+            _sdCardFiles = SdCardFileListParser.ParseFileList(refreshListing);
         }
 
         /// <summary>
@@ -1307,8 +1488,17 @@ namespace Daqifi.Core.Device.SdCard
             // If any line looks like a real result (non-empty, not an error or
             // firmware status line), hand off to the parser. Stray interleaved
             // error lines are still parsed away by SdCardFileListParser.
+            //
+            // The end-of-listing marker is framing, not a result. Counting it as
+            // content would let a stale marker -- one left in the buffer by an
+            // earlier timed-out exchange, which is exactly what
+            // TrySplitAtSdListTerminator warns about -- vouch for a reply whose
+            // only other line is this request's SCPI error, and the caller would
+            // be handed a confidently empty card.
             var hasContentLine = lines.Any(line =>
-                !string.IsNullOrWhiteSpace(line) && !ScpiResponseClassifier.IsErrorResponseLine(line));
+                !string.IsNullOrWhiteSpace(line)
+                && !ScpiResponseClassifier.IsErrorResponseLine(line)
+                && !SdCardFileListParser.IsListEndMarker(line, out _));
             if (hasContentLine)
             {
                 return;

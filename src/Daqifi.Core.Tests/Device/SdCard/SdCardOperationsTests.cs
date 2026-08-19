@@ -690,6 +690,232 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DeleteSdCardFileAsync_WithIncompleteListing_ThrowsAndKeepsTheCache()
+        {
+            // The refresh after a DELETE is what a caller consults next to
+            // decide whether the file is gone, so a listing the device itself
+            // called INCOMPLETE must not become that answer -- every absence in
+            // a short list would look confirmed.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ INCOMPLETE",
+            };
+            device.Connect();
+
+            await Assert.ThrowsAsync<SdCardListIncompleteException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithNoTransportTerminator_ThrowsAndKeepsTheCache()
+        {
+            // A reply cut short by the completion window loses the device marker
+            // too, so it reads as Unterminated -- which is legitimate on
+            // pre-#796 firmware and cannot be treated as an error on its own.
+            // The transport terminator is what separates "the firmware sent no
+            // marker" from "we stopped listening": without it the exchange is
+            // not known to have finished, so nothing it contains can be cached.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/remaining.bin 12" };
+            // The fake appends the terminator whenever the exchange asked for it,
+            // which is what a healthy device does. This knob withholds it, which
+            // is what a reply cut short by the completion window looks like.
+            // int.MaxValue, not 1: one stall is RETRIED now, so withholding the
+            // terminator once would prove the retry works, not the throw.
+            device.UnterminatedAttempts = int.MaxValue;
+            device.Connect();
+
+            await Assert.ThrowsAsync<SdCardListIncompleteException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithOneUnterminatedListing_RetriesAndCaches()
+        {
+            // One stalled relist is a transient, and the read path has always
+            // retried it. The retry re-LISTs only -- re-sending the DELETE
+            // would ask the device to remove a file that is already gone.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/remaining.bin 12" };
+            device.UnterminatedAttempts = 1;
+            device.Connect();
+
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            Assert.Equal("remaining.bin", Assert.Single(device.SdCardFiles).FileName);
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(
+                1,
+                sent.Count(c => c.StartsWith("SYSTem:STORage:SD:DELete", StringComparison.Ordinal)));
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithPersistentDeviceError_ThrowsAndKeepsTheCache()
+        {
+            // A delete the device refuses on every attempt: the retry above
+            // exhausts without throwing, and the reply that reaches the cache
+            // logic carries an error line, a valid transport terminator and no
+            // device marker. Nothing in the status guards fires, ParseFileList
+            // skips the error line, and the cache would become an EMPTY list --
+            // telling the caller the delete worked and the card is empty, in
+            // the one case where the device said neither.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+            };
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("locked.bin"));
+            // The device's own words, not a generic "listing incomplete".
+            Assert.Contains("-200", ex.Message);
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_RefusedWithOtherFilesPresent_Throws()
+        {
+            // The realistic shape of a refused delete: the card still holds
+            // other files, so the reply carries an error line AND real entries.
+            // ThrowIfSdCardListError returns silently on that (its content
+            // escape is right for the read path), so the delete's own error is
+            // what has to be judged -- otherwise the caller is told the delete
+            // worked while the file is still listed.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/fileA.csv 100",
+                "Daqifi/fileB.csv 200",
+                "__END_OF_LIST__ OK",
+            };
+            device.Connect();
+
+            await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("fileA.csv"));
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_RefusedAndUnterminated_ReportsTheDeviceError()
+        {
+            // Both failures at once: the device refuses the delete AND the
+            // confirmation exchange never terminates. The completeness throw
+            // used to fire first, so the caller was told "the listing did not
+            // complete -- check the connection and retry" for a delete the
+            // device had explicitly refused, with LastScpiError null. The
+            // delete's own outcome is judged first now, so the reported error
+            // is the one the device actually gave.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+            };
+            device.UnterminatedAttempts = int.MaxValue;
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("locked.bin"));
+
+            Assert.IsNotType<SdCardListIncompleteException>(ex);
+            Assert.Contains("-200", ex.Message);
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_ErrorButFileGone_TreatsTheDeleteAsDone()
+        {
+            // The error line carries no origin: DELETE, LIST and SYST:ERRor?
+            // travel together, and the LIST has failure modes of its own. Here
+            // the file the caller asked to delete is ABSENT from a listing that
+            // rendered completely -- so it was deleted, whatever the error was
+            // about. Reporting failure would send the caller to delete a file
+            // that is already gone.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ OK",
+            };
+            device.Connect();
+
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            Assert.Equal("remaining.bin", Assert.Single(device.SdCardFiles).FileName);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_ErrorAndFileAbsentFromUnterminatedListing_Throws()
+        {
+            // Absence is only evidence if the listing is whole. Here the reply
+            // is transport-terminated -- so the exchange finished -- but the
+            // device sent no end-of-listing marker, which is exactly the case
+            // where a walk cut short and a walk that reached the end look
+            // identical. The target is missing, and that means nothing.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/remaining.bin 12",
+            };
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Contains("-200", ex.Message);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_ErrorAndFileAbsentFromIncompleteListing_Throws()
+        {
+            // The device said outright that it did not finish the walk, so the
+            // file it never reached cannot be reported as deleted.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "**ERROR: -200,\"Execution error\"",
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ INCOMPLETE",
+            };
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Contains("-200", ex.Message);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithCompleteListing_UpdatesTheCache()
+        {
+            // The same path with an OK marker still refreshes, and the marker
+            // itself is not mistaken for a file.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ OK",
+            };
+            device.Connect();
+
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            Assert.Single(device.SdCardFiles);
+            Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_RestoresLanInterface()
         {
             // Arrange
@@ -1013,6 +1239,51 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.Equal(2, files.Count);
             Assert.Equal("log_20240115_103000.bin", files[0].FileName);
             Assert.Equal("data.bin", files[1].FileName);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WhenStaleMarkerAccompaniesThisRequestsError_StillThrows()
+        {
+            // A stale end-of-listing marker, left in the buffer by an earlier timed-out
+            // exchange, arrives ahead of THIS request's own SCPI error. The marker is
+            // framing and must not vouch for the reply: if it counted as content, the
+            // error would be skipped, the status would read Unterminated rather than
+            // Failed, and the caller would be handed a confidently empty card for a
+            // listing the device never produced.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var staleMarkerThenError = new List<string>
+            {
+                "__END_OF_LIST__ OK",
+                "**ERROR: -200,\"Execution error\"",
+            };
+
+            // Both the first attempt and its retry see it, so the loop runs out of
+            // attempts holding the error rather than recovering on the second.
+            device.ResponseSequence.Enqueue(new List<string>(staleMarkerThenError));
+            device.ResponseSequence.Enqueue(new List<string>(staleMarkerThenError));
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.GetSdCardFilesAsync());
+
+            Assert.Contains("Execution error", ex.Message);
+            Assert.Equal("**ERROR: -200,\"Execution error\"", ex.LastScpiError);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WhenMarkerIsTheOnlyLine_ReportsAnEmptyCard()
+        {
+            // The other side of the same predicate: a genuinely empty directory ends
+            // with nothing but the marker. Treating the marker as framing must not
+            // turn that into an error -- there is no SCPI error to surface, so the
+            // empty listing is the right answer.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "__END_OF_LIST__ OK" };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            Assert.Empty(files);
         }
 
         [Fact]
