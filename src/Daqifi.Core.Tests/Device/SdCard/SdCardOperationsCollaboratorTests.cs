@@ -661,7 +661,10 @@ public class SdCardOperationsCollaboratorTests
     public async Task DeleteSdCardFileAsync_DeletesThenRelistsInTheSameExchange()
     {
         var host = new FakeHost();
-        host.EnqueueResponse("Daqifi/keep.bin 10");
+        // The delete refresh now carries the same transport terminator the read
+        // path uses, so the canned reply must too -- it is what proves the
+        // exchange finished rather than being cut short.
+        host.EnqueueResponse("Daqifi/keep.bin 10", NoErrorTerminator);
         var ops = new SdCardOperations(host);
 
         await ops.DeleteSdCardFileAsync("gone.bin");
@@ -675,6 +678,7 @@ public class SdCardOperationsCollaboratorTests
                 "send:" + EnableSd,
                 "send:SYSTem:STORage:SD:DELete \"gone.bin\"",
                 "send:" + ListFiles,
+                "send:" + SystemError,
                 "send:" + DisableSd,
                 "send:" + EnableLan,
                 "exchange:end",
@@ -687,8 +691,8 @@ public class SdCardOperationsCollaboratorTests
     public async Task DeleteSdCardFileAsync_ScpiError_RetriesExactlyOnce()
     {
         var host = new FakeHost();
-        host.EnqueueResponse("**ERROR: -200,\"Execution error\"");
-        host.EnqueueResponse("Daqifi/keep.bin 10");
+        host.EnqueueResponse("**ERROR: -200,\"Execution error\"", NoErrorTerminator);
+        host.EnqueueResponse("Daqifi/keep.bin 10", NoErrorTerminator);
         var ops = new SdCardOperations(host);
 
         await ops.DeleteSdCardFileAsync("gone.bin");

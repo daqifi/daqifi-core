@@ -743,6 +743,15 @@ namespace Daqifi.Core.Device.SdCard
                 {
                     _host.Send(ScpiMessageProducer.DeleteSdFile(fileName));
                     _host.Send(ScpiMessageProducer.GetSdFileList);
+
+                    // Transport terminator, exactly as the read path sends it.
+                    // Without it a reply cut short by the completion window is
+                    // indistinguishable from a complete one that carried no
+                    // device marker -- and the second of those is legitimate
+                    // (pre-#796 firmware), so the status alone cannot tell them
+                    // apart. This is what makes "the exchange finished" a fact
+                    // rather than an assumption.
+                    _host.Send(ScpiMessageProducer.GetSystemError);
                 },
                 responseTimeoutMs: 3000,
                 // Same completion window the read path uses for the same
@@ -771,6 +780,7 @@ namespace Daqifi.Core.Device.SdCard
                         {
                             _host.Send(ScpiMessageProducer.DeleteSdFile(fileName));
                             _host.Send(ScpiMessageProducer.GetSdFileList);
+                            _host.Send(ScpiMessageProducer.GetSystemError);
                         },
                         responseTimeoutMs: 3000,
                         // The retry needs the window as much as the first
@@ -789,6 +799,17 @@ namespace Daqifi.Core.Device.SdCard
                 }
             }
 
+            // Prove the EXCHANGE finished before judging what it contained. A
+            // reply cut short by the completion window loses the device's
+            // marker too, so it would otherwise read as Unterminated -- which
+            // is legitimate on pre-#796 firmware and therefore cannot be
+            // treated as an error on its own. The transport terminator is what
+            // separates the two, and the read path has always required it.
+            if (!TrySplitAtSdListTerminator(lines, out var refreshListing))
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
             // Same guard as the read path: a listing the device itself called
             // INCOMPLETE or FAILED must not become the cached answer to "what
             // is on the card?". This refresh follows a DELETE, so the cache it
@@ -796,14 +817,14 @@ namespace Daqifi.Core.Device.SdCard
             // whether the file is gone -- and a partial list makes every
             // absence look confirmed. The cache is left untouched rather than
             // replaced with a list we know is short.
-            var refreshStatus = SdCardFileListParser.GetListingStatus(lines);
+            var refreshStatus = SdCardFileListParser.GetListingStatus(refreshListing);
             if (refreshStatus == SdCardListingStatus.Failed
                 || refreshStatus == SdCardListingStatus.Incomplete)
             {
                 throw new SdCardListIncompleteException(lines);
             }
 
-            _sdCardFiles = SdCardFileListParser.ParseFileList(lines);
+            _sdCardFiles = SdCardFileListParser.ParseFileList(refreshListing);
         }
 
         /// <summary>

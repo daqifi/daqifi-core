@@ -711,6 +711,29 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DeleteSdCardFileAsync_WithNoTransportTerminator_ThrowsAndKeepsTheCache()
+        {
+            // A reply cut short by the completion window loses the device marker
+            // too, so it reads as Unterminated -- which is legitimate on
+            // pre-#796 firmware and cannot be treated as an error on its own.
+            // The transport terminator is what separates "the firmware sent no
+            // marker" from "we stopped listening": without it the exchange is
+            // not known to have finished, so nothing it contains can be cached.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/remaining.bin 12" };
+            // The fake appends the terminator whenever the exchange asked for it,
+            // which is what a healthy device does. This knob withholds it, which
+            // is what a reply cut short by the completion window looks like.
+            device.UnterminatedAttempts = 1;
+            device.Connect();
+
+            await Assert.ThrowsAsync<SdCardListIncompleteException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_WithCompleteListing_UpdatesTheCache()
         {
             // The same path with an OK marker still refreshes, and the marker
