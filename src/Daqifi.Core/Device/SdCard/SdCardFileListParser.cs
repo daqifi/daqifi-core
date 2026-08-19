@@ -191,6 +191,18 @@ namespace Daqifi.Core.Device.SdCard
             {
                 if (!IsListEndMarker(line ?? string.Empty, out var word))
                 {
+                    // Content AFTER a marker means that marker did not end
+                    // this listing -- it was left in flight by an earlier,
+                    // timed-out exchange. Only a marker that is actually last
+                    // describes the walk we are holding, so anything following
+                    // one puts us back to knowing nothing. Unterminated is the
+                    // safe direction: it is not an error, it just declines to
+                    // claim the listing is whole.
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        status = SdCardListingStatus.Unterminated;
+                    }
+
                     continue;
                 }
 

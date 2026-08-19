@@ -66,6 +66,22 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public void GetListingStatus_WithContentAfterTheMarker_IsUnterminated()
+        {
+            // A marker with entries after it did not terminate THIS listing --
+            // it is left over from an earlier, timed-out exchange. Claiming
+            // Complete there would vouch for a reply we never saw the end of.
+            var status = SdCardFileListParser.GetListingStatus(new[]
+            {
+                "Daqifi/a.csv 1",
+                "__END_OF_LIST__ OK",
+                "Daqifi/b.csv 2",
+            });
+
+            Assert.Equal(SdCardListingStatus.Unterminated, status);
+        }
+
+        [Fact]
         public void GetListingStatus_WithNoMarker_IsUnterminated()
         {
             // Pre-#794 firmware, and the abort case, which deliberately sends none.
