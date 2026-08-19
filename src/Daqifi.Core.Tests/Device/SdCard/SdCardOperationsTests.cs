@@ -1047,6 +1047,77 @@ namespace Daqifi.Core.Tests.Device.SdCard
             Assert.NotEmpty(ex.RawDeviceResponse);
         }
 
+        [Theory]
+        [InlineData(4)]   // SYS_FS_ERROR_NO_FILE
+        [InlineData(5)]   // SYS_FS_ERROR_NO_PATH
+        public async Task GetSdCardFilesAsync_WhenTheDirectoryIsNotOnTheCard_ThrowsDirectoryNotFound(int fsError)
+        {
+            // Firmware #798: a listing no longer creates the directory it was asked to
+            // read, so "that directory is not there" became observable. It is a normal
+            // state -- a freshly formatted card has no log directory until the first
+            // capture writes one -- and a caller that renders it like a corrupt
+            // filesystem shows a scary message for "you have not logged anything yet".
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string>
+            {
+                $"[Error:{fsError}]Failed to open directory [DAQiFi]",
+                "__END_OF_LIST__ FAILED",
+            };
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardDirectoryNotFoundException>(
+                () => device.GetSdCardFilesAsync());
+
+            Assert.Equal("DAQiFi", ex.DirectoryPath);
+            // Still an SdCardFilesystemException, so every existing catch site and the
+            // desktop classifier keep working unchanged.
+            Assert.IsAssignableFrom<SdCardFilesystemException>(ex);
+        }
+
+        [Theory]
+        [InlineData(1)]   // SYS_FS_ERROR_DISK_ERR
+        [InlineData(3)]   // SYS_FS_ERROR_NOT_READY
+        [InlineData(13)]  // SYS_FS_ERROR_NO_FILESYSTEM territory -- anything unfamiliar
+        public async Task GetSdCardFilesAsync_WhenTheDirectoryFailsForAnotherReason_StaysAFilesystemError(int fsError)
+        {
+            // The other side of the same predicate. A disk error, an unready card or a
+            // code this client has never seen must NOT be narrowed to "not found" --
+            // that would tell a user with a dying card that they simply have no files.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string>
+            {
+                $"[Error:{fsError}]Failed to open directory [DAQiFi]",
+            };
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardFilesystemException>(
+                () => device.GetSdCardFilesAsync());
+
+            Assert.IsNotType<SdCardDirectoryNotFoundException>(ex);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WhenTheNotFoundLineHasNoBracketedPath_StillThrowsWithANullPath()
+        {
+            // The pre-#798 firmware phrasing has no bracketed path. The code still
+            // classifies, and DirectoryPath is honestly null rather than a fragment of
+            // the message.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var response = new List<string> { "[Error:5]Failed to open directory /Daqifi" };
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.ResponseSequence.Enqueue(new List<string>(response));
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardDirectoryNotFoundException>(
+                () => device.GetSdCardFilesAsync());
+
+            Assert.Null(ex.DirectoryPath);
+        }
+
         [Fact]
         public async Task GetSdCardFilesAsync_WithFilesystemError_ThrowsSdCardFilesystemException()
         {
