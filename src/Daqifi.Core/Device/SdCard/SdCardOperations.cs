@@ -775,6 +775,20 @@ namespace Daqifi.Core.Device.SdCard
                 }
             }
 
+            // Same guard as the read path: a listing the device itself called
+            // INCOMPLETE or FAILED must not become the cached answer to "what
+            // is on the card?". This refresh follows a DELETE, so the cache it
+            // overwrites is exactly what a caller consults next to decide
+            // whether the file is gone -- and a partial list makes every
+            // absence look confirmed. The cache is left untouched rather than
+            // replaced with a list we know is short.
+            var refreshStatus = SdCardFileListParser.GetListingStatus(lines);
+            if (refreshStatus == SdCardListingStatus.Failed
+                || refreshStatus == SdCardListingStatus.Incomplete)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
             _sdCardFiles = SdCardFileListParser.ParseFileList(lines);
         }
 

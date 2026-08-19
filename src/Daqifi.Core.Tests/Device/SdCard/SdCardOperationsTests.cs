@@ -690,6 +690,46 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task DeleteSdCardFileAsync_WithIncompleteListing_ThrowsAndKeepsTheCache()
+        {
+            // The refresh after a DELETE is what a caller consults next to
+            // decide whether the file is gone, so a listing the device itself
+            // called INCOMPLETE must not become that answer -- every absence in
+            // a short list would look confirmed.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ INCOMPLETE",
+            };
+            device.Connect();
+
+            await Assert.ThrowsAsync<SdCardListIncompleteException>(
+                () => device.DeleteSdCardFileAsync("data.bin"));
+
+            Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithCompleteListing_UpdatesTheCache()
+        {
+            // The same path with an OK marker still refreshes, and the marker
+            // itself is not mistaken for a file.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string>
+            {
+                "Daqifi/remaining.bin 12",
+                "__END_OF_LIST__ OK",
+            };
+            device.Connect();
+
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            Assert.Single(device.SdCardFiles);
+            Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
+        }
+
+        [Fact]
         public async Task DeleteSdCardFileAsync_RestoresLanInterface()
         {
             // Arrange
