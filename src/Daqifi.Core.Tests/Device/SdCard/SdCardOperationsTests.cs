@@ -724,13 +724,35 @@ namespace Daqifi.Core.Tests.Device.SdCard
             // The fake appends the terminator whenever the exchange asked for it,
             // which is what a healthy device does. This knob withholds it, which
             // is what a reply cut short by the completion window looks like.
-            device.UnterminatedAttempts = 1;
+            // int.MaxValue, not 1: one stall is RETRIED now, so withholding the
+            // terminator once would prove the retry works, not the throw.
+            device.UnterminatedAttempts = int.MaxValue;
             device.Connect();
 
             await Assert.ThrowsAsync<SdCardListIncompleteException>(
                 () => device.DeleteSdCardFileAsync("data.bin"));
 
             Assert.Empty(device.SdCardFiles);
+        }
+
+        [Fact]
+        public async Task DeleteSdCardFileAsync_WithOneUnterminatedListing_RetriesAndCaches()
+        {
+            // One stalled relist is a transient, and the read path has always
+            // retried it. The retry re-LISTs only -- re-sending the DELETE
+            // would ask the device to remove a file that is already gone.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "Daqifi/remaining.bin 12" };
+            device.UnterminatedAttempts = 1;
+            device.Connect();
+
+            await device.DeleteSdCardFileAsync("data.bin");
+
+            Assert.Equal("remaining.bin", Assert.Single(device.SdCardFiles).FileName);
+            var sent = device.SentMessages.Select(m => m.Data).ToList();
+            Assert.Equal(
+                1,
+                sent.Count(c => c.StartsWith("SYSTem:STORage:SD:DELete", StringComparison.Ordinal)));
         }
 
         [Fact]

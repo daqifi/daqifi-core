@@ -805,7 +805,43 @@ namespace Daqifi.Core.Device.SdCard
             // is legitimate on pre-#796 firmware and therefore cannot be
             // treated as an error on its own. The transport terminator is what
             // separates the two, and the read path has always required it.
-            if (!TrySplitAtSdListTerminator(lines, out var refreshListing))
+            var refreshComplete = TrySplitAtSdListTerminator(lines, out var refreshListing);
+
+            if (!refreshComplete && !ScpiResponseClassifier.ContainsScpiError(lines))
+            {
+                // An unterminated reply with no error is a one-off stall, and
+                // the read path gives that a second attempt for the same
+                // reason. Re-LIST only: the DELETE was accepted -- nothing
+                // reported otherwise -- so re-sending it would ask the device
+                // to remove a file that is already gone and turn a transient
+                // stall into a hard error. That is also why this is a separate
+                // loop from the error retry above, which re-sends both
+                // deliberately because there the delete itself may not have
+                // landed.
+                for (var retry = 0; retry < SD_LIST_MAX_RETRIES && !refreshComplete; retry++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+
+                    lines = await _host.ExecuteTextCommandAsync(
+                        () =>
+                        {
+                            _host.Send(ScpiMessageProducer.GetSdFileList);
+                            _host.Send(ScpiMessageProducer.GetSystemError);
+                        },
+                        responseTimeoutMs: 3000,
+                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                        cancellationToken: cancellationToken,
+                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
+
+                    refreshComplete = TrySplitAtSdListTerminator(lines, out refreshListing)
+                                      && !ScpiResponseClassifier.ContainsScpiError(refreshListing);
+                }
+            }
+
+            if (!refreshComplete)
             {
                 throw new SdCardListIncompleteException(lines);
             }
