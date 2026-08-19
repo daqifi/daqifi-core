@@ -1200,6 +1200,51 @@ namespace Daqifi.Core.Tests.Device.SdCard
         }
 
         [Fact]
+        public async Task GetSdCardFilesAsync_WhenStaleMarkerAccompaniesThisRequestsError_StillThrows()
+        {
+            // A stale end-of-listing marker, left in the buffer by an earlier timed-out
+            // exchange, arrives ahead of THIS request's own SCPI error. The marker is
+            // framing and must not vouch for the reply: if it counted as content, the
+            // error would be skipped, the status would read Unterminated rather than
+            // Failed, and the caller would be handed a confidently empty card for a
+            // listing the device never produced.
+            var device = new RetryableSdCardStreamingDevice("TestDevice");
+            var staleMarkerThenError = new List<string>
+            {
+                "__END_OF_LIST__ OK",
+                "**ERROR: -200,\"Execution error\"",
+            };
+
+            // Both the first attempt and its retry see it, so the loop runs out of
+            // attempts holding the error rather than recovering on the second.
+            device.ResponseSequence.Enqueue(new List<string>(staleMarkerThenError));
+            device.ResponseSequence.Enqueue(new List<string>(staleMarkerThenError));
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+                () => device.GetSdCardFilesAsync());
+
+            Assert.Contains("Execution error", ex.Message);
+            Assert.Equal("**ERROR: -200,\"Execution error\"", ex.LastScpiError);
+        }
+
+        [Fact]
+        public async Task GetSdCardFilesAsync_WhenMarkerIsTheOnlyLine_ReportsAnEmptyCard()
+        {
+            // The other side of the same predicate: a genuinely empty directory ends
+            // with nothing but the marker. Treating the marker as framing must not
+            // turn that into an error -- there is no SCPI error to surface, so the
+            // empty listing is the right answer.
+            var device = new TestableSdCardStreamingDevice("TestDevice");
+            device.CannedTextResponse = new List<string> { "__END_OF_LIST__ OK" };
+            device.Connect();
+
+            var files = await device.GetSdCardFilesAsync();
+
+            Assert.Empty(files);
+        }
+
+        [Fact]
         public async Task GetSdCardFilesAsync_WhenTerminatorMissingOnFirstAttemptOnly_RetriesAndSucceeds()
         {
             // A one-off stall is retried on the same terms as a transient SCPI error, so a single

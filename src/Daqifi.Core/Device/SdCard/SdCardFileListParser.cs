@@ -139,7 +139,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="line">The raw line, trimmed internally.</param>
         /// <param name="statusWord">The status word, or empty when there is none.</param>
         /// <returns>True when the line is the marker.</returns>
-        private static bool IsListEndMarker(string line, out string statusWord)
+        internal static bool IsListEndMarker(string line, out string statusWord)
         {
             statusWord = string.Empty;
 

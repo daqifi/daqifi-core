@@ -1476,8 +1476,17 @@ namespace Daqifi.Core.Device.SdCard
             // If any line looks like a real result (non-empty, not an error or
             // firmware status line), hand off to the parser. Stray interleaved
             // error lines are still parsed away by SdCardFileListParser.
+            //
+            // The end-of-listing marker is framing, not a result. Counting it as
+            // content would let a stale marker -- one left in the buffer by an
+            // earlier timed-out exchange, which is exactly what
+            // TrySplitAtSdListTerminator warns about -- vouch for a reply whose
+            // only other line is this request's SCPI error, and the caller would
+            // be handed a confidently empty card.
             var hasContentLine = lines.Any(line =>
-                !string.IsNullOrWhiteSpace(line) && !ScpiResponseClassifier.IsErrorResponseLine(line));
+                !string.IsNullOrWhiteSpace(line)
+                && !ScpiResponseClassifier.IsErrorResponseLine(line)
+                && !SdCardFileListParser.IsListEndMarker(line, out _));
             if (hasContentLine)
             {
                 return;
