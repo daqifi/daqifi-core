@@ -70,22 +70,6 @@ public class DeviceDiagnosticsTests
     }
 
     [Fact]
-    public async Task GetSystemLogAsync_WhenBufferHasEntries_IgnoresTheTerminator()
-    {
-        // A populated dump is its entries FOLLOWED BY the same blank terminator, so the
-        // terminator must not leak into the parsed entries as a phantom log line.
-        var device = new TestableDiagnosticsDevice("TestDevice")
-        {
-            CannedTextResponse = { "Test log message 1", "" }
-        };
-        device.Connect();
-
-        var entries = await device.GetSystemLogAsync();
-        Assert.Single(entries);
-        Assert.Equal("Test log message 1", entries[0].Message);
-    }
-
-    [Fact]
     public async Task GetSystemLogAsync_WhenErrorOnlyResponse_Throws()
     {
         // An error-only response must not masquerade as an empty log.

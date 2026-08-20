@@ -77,7 +77,13 @@ namespace Daqifi.Core.Device.Diagnostics
                     raw);
             }
 
-            // Everything downstream expects content lines, exactly as before.
+            // Belt and braces, not load-bearing: SystemLogParser.Parse and
+            // ScpiResponseClassifier.IsErrorOnlyResponse both skip blank lines already
+            // (the latter explicitly, via IsNullOrWhiteSpace), so keeping the terminator
+            // would change neither. Mutation-tested: removing this line breaks nothing.
+            // It stays so the contract of this seam -- everything downstream sees the
+            // same content lines it saw before keepBlankLines existed -- holds by
+            // construction rather than by depending on two other components' internals.
             var lines = raw.Where(line => line.Length > 0).ToList();
 
             var entries = SystemLogParser.Parse(lines);
