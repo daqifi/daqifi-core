@@ -260,6 +260,92 @@ namespace Daqifi.Core.Tests.Device.Discovery
             Name = name ?? serial,
         };
 
+        #region Busy-port forwarding (#532)
+
+        [Fact]
+        public void BusyPorts_AreForwardedFromTheConstituentThatReportsThem()
+        {
+            // ContinuousDeviceFinder asks the finder it DIRECTLY wraps for busy ports:
+            //   (_finder as IBusyPortReporter)?.BusyPortsFromLastPass
+            // and the documented way to build continuous all-transport discovery is to wrap this
+            // composite. So if the composite does not carry the signal, the cast yields null, the
+            // rescue never runs, and a device whose port the app itself holds is reported lost --
+            // #532, unfixed, on the one path most callers actually use.
+            //
+            // The `as` (rather than a direct cast) is deliberate: it is what the consumer does,
+            // and it compiles whether or not the composite implements the interface, so this test
+            // fails by ASSERTION on the unfixed code rather than by not building.
+            var reporting = new BusyReportingFinder("COM3", "usb:1-1.2");
+            IDeviceFinder composite = new AllTransportsDeviceFinder(
+                new IDeviceFinder[] { new ListDeviceFinder(Enumerable.Empty<IDeviceInfo>()), reporting });
+
+            var reporter = composite as IBusyPortReporter;
+
+            Assert.NotNull(reporter);
+            var ports = reporter!.TakeBusyPortsFromLastPass();
+            Assert.Equal(new[] { "COM3" }, ports.Select(p => p.PortName));
+            Assert.Equal("usb:1-1.2", ports.Single().LocationKey);
+        }
+
+        [Fact]
+        public void BusyPorts_AggregateAcrossConstituentsAndIgnoreNonReporters()
+        {
+            // A composite mixes transports; only some report busy ports at all. Those that do not
+            // must be skipped rather than suppressing the ones that do.
+            IDeviceFinder composite = new AllTransportsDeviceFinder(new IDeviceFinder[]
+            {
+                new BusyReportingFinder("COM3", null),
+                new ListDeviceFinder(Enumerable.Empty<IDeviceInfo>()),                 // reports nothing -- not a reporter
+                new BusyReportingFinder("COM7", "usb:2-1"),
+            });
+
+            var ports = ((IBusyPortReporter)composite).TakeBusyPortsFromLastPass();
+
+            Assert.Equal(new[] { "COM3", "COM7" }, ports.Select(p => p.PortName).OrderBy(n => n));
+        }
+
+        [Fact]
+        public void BusyPorts_AggregateThroughANestedComposite()
+        {
+            // Nesting needs no special handling precisely BECAUSE the composite implements the
+            // interface -- the same filter picks up an inner composite and recurses. Pinned so a
+            // later "simplification" to a concrete SerialDeviceFinder check would fail here.
+            IDeviceFinder inner = new AllTransportsDeviceFinder(
+                new IDeviceFinder[] { new BusyReportingFinder("COM9", null) });
+            IDeviceFinder outer = new AllTransportsDeviceFinder(
+                new IDeviceFinder[] { new ListDeviceFinder(Enumerable.Empty<IDeviceInfo>()), inner });
+
+            var ports = ((IBusyPortReporter)outer).TakeBusyPortsFromLastPass();
+
+            Assert.Equal(new[] { "COM9" }, ports.Select(p => p.PortName));
+        }
+
+        /// <summary>Finds nothing, but reports one port as present-and-already-open.</summary>
+        private sealed class BusyReportingFinder : IDeviceFinder, IBusyPortReporter
+        {
+            private readonly BusyPort _busy;
+
+            public BusyReportingFinder(string portName, string? locationKey)
+                => _busy = new BusyPort(portName, locationKey);
+
+#pragma warning disable CS0067 // Interface events, unused by this stub.
+            public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
+            public event EventHandler? DiscoveryCompleted;
+#pragma warning restore CS0067
+
+            public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+                => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
+
+            public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+                => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
+
+            // Re-armed by nothing: this stub always reports, which is what makes it a stub. The
+            // single-use semantics of the real ledger are pinned in BusyPortLedgerTests.
+            IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass() => new[] { _busy };
+        }
+
+        #endregion
+
         private sealed class ListDeviceFinder : IDeviceFinder, IDisposable
         {
             private readonly IReadOnlyList<IDeviceInfo> _devices;

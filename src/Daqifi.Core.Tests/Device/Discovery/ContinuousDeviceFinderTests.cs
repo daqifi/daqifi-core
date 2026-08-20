@@ -28,6 +28,19 @@ public class ContinuousDeviceFinderTests
             Name = name
         };
 
+    private static DeviceInfo SerialAt(string sn, string port, string? location)
+        => new()
+        {
+            ConnectionType = ConnectionType.Serial,
+            SerialNumber = sn,
+            PortName = port,
+            Name = "serial",
+            LocationKey = location
+        };
+
+    private static BusyPort[] Busy(string port, string? location = null)
+        => new[] { new BusyPort(port, location) };
+
     private static ContinuousDeviceFinder NewFinder(
         IDeviceFinder inner,
         int missThreshold = 2,
@@ -42,6 +55,335 @@ public class ContinuousDeviceFinderTests
             Interval = TimeSpan.FromMilliseconds(10),
             PassTimeout = TimeSpan.FromMilliseconds(50)
         });
+
+    #region Busy ports (issue #532)
+
+    [Fact]
+    public void Reconcile_DeviceOnABusyPort_IsNotLost()
+    {
+        // The reported bug: keep discovery running next to a device you are using, and the
+        // device you are using disappears. Its port is still there -- your own process just has
+        // it open, so the probe cannot ask it anything and answers exactly as it would for an
+        // empty port.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+
+        // Several passes where the probe cannot open COM3. Well past MissThreshold.
+        for (var i = 0; i < 5; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        }
+
+        Assert.Empty(lost);
+        Assert.Single(finder.Devices);
+    }
+
+    [Fact]
+    public void Reconcile_DeviceWhosePortIsGone_IsStillLost()
+    {
+        // The control, and the one that matters most: the fix must not make devices immortal.
+        // A real removal takes the port out of enumeration, so no busy report mentions it.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+
+        // Another port is busy; COM3 is simply absent.
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM9"));
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM9"));
+
+        Assert.Single(lost);
+        Assert.Equal("SN-1", lost[0].SerialNumber);
+        Assert.Empty(finder.Devices);
+    }
+
+    [Fact]
+    public void Reconcile_BusyPortMatching_IsCaseInsensitive()
+    {
+        // Windows COM names are case-insensitive, and the busy report is whatever string the
+        // platform handed back. A case difference must not resurrect the original bug.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("com3"));
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("com3"));
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_BusyPortRescue_DoesNotStopAGenuineLossLater()
+    {
+        // A device held open for a while and then genuinely unplugged must still be reported
+        // lost -- the rescue suppresses the miss, it does not latch the device as present.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        Assert.Empty(lost);
+
+        // Unplugged: the port stops enumerating, so it stops being reported busy.
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+
+        Assert.Single(lost);
+    }
+
+    [Fact]
+    public void Reconcile_WithNoBusyReport_BehavesExactlyAsBefore()
+    {
+        // A finder that cannot report busy ports (WiFi, or any third-party IDeviceFinder) passes
+        // null, and nothing about the existing miss accounting changes.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+
+        Assert.Single(lost);
+    }
+
+    [Fact]
+    public void Reconcile_PortNameReusedByADifferentDevice_StillReportsTheOriginalLost()
+    {
+        // An OS port name is a lease, not an identity. Unplug SN-1 and the next device along can
+        // be handed COM3; if something holds that new port open, matching on the name alone would
+        // keep SN-1 reported as present for as long as the name stayed occupied -- a device made
+        // immortal, which is exactly what the rescue must not cause.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        // COM3 is busy again -- but it is a DIFFERENT physical port now.
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-4.1"));
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-4.1"));
+
+        Assert.Single(lost);
+        Assert.Equal("SN-1", lost[0].SerialNumber);
+    }
+
+    [Fact]
+    public void Reconcile_SameLocationStillBusy_IsStillRescued()
+    {
+        // The complement, so the location check cannot become "never rescue": the same physical
+        // port, still held by the caller's own app, must keep the device in the live set.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-1.2"));
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-1.2"));
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_WhenALocationIsUnknown_FallsBackToThePortName()
+    {
+        // A platform that cannot place the port degrades to name matching rather than losing the
+        // rescue entirely -- never worse than before locations were carried.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: null) });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-4.1"));
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-4.1"));
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_AConfirmingReportIsNotHiddenByANameOnlyOneForTheSamePort()
+    {
+        // The composite finder aggregates across transports, so ONE port name can now be reported
+        // more than once in a pass. Returning on the first match let a report that happened to
+        // carry no location downgrade the device to the bounded name-only path, even though a
+        // second report confirmed the location outright. Order is deliberate: the weaker report
+        // comes first, which is the only order in which the bug shows.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        var reports = new[]
+        {
+            new BusyPort("COM3", null),          // weaker, and seen first
+            new BusyPort("COM3", "usb:1-1.2"),   // confirms the location
+        };
+
+        // Past MaxWeakBusyRescues: only a LocationConfirmed classification survives this long.
+        for (var i = 0; i < 40; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+        }
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_ARescueClearsTheConsecutiveMissCount()
+    {
+        // MissThreshold counts CONSECUTIVE misses, and the default of 2 exists to tolerate one
+        // dropped response. A rescue is explicitly not a miss, so a stale count surviving one
+        // silently voided that tolerance: miss, rescue, miss fired DeviceLost after a single real
+        // miss FOLLOWING a pass in which the device was affirmatively confirmed present.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        finder.Reconcile(Array.Empty<IDeviceInfo>());                          // miss 1
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-1.2")); // rescued
+        finder.Reconcile(Array.Empty<IDeviceInfo>());                          // miss 1 again
+
+        Assert.Empty(lost);
+
+        // And the tolerance is restored rather than merely deferred: it still takes a FULL
+        // threshold of consecutive misses from here.
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+        Assert.Single(lost);
+    }
+
+    [Fact]
+    public void Reconcile_AContradictedConfirmationRescuesNothing()
+    {
+        // A confirming report does not get to short-circuit the scan. One reporter places this
+        // port where the device is; another places it somewhere else. Because the confirmed path
+        // is UNBOUNDED, accepting it on contradictory evidence keeps an absent device alive
+        // forever, while declining costs a miss the threshold absorbs. Order matters: the
+        // confirming report comes first, which is the order an early return would have accepted.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        var reports = new[]
+        {
+            new BusyPort("COM3", "usb:1-1.2"),   // confirms, and is seen FIRST
+            new BusyPort("COM3", "usb:9-9.9"),   // contradicts it
+        };
+
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+
+        Assert.Single(lost);
+    }
+
+    [Fact]
+    public void Reconcile_AContradictedReportRescuesNothing()
+    {
+        // One reporter positively places this port somewhere the device is not. Combined with a
+        // name-only report that is merely uninformative, the evidence is contradictory, and the
+        // fail-safe reading of a contradiction is to rescue nothing rather than fall back to the
+        // weakest claim available.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        var reports = new[]
+        {
+            new BusyPort("COM3", null),
+            new BusyPort("COM3", "usb:9-9.9"),   // a different physical position
+        };
+
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+
+        Assert.Single(lost);
+    }
+
+    [Fact]
+    public void Reconcile_NameOnlyRescue_IsBounded()
+    {
+        // A name-only match is not evidence about the DEVICE -- an OS port name is a lease, and
+        // neither side offered a location to check it against. Left unbounded, a removed device
+        // whose name stayed occupied would never be reported lost: the exact failure this whole
+        // mechanism must not cause. Past the bound it falls back to ordinary miss counting.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: null) });
+
+        for (var i = 0; i < 40; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        }
+
+        Assert.Single(lost);
+        Assert.Equal("SN-1", lost[0].SerialNumber);
+    }
+
+    [Fact]
+    public void Reconcile_LocationConfirmedRescue_IsNotBounded()
+    {
+        // The complement, and the reason a blanket cap was the wrong fix: the case this exists
+        // for -- your own app holding the device it is using -- has no time limit. With the
+        // location agreeing there IS evidence about the physical port, so it holds indefinitely.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        for (var i = 0; i < 200; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-1.2"));
+        }
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_ARealSighting_ResetsTheWeakRescueBudget()
+    {
+        // The budget is about consecutive unverifiable passes. Actually seeing the device proves
+        // it is there, so a later spell of name-only rescues starts from scratch rather than
+        // inheriting an old tally and evicting a present device early.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        var device = SerialAt("SN-1", port: "COM3", location: null);
+        finder.Reconcile(new[] { device });
+
+        for (var i = 0; i < 15; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        }
+        Assert.Empty(lost);
+
+        finder.Reconcile(new[] { device });          // probed successfully again
+
+        for (var i = 0; i < 15; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        }
+
+        Assert.Empty(lost);
+    }
+
+    #endregion
 
     #region Constructor / options validation
 

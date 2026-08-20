@@ -36,7 +36,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// needs will report nothing, exactly as it would have before.
 /// </para>
 /// </remarks>
-public class SerialDeviceFinder : DeviceFinderBase
+public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
 {
     #region Constants
 
@@ -289,6 +289,16 @@ public class SerialDeviceFinder : DeviceFinderBase
     #region Public Methods
 
     /// <summary>
+    /// Ports that were present but already open during the most recent pass. Probes run
+    /// concurrently and can finish out of order, so the pass bookkeeping lives in its own type.
+    /// </summary>
+    private readonly BusyPortLedger _busyPorts = new();
+
+    /// <inheritdoc />
+    IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass()
+        => _busyPorts.TakePortsFromLastPass();
+
+    /// <summary>
     /// Discovers devices asynchronously with a cancellation token.
     /// Probes each serial port to identify DAQiFi devices.
     /// </summary>
@@ -302,6 +312,9 @@ public class SerialDeviceFinder : DeviceFinderBase
         await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Describes this pass alone; a port freed since the last one must not stay "busy".
+            _busyPorts.BeginPass();
+
             var discoveredDevices = new List<IDeviceInfo>();
             // Pre-filter by USB VID/PID where the platform supports it
             // (closes #157). This drops discovery time from ~1 minute on a
@@ -392,6 +405,42 @@ public class SerialDeviceFinder : DeviceFinderBase
     #endregion
 
     #region Private Methods
+
+    /// <summary>
+    /// Whether the OS still enumerates <paramref name="portName"/> right now.
+    /// </summary>
+    /// <remarks>
+    /// Used only to tell "present but locked" from "gone", which the platform exception cannot.
+    /// A provider that throws is treated as "still present": the busy report is an optimisation
+    /// over counting a miss, and losing it should not be worse than not having it.
+    /// </remarks>
+    private bool IsPortStillPresent(string portName)
+    {
+        try
+        {
+            var ports = _portNameProvider?.Invoke()
+                ?? SerialStreamTransport.GetAvailablePortNames();
+
+            foreach (var p in ports)
+            {
+                if (string.Equals(p, portName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch
+        {
+            // Fail CLOSED. This method exists to stop an absent port being rescued, so answering
+            // "present" when we could not tell re-opens the exact hole it was added to close --
+            // and feeds it into the location-confirmed path, which is deliberately unbounded. A
+            // wrong "gone" costs one miss and MissThreshold absorbs it; a wrong "present" can keep
+            // a phantom alive forever. It also matches the behaviour before any of this existed.
+            return false;
+        }
+    }
 
     /// <summary>
     /// Attempts to probe a serial port and retrieve device information.
@@ -619,6 +668,11 @@ public class SerialDeviceFinder : DeviceFinderBase
     /// <returns>Device info if a DAQiFi device responds, null otherwise.</returns>
     private async Task<IDeviceInfo?> TryGetDeviceInfoAsync(string portName, CancellationToken cancellationToken)
     {
+        // Captured at ENTRY, not at write time. A probe abandoned on the hard per-port timeout
+        // keeps running and may reach its catch during a LATER pass; stamping it with the pass it
+        // actually belongs to is what stops that late answer being consumed as a fresh observation.
+        var probePass = _busyPorts.CurrentPass;
+
         SerialPort? port = null;
 
         try
@@ -664,7 +718,46 @@ public class SerialDeviceFinder : DeviceFinderBase
         }
         catch (UnauthorizedAccessException)
         {
-            // Port is in use by another application
+            // The port is there; something else already has it open — very often the caller's
+            // own application, holding the device it is actively using. Recorded rather than
+            // folded into the null below, because "busy" and "not a DAQiFi device" are the same
+            // answer to this method and completely different answers to the caller (issue #532).
+            //
+            // Measured 2026-08-20: opening a COM port twice on Windows with
+            // System.IO.Ports.SerialPort throws System.UnauthorizedAccessException ("Access to
+            // the port 'COM12' is denied"), so a LOCKED port does raise this. That is all it
+            // shows -- see the presence check below for why it is not sufficient on its own.
+            // The USB physical location is resolved from the OS, not from the port, so it is
+            // available precisely here — on the one path where the port cannot be opened. It is
+            // what stops a reused port name from vouching for a device that has gone.
+            string? busyLocationKey;
+            try
+            {
+                busyLocationKey = _usbLocationProvider.GetLocationKey(portName);
+            }
+            catch
+            {
+                // Same contract as the success path: a misbehaving custom provider degrades the
+                // match to port-name-only, it does not take out the busy report.
+                busyLocationKey = null;
+            }
+
+            // "Access is denied" does NOT mean "the port is there". This repository already
+            // documents the trap (SerialPortConnectException): on macOS and Linux a MISSING port
+            // and a port held by another process produce byte-identical exceptions -- same type,
+            // same message. My Windows measurement only ever showed that a LOCKED port throws
+            // this; it never showed the converse, and generalising from it would have been wrong
+            // on the very platform issue #532 was reproduced on.
+            //
+            // So presence is established the way SerialPortConnectException establishes it: by
+            // asking the OS separately, not by reading the exception. A port unplugged between
+            // enumeration and Open() is gone, not busy, and must not suppress a genuine miss.
+            if (!IsPortStillPresent(portName))
+            {
+                return null;
+            }
+
+            _busyPorts.Record(probePass, new BusyPort(portName, busyLocationKey));
             return null;
         }
         catch (OperationCanceledException)

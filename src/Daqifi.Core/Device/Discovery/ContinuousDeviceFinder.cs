@@ -42,6 +42,12 @@ public class ContinuousDeviceFinder : IDisposable
 
         /// <summary>Consecutive passes in which the device was not seen.</summary>
         public int MissCount { get; set; }
+
+        /// <summary>
+        /// Consecutive passes rescued on a busy port whose USB location could NOT be checked,
+        /// so the only evidence was a port name.
+        /// </summary>
+        public int WeakRescueCount { get; set; }
     }
 
     #endregion
@@ -51,6 +57,13 @@ public class ContinuousDeviceFinder : IDisposable
     private readonly IDeviceFinder _finder;
     private readonly TimeSpan _interval;
     private readonly TimeSpan _passTimeout;
+    /// <summary>
+    /// How many consecutive passes a device may be held by a busy port that could not be
+    /// location-checked. Generous, because a name-only match is usually still the right answer;
+    /// finite, because on that evidence alone it cannot be trusted forever.
+    /// </summary>
+    private const int MaxWeakBusyRescues = 20;
+
     private readonly int _missThreshold;
     private readonly Func<IDeviceInfo, string>? _identitySelector;
     private readonly bool _leaveInnerFinderOpen;
@@ -252,7 +265,14 @@ public class ContinuousDeviceFinder : IDisposable
     /// Exposed internally so the dedup/stale logic can be unit-tested without timing.
     /// </summary>
     /// <param name="passResults">Devices observed in the most recent pass.</param>
-    internal void Reconcile(IReadOnlyCollection<IDeviceInfo> passResults)
+    /// <param name="busyPorts">
+    /// Ports the finder found present but already open, or <see langword="null"/> when it cannot
+    /// report that. A tracked device on one of these has not gone away — the probe just could not
+    /// reach it — so it keeps its place in the live set instead of counting a miss (issue #532).
+    /// </param>
+    internal void Reconcile(
+        IReadOnlyCollection<IDeviceInfo> passResults,
+        IReadOnlyCollection<BusyPort>? busyPorts = null)
     {
         var newlyDiscovered = new List<IDeviceInfo>();
         var lost = new List<IDeviceInfo>();
@@ -277,6 +297,10 @@ public class ContinuousDeviceFinder : IDisposable
                     // change between passes) and clear the miss counter.
                     tracked.Info = device;
                     tracked.MissCount = 0;
+
+                    // Actually seeing the device proves it is there, so a later spell of
+                    // unverifiable rescues starts from scratch.
+                    tracked.WeakRescueCount = 0;
                 }
                 else
                 {
@@ -294,6 +318,54 @@ public class ContinuousDeviceFinder : IDisposable
                 }
 
                 var tracked = pair.Value;
+
+                // A device sitting on a port that is present but already open has not gone
+                // anywhere -- the probe simply could not ask it, because something (very often
+                // the caller's own application, using this very device) holds the port. Counting
+                // that as a miss is what made an in-use device disappear from discovery and come
+                // back on disconnect (issue #532).
+                //
+                // This only rescues a device already in the live set: the identity comes from the
+                // pass that found it while the port was free, so nothing is being invented. A
+                // genuine removal takes the port out of enumeration entirely, no busy report is
+                // produced for it, and DeviceLost fires exactly as before.
+                if (busyPorts != null)
+                {
+                    var rescue = ClassifyBusyRescue(tracked.Info, busyPorts);
+
+                    // A location match is evidence about the physical device, so it can hold the
+                    // device indefinitely -- which it must, because the case this exists for
+                    // (your own app using the device) has no time limit.
+                    // MissThreshold counts CONSECUTIVE misses -- the doc comment above says so and
+                    // the default of 2 exists to tolerate one dropped response. A rescue is
+                    // explicitly not a miss, so leaving a stale count behind silently voided that
+                    // tolerance: miss, rescue, miss would fire DeviceLost after a single real miss
+                    // following a pass in which the device was affirmatively confirmed present.
+                    if (rescue == BusyRescue.LocationConfirmed)
+                    {
+                        tracked.MissCount = 0;
+                        tracked.WeakRescueCount = 0;
+                        continue;
+                    }
+
+                    // A name-only match is not evidence about the device at all: an OS port name
+                    // is a lease, and neither side could offer a location to check it against. On
+                    // that basis the rescue is BOUNDED -- otherwise a removed device whose name
+                    // stayed occupied would never be reported lost, which is the failure this
+                    // whole mechanism must not cause. Past the bound it falls back to ordinary
+                    // miss counting, i.e. exactly the behaviour before any of this existed.
+                    // The weak branch clears it too, for the same reason: this pass was not a
+                    // miss either. It cannot rescue forever -- WeakRescueCount is the bound, and
+                    // unlike MissCount it survives across rescues, so the budget still runs out.
+                    if (rescue == BusyRescue.NameOnly &&
+                        tracked.WeakRescueCount < MaxWeakBusyRescues)
+                    {
+                        tracked.MissCount = 0;
+                        tracked.WeakRescueCount++;
+                        continue;
+                    }
+                }
+
                 tracked.MissCount++;
                 if (tracked.MissCount >= _missThreshold)
                 {
@@ -447,7 +519,9 @@ public class ContinuousDeviceFinder : IDisposable
             {
                 try
                 {
-                    Reconcile(results);
+                    Reconcile(
+                        results,
+                        (_finder as IBusyPortReporter)?.TakeBusyPortsFromLastPass());
                 }
                 catch (Exception ex)
                 {
@@ -500,6 +574,92 @@ public class ContinuousDeviceFinder : IDisposable
     protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
     {
         DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
+    }
+
+    /// <summary>
+    /// Whether a tracked device sits on one of the ports the finder reported as busy.
+    /// </summary>
+    /// <summary>How much a busy port can be trusted to speak for a tracked device.</summary>
+    private enum BusyRescue
+    {
+        /// <summary>No busy port matches this device.</summary>
+        None = 0,
+
+        /// <summary>The port name matches, but no location was available on one or both sides.</summary>
+        NameOnly,
+
+        /// <summary>The port name matches and both sides agree on the USB physical location.</summary>
+        LocationConfirmed,
+    }
+
+    /// <summary>
+    /// How strongly the busy report vouches for <paramref name="device"/> still being present.
+    /// </summary>
+    private static BusyRescue ClassifyBusyRescue(
+        IDeviceInfo device,
+        IReadOnlyCollection<BusyPort> busyPorts)
+    {
+        var port = device?.PortName;
+        if (string.IsNullOrEmpty(port))
+        {
+            return BusyRescue.None;
+        }
+
+        // EVERY matching report is considered, not just the first. Since the composite finder
+        // aggregates across transports, one port name can now be reported more than once, and
+        // returning on the first match let an entry that happened to carry no location suppress
+        // a later one that would have confirmed it.
+        var sawNameOnly = false;
+        var sawLocationConfirmed = false;
+        var sawLocationMismatch = false;
+
+        foreach (var busy in busyPorts)
+        {
+            // Ordinal-ignore-case: Windows COM names are case-insensitive, and the POSIX device
+            // paths this also sees never differ by case alone.
+            if (!string.Equals(busy.PortName, port, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (busy.LocationKey == null || device!.LocationKey == null)
+            {
+                sawNameOnly = true;
+                continue;
+            }
+
+            // The location is a physical POSITION, not a device identity: it confirms the port is
+            // the same one, not that the same unit is behind it. A different device plugged into
+            // the same hub position still matches. That residual is inherent -- the serial number
+            // is only readable by opening the port, which is exactly what cannot be done here.
+            if (string.Equals(busy.LocationKey, device.LocationKey, StringComparison.Ordinal))
+            {
+                sawLocationConfirmed = true;
+                continue;
+            }
+
+            sawLocationMismatch = true;
+        }
+
+        // A mismatch POISONS the whole classification, including an otherwise-confirming report.
+        // It is the one piece of NEGATIVE evidence available here -- a reporter positively placing
+        // this port somewhere the device is not -- and the asymmetry decides it: rescuing wrongly
+        // on the location-confirmed path is unbounded, so a contradiction keeping an absent device
+        // alive lasts forever, while declining wrongly costs a miss that MissThreshold absorbs.
+        //
+        // Returning early on the first confirming report would have skipped this check, which is
+        // the inconsistency this replaces: contradiction was already fail-safe everywhere else.
+        if (sawLocationMismatch)
+        {
+            return BusyRescue.None;
+        }
+
+        if (sawLocationConfirmed)
+        {
+            return BusyRescue.LocationConfirmed;
+        }
+
+        return sawNameOnly ? BusyRescue.NameOnly : BusyRescue.None;
     }
 
     /// <summary>
