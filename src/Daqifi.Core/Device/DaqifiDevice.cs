@@ -497,6 +497,35 @@ namespace Daqifi.Core.Device
         private static readonly TimeSpan ChannelPopulationPollInterval = TimeSpan.FromSeconds(1);
 
         /// <summary>
+        /// Default wait for <see cref="RefreshDeviceStatusAsync"/>. A device that is answering at
+        /// all replies in milliseconds; this is a hang detector, not a prediction.
+        /// </summary>
+        private static readonly TimeSpan DefaultStatusRefreshTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// Serializes <see cref="RefreshDeviceStatusAsync"/>. Two concurrent refreshes would both
+        /// subscribe to the same multicast <see cref="StatusMessageReceived"/> event, and a single
+        /// incoming frame -- which answers only one of the two requests -- would complete both, so
+        /// the loser would return a success not tied to its own request.
+        /// </summary>
+        private readonly SemaphoreSlim _statusRefreshGate = new(1, 1);
+
+        /// <summary>
+        /// The waiter for an in-flight <see cref="RefreshDeviceStatusAsync"/>, invoked directly
+        /// rather than through the public <see cref="StatusMessageReceived"/> event.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="RaiseClassifiedEvent"/> wraps the WHOLE multicast delegate in one try/catch,
+        /// which isolates the device from a throwing subscriber but not subscribers from each
+        /// other: .NET stops invoking an invocation list at the first exception, so a consumer
+        /// that subscribed earlier and throws would prevent the refresh from ever seeing its own
+        /// reply -- and it would time out while the status it asked for had already been applied.
+        /// Only one refresh runs at a time (<see cref="_statusRefreshGate"/>), so a single field
+        /// is enough.
+        /// </remarks>
+        private Action<DaqifiOutMessage>? _statusRefreshWaiter;
+
+        /// <summary>
         /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
         /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
         /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
@@ -3288,6 +3317,134 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Asks the device for a fresh status message and waits for it to arrive, updating
+        /// <see cref="Metadata"/> — including <see cref="DeviceMetadata.Health"/> — from the reply.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Health telemetry is <b>not</b> live. The device sends a status message when asked and at
+        /// no other time: a connected link carries stream frames only (the firmware builds each one
+        /// from four tags, none of them health), so without this call the values captured during
+        /// <c>InitializeAsync</c> stay frozen for the life of the connection. Measured on an Nq1
+        /// running 3.7.2: 1,587 inbound messages over 65 s, of which exactly one carried health —
+        /// the one the harness explicitly asked for (issue #535).
+        /// </para>
+        /// <para>
+        /// Cadence is deliberately the caller's, not Core's. A self-poll inside the library would
+        /// contend for the operation lock against streaming and SD work, so how often "current"
+        /// needs to be is a decision only the application can make.
+        /// </para>
+        /// <para>
+        /// <b>Known limitation.</b> A status frame carries nothing saying which request it answers,
+        /// so if one refresh times out and its reply arrives late, the NEXT refresh can be
+        /// completed by that older frame rather than its own. The value is still a genuine device
+        /// reading — just one taken before this call, bounded by the previous refresh's timeout —
+        /// and this call's own reply lands moments later and updates
+        /// <see cref="DeviceMetadata.Health"/> again.
+        /// </para>
+        /// <para>
+        /// It is documented rather than worked around because the protocol offers no correlation
+        /// to work around it with. The obvious heuristic — skip one frame after a timeout — makes
+        /// the more common case worse: if the earlier reply never arrives at all, the next refresh
+        /// would discard its OWN reply and time out too. Concurrent refreshes, which had the same
+        /// shape for a different reason, are prevented outright by serializing them.
+        /// </para>
+        /// </remarks>
+        /// <param name="timeout">
+        /// How long to wait, in total. Defaults to 5 seconds when omitted, so a silent device
+        /// surfaces as a <see cref="TimeoutException"/> rather than hanging the caller.
+        /// <para>
+        /// The deadline covers the whole operation, not just the device round-trip: waiting behind
+        /// another refresh, and waiting for the request itself to be sent. <see cref="Send"/> is
+        /// fire-and-forget and is <b>deferred</b> while an exclusive operation holds the device
+        /// (an SD download can hold it for many minutes), so a short timeout taken during one can
+        /// elapse before the device is ever asked. That is a real outcome, and the exception says
+        /// only that no status arrived — pass a timeout that suits what else the device is doing.
+        /// </para>
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe.</param>
+        /// <returns>A task that completes once a status message has been received and applied.</returns>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="TimeoutException">Thrown when no status message arrives in time.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public async Task RefreshDeviceStatusAsync(
+            TimeSpan? timeout = null,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureConnected(cancellationToken);
+
+            var wait = timeout ?? DefaultStatusRefreshTimeout;
+            if (wait <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(timeout), wait, "Timeout must be positive.");
+            }
+
+            // One deadline covers the whole operation: waiting for the gate, waiting for the send
+            // to leave the queue, and waiting for the reply. See the timeout parameter's note.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(wait);
+
+            try
+            {
+                await _statusRefreshGate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {wait.TotalSeconds:0.##}s waiting for an earlier status "
+                    + "refresh on this device to finish.");
+            }
+
+            try
+            {
+                var statusTcs = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+                void OnStatus(DaqifiOutMessage _) => statusTcs.TrySetResult(true);
+
+                // Subscribed before the send, so a device that answers immediately cannot slip the
+                // reply through the gap between Send() and the subscription -- the same ordering
+                // WaitForChannelsPopulatedAsync relies on.
+                //
+                // Metadata is updated by OnStatusMessageReceived BEFORE this event is raised, so by
+                // the time the wait completes the caller can read Metadata.Health and see the reply.
+                _statusRefreshWaiter = OnStatus;
+                try
+                {
+                    Send(ScpiMessageProducer.GetDeviceInfo);
+
+                    try
+                    {
+                        await statusTcs.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // A reply landing in the same instant the deadline fires can cancel the
+                        // wait even though the status DID arrive and was applied. Reporting that
+                        // as a timeout would tell the caller the refresh failed while the data
+                        // they asked for is sitting in Metadata.
+                        if (statusTcs.Task.IsCompletedSuccessfully)
+                        {
+                            return;
+                        }
+
+                        throw new TimeoutException(
+                            $"The device did not return a status message within {wait.TotalSeconds:0.##}s.");
+                    }
+                }
+                finally
+                {
+                    _statusRefreshWaiter = null;
+                }
+            }
+            finally
+            {
+                _statusRefreshGate.Release();
+            }
+        }
+
+        /// <summary>
         /// Sends <c>GetDeviceInfo</c> and waits for the device to report its channel
         /// configuration via the <see cref="ChannelsPopulated"/> event, re-sending the request
         /// periodically until channels populate or the timeout elapses.
@@ -3397,6 +3554,23 @@ namespace Daqifi.Core.Device
 
             // Populate channels from the status message
             PopulateChannelsFromStatus(message);
+
+            // The refresh waiter runs BEFORE any consumer subscriber and outside the multicast
+            // event, so no third party can delay or prevent a caller of RefreshDeviceStatusAsync
+            // from seeing the reply it asked for. Its own faults are contained here for the same
+            // reason the classified event contains a subscriber's.
+            var waiter = _statusRefreshWaiter;
+            if (waiter != null)
+            {
+                try
+                {
+                    waiter(message);
+                }
+                catch (Exception ex)
+                {
+                    SafeLog(() => _logger.LogWarning(ex, "[RefreshDeviceStatus] waiter threw"));
+                }
+            }
 
             // Raise the classified event first so consumers that only care about status
             // messages can react before the undifferentiated MessageReceived below. A
