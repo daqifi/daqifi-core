@@ -199,9 +199,11 @@ namespace Daqifi.Core.Device
                         state.MinValue,
                         state.MaxValue,
 
-                        // An entry exists only because a sample created it, so the count is never zero.
-                        state.ValueSum / state.SampleCount,
-                        state.Unit));
+                        // An entry exists only because a sample created it, and every sample
+                        // increments ValueSampleCount, so it is never zero here.
+                        state.ValueSum / state.ValueSampleCount,
+                        state.Scaling?.Unit,
+                        state.ValueSampleCount));
                 }
 
                 // Device order — analog first, then digital, ascending within each — so a caller
@@ -279,7 +281,7 @@ namespace Daqifi.Core.Device
             // properties take the channel's own lock, and reaching for one while holding this one
             // would nest the two locks on the decode thread for no benefit.
             RecordCore(channel.Type, channel.ChannelNumber, channel.Name, sample.Timestamp,
-                sample.ScaledValue, sample.Unit);
+                sample.ScaledValue, sample.Scaling);
         }
 
         /// <summary>
@@ -382,14 +384,15 @@ namespace Daqifi.Core.Device
         /// channel's <c>ChannelScaling</c> (e.g. PSI). These statistics report the latter, so they
         /// mean what the channel was configured to mean (issue #534).
         /// </param>
-        /// <param name="unit">
-        /// The unit <paramref name="value"/> is expressed in, or <c>null</c> when unstated. Kept so
-        /// a consumer can tell volts from engineering units; without it the snapshot reports three
-        /// bare numbers whose meaning cannot be recovered, because it has already consumed the
-        /// samples they came from.
+        /// <param name="scaling">
+        /// The transform <paramref name="value"/> was produced by, or <c>null</c> when the channel
+        /// has none. Kept so a consumer can tell volts from engineering units -- without it the
+        /// snapshot reports three bare numbers whose meaning cannot be recovered, because it has
+        /// already consumed the samples they came from -- and so a change of scaling mid-window can
+        /// be detected.
         /// </param>
         private void RecordCore(ChannelType type, int number, string name, DateTime timestamp,
-            double value, string? unit)
+            double value, ChannelScaling? scaling)
         {
             var now = _clock();
 
@@ -409,21 +412,42 @@ namespace Daqifi.Core.Device
 
                 state.Name = name;
 
-                // Last seen wins, exactly as Name does. A channel's scaling can be reassigned
-                // mid-session, and the alternative -- freezing the first unit -- would label later
-                // samples with a unit they were not measured in.
-                state.Unit = unit;
+                // A channel's scaling can be reassigned mid-session -- IScaledChannel documents it
+                // ("every sample decoded from then on carries it"), and samples keep the scaling
+                // that was in force when they were decoded. So one window can genuinely contain
+                // samples in two different units.
+                //
+                // Aggregating across that is meaningless: a min in PSI and a max in Bar are not
+                // extremes of anything, and reporting only the newest unit would put a label on
+                // them that is actively false. When the scaling changes, the VALUE accumulators
+                // restart from this sample, so the three value figures always describe exactly one
+                // scaling. ValueSampleCount says how many samples that is, so the restart is
+                // visible rather than an unexplained gap against SampleCount.
+                //
+                // Compared on the whole scaling, not just the unit: a gain change that keeps the
+                // unit still makes earlier readings incomparable. ChannelScaling is a record, so
+                // this is structural equality.
+                var scalingChanged = state.ValueSampleCount > 0 && !Equals(scaling, state.Scaling);
+                state.Scaling = scaling;
+
+                // Timing, ordering and count statistics are unaffected by scaling and continue
+                // across the change untouched.
+
+                if (state.ValueSampleCount == 0 || scalingChanged)
+                {
+                    // Seeded from the first sample under this scaling, not left at zero: a channel
+                    // that never reads anywhere near zero must not report zero as its extreme.
+                    state.MinValue = value;
+                    state.MaxValue = value;
+                    state.ValueSum = 0.0;
+                    state.ValueSampleCount = 0;
+                }
 
                 if (state.SampleCount == 0)
                 {
                     state.EarliestTimestamp = timestamp;
                     state.LatestTimestamp = timestamp;
                     state.FirstReceivedAt = now;
-
-                    // Seeded from the first sample, not left at zero: a channel that never reads
-                    // anywhere near zero must not report zero as its extreme.
-                    state.MinValue = value;
-                    state.MaxValue = value;
                 }
                 else
                 {
@@ -459,6 +483,7 @@ namespace Daqifi.Core.Device
                 }
 
                 state.ValueSum += value;
+                state.ValueSampleCount++;
                 state.LastReceivedAt = now;
                 state.SampleCount++;
 
@@ -536,7 +561,7 @@ namespace Daqifi.Core.Device
         /// </summary>
         private void OnSampleReceived(object? sender, SampleReceivedEventArgs e) =>
             RecordCore(e.Channel.Type, e.Channel.ChannelNumber, e.Channel.Name, e.Sample.Timestamp,
-                e.Sample.ScaledValue, e.Sample.Unit);
+                e.Sample.ScaledValue, e.Sample.Scaling);
 
         /// <summary>
         /// One channel's mutable accumulators. A class rather than a struct so it can be updated in
@@ -545,7 +570,8 @@ namespace Daqifi.Core.Device
         private sealed class ChannelState
         {
             internal string Name = string.Empty;
-            internal string? Unit;
+            internal ChannelScaling? Scaling;
+            internal long ValueSampleCount;
             internal long SampleCount;
 
             /// <summary>The extremes of the timestamps seen, which the device-clock span is measured over.</summary>

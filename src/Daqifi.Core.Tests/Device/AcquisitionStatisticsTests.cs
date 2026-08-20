@@ -537,20 +537,36 @@ namespace Daqifi.Core.Tests.Device
             var channel = new AnalogChannel(0);
             var sample = Sample(Epoch, 1.0);
 
-            // Warm up: JIT the path and create the channel's accumulator, the one allocation there is.
-            for (var i = 0; i < 100; i++)
+            // Warm up over the SAME count as the measurement, not a token 100.
+            //
+            // Tiered compilation promotes a hot method to tier 1 partway through a long loop, and
+            // that rejit allocates. With a 100-iteration warmup the promotion landed inside the
+            // measured window instead of before it, and the test reported ~7 KB across 10,000
+            // records -- 0.71 bytes per call, which is not a per-call allocation at all (a real one
+            // is >= 24 bytes an object, so >= 240 KB here) but was enough to fail an == 0 assertion.
+            //
+            // That is issue #531: "fails on a full net10 run, passes in isolation". It is not
+            // actually run-order dependent, it is warmup-dependent -- any change that makes
+            // RecordCore larger pushes the promotion later, and #534's scaling-comparison did.
+            // Warming to the measured count puts the promotion firmly before `before` is read.
+            //
+            // The assertion keeps its teeth: a genuine per-call allocation is three orders of
+            // magnitude above the noise this removes.
+            const int iterations = 10_000;
+
+            for (var i = 0; i < iterations; i++)
             {
                 stats.Record(channel, sample);
             }
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 10_000; i++)
+            for (var i = 0; i < iterations; i++)
             {
                 stats.Record(channel, sample);
             }
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            Assert.True(allocated == 0, $"recording 10,000 samples allocated {allocated} bytes; expected none");
+            Assert.True(allocated == 0, $"recording {iterations:N0} samples allocated {allocated} bytes; expected none");
         }
 
         [Fact]
@@ -686,6 +702,93 @@ namespace Daqifi.Core.Tests.Device
             Assert.Equal(1.0, channelStats.MinValue);
             Assert.Equal(3.0, channelStats.MaxValue);
             Assert.Equal(2.0, channelStats.MeanValue);
+        }
+
+        [Fact]
+        public void Record_WhenTheScalingChangesMidWindow_RestartsTheValueFiguresAndSaysSo()
+        {
+            // IScaledChannel supports reassigning a scaling mid-session, and samples keep the one
+            // in force when they were decoded -- so a window can genuinely hold two units. A
+            // minimum in PSI and a maximum in Bar are not the extremes of anything, and reporting
+            // the newest unit over both would put a label on them that is actively false.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0) { Name = "AI0" };
+            var psi = new ChannelScaling(2.0, 10.0, "PSI");
+            var bar = new ChannelScaling(1.0, 0.0, "Bar");
+
+            foreach (var volts in new[] { 1.0, 3.0 })          // 12, 16 PSI
+            {
+                stats.Record(channel, Sample(clock.Now, volts, psi));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            foreach (var volts in new[] { 5.0, 7.0 })          // 5, 7 Bar
+            {
+                stats.Record(channel, Sample(clock.Now, volts, bar));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            var channelStats = Assert.Single(stats.Snapshot().Channels);
+
+            // Only the Bar samples describe the value figures.
+            Assert.Equal("Bar", channelStats.Unit);
+            Assert.Equal(5.0, channelStats.MinValue);
+            Assert.Equal(7.0, channelStats.MaxValue);
+            Assert.Equal(6.0, channelStats.MeanValue);
+            Assert.Equal(2, channelStats.ValueSampleCount);
+
+            // Timing and counting are unit-independent and continue across the change.
+            Assert.Equal(4, channelStats.SampleCount);
+        }
+
+        [Fact]
+        public void Record_WhenOnlyTheGainChanges_AlsoRestartsTheValueFigures()
+        {
+            // Compared on the whole scaling, not just the unit label: recalibrating a transducer
+            // leaves the unit reading "PSI" while making the earlier numbers incomparable with the
+            // later ones. Aggregating those is the same error wearing a matching label.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0) { Name = "AI0" };
+
+            stats.Record(channel, Sample(clock.Now, 1.0, new ChannelScaling(2.0, 0.0, "PSI")));
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            stats.Record(channel, Sample(clock.Now, 1.0, new ChannelScaling(50.0, 0.0, "PSI")));
+
+            var channelStats = Assert.Single(stats.Snapshot().Channels);
+
+            Assert.Equal("PSI", channelStats.Unit);
+            Assert.Equal(50.0, channelStats.MinValue);
+            Assert.Equal(50.0, channelStats.MaxValue);
+            Assert.Equal(1, channelStats.ValueSampleCount);
+            Assert.Equal(2, channelStats.SampleCount);
+        }
+
+        [Fact]
+        public void Record_WithAStableScaling_CountsEveryValueSample()
+        {
+            // The control for the restart: an unchanging scaling must not trigger it, or every
+            // window would collapse to its last sample.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0) { Name = "AI0" };
+            var psi = new ChannelScaling(2.0, 10.0, "PSI");
+
+            foreach (var volts in new[] { 1.0, 3.0, 2.0 })
+            {
+                // A NEW but EQUAL scaling instance each time -- ChannelScaling is a record, so
+                // this must compare equal and must not look like a reassignment.
+                stats.Record(channel, Sample(clock.Now, volts, new ChannelScaling(2.0, 10.0, "PSI")));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            var channelStats = Assert.Single(stats.Snapshot().Channels);
+            Assert.Equal(3, channelStats.ValueSampleCount);
+            Assert.Equal(3, channelStats.SampleCount);
+            Assert.Equal(12.0, channelStats.MinValue);
+            Assert.Equal(16.0, channelStats.MaxValue);
+            Assert.Equal(psi.Unit, channelStats.Unit);
         }
 
         #endregion

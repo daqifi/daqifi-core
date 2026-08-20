@@ -90,6 +90,18 @@ namespace Daqifi.Core.Device
     /// (issue #534).
     /// </para>
     /// </param>
+    /// <param name="ValueSampleCount">
+    /// How many samples the three value figures above were computed from. Normally equal to
+    /// <paramref name="SampleCount"/>.
+    /// <para>
+    /// It differs when the channel's scaling was reassigned mid-window. Aggregating across that is
+    /// meaningless — a minimum in PSI and a maximum in Bar are not the extremes of anything — so
+    /// the value figures restart at the change and describe only the samples taken under the
+    /// scaling <paramref name="Unit"/> names. This field is what makes that restart visible
+    /// instead of an unexplained gap. The timing, ordering and count statistics are unaffected by
+    /// scaling and continue across it.
+    /// </para>
+    /// </param>
     public sealed record ChannelAcquisitionStatistics(
         ChannelType ChannelType,
         int ChannelNumber,
@@ -105,7 +117,8 @@ namespace Daqifi.Core.Device
         double MinValue,
         double MaxValue,
         double MeanValue,
-        string? Unit = null)
+        string? Unit = null,
+        long ValueSampleCount = 0)
     {
         /// <summary>
         /// Gets the sample rate the host actually received this channel at, in Hz, measured against
