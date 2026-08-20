@@ -290,26 +290,16 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
 
     /// <summary>
     /// Ports that were present but already open during the most recent pass. Probes run
-    /// concurrently, so this is a concurrent set rather than a list.
+    /// concurrently and can finish out of order, so the pass bookkeeping lives in its own type.
     /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Pass, BusyPort Port)> _busyPorts =
-        new System.Collections.Concurrent.ConcurrentDictionary<string, (int, BusyPort)>(System.StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Which pass is currently collecting. A probe abandoned on the hard per-port timeout keeps
-    /// running and can finish after its own pass returned -- and after the next pass cleared the
-    /// set -- so every write carries the pass it belongs to and reads ignore anything else.
-    /// Clearing alone could not prevent that: the late write lands after the clear.
-    /// </summary>
-    private int _busyPass;
+    private readonly BusyPortLedger _busyPorts = new();
 
     /// <inheritdoc />
     IReadOnlyCollection<BusyPort> IBusyPortReporter.BusyPortsFromLastPass
     {
         get
         {
-            var pass = System.Threading.Volatile.Read(ref _busyPass);
-            return _busyPorts.Values.Where(e => e.Pass == pass).Select(e => e.Port).ToList();
+            return _busyPorts.PortsFromLastPass();
         }
     }
 
@@ -328,9 +318,7 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
         try
         {
             // Describes this pass alone; a port freed since the last one must not stay "busy".
-            _busyPorts.Clear();
-            System.Threading.Volatile.Write(ref _busyPass, unchecked(_busyPass + 1));
-            var busyPass = System.Threading.Volatile.Read(ref _busyPass);
+            _busyPorts.BeginPass();
 
             var discoveredDevices = new List<IDeviceInfo>();
             // Pre-filter by USB VID/PID where the platform supports it
@@ -683,7 +671,7 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
         // Captured at ENTRY, not at write time. A probe abandoned on the hard per-port timeout
         // keeps running and may reach its catch during a LATER pass; stamping it with the pass it
         // actually belongs to is what stops that late answer being consumed as a fresh observation.
-        var probePass = System.Threading.Volatile.Read(ref _busyPass);
+        var probePass = _busyPorts.CurrentPass;
 
         SerialPort? port = null;
 
@@ -769,7 +757,7 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
                 return null;
             }
 
-            _busyPorts.TryAdd(portName, (probePass, new BusyPort(portName, busyLocationKey)));
+            _busyPorts.Record(probePass, new BusyPort(portName, busyLocationKey));
             return null;
         }
         catch (OperationCanceledException)

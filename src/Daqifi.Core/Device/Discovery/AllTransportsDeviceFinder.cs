@@ -22,7 +22,7 @@ namespace Daqifi.Core.Device.Discovery
     /// to one. A single transport finder throwing (e.g. WiFi discovery with no network) is logged and
     /// skipped so the other transports still return results.
     /// </remarks>
-    public sealed class AllTransportsDeviceFinder : IDeviceFinder, IDisposable
+    public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter, IDisposable
     {
         private readonly IReadOnlyList<IDeviceFinder> _finders;
         private readonly Func<IDeviceInfo, string>? _identitySelector;
@@ -90,6 +90,24 @@ namespace Daqifi.Core.Device.Discovery
             var finders = new IDeviceFinder[] { new WiFiDeviceFinder(), new SerialDeviceFinder() };
             return new AllTransportsDeviceFinder(finders, identitySelector, ownsFinders: true);
         }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Forwarded from whichever constituents report busy ports, because a composite that
+        /// swallowed the signal would defeat the feature on the ONLY construction path most
+        /// callers use. <see cref="ContinuousDeviceFinder"/> asks the finder it directly wraps,
+        /// and the documented shape is to wrap this class (see <see cref="CreateDefault"/>) --
+        /// so without this member the busy-port rescue silently never runs, and a device whose
+        /// port the application itself is holding is reported lost. That is exactly the bug the
+        /// rescue exists to prevent, so the seam has to carry it.
+        ///
+        /// Nesting works without special handling: this type now implements the interface, so a
+        /// composite of composites is picked up by the same filter and aggregates recursively.
+        /// </remarks>
+        IReadOnlyCollection<BusyPort> IBusyPortReporter.BusyPortsFromLastPass =>
+            _finders.OfType<IBusyPortReporter>()
+                    .SelectMany(f => f.BusyPortsFromLastPass)
+                    .ToList();
 
         /// <inheritdoc />
         public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
