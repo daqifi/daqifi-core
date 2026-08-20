@@ -503,6 +503,14 @@ namespace Daqifi.Core.Device
         private static readonly TimeSpan DefaultStatusRefreshTimeout = TimeSpan.FromSeconds(5);
 
         /// <summary>
+        /// Serializes <see cref="RefreshDeviceStatusAsync"/>. Two concurrent refreshes would both
+        /// subscribe to the same multicast <see cref="StatusMessageReceived"/> event, and a single
+        /// incoming frame -- which answers only one of the two requests -- would complete both, so
+        /// the loser would return a success not tied to its own request.
+        /// </summary>
+        private readonly SemaphoreSlim _statusRefreshGate = new(1, 1);
+
+        /// <summary>
         /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
         /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
         /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
@@ -3313,8 +3321,16 @@ namespace Daqifi.Core.Device
         /// </para>
         /// </remarks>
         /// <param name="timeout">
-        /// How long to wait for the reply. Defaults to 5 seconds when omitted, so a silent device
+        /// How long to wait, in total. Defaults to 5 seconds when omitted, so a silent device
         /// surfaces as a <see cref="TimeoutException"/> rather than hanging the caller.
+        /// <para>
+        /// The deadline covers the whole operation, not just the device round-trip: waiting behind
+        /// another refresh, and waiting for the request itself to be sent. <see cref="Send"/> is
+        /// fire-and-forget and is <b>deferred</b> while an exclusive operation holds the device
+        /// (an SD download can hold it for many minutes), so a short timeout taken during one can
+        /// elapse before the device is ever asked. That is a real outcome, and the exception says
+        /// only that no status arrived — pass a timeout that suits what else the device is doing.
+        /// </para>
         /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task that completes once a status message has been received and applied.</returns>
@@ -3334,38 +3350,58 @@ namespace Daqifi.Core.Device
                     nameof(timeout), wait, "Timeout must be positive.");
             }
 
-            var statusTcs = new TaskCompletionSource<bool>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+            // One deadline covers the whole operation: waiting for the gate, waiting for the send
+            // to leave the queue, and waiting for the reply. See the timeout parameter's note.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(wait);
 
-            void OnStatus(DaqifiOutMessage _) => statusTcs.TrySetResult(true);
-
-            // Subscribed before the send, so a device that answers immediately cannot slip the
-            // reply through the gap between Send() and the subscription -- the same ordering
-            // WaitForChannelsPopulatedAsync relies on.
-            //
-            // Metadata is updated by OnStatusMessageReceived BEFORE this event is raised, so by
-            // the time the wait completes the caller can read Metadata.Health and see the reply.
-            StatusMessageReceived += OnStatus;
             try
             {
-                Send(ScpiMessageProducer.GetDeviceInfo);
+                await _statusRefreshGate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {wait.TotalSeconds:0.##}s waiting for an earlier status "
+                    + "refresh on this device to finish.");
+            }
 
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(wait);
+            try
+            {
+                var statusTcs = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
 
+                void OnStatus(DaqifiOutMessage _) => statusTcs.TrySetResult(true);
+
+                // Subscribed before the send, so a device that answers immediately cannot slip the
+                // reply through the gap between Send() and the subscription -- the same ordering
+                // WaitForChannelsPopulatedAsync relies on.
+                //
+                // Metadata is updated by OnStatusMessageReceived BEFORE this event is raised, so by
+                // the time the wait completes the caller can read Metadata.Health and see the reply.
+                StatusMessageReceived += OnStatus;
                 try
                 {
-                    await statusTcs.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+                    Send(ScpiMessageProducer.GetDeviceInfo);
+
+                    try
+                    {
+                        await statusTcs.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw new TimeoutException(
+                            $"The device did not return a status message within {wait.TotalSeconds:0.##}s.");
+                    }
                 }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                finally
                 {
-                    throw new TimeoutException(
-                        $"The device did not return a status message within {wait.TotalSeconds:0.##}s.");
+                    StatusMessageReceived -= OnStatus;
                 }
             }
             finally
             {
-                StatusMessageReceived -= OnStatus;
+                _statusRefreshGate.Release();
             }
         }
 

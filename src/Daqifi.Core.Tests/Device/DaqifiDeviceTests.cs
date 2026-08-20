@@ -197,6 +197,41 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public async Task RefreshDeviceStatusAsync_ConcurrentCalls_AreNotCompletedByEachOthersReply()
+        {
+            // Both callers subscribe to the same multicast StatusMessageReceived event, so without
+            // serialization ONE incoming frame -- which answers only one of the two requests --
+            // completes both, and the loser returns a success not tied to its own request.
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+
+            var first = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+
+            // The second call must be queued behind the first, not racing it: at this point only
+            // one request can have gone out.
+            var second = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+
+            await Task.Delay(50);
+            Assert.Single(device.SentCommands);
+            Assert.False(second.IsCompleted);
+
+            // One reply satisfies the first caller only.
+            device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 11 });
+            await first;
+
+            await Task.Delay(50);
+            Assert.False(second.IsCompleted);
+
+            // The second caller's own request goes out once it holds the gate, and its own reply
+            // completes it.
+            Assert.Equal(2, device.SentCommands.Count);
+            device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 22 });
+            await second;
+
+            Assert.Equal(22, device.Metadata.Health.BatteryPercent);
+        }
+
+        [Fact]
         public async Task RefreshDeviceStatusAsync_UnsubscribesAfterCompleting()
         {
             // The handler is added per call, so a caller polling in a loop would otherwise
