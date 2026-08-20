@@ -63,6 +63,63 @@ public sealed record MemoryDiagnostics
     /// </summary>
     public ulong? SamplePoolMaxUsed => GetValue("SamplePoolMaxUsed");
 
+    /// <summary>
+    /// Gets the size in bytes of the largest single free heap block, or <see langword="null"/> if
+    /// absent.
+    /// </summary>
+    /// <remarks>
+    /// This, not <see cref="HeapFree"/>, is the largest allocation the device can still service.
+    /// A device reporting 7.5 KB free across twenty blocks and one reporting 7.5 KB free in a
+    /// single block have the same <see cref="HeapFree"/> and completely different prospects.
+    /// </remarks>
+    public ulong? LargestFreeBlock => GetValue("LargestFreeBlock");
+
+    /// <summary>
+    /// Gets the size in bytes of the smallest single free heap block, or <see langword="null"/> if
+    /// absent.
+    /// </summary>
+    public ulong? SmallestFreeBlock => GetValue("SmallestFreeBlock");
+
+    /// <summary>
+    /// Gets how many separate blocks the free heap is divided into, or <see langword="null"/> if
+    /// absent.
+    /// </summary>
+    /// <remarks>
+    /// A HIGH count means fragmentation: the free bytes exist but are scattered, so a large
+    /// allocation can fail while <see cref="HeapFree"/> still looks comfortable. A count of
+    /// <c>1</c> is the opposite — the free heap is one contiguous run, the least fragmented state
+    /// there is. A device can therefore be unfragmented and nearly exhausted at the same time,
+    /// which is what <see cref="LargestFreeBlock"/> equalling <see cref="HeapFree"/> means.
+    /// </remarks>
+    public ulong? HeapFreeBlocks => GetValue("HeapFreeBlocks");
+
+    /// <summary>
+    /// Gets the size in bytes of the SD circular buffer, or <see langword="null"/> if absent.
+    /// </summary>
+    public ulong? SdCircularSize => GetValue("SdCircularSize");
+
+    /// <summary>
+    /// Gets the total bytes of sample-pool data memory, or <see langword="null"/> if absent.
+    /// </summary>
+    public ulong? SamplePoolBytes => GetValue("SamplePoolBytes");
+
+    /// <summary>
+    /// Gets the bytes occupied by the sample pool's free-list array, or <see langword="null"/> if
+    /// absent.
+    /// </summary>
+    public ulong? SampleNextFreeBytes => GetValue("SampleNextFreeBytes");
+
+    /// <summary>
+    /// Gets the estimated bytes of FreeRTOS queue overhead for samples, or <see langword="null"/>
+    /// if absent.
+    /// </summary>
+    public ulong? SampleQueueBytes => GetValue("SampleQueueBytes");
+
+    /// <summary>
+    /// Gets the size in bytes of one sample-pool element, or <see langword="null"/> if absent.
+    /// </summary>
+    public ulong? SampleElementBytes => GetValue("SampleElementBytes");
+
     private ulong? GetValue(string key) =>
         Values.TryGetValue(key, out var value) ? value : null;
 }
