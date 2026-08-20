@@ -3334,6 +3334,21 @@ namespace Daqifi.Core.Device
         /// contend for the operation lock against streaming and SD work, so how often "current"
         /// needs to be is a decision only the application can make.
         /// </para>
+        /// <para>
+        /// <b>Known limitation.</b> A status frame carries nothing saying which request it answers,
+        /// so if one refresh times out and its reply arrives late, the NEXT refresh can be
+        /// completed by that older frame rather than its own. The value is still a genuine device
+        /// reading — just one taken before this call, bounded by the previous refresh's timeout —
+        /// and this call's own reply lands moments later and updates
+        /// <see cref="DeviceMetadata.Health"/> again.
+        /// </para>
+        /// <para>
+        /// It is documented rather than worked around because the protocol offers no correlation
+        /// to work around it with. The obvious heuristic — skip one frame after a timeout — makes
+        /// the more common case worse: if the earlier reply never arrives at all, the next refresh
+        /// would discard its OWN reply and time out too. Concurrent refreshes, which had the same
+        /// shape for a different reason, are prevented outright by serializing them.
+        /// </para>
         /// </remarks>
         /// <param name="timeout">
         /// How long to wait, in total. Defaults to 5 seconds when omitted, so a silent device
