@@ -292,11 +292,11 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
     /// Ports that were present but already open during the most recent pass. Probes run
     /// concurrently, so this is a concurrent set rather than a list.
     /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _busyPorts =
-        new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(System.StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BusyPort> _busyPorts =
+        new System.Collections.Concurrent.ConcurrentDictionary<string, BusyPort>(System.StringComparer.OrdinalIgnoreCase);
 
     /// <inheritdoc />
-    IReadOnlyCollection<string> IBusyPortReporter.BusyPortsFromLastPass => _busyPorts.Keys.ToList();
+    IReadOnlyCollection<BusyPort> IBusyPortReporter.BusyPortsFromLastPass => _busyPorts.Values.ToList();
 
     /// <summary>
     /// Discovers devices asynchronously with a cancellation token.
@@ -686,7 +686,22 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
             // support, Windows included: verified 2026-08-20 by opening a COM port twice with
             // System.IO.Ports.SerialPort on Windows, which threw
             // System.UnauthorizedAccessException ("Access to the port 'COM12' is denied").
-            _busyPorts.TryAdd(portName, 0);
+            // The USB physical location is resolved from the OS, not from the port, so it is
+            // available precisely here — on the one path where the port cannot be opened. It is
+            // what stops a reused port name from vouching for a device that has gone.
+            string? busyLocationKey;
+            try
+            {
+                busyLocationKey = _usbLocationProvider.GetLocationKey(portName);
+            }
+            catch
+            {
+                // Same contract as the success path: a misbehaving custom provider degrades the
+                // match to port-name-only, it does not take out the busy report.
+                busyLocationKey = null;
+            }
+
+            _busyPorts.TryAdd(portName, new BusyPort(portName, busyLocationKey));
             return null;
         }
         catch (OperationCanceledException)

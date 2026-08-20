@@ -259,7 +259,7 @@ public class ContinuousDeviceFinder : IDisposable
     /// </param>
     internal void Reconcile(
         IReadOnlyCollection<IDeviceInfo> passResults,
-        IReadOnlyCollection<string>? busyPorts = null)
+        IReadOnlyCollection<BusyPort>? busyPorts = null)
     {
         var newlyDiscovered = new List<IDeviceInfo>();
         var lost = new List<IDeviceInfo>();
@@ -530,7 +530,7 @@ public class ContinuousDeviceFinder : IDisposable
     /// <summary>
     /// Whether a tracked device sits on one of the ports the finder reported as busy.
     /// </summary>
-    private static bool IsOnBusyPort(IDeviceInfo device, IReadOnlyCollection<string> busyPorts)
+    private static bool IsOnBusyPort(IDeviceInfo device, IReadOnlyCollection<BusyPort> busyPorts)
     {
         var port = device?.PortName;
         if (string.IsNullOrEmpty(port))
@@ -542,10 +542,28 @@ public class ContinuousDeviceFinder : IDisposable
         {
             // Ordinal-ignore-case: Windows COM names are case-insensitive, and the POSIX device
             // paths this also sees never differ by case alone.
-            if (string.Equals(busy, port, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(busy.PortName, port, StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                continue;
             }
+
+            // An OS port name is a lease, not an identity. Unplug a device and the next one along
+            // can be handed the same name — so matching on the name alone would keep a device that
+            // has genuinely gone reported as present for as long as its old name stayed occupied,
+            // which is the failure this rescue exists to avoid causing.
+            //
+            // When both sides know the USB physical location, it has to agree. It is resolved from
+            // the OS rather than from the port, so it is available on exactly the path where the
+            // port cannot be opened.
+            if (busy.LocationKey != null && device!.LocationKey != null)
+            {
+                return string.Equals(busy.LocationKey, device.LocationKey, StringComparison.Ordinal);
+            }
+
+            // One side could not resolve a location — an older platform provider, or a port the OS
+            // will not place. Fall back to the name, which is what this did before locations were
+            // carried: still a large improvement on counting the device lost, and never worse.
+            return true;
         }
 
         return false;

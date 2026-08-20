@@ -33,5 +33,5 @@ internal interface IBusyPortReporter
     /// <remarks>
     /// Reset at the start of every pass, so it describes that pass alone and never accumulates.
     /// </remarks>
-    IReadOnlyCollection<string> BusyPortsFromLastPass { get; }
+    IReadOnlyCollection<BusyPort> BusyPortsFromLastPass { get; }
 }
