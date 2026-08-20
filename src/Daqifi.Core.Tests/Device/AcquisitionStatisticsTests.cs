@@ -614,10 +614,23 @@ namespace Daqifi.Core.Tests.Device
                 }
             }
 
-            Push(200, 50_000u); // warm up the JIT, the decoder's channel cache and the accumulators
+            // Warm up over the SAME count as the measurement, not a token 200.
+            //
+            // This is #531's cause again, in the sibling test (#559). Tiered compilation promotes
+            // a hot method to tier 1 partway through a long loop and the rejit allocates, so a
+            // short warmup leaves the promotion to land INSIDE the measured window. It shows up as
+            // a full-run-only failure -- in isolation the method is cold and the promotion falls
+            // in the warmup; in a full run earlier tests have already made it partly hot, so the
+            // threshold is crossed later, during the measurement. Nothing about run ORDER is
+            // load-bearing, which is why the issue title's "passes in isolation" is a symptom
+            // rather than the mechanism.
+            //
+            // The measurement base tick starts beyond the warmup's last one so timestamps stay
+            // monotonic: the warmup ends at 50_000 + (frames-1) * 50_000.
+            Push(frames, 50_000u);
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            Push(frames, 50_000_000u);
+            Push(frames, 200_000_000u);
             return GC.GetAllocatedBytesForCurrentThread() - before;
 
             static void Inert(object? sender, SampleReceivedEventArgs e)
