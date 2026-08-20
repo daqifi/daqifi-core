@@ -511,7 +511,7 @@ public class ContinuousDeviceFinder : IDisposable
                 {
                     Reconcile(
                         results,
-                        (_finder as IBusyPortReporter)?.BusyPortsFromLastPass);
+                        (_finder as IBusyPortReporter)?.TakeBusyPortsFromLastPass());
                 }
                 catch (Exception ex)
                 {
@@ -595,6 +595,13 @@ public class ContinuousDeviceFinder : IDisposable
             return BusyRescue.None;
         }
 
+        // EVERY matching report is considered, not just the first. Since the composite finder
+        // aggregates across transports, one port name can now be reported more than once, and
+        // returning on the first match let an entry that happened to carry no location suppress
+        // a later one that would have confirmed it.
+        var sawNameOnly = false;
+        var sawLocationMismatch = false;
+
         foreach (var busy in busyPorts)
         {
             // Ordinal-ignore-case: Windows COM names are case-insensitive, and the POSIX device
@@ -606,19 +613,29 @@ public class ContinuousDeviceFinder : IDisposable
 
             if (busy.LocationKey == null || device!.LocationKey == null)
             {
-                return BusyRescue.NameOnly;
+                sawNameOnly = true;
+                continue;
             }
 
             // The location is a physical POSITION, not a device identity: it confirms the port is
             // the same one, not that the same unit is behind it. A different device plugged into
             // the same hub position still matches. That residual is inherent -- the serial number
             // is only readable by opening the port, which is exactly what cannot be done here.
-            return string.Equals(busy.LocationKey, device.LocationKey, StringComparison.Ordinal)
-                ? BusyRescue.LocationConfirmed
-                : BusyRescue.None;
+            if (string.Equals(busy.LocationKey, device.LocationKey, StringComparison.Ordinal))
+            {
+                // Strongest available evidence; nothing later can improve on it.
+                return BusyRescue.LocationConfirmed;
+            }
+
+            sawLocationMismatch = true;
         }
 
-        return BusyRescue.None;
+        // A mismatch alongside a name-only report is CONTRADICTORY evidence, and the fail-safe
+        // reading of a contradiction is to rescue nothing: one reporter positively placed this
+        // port somewhere the device is not.
+        return sawNameOnly && !sawLocationMismatch
+            ? BusyRescue.NameOnly
+            : BusyRescue.None;
     }
 
     /// <summary>

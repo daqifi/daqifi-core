@@ -104,10 +104,19 @@ namespace Daqifi.Core.Device.Discovery
         /// Nesting works without special handling: this type now implements the interface, so a
         /// composite of composites is picked up by the same filter and aggregates recursively.
         /// </remarks>
-        IReadOnlyCollection<BusyPort> IBusyPortReporter.BusyPortsFromLastPass =>
-            _finders.OfType<IBusyPortReporter>()
-                    .SelectMany(f => f.BusyPortsFromLastPass)
-                    .ToList();
+        IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass()
+        {
+            // ToList() per constituent, deliberately: taking is single-use, so EVERY reporter must
+            // be drained on every call. A lazy chain that some caller short-circuited would leave
+            // an untaken snapshot behind, to be handed out later as if it were current.
+            var taken = new List<BusyPort>();
+            foreach (var reporter in _finders.OfType<IBusyPortReporter>())
+            {
+                taken.AddRange(reporter.TakeBusyPortsFromLastPass());
+            }
+
+            return taken;
+        }
 
         /// <inheritdoc />
         public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)

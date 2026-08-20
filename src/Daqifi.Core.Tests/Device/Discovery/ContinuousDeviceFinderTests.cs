@@ -208,6 +208,60 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
+    public void Reconcile_AConfirmingReportIsNotHiddenByANameOnlyOneForTheSamePort()
+    {
+        // The composite finder aggregates across transports, so ONE port name can now be reported
+        // more than once in a pass. Returning on the first match let a report that happened to
+        // carry no location downgrade the device to the bounded name-only path, even though a
+        // second report confirmed the location outright. Order is deliberate: the weaker report
+        // comes first, which is the only order in which the bug shows.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        var reports = new[]
+        {
+            new BusyPort("COM3", null),          // weaker, and seen first
+            new BusyPort("COM3", "usb:1-1.2"),   // confirms the location
+        };
+
+        // Past MaxWeakBusyRescues: only a LocationConfirmed classification survives this long.
+        for (var i = 0; i < 40; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+        }
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_AContradictedReportRescuesNothing()
+    {
+        // One reporter positively places this port somewhere the device is not. Combined with a
+        // name-only report that is merely uninformative, the evidence is contradictory, and the
+        // fail-safe reading of a contradiction is to rescue nothing rather than fall back to the
+        // weakest claim available.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        var reports = new[]
+        {
+            new BusyPort("COM3", null),
+            new BusyPort("COM3", "usb:9-9.9"),   // a different physical position
+        };
+
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+
+        Assert.Single(lost);
+    }
+
+    [Fact]
     public void Reconcile_NameOnlyRescue_IsBounded()
     {
         // A name-only match is not evidence about the DEVICE -- an OS port name is a lease, and

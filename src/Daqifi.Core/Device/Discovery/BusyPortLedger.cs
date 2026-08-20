@@ -24,6 +24,11 @@ internal sealed class BusyPortLedger
 
     private int _pass;
 
+    // 1 while this pass's observation has not yet been taken. A busy-port set describes ONE pass;
+    // it is not a standing fact about the world, and handing the same one out twice is how a
+    // genuinely absent device stays alive forever (see TakePortsFromLastPass).
+    private int _armed;
+
     /// <summary>The pass currently collecting.</summary>
     internal int CurrentPass => Volatile.Read(ref _pass);
 
@@ -35,6 +40,7 @@ internal sealed class BusyPortLedger
         // Clearing alone could never be enough -- a late write lands after the clear.
         _entries.Clear();
         Volatile.Write(ref _pass, unchecked(_pass + 1));
+        Volatile.Write(ref _armed, 1);
         return Volatile.Read(ref _pass);
     }
 
@@ -58,9 +64,27 @@ internal sealed class BusyPortLedger
             (_, existing) => IsNewerPass(pass, existing.Pass) ? (pass, port) : existing);
     }
 
-    /// <summary>Ports recorded as busy by the pass that is currently collecting.</summary>
-    internal IReadOnlyCollection<BusyPort> PortsFromLastPass()
+    /// <summary>
+    /// Takes this pass's busy-port observation, or an empty set if it has already been taken.
+    /// </summary>
+    /// <remarks>
+    /// Single-use ON PURPOSE. A discovery run over several transports can return before this
+    /// finder ever acquired its semaphore and began a pass -- and then the newest data here is
+    /// from an OLDER moment. Handing it out again would let repeated contention reuse one stale
+    /// location-confirmed observation indefinitely, and because that path is deliberately
+    /// unbounded, a device that really was unplugged would never be reported lost.
+    ///
+    /// So the question this answers is not "what was busy recently" but "what did the pass that
+    /// just ran observe" -- and if no pass ran, the honest answer is nothing, not last time's.
+    /// </remarks>
+    internal IReadOnlyCollection<BusyPort> TakePortsFromLastPass()
     {
+        // Exchange rather than read-then-write: two readers must not both receive the snapshot.
+        if (Interlocked.Exchange(ref _armed, 0) == 0)
+        {
+            return System.Array.Empty<BusyPort>();
+        }
+
         var pass = Volatile.Read(ref _pass);
         return _entries.Values.Where(e => e.Pass == pass).Select(e => e.Port).ToList();
     }

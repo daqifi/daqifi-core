@@ -295,13 +295,8 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
     private readonly BusyPortLedger _busyPorts = new();
 
     /// <inheritdoc />
-    IReadOnlyCollection<BusyPort> IBusyPortReporter.BusyPortsFromLastPass
-    {
-        get
-        {
-            return _busyPorts.PortsFromLastPass();
-        }
-    }
+    IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass()
+        => _busyPorts.TakePortsFromLastPass();
 
     /// <summary>
     /// Discovers devices asynchronously with a cancellation token.
@@ -438,7 +433,12 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
         }
         catch
         {
-            return true;
+            // Fail CLOSED. This method exists to stop an absent port being rescued, so answering
+            // "present" when we could not tell re-opens the exact hole it was added to close --
+            // and feeds it into the location-confirmed path, which is deliberately unbounded. A
+            // wrong "gone" costs one miss and MissThreshold absorbs it; a wrong "present" can keep
+            // a phantom alive forever. It also matches the behaviour before any of this existed.
+            return false;
         }
     }
 

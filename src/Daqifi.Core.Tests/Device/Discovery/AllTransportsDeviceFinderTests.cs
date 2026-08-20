@@ -282,7 +282,7 @@ namespace Daqifi.Core.Tests.Device.Discovery
             var reporter = composite as IBusyPortReporter;
 
             Assert.NotNull(reporter);
-            var ports = reporter!.BusyPortsFromLastPass;
+            var ports = reporter!.TakeBusyPortsFromLastPass();
             Assert.Equal(new[] { "COM3" }, ports.Select(p => p.PortName));
             Assert.Equal("usb:1-1.2", ports.Single().LocationKey);
         }
@@ -299,7 +299,7 @@ namespace Daqifi.Core.Tests.Device.Discovery
                 new BusyReportingFinder("COM7", "usb:2-1"),
             });
 
-            var ports = ((IBusyPortReporter)composite).BusyPortsFromLastPass;
+            var ports = ((IBusyPortReporter)composite).TakeBusyPortsFromLastPass();
 
             Assert.Equal(new[] { "COM3", "COM7" }, ports.Select(p => p.PortName).OrderBy(n => n));
         }
@@ -315,7 +315,7 @@ namespace Daqifi.Core.Tests.Device.Discovery
             IDeviceFinder outer = new AllTransportsDeviceFinder(
                 new IDeviceFinder[] { new ListDeviceFinder(Enumerable.Empty<IDeviceInfo>()), inner });
 
-            var ports = ((IBusyPortReporter)outer).BusyPortsFromLastPass;
+            var ports = ((IBusyPortReporter)outer).TakeBusyPortsFromLastPass();
 
             Assert.Equal(new[] { "COM9" }, ports.Select(p => p.PortName));
         }
@@ -339,7 +339,9 @@ namespace Daqifi.Core.Tests.Device.Discovery
             public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
                 => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
 
-            IReadOnlyCollection<BusyPort> IBusyPortReporter.BusyPortsFromLastPass => new[] { _busy };
+            // Re-armed by nothing: this stub always reports, which is what makes it a stub. The
+            // single-use semantics of the real ledger are pinned in BusyPortLedgerTests.
+            IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass() => new[] { _busy };
         }
 
         #endregion

@@ -28,7 +28,7 @@ public class BusyPortLedgerTests
         ledger.Record(stalePass, Port("COM3"));      // late probe, lands after the clear
         ledger.Record(currentPass, Port("COM3"));    // this pass's own observation
 
-        Assert.Equal(new[] { "COM3" }, ledger.PortsFromLastPass().Select(p => p.PortName));
+        Assert.Equal(new[] { "COM3" }, ledger.TakePortsFromLastPass().Select(p => p.PortName));
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public class BusyPortLedgerTests
         ledger.Record(currentPass, Port("COM3", "usb:1-1.2"));
         ledger.Record(stalePass, Port("COM3", "usb:9-9.9"));
 
-        var ports = ledger.PortsFromLastPass();
+        var ports = ledger.TakePortsFromLastPass();
         Assert.Equal("usb:1-1.2", Assert.Single(ports).LocationKey);
     }
 
@@ -58,7 +58,7 @@ public class BusyPortLedgerTests
 
         // A port freed since the last pass must not stay "busy" -- otherwise a device really
         // unplugged while its name was occupied would be rescued forever.
-        Assert.Empty(ledger.PortsFromLastPass());
+        Assert.Empty(ledger.TakePortsFromLastPass());
     }
 
     [Fact]
@@ -72,7 +72,46 @@ public class BusyPortLedgerTests
         ledger.Record(pass, Port("COM3"));
         ledger.Record(pass, Port("com3"));
 
-        Assert.Single(ledger.PortsFromLastPass());
+        Assert.Single(ledger.TakePortsFromLastPass());
+    }
+
+    [Fact]
+    public void TakePortsFromLastPass_IsSingleUse()
+    {
+        // A busy-port set describes ONE pass. A discovery run across several transports can return
+        // before this finder ever began a pass, and the newest data here would then be from an
+        // older moment -- so a second take without an intervening pass must report nothing rather
+        // than hand out the same observation again. Repeated contention would otherwise reuse one
+        // stale location-confirmed entry forever, and that path is deliberately unbounded, so a
+        // device that really was unplugged would never be reported lost.
+        var ledger = new BusyPortLedger();
+        var pass = ledger.BeginPass();
+        ledger.Record(pass, Port("COM3"));
+
+        Assert.Single(ledger.TakePortsFromLastPass());
+        Assert.Empty(ledger.TakePortsFromLastPass());
+    }
+
+    [Fact]
+    public void TakePortsFromLastPass_IsRearmedByANewPass()
+    {
+        // The complement: taking must not disable the ledger, or the feature stops working after
+        // the first reconcile.
+        var ledger = new BusyPortLedger();
+        var first = ledger.BeginPass();
+        ledger.Record(first, Port("COM3"));
+        ledger.TakePortsFromLastPass();
+
+        var second = ledger.BeginPass();
+        ledger.Record(second, Port("COM3"));
+
+        Assert.Single(ledger.TakePortsFromLastPass());
+    }
+
+    [Fact]
+    public void TakePortsFromLastPass_BeforeAnyPass_IsEmpty()
+    {
+        Assert.Empty(new BusyPortLedger().TakePortsFromLastPass());
     }
 
     [Fact]
