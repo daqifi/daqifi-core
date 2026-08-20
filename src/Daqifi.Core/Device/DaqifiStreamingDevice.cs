@@ -1312,9 +1312,11 @@ namespace Daqifi.Core.Device
             int completionTimeoutMs,
             CancellationToken cancellationToken,
             Func<CancellationToken, Task>? prepareAsync,
-            Func<Task>? finalizeAsync)
+            Func<Task>? finalizeAsync,
+            bool keepBlankLines)
             => ExecuteTextCommandAsync(
-                setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync, finalizeAsync);
+                setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync,
+                finalizeAsync, keepBlankLines);
 #pragma warning restore CA1068
 
         Task<IReadOnlyList<string>> IDeviceOperationHost.DrainErrorQueueAsync(

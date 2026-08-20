@@ -506,7 +506,8 @@ public class LiveSampleStreamTests
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null) => throw new NotSupportedException();
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false) => throw new NotSupportedException();
         public Task<IReadOnlyList<string>> DrainErrorQueueAsync(
             int maxIterations = 256,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();

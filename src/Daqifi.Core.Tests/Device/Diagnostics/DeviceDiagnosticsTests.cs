@@ -39,11 +39,50 @@ public class DeviceDiagnosticsTests
     [Fact]
     public async Task GetSystemLogAsync_WhenBufferEmpty_ReturnsEmpty()
     {
-        // No lines = genuinely empty buffer (firmware writes nothing); must not throw.
-        var device = new TestableDiagnosticsDevice("TestDevice");
+        // An empty log is a BLANK LINE, not silence. The firmware terminates every
+        // SYSTem:LOG? dump with one whether or not it had anything to say -- measured
+        // on a bench Nq1 running 3.7.2 with a raw pyserial probe: an empty log answers
+        // b'\r\n' in 6 ms (issue #543).
+        //
+        // This test previously canned NOTHING and asserted no-throw, with the comment
+        // "firmware writes nothing". That premise was wrong, and it is what made an
+        // empty log indistinguishable from a dead link: both arrived as zero lines and
+        // both were reported as "your log is empty".
+        var device = new TestableDiagnosticsDevice("TestDevice") { CannedTextResponse = { "" } };
         device.Connect();
 
         Assert.Empty(await device.GetSystemLogAsync());
+    }
+
+    [Fact]
+    public async Task GetSystemLogAsync_WhenDeviceAnswersNothingAtAll_Throws()
+    {
+        // Zero lines -- not even the terminator -- is a silent or unresponsive device.
+        // Returning an empty list here is the failure #543 exists to remove: it reports
+        // a dead link as a clean bill of health, on the one call an operator reaches for
+        // when they suspect the device is unwell.
+        var device = new TestableDiagnosticsDevice("TestDevice");
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(
+            () => device.GetSystemLogAsync());
+        Assert.Contains("did not answer", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetSystemLogAsync_WhenBufferHasEntries_IgnoresTheTerminator()
+    {
+        // A populated dump is its entries FOLLOWED BY the same blank terminator, so the
+        // terminator must not leak into the parsed entries as a phantom log line.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "Test log message 1", "" }
+        };
+        device.Connect();
+
+        var entries = await device.GetSystemLogAsync();
+        Assert.Single(entries);
+        Assert.Equal("Test log message 1", entries[0].Message);
     }
 
     [Fact]
@@ -471,7 +510,8 @@ public class DeviceDiagnosticsTests
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null)
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false)
         {
             try
             {

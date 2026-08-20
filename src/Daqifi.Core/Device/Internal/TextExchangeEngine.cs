@@ -203,7 +203,7 @@ namespace Daqifi.Core.Device.Internal
         /// </summary>
         /// <remarks>
         /// The parameter contract — including what the prepare and finalize phases guarantee — is
-        /// documented on <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>,
+        /// documented on <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>,
         /// the seam callers actually use.
         /// </remarks>
         internal async Task<IReadOnlyList<string>> ExecuteAsync(
@@ -212,7 +212,8 @@ namespace Daqifi.Core.Device.Internal
             Func<CancellationToken, Task> setupActionAsync,
             int responseTimeoutMs,
             int completionTimeoutMs,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool keepBlankLines = false)
         {
             if (responseTimeoutMs <= 0)
                 throw new ArgumentOutOfRangeException(nameof(responseTimeoutMs), responseTimeoutMs, "Timeout must be positive.");
@@ -546,9 +547,17 @@ namespace Daqifi.Core.Device.Internal
                 List<string> result;
                 lock (collectedLinesGate)
                 {
-                    result = collectedLines
-                        .Skip(staleLineCount)
-                        .Where(line => line.Length > 0)
+                    var afterStale = collectedLines.Skip(staleLineCount);
+                    // keepBlankLines is how a caller asks to see the firmware's
+                    // end-of-dump blank line. SYSTem:LOG? terminates its dump with
+                    // one unconditionally, so its presence is the difference between
+                    // "the device answered and its log is empty" and "the device did
+                    // not answer at all" -- two states that are otherwise identical
+                    // from here (issue #543). Default stays false: every other caller
+                    // parses content and has never seen a blank line (#538).
+                    result = (keepBlankLines
+                                ? afterStale
+                                : afterStale.Where(line => line.Length > 0))
                         .ToList();
                 }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -50,10 +51,34 @@ namespace Daqifi.Core.Device.Diagnostics
         {
             _host.EnsureConnected(cancellationToken);
 
-            var lines = await _host.ExecuteTextCommandAsync(
+            // keepBlankLines is what makes "the log is empty" distinguishable from
+            // "the device never answered" (issue #543). Both used to arrive here as an
+            // empty list, so a silent link, a wedged text exchange, or an unsupported
+            // header all reported as "your log is empty" -- the least useful answer a
+            // DIAGNOSTICS call can give, because it is indistinguishable from health.
+            //
+            // The firmware ends every SYSTem:LOG? dump with a blank line, empty or not
+            // (measured on a bench Nq1 running 3.7.2 with a raw pyserial probe, three
+            // trials of three: an empty log answers b'\r\n' in 6 ms; a populated one
+            // answers its entries followed by the same trailing b'\r\n'). So ANY line
+            // reaching us -- blank or not -- means the device answered.
+            var raw = await _host.ExecuteTextCommandAsync(
                 () => _host.Send(ScpiMessageProducer.GetSystemLog),
                 responseTimeoutMs: DIAGNOSTICS_RESPONSE_TIMEOUT_MS,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken,
+                keepBlankLines: true).ConfigureAwait(false);
+
+            if (raw.Count == 0)
+            {
+                throw new DeviceDiagnosticsException(
+                    "The device did not answer SYSTem:LOG? - not even the blank line that "
+                    + "terminates every log dump. This is a silent or unresponsive device, "
+                    + "not an empty log.",
+                    raw);
+            }
+
+            // Everything downstream expects content lines, exactly as before.
+            var lines = raw.Where(line => line.Length > 0).ToList();
 
             var entries = SystemLogParser.Parse(lines);
 

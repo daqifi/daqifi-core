@@ -1256,7 +1256,7 @@ namespace Daqifi.Core.Device
         /// <remarks>
         /// Waits up to 10 seconds to acquire the device operation lock before
         /// tearing down the consumer / producer / transport. This prevents
-        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
@@ -1777,6 +1777,13 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        /// <param name="keepBlankLines">
+        /// When <c>true</c>, blank lines are returned instead of filtered out. Only the system-log
+        /// read wants this: <c>SYSTem:LOG?</c> terminates its dump with a blank line
+        /// unconditionally, so seeing it is what separates "the device answered and its log is
+        /// empty" from "the device never answered" (issue #543). Every other caller parses content
+        /// and has never seen a blank line, so the default is <c>false</c>.
+        /// </param>
         // prepareAsync and finalizeAsync are added AFTER cancellationToken (technically violating
         // CA1068 "CancellationToken should be last") to keep existing positional callers working,
         // matching the convention established in IFirmwareUpdateService for the same reason. They
@@ -1792,7 +1799,8 @@ namespace Daqifi.Core.Device
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null)
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false)
         {
             return ExecuteTextCommandCoreAsync(
                 prepareAsync,
@@ -1800,12 +1808,13 @@ namespace Daqifi.Core.Device
                 _ => { setupAction(); return Task.CompletedTask; },
                 responseTimeoutMs,
                 completionTimeoutMs,
-                cancellationToken);
+                cancellationToken,
+                keepBlankLines);
         }
 #pragma warning restore CA1068
 
         /// <summary>
-        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// that accepts an async setup action so callers can <c>await</c> cancellable operations
         /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
         /// blocking the thread-pool thread.
@@ -1844,7 +1853,8 @@ namespace Daqifi.Core.Device
             Func<CancellationToken, Task> setupActionAsync,
             int responseTimeoutMs,
             int completionTimeoutMs,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool keepBlankLines = false)
         {
             return _textExchange.ExecuteAsync(
                 prepareAsync,
@@ -1852,7 +1862,8 @@ namespace Daqifi.Core.Device
                 setupActionAsync,
                 responseTimeoutMs,
                 completionTimeoutMs,
-                cancellationToken);
+                cancellationToken,
+                keepBlankLines);
         }
 
         /// <summary>
@@ -1966,7 +1977,7 @@ namespace Daqifi.Core.Device
         /// on hardware faults, or discard them if known-stale.
         /// </para>
         /// <para>
-        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>, which
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>, which
         /// pauses the protobuf consumer for the duration of the text exchange.
         /// Avoid calling this during active streaming or concurrently with
         /// other text commands.
