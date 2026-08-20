@@ -197,6 +197,27 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public async Task RefreshDeviceStatusAsync_IsNotBlockedByAThrowingStatusSubscriber()
+        {
+            // .NET stops invoking a multicast delegate at the first exception, and
+            // RaiseClassifiedEvent wraps the WHOLE list in one try/catch -- so a consumer that
+            // subscribed earlier and throws would have prevented the refresh from ever seeing its
+            // own reply. It would then time out while the status it asked for had already been
+            // applied to Metadata, which is the most confusing failure this API could produce.
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+
+            device.StatusMessageReceived += _ => throw new InvalidOperationException("boom");
+
+            var refresh = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(2));
+            device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 55 });
+
+            await refresh;
+
+            Assert.Equal(55, device.Metadata.Health.BatteryPercent);
+        }
+
+        [Fact]
         public async Task RefreshDeviceStatusAsync_ConcurrentCalls_AreNotCompletedByEachOthersReply()
         {
             // Both callers subscribe to the same multicast StatusMessageReceived event, so without

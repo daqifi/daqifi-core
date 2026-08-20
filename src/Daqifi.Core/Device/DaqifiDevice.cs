@@ -511,6 +511,21 @@ namespace Daqifi.Core.Device
         private readonly SemaphoreSlim _statusRefreshGate = new(1, 1);
 
         /// <summary>
+        /// The waiter for an in-flight <see cref="RefreshDeviceStatusAsync"/>, invoked directly
+        /// rather than through the public <see cref="StatusMessageReceived"/> event.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="RaiseClassifiedEvent"/> wraps the WHOLE multicast delegate in one try/catch,
+        /// which isolates the device from a throwing subscriber but not subscribers from each
+        /// other: .NET stops invoking an invocation list at the first exception, so a consumer
+        /// that subscribed earlier and throws would prevent the refresh from ever seeing its own
+        /// reply -- and it would time out while the status it asked for had already been applied.
+        /// Only one refresh runs at a time (<see cref="_statusRefreshGate"/>), so a single field
+        /// is enough.
+        /// </remarks>
+        private Action<DaqifiOutMessage>? _statusRefreshWaiter;
+
+        /// <summary>
         /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
         /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
         /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
@@ -3379,7 +3394,7 @@ namespace Daqifi.Core.Device
                 //
                 // Metadata is updated by OnStatusMessageReceived BEFORE this event is raised, so by
                 // the time the wait completes the caller can read Metadata.Health and see the reply.
-                StatusMessageReceived += OnStatus;
+                _statusRefreshWaiter = OnStatus;
                 try
                 {
                     Send(ScpiMessageProducer.GetDeviceInfo);
@@ -3390,13 +3405,22 @@ namespace Daqifi.Core.Device
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
+                        // A reply landing in the same instant the deadline fires can cancel the
+                        // wait even though the status DID arrive and was applied. Reporting that
+                        // as a timeout would tell the caller the refresh failed while the data
+                        // they asked for is sitting in Metadata.
+                        if (statusTcs.Task.IsCompletedSuccessfully)
+                        {
+                            return;
+                        }
+
                         throw new TimeoutException(
                             $"The device did not return a status message within {wait.TotalSeconds:0.##}s.");
                     }
                 }
                 finally
                 {
-                    StatusMessageReceived -= OnStatus;
+                    _statusRefreshWaiter = null;
                 }
             }
             finally
@@ -3515,6 +3539,23 @@ namespace Daqifi.Core.Device
 
             // Populate channels from the status message
             PopulateChannelsFromStatus(message);
+
+            // The refresh waiter runs BEFORE any consumer subscriber and outside the multicast
+            // event, so no third party can delay or prevent a caller of RefreshDeviceStatusAsync
+            // from seeing the reply it asked for. Its own faults are contained here for the same
+            // reason the classified event contains a subscriber's.
+            var waiter = _statusRefreshWaiter;
+            if (waiter != null)
+            {
+                try
+                {
+                    waiter(message);
+                }
+                catch (Exception ex)
+                {
+                    SafeLog(() => _logger.LogWarning(ex, "[RefreshDeviceStatus] waiter threw"));
+                }
+            }
 
             // Raise the classified event first so consumers that only care about status
             // messages can react before the undifferentiated MessageReceived below. A
