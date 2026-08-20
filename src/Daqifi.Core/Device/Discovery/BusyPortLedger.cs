@@ -24,6 +24,13 @@ internal sealed class BusyPortLedger
 
     private int _pass;
 
+    // BeginPass and TakePortsFromLastPass must be atomic WITH RESPECT TO EACH OTHER. Disarming and
+    // then reading the entries as two steps let a queued discovery start in between, so the taker
+    // could receive the next pass's half-filled data while the next taker received nothing at all.
+    // Record stays outside this lock -- it is a ConcurrentDictionary write and must not serialise
+    // against the concurrent probes that call it.
+    private readonly object _sync = new();
+
     // 1 while this pass's observation has not yet been taken. A busy-port set describes ONE pass;
     // it is not a standing fact about the world, and handing the same one out twice is how a
     // genuinely absent device stays alive forever (see TakePortsFromLastPass).
@@ -38,10 +45,13 @@ internal sealed class BusyPortLedger
         // Clear BEFORE the increment. A probe that enters after the increment gets the new pass
         // and is kept; one that entered before it carries the old pass and is filtered on read.
         // Clearing alone could never be enough -- a late write lands after the clear.
-        _entries.Clear();
-        Volatile.Write(ref _pass, unchecked(_pass + 1));
-        Volatile.Write(ref _armed, 1);
-        return Volatile.Read(ref _pass);
+        lock (_sync)
+        {
+            _entries.Clear();
+            Volatile.Write(ref _pass, unchecked(_pass + 1));
+            Volatile.Write(ref _armed, 1);
+            return _pass;
+        }
     }
 
     /// <summary>Records a busy port against the pass its probe started in.</summary>
@@ -79,14 +89,19 @@ internal sealed class BusyPortLedger
     /// </remarks>
     internal IReadOnlyCollection<BusyPort> TakePortsFromLastPass()
     {
-        // Exchange rather than read-then-write: two readers must not both receive the snapshot.
-        if (Interlocked.Exchange(ref _armed, 0) == 0)
+        lock (_sync)
         {
-            return System.Array.Empty<BusyPort>();
-        }
+            // Inside the lock the disarm and the read are one step, so the entries returned are
+            // always the ones belonging to the pass whose arm was consumed.
+            if (_armed == 0)
+            {
+                return System.Array.Empty<BusyPort>();
+            }
 
-        var pass = Volatile.Read(ref _pass);
-        return _entries.Values.Where(e => e.Pass == pass).Select(e => e.Port).ToList();
+            _armed = 0;
+            var pass = _pass;
+            return _entries.Values.Where(e => e.Pass == pass).Select(e => e.Port).ToList();
+        }
     }
 
     /// <summary>

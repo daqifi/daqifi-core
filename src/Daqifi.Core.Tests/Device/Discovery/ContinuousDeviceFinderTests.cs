@@ -237,6 +237,57 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
+    public void Reconcile_ARescueClearsTheConsecutiveMissCount()
+    {
+        // MissThreshold counts CONSECUTIVE misses, and the default of 2 exists to tolerate one
+        // dropped response. A rescue is explicitly not a miss, so a stale count surviving one
+        // silently voided that tolerance: miss, rescue, miss fired DeviceLost after a single real
+        // miss FOLLOWING a pass in which the device was affirmatively confirmed present.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        finder.Reconcile(Array.Empty<IDeviceInfo>());                          // miss 1
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-1.2")); // rescued
+        finder.Reconcile(Array.Empty<IDeviceInfo>());                          // miss 1 again
+
+        Assert.Empty(lost);
+
+        // And the tolerance is restored rather than merely deferred: it still takes a FULL
+        // threshold of consecutive misses from here.
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+        Assert.Single(lost);
+    }
+
+    [Fact]
+    public void Reconcile_AContradictedConfirmationRescuesNothing()
+    {
+        // A confirming report does not get to short-circuit the scan. One reporter places this
+        // port where the device is; another places it somewhere else. Because the confirmed path
+        // is UNBOUNDED, accepting it on contradictory evidence keeps an absent device alive
+        // forever, while declining costs a miss the threshold absorbs. Order matters: the
+        // confirming report comes first, which is the order an early return would have accepted.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        var reports = new[]
+        {
+            new BusyPort("COM3", "usb:1-1.2"),   // confirms, and is seen FIRST
+            new BusyPort("COM3", "usb:9-9.9"),   // contradicts it
+        };
+
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), reports);
+
+        Assert.Single(lost);
+    }
+
+    [Fact]
     public void Reconcile_AContradictedReportRescuesNothing()
     {
         // One reporter positively places this port somewhere the device is not. Combined with a

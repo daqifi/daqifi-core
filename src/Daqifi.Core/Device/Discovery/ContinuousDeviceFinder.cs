@@ -336,8 +336,14 @@ public class ContinuousDeviceFinder : IDisposable
                     // A location match is evidence about the physical device, so it can hold the
                     // device indefinitely -- which it must, because the case this exists for
                     // (your own app using the device) has no time limit.
+                    // MissThreshold counts CONSECUTIVE misses -- the doc comment above says so and
+                    // the default of 2 exists to tolerate one dropped response. A rescue is
+                    // explicitly not a miss, so leaving a stale count behind silently voided that
+                    // tolerance: miss, rescue, miss would fire DeviceLost after a single real miss
+                    // following a pass in which the device was affirmatively confirmed present.
                     if (rescue == BusyRescue.LocationConfirmed)
                     {
+                        tracked.MissCount = 0;
                         tracked.WeakRescueCount = 0;
                         continue;
                     }
@@ -348,9 +354,13 @@ public class ContinuousDeviceFinder : IDisposable
                     // stayed occupied would never be reported lost, which is the failure this
                     // whole mechanism must not cause. Past the bound it falls back to ordinary
                     // miss counting, i.e. exactly the behaviour before any of this existed.
+                    // The weak branch clears it too, for the same reason: this pass was not a
+                    // miss either. It cannot rescue forever -- WeakRescueCount is the bound, and
+                    // unlike MissCount it survives across rescues, so the budget still runs out.
                     if (rescue == BusyRescue.NameOnly &&
                         tracked.WeakRescueCount < MaxWeakBusyRescues)
                     {
+                        tracked.MissCount = 0;
                         tracked.WeakRescueCount++;
                         continue;
                     }
@@ -600,6 +610,7 @@ public class ContinuousDeviceFinder : IDisposable
         // returning on the first match let an entry that happened to carry no location suppress
         // a later one that would have confirmed it.
         var sawNameOnly = false;
+        var sawLocationConfirmed = false;
         var sawLocationMismatch = false;
 
         foreach (var busy in busyPorts)
@@ -623,19 +634,32 @@ public class ContinuousDeviceFinder : IDisposable
             // is only readable by opening the port, which is exactly what cannot be done here.
             if (string.Equals(busy.LocationKey, device.LocationKey, StringComparison.Ordinal))
             {
-                // Strongest available evidence; nothing later can improve on it.
-                return BusyRescue.LocationConfirmed;
+                sawLocationConfirmed = true;
+                continue;
             }
 
             sawLocationMismatch = true;
         }
 
-        // A mismatch alongside a name-only report is CONTRADICTORY evidence, and the fail-safe
-        // reading of a contradiction is to rescue nothing: one reporter positively placed this
-        // port somewhere the device is not.
-        return sawNameOnly && !sawLocationMismatch
-            ? BusyRescue.NameOnly
-            : BusyRescue.None;
+        // A mismatch POISONS the whole classification, including an otherwise-confirming report.
+        // It is the one piece of NEGATIVE evidence available here -- a reporter positively placing
+        // this port somewhere the device is not -- and the asymmetry decides it: rescuing wrongly
+        // on the location-confirmed path is unbounded, so a contradiction keeping an absent device
+        // alive lasts forever, while declining wrongly costs a miss that MissThreshold absorbs.
+        //
+        // Returning early on the first confirming report would have skipped this check, which is
+        // the inconsistency this replaces: contradiction was already fail-safe everywhere else.
+        if (sawLocationMismatch)
+        {
+            return BusyRescue.None;
+        }
+
+        if (sawLocationConfirmed)
+        {
+            return BusyRescue.LocationConfirmed;
+        }
+
+        return sawNameOnly ? BusyRescue.NameOnly : BusyRescue.None;
     }
 
     /// <summary>
