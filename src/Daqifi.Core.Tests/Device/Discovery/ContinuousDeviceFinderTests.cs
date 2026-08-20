@@ -43,6 +43,106 @@ public class ContinuousDeviceFinderTests
             PassTimeout = TimeSpan.FromMilliseconds(50)
         });
 
+    #region Busy ports (issue #532)
+
+    [Fact]
+    public void Reconcile_DeviceOnABusyPort_IsNotLost()
+    {
+        // The reported bug: keep discovery running next to a device you are using, and the
+        // device you are using disappears. Its port is still there -- your own process just has
+        // it open, so the probe cannot ask it anything and answers exactly as it would for an
+        // empty port.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+
+        // Several passes where the probe cannot open COM3. Well past MissThreshold.
+        for (var i = 0; i < 5; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), new[] { "COM3" });
+        }
+
+        Assert.Empty(lost);
+        Assert.Single(finder.Devices);
+    }
+
+    [Fact]
+    public void Reconcile_DeviceWhosePortIsGone_IsStillLost()
+    {
+        // The control, and the one that matters most: the fix must not make devices immortal.
+        // A real removal takes the port out of enumeration, so no busy report mentions it.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+
+        // Another port is busy; COM3 is simply absent.
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), new[] { "COM9" });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), new[] { "COM9" });
+
+        Assert.Single(lost);
+        Assert.Equal("SN-1", lost[0].SerialNumber);
+        Assert.Empty(finder.Devices);
+    }
+
+    [Fact]
+    public void Reconcile_BusyPortMatching_IsCaseInsensitive()
+    {
+        // Windows COM names are case-insensitive, and the busy report is whatever string the
+        // platform handed back. A case difference must not resurrect the original bug.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), new[] { "com3" });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), new[] { "com3" });
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_BusyPortRescue_DoesNotStopAGenuineLossLater()
+    {
+        // A device held open for a while and then genuinely unplugged must still be reported
+        // lost -- the rescue suppresses the miss, it does not latch the device as present.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), new[] { "COM3" });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), new[] { "COM3" });
+        Assert.Empty(lost);
+
+        // Unplugged: the port stops enumerating, so it stops being reported busy.
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+
+        Assert.Single(lost);
+    }
+
+    [Fact]
+    public void Reconcile_WithNoBusyReport_BehavesExactlyAsBefore()
+    {
+        // A finder that cannot report busy ports (WiFi, or any third-party IDeviceFinder) passes
+        // null, and nothing about the existing miss accounting changes.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { Serial("SN-1", port: "COM3") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+        finder.Reconcile(Array.Empty<IDeviceInfo>());
+
+        Assert.Single(lost);
+    }
+
+    #endregion
+
     #region Constructor / options validation
 
     [Fact]

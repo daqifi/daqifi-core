@@ -36,7 +36,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// needs will report nothing, exactly as it would have before.
 /// </para>
 /// </remarks>
-public class SerialDeviceFinder : DeviceFinderBase
+public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
 {
     #region Constants
 
@@ -289,6 +289,16 @@ public class SerialDeviceFinder : DeviceFinderBase
     #region Public Methods
 
     /// <summary>
+    /// Ports that were present but already open during the most recent pass. Probes run
+    /// concurrently, so this is a concurrent set rather than a list.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _busyPorts =
+        new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(System.StringComparer.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    IReadOnlyCollection<string> IBusyPortReporter.BusyPortsFromLastPass => _busyPorts.Keys.ToList();
+
+    /// <summary>
     /// Discovers devices asynchronously with a cancellation token.
     /// Probes each serial port to identify DAQiFi devices.
     /// </summary>
@@ -302,6 +312,9 @@ public class SerialDeviceFinder : DeviceFinderBase
         await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Describes this pass alone; a port freed since the last one must not stay "busy".
+            _busyPorts.Clear();
+
             var discoveredDevices = new List<IDeviceInfo>();
             // Pre-filter by USB VID/PID where the platform supports it
             // (closes #157). This drops discovery time from ~1 minute on a
@@ -664,7 +677,16 @@ public class SerialDeviceFinder : DeviceFinderBase
         }
         catch (UnauthorizedAccessException)
         {
-            // Port is in use by another application
+            // The port is there; something else already has it open — very often the caller's
+            // own application, holding the device it is actively using. Recorded rather than
+            // folded into the null below, because "busy" and "not a DAQiFi device" are the same
+            // answer to this method and completely different answers to the caller (issue #532).
+            //
+            // UnauthorizedAccessException is the right discriminator on every platform we
+            // support, Windows included: verified 2026-08-20 by opening a COM port twice with
+            // System.IO.Ports.SerialPort on Windows, which threw
+            // System.UnauthorizedAccessException ("Access to the port 'COM12' is denied").
+            _busyPorts.TryAdd(portName, 0);
             return null;
         }
         catch (OperationCanceledException)

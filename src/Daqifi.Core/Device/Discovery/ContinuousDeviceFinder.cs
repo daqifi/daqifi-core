@@ -252,7 +252,14 @@ public class ContinuousDeviceFinder : IDisposable
     /// Exposed internally so the dedup/stale logic can be unit-tested without timing.
     /// </summary>
     /// <param name="passResults">Devices observed in the most recent pass.</param>
-    internal void Reconcile(IReadOnlyCollection<IDeviceInfo> passResults)
+    /// <param name="busyPorts">
+    /// Ports the finder found present but already open, or <see langword="null"/> when it cannot
+    /// report that. A tracked device on one of these has not gone away — the probe just could not
+    /// reach it — so it keeps its place in the live set instead of counting a miss (issue #532).
+    /// </param>
+    internal void Reconcile(
+        IReadOnlyCollection<IDeviceInfo> passResults,
+        IReadOnlyCollection<string>? busyPorts = null)
     {
         var newlyDiscovered = new List<IDeviceInfo>();
         var lost = new List<IDeviceInfo>();
@@ -294,6 +301,22 @@ public class ContinuousDeviceFinder : IDisposable
                 }
 
                 var tracked = pair.Value;
+
+                // A device sitting on a port that is present but already open has not gone
+                // anywhere -- the probe simply could not ask it, because something (very often
+                // the caller's own application, using this very device) holds the port. Counting
+                // that as a miss is what made an in-use device disappear from discovery and come
+                // back on disconnect (issue #532).
+                //
+                // This only rescues a device already in the live set: the identity comes from the
+                // pass that found it while the port was free, so nothing is being invented. A
+                // genuine removal takes the port out of enumeration entirely, no busy report is
+                // produced for it, and DeviceLost fires exactly as before.
+                if (busyPorts != null && IsOnBusyPort(tracked.Info, busyPorts))
+                {
+                    continue;
+                }
+
                 tracked.MissCount++;
                 if (tracked.MissCount >= _missThreshold)
                 {
@@ -447,7 +470,9 @@ public class ContinuousDeviceFinder : IDisposable
             {
                 try
                 {
-                    Reconcile(results);
+                    Reconcile(
+                        results,
+                        (_finder as IBusyPortReporter)?.BusyPortsFromLastPass);
                 }
                 catch (Exception ex)
                 {
@@ -500,6 +525,30 @@ public class ContinuousDeviceFinder : IDisposable
     protected virtual void OnDeviceDiscovered(IDeviceInfo deviceInfo)
     {
         DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
+    }
+
+    /// <summary>
+    /// Whether a tracked device sits on one of the ports the finder reported as busy.
+    /// </summary>
+    private static bool IsOnBusyPort(IDeviceInfo device, IReadOnlyCollection<string> busyPorts)
+    {
+        var port = device?.PortName;
+        if (string.IsNullOrEmpty(port))
+        {
+            return false;
+        }
+
+        foreach (var busy in busyPorts)
+        {
+            // Ordinal-ignore-case: Windows COM names are case-insensitive, and the POSIX device
+            // paths this also sees never differ by case alone.
+            if (string.Equals(busy, port, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
