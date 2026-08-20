@@ -17,8 +17,11 @@ namespace Daqifi.Core.Device.Discovery;
 /// </remarks>
 internal sealed class BusyPortLedger
 {
-    // Case-insensitive because an OS port name is not case-significant, and two spellings of one
-    // port must not become two entries -- the reader would then see a phantom second busy port.
+    // Case-insensitive to match ClassifyBusyRescue, so a port cannot be recorded under one
+    // spelling and looked up under another. Windows COM names genuinely are case-insensitive; the
+    // POSIX device paths this also sees are case-SENSITIVE, but both the recorded name and the
+    // looked-up one come from the same enumeration, so they never differ by case alone. Two
+    // spellings becoming two entries would show up as a phantom second busy port.
     private readonly ConcurrentDictionary<string, (int Pass, BusyPort Port)> _entries =
         new(System.StringComparer.OrdinalIgnoreCase);
 
