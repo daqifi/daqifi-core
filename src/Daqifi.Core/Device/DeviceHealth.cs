@@ -3,9 +3,24 @@ namespace Daqifi.Core.Device;
 /// <summary>
 /// Health/telemetry values decoded from a device status message: battery charge,
 /// board temperature, and the raw power/device status codes. These update as new
-/// status messages arrive (including the periodic ones emitted during streaming),
-/// so a snapshot reflects the most recent reading Core has seen.
+/// status messages arrive, so a snapshot reflects the most recent reading Core has seen.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Status messages are not periodic.</b> The device sends one when asked and at no other
+/// time — a connected link carries stream frames only, and the firmware builds each of those
+/// from four tags, none of them health. So these values are captured during
+/// <c>InitializeAsync</c> and then stay put until something asks again. Measured on an Nq1
+/// running 3.7.2: 1,587 inbound messages over 65 s, exactly one of which carried health, and
+/// only because it was requested (issue #535).
+/// </para>
+/// <para>
+/// Call <see cref="DaqifiDevice.RefreshDeviceStatusAsync"/> to get a current reading. An
+/// earlier revision of this summary said these values included "the periodic ones emitted
+/// during streaming"; there are none, and a consumer who believed it would display a battery
+/// percentage frozen at connect.
+/// </para>
+/// </remarks>
 /// <remarks>
 /// The underlying protobuf fields are proto3 scalars with no explicit presence, so a
 /// value of <c>0</c> is indistinguishable from "not reported". To avoid dropping a known
@@ -32,6 +47,13 @@ public class DeviceHealth
     /// the field), or <c>null</c> if the device has not reported a temperature since this instance
     /// was created.
     /// </summary>
+    /// <remarks>
+    /// <b>No shipping firmware populates this.</b> The encoder's <c>temp_status</c> case is empty,
+    /// so the field is never assigned, stays 0, and proto3 omits it — checked at v3.5.0, v3.6.0,
+    /// v3.7.0, v3.7.1 and v3.7.2, i.e. the whole range Core supports. Against real hardware this
+    /// is <c>null</c> and cannot be anything else; it is kept because the wire field exists and a
+    /// future firmware may fill it (issue #535).
+    /// </remarks>
     public int? BoardTemperatureCelsius { get; set; }
 
     /// <summary>

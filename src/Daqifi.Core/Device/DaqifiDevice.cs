@@ -497,6 +497,12 @@ namespace Daqifi.Core.Device
         private static readonly TimeSpan ChannelPopulationPollInterval = TimeSpan.FromSeconds(1);
 
         /// <summary>
+        /// Default wait for <see cref="RefreshDeviceStatusAsync"/>. A device that is answering at
+        /// all replies in milliseconds; this is a hang detector, not a prediction.
+        /// </summary>
+        private static readonly TimeSpan DefaultStatusRefreshTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>
         /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
         /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
         /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
@@ -3284,6 +3290,82 @@ namespace Daqifi.Core.Device
                 SafeLog(() => _logger.LogDebug(
                     ex,
                     "[InitializeAsync] Reading the capability document failed; keeping board-derived capabilities."));
+            }
+        }
+
+        /// <summary>
+        /// Asks the device for a fresh status message and waits for it to arrive, updating
+        /// <see cref="Metadata"/> — including <see cref="DeviceMetadata.Health"/> — from the reply.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Health telemetry is <b>not</b> live. The device sends a status message when asked and at
+        /// no other time: a connected link carries stream frames only (the firmware builds each one
+        /// from four tags, none of them health), so without this call the values captured during
+        /// <c>InitializeAsync</c> stay frozen for the life of the connection. Measured on an Nq1
+        /// running 3.7.2: 1,587 inbound messages over 65 s, of which exactly one carried health —
+        /// the one the harness explicitly asked for (issue #535).
+        /// </para>
+        /// <para>
+        /// Cadence is deliberately the caller's, not Core's. A self-poll inside the library would
+        /// contend for the operation lock against streaming and SD work, so how often "current"
+        /// needs to be is a decision only the application can make.
+        /// </para>
+        /// </remarks>
+        /// <param name="timeout">
+        /// How long to wait for the reply. Defaults to 5 seconds when omitted, so a silent device
+        /// surfaces as a <see cref="TimeoutException"/> rather than hanging the caller.
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe.</param>
+        /// <returns>A task that completes once a status message has been received and applied.</returns>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="TimeoutException">Thrown when no status message arrives in time.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public async Task RefreshDeviceStatusAsync(
+            TimeSpan? timeout = null,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureConnected(cancellationToken);
+
+            var wait = timeout ?? DefaultStatusRefreshTimeout;
+            if (wait <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(timeout), wait, "Timeout must be positive.");
+            }
+
+            var statusTcs = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void OnStatus(DaqifiOutMessage _) => statusTcs.TrySetResult(true);
+
+            // Subscribed before the send, so a device that answers immediately cannot slip the
+            // reply through the gap between Send() and the subscription -- the same ordering
+            // WaitForChannelsPopulatedAsync relies on.
+            //
+            // Metadata is updated by OnStatusMessageReceived BEFORE this event is raised, so by
+            // the time the wait completes the caller can read Metadata.Health and see the reply.
+            StatusMessageReceived += OnStatus;
+            try
+            {
+                Send(ScpiMessageProducer.GetDeviceInfo);
+
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(wait);
+
+                try
+                {
+                    await statusTcs.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"The device did not return a status message within {wait.TotalSeconds:0.##}s.");
+                }
+            }
+            finally
+            {
+                StatusMessageReceived -= OnStatus;
             }
         }
 
