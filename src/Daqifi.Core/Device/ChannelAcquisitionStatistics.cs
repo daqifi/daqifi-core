@@ -68,9 +68,28 @@ namespace Daqifi.Core.Device
     /// so every device-clock figure here describes a stream that moved backwards at some point and
     /// should be read as approximate. The host-clock figures are unaffected.
     /// </param>
-    /// <param name="MinValue">The smallest scaled value seen, seeded from the first sample.</param>
-    /// <param name="MaxValue">The largest scaled value seen, seeded from the first sample.</param>
-    /// <param name="MeanValue">The arithmetic mean of every scaled value seen in the window.</param>
+    /// <param name="MinValue">
+    /// The smallest value seen, seeded from the first sample, in <paramref name="Unit"/>.
+    /// </param>
+    /// <param name="MaxValue">
+    /// The largest value seen, seeded from the first sample, in <paramref name="Unit"/>.
+    /// </param>
+    /// <param name="MeanValue">
+    /// The arithmetic mean of every value seen in the window, in <paramref name="Unit"/>.
+    /// </param>
+    /// <param name="Unit">
+    /// The unit the three value figures are expressed in — the channel's configured engineering
+    /// unit (e.g. <c>"PSI"</c>) when it has one, otherwise whatever its scaling states, or
+    /// <c>null</c> when unstated.
+    /// <para>
+    /// It is here because without it the three numbers cannot be interpreted and cannot be
+    /// converted after the fact. This type is the only place in Core that consumes samples on the
+    /// consumer's behalf and returns just derived figures — every other path hands over the sample,
+    /// so a caller can read <c>ScaledValue</c> and <c>Unit</c> itself. A negative gain also
+    /// transposes the extremes, so re-applying a scaling by hand is not a safe workaround
+    /// (issue #534).
+    /// </para>
+    /// </param>
     public sealed record ChannelAcquisitionStatistics(
         ChannelType ChannelType,
         int ChannelNumber,
@@ -85,7 +104,8 @@ namespace Daqifi.Core.Device
         long OutOfOrderSampleCount,
         double MinValue,
         double MaxValue,
-        double MeanValue)
+        double MeanValue,
+        string? Unit = null)
     {
         /// <summary>
         /// Gets the sample rate the host actually received this channel at, in Hz, measured against

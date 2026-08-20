@@ -200,7 +200,8 @@ namespace Daqifi.Core.Device
                         state.MaxValue,
 
                         // An entry exists only because a sample created it, so the count is never zero.
-                        state.ValueSum / state.SampleCount));
+                        state.ValueSum / state.SampleCount,
+                        state.Unit));
                 }
 
                 // Device order — analog first, then digital, ascending within each — so a caller
@@ -277,7 +278,8 @@ namespace Daqifi.Core.Device
             // Channel and sample members are read here rather than under the lock: the channel's
             // properties take the channel's own lock, and reaching for one while holding this one
             // would nest the two locks on the decode thread for no benefit.
-            RecordCore(channel.Type, channel.ChannelNumber, channel.Name, sample.Timestamp, sample.Value);
+            RecordCore(channel.Type, channel.ChannelNumber, channel.Name, sample.Timestamp,
+                sample.ScaledValue, sample.Unit);
         }
 
         /// <summary>
@@ -373,8 +375,21 @@ namespace Daqifi.Core.Device
         /// <param name="number">The sample's channel number.</param>
         /// <param name="name">The channel's name as it reads now.</param>
         /// <param name="timestamp">The sample's device-derived timestamp.</param>
-        /// <param name="value">The sample's scaled value.</param>
-        private void RecordCore(ChannelType type, int number, string name, DateTime timestamp, double value)
+        /// <param name="value">
+        /// The sample's value in the unit the channel is configured to report -- <c>ScaledValue</c>,
+        /// not <c>Value</c>. The word "scaled" is overloaded here: <c>IDataSample.Value</c> is
+        /// already calibration-scaled (volts), while <c>ScaledValue</c> additionally applies the
+        /// channel's <c>ChannelScaling</c> (e.g. PSI). These statistics report the latter, so they
+        /// mean what the channel was configured to mean (issue #534).
+        /// </param>
+        /// <param name="unit">
+        /// The unit <paramref name="value"/> is expressed in, or <c>null</c> when unstated. Kept so
+        /// a consumer can tell volts from engineering units; without it the snapshot reports three
+        /// bare numbers whose meaning cannot be recovered, because it has already consumed the
+        /// samples they came from.
+        /// </param>
+        private void RecordCore(ChannelType type, int number, string name, DateTime timestamp,
+            double value, string? unit)
         {
             var now = _clock();
 
@@ -393,6 +408,11 @@ namespace Daqifi.Core.Device
                 }
 
                 state.Name = name;
+
+                // Last seen wins, exactly as Name does. A channel's scaling can be reassigned
+                // mid-session, and the alternative -- freezing the first unit -- would label later
+                // samples with a unit they were not measured in.
+                state.Unit = unit;
 
                 if (state.SampleCount == 0)
                 {
@@ -515,7 +535,8 @@ namespace Daqifi.Core.Device
         /// is worth measuring is the caller's business, not this handler's.
         /// </summary>
         private void OnSampleReceived(object? sender, SampleReceivedEventArgs e) =>
-            RecordCore(e.Channel.Type, e.Channel.ChannelNumber, e.Channel.Name, e.Sample.Timestamp, e.Sample.Value);
+            RecordCore(e.Channel.Type, e.Channel.ChannelNumber, e.Channel.Name, e.Sample.Timestamp,
+                e.Sample.ScaledValue, e.Sample.Unit);
 
         /// <summary>
         /// One channel's mutable accumulators. A class rather than a struct so it can be updated in
@@ -524,6 +545,7 @@ namespace Daqifi.Core.Device
         private sealed class ChannelState
         {
             internal string Name = string.Empty;
+            internal string? Unit;
             internal long SampleCount;
 
             /// <summary>The extremes of the timestamps seen, which the device-clock span is measured over.</summary>

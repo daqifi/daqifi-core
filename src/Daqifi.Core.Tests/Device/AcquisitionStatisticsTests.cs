@@ -611,10 +611,92 @@ namespace Daqifi.Core.Tests.Device
 
         #endregion
 
+        #region Engineering units (issue #534)
+
+        [Fact]
+        public void Record_WithAChannelScaling_ReportsTheEngineeringValueAndItsUnit()
+        {
+            // A channel configured to read PSI must not have its statistics reported in volts.
+            // Before this fix RecordCore read sample.Value, so a pressure transducer's snapshot
+            // came back as the raw voltage with nothing saying which of the two it was -- and the
+            // snapshot cannot be converted afterwards, because it has already consumed the samples.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0) { Name = "AI0" };
+            var scaling = new ChannelScaling(2.0, 10.0, "PSI");
+
+            foreach (var volts in new[] { 1.0, 3.0, 2.0 })
+            {
+                stats.Record(channel, Sample(clock.Now, volts, scaling));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            var channelStats = Assert.Single(stats.Snapshot().Channels);
+            Assert.Equal("PSI", channelStats.Unit);
+            Assert.Equal(12.0, channelStats.MinValue);   // 1.0 * 2 + 10
+            Assert.Equal(16.0, channelStats.MaxValue);   // 3.0 * 2 + 10
+            Assert.Equal(14.0, channelStats.MeanValue);  // mean of 12, 16, 14
+        }
+
+        [Fact]
+        public void Record_WithAnInvertingScaling_DoesNotTransposeTheExtremes()
+        {
+            // The case that makes a manual fix-up unsafe rather than merely inconvenient: a
+            // negative gain swaps which raw reading is the extreme. Recording raw volts and
+            // letting the consumer re-apply the scaling would hand them a MinValue that is
+            // actually the maximum. ChannelScaling permits a negative gain -- only finiteness
+            // is validated -- so this is a supported configuration, not an abuse.
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0) { Name = "AI0" };
+            var scaling = new ChannelScaling(-3.0, 5.0, "PSI");
+
+            foreach (var volts in new[] { 1.0, 2.0 })
+            {
+                stats.Record(channel, Sample(clock.Now, volts, scaling));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            var channelStats = Assert.Single(stats.Snapshot().Channels);
+
+            // 1.0 V -> 2.0 PSI (the MAXIMUM); 2.0 V -> -1.0 PSI (the MINIMUM).
+            Assert.Equal(-1.0, channelStats.MinValue);
+            Assert.Equal(2.0, channelStats.MaxValue);
+            Assert.True(channelStats.MinValue < channelStats.MaxValue,
+                "an inverting scaling must not leave the extremes transposed");
+        }
+
+        [Fact]
+        public void Record_WithNoScaling_IsUnchangedAndReportsNoUnit()
+        {
+            // The control: an unscaled channel must read exactly as it did before, so the fix
+            // cannot be "always transform something".
+            var clock = new TestClock(Epoch);
+            using var stats = new AcquisitionStatistics(null, clock.Read);
+            var channel = new AnalogChannel(0) { Name = "AI0" };
+
+            foreach (var value in new[] { 1.0, 3.0, 2.0 })
+            {
+                stats.Record(channel, Sample(clock.Now, value));
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            var channelStats = Assert.Single(stats.Snapshot().Channels);
+            Assert.Null(channelStats.Unit);
+            Assert.Equal(1.0, channelStats.MinValue);
+            Assert.Equal(3.0, channelStats.MaxValue);
+            Assert.Equal(2.0, channelStats.MeanValue);
+        }
+
+        #endregion
+
         #region Helpers
 
         private static IDataSample Sample(DateTime timestamp, double value) =>
             new DataSample(timestamp, value);
+
+        private static IDataSample Sample(DateTime timestamp, double value, ChannelScaling scaling) =>
+            new DataSample(timestamp, value) { Scaling = scaling };
 
         private static void EnableAllChannels(DaqifiStreamingDevice device)
         {
