@@ -42,6 +42,12 @@ public class ContinuousDeviceFinder : IDisposable
 
         /// <summary>Consecutive passes in which the device was not seen.</summary>
         public int MissCount { get; set; }
+
+        /// <summary>
+        /// Consecutive passes rescued on a busy port whose USB location could NOT be checked,
+        /// so the only evidence was a port name.
+        /// </summary>
+        public int WeakRescueCount { get; set; }
     }
 
     #endregion
@@ -51,6 +57,13 @@ public class ContinuousDeviceFinder : IDisposable
     private readonly IDeviceFinder _finder;
     private readonly TimeSpan _interval;
     private readonly TimeSpan _passTimeout;
+    /// <summary>
+    /// How many consecutive passes a device may be held by a busy port that could not be
+    /// location-checked. Generous, because a name-only match is usually still the right answer;
+    /// finite, because on that evidence alone it cannot be trusted forever.
+    /// </summary>
+    private const int MaxWeakBusyRescues = 20;
+
     private readonly int _missThreshold;
     private readonly Func<IDeviceInfo, string>? _identitySelector;
     private readonly bool _leaveInnerFinderOpen;
@@ -284,6 +297,10 @@ public class ContinuousDeviceFinder : IDisposable
                     // change between passes) and clear the miss counter.
                     tracked.Info = device;
                     tracked.MissCount = 0;
+
+                    // Actually seeing the device proves it is there, so a later spell of
+                    // unverifiable rescues starts from scratch.
+                    tracked.WeakRescueCount = 0;
                 }
                 else
                 {
@@ -312,9 +329,31 @@ public class ContinuousDeviceFinder : IDisposable
                 // pass that found it while the port was free, so nothing is being invented. A
                 // genuine removal takes the port out of enumeration entirely, no busy report is
                 // produced for it, and DeviceLost fires exactly as before.
-                if (busyPorts != null && IsOnBusyPort(tracked.Info, busyPorts))
+                if (busyPorts != null)
                 {
-                    continue;
+                    var rescue = ClassifyBusyRescue(tracked.Info, busyPorts);
+
+                    // A location match is evidence about the physical device, so it can hold the
+                    // device indefinitely -- which it must, because the case this exists for
+                    // (your own app using the device) has no time limit.
+                    if (rescue == BusyRescue.LocationConfirmed)
+                    {
+                        tracked.WeakRescueCount = 0;
+                        continue;
+                    }
+
+                    // A name-only match is not evidence about the device at all: an OS port name
+                    // is a lease, and neither side could offer a location to check it against. On
+                    // that basis the rescue is BOUNDED -- otherwise a removed device whose name
+                    // stayed occupied would never be reported lost, which is the failure this
+                    // whole mechanism must not cause. Past the bound it falls back to ordinary
+                    // miss counting, i.e. exactly the behaviour before any of this existed.
+                    if (rescue == BusyRescue.NameOnly &&
+                        tracked.WeakRescueCount < MaxWeakBusyRescues)
+                    {
+                        tracked.WeakRescueCount++;
+                        continue;
+                    }
                 }
 
                 tracked.MissCount++;
@@ -530,12 +569,30 @@ public class ContinuousDeviceFinder : IDisposable
     /// <summary>
     /// Whether a tracked device sits on one of the ports the finder reported as busy.
     /// </summary>
-    private static bool IsOnBusyPort(IDeviceInfo device, IReadOnlyCollection<BusyPort> busyPorts)
+    /// <summary>How much a busy port can be trusted to speak for a tracked device.</summary>
+    private enum BusyRescue
+    {
+        /// <summary>No busy port matches this device.</summary>
+        None = 0,
+
+        /// <summary>The port name matches, but no location was available on one or both sides.</summary>
+        NameOnly,
+
+        /// <summary>The port name matches and both sides agree on the USB physical location.</summary>
+        LocationConfirmed,
+    }
+
+    /// <summary>
+    /// How strongly the busy report vouches for <paramref name="device"/> still being present.
+    /// </summary>
+    private static BusyRescue ClassifyBusyRescue(
+        IDeviceInfo device,
+        IReadOnlyCollection<BusyPort> busyPorts)
     {
         var port = device?.PortName;
         if (string.IsNullOrEmpty(port))
         {
-            return false;
+            return BusyRescue.None;
         }
 
         foreach (var busy in busyPorts)
@@ -547,26 +604,21 @@ public class ContinuousDeviceFinder : IDisposable
                 continue;
             }
 
-            // An OS port name is a lease, not an identity. Unplug a device and the next one along
-            // can be handed the same name — so matching on the name alone would keep a device that
-            // has genuinely gone reported as present for as long as its old name stayed occupied,
-            // which is the failure this rescue exists to avoid causing.
-            //
-            // When both sides know the USB physical location, it has to agree. It is resolved from
-            // the OS rather than from the port, so it is available on exactly the path where the
-            // port cannot be opened.
-            if (busy.LocationKey != null && device!.LocationKey != null)
+            if (busy.LocationKey == null || device!.LocationKey == null)
             {
-                return string.Equals(busy.LocationKey, device.LocationKey, StringComparison.Ordinal);
+                return BusyRescue.NameOnly;
             }
 
-            // One side could not resolve a location — an older platform provider, or a port the OS
-            // will not place. Fall back to the name, which is what this did before locations were
-            // carried: still a large improvement on counting the device lost, and never worse.
-            return true;
+            // The location is a physical POSITION, not a device identity: it confirms the port is
+            // the same one, not that the same unit is behind it. A different device plugged into
+            // the same hub position still matches. That residual is inherent -- the serial number
+            // is only readable by opening the port, which is exactly what cannot be done here.
+            return string.Equals(busy.LocationKey, device.LocationKey, StringComparison.Ordinal)
+                ? BusyRescue.LocationConfirmed
+                : BusyRescue.None;
         }
 
-        return false;
+        return BusyRescue.None;
     }
 
     /// <summary>

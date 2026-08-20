@@ -207,6 +207,77 @@ public class ContinuousDeviceFinderTests
         Assert.Empty(lost);
     }
 
+    [Fact]
+    public void Reconcile_NameOnlyRescue_IsBounded()
+    {
+        // A name-only match is not evidence about the DEVICE -- an OS port name is a lease, and
+        // neither side offered a location to check it against. Left unbounded, a removed device
+        // whose name stayed occupied would never be reported lost: the exact failure this whole
+        // mechanism must not cause. Past the bound it falls back to ordinary miss counting.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: null) });
+
+        for (var i = 0; i < 40; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        }
+
+        Assert.Single(lost);
+        Assert.Equal("SN-1", lost[0].SerialNumber);
+    }
+
+    [Fact]
+    public void Reconcile_LocationConfirmedRescue_IsNotBounded()
+    {
+        // The complement, and the reason a blanket cap was the wrong fix: the case this exists
+        // for -- your own app holding the device it is using -- has no time limit. With the
+        // location agreeing there IS evidence about the physical port, so it holds indefinitely.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { SerialAt("SN-1", port: "COM3", location: "usb:1-1.2") });
+
+        for (var i = 0; i < 200; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3", "usb:1-1.2"));
+        }
+
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void Reconcile_ARealSighting_ResetsTheWeakRescueBudget()
+    {
+        // The budget is about consecutive unverifiable passes. Actually seeing the device proves
+        // it is there, so a later spell of name-only rescues starts from scratch rather than
+        // inheriting an old tally and evicting a present device early.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        var device = SerialAt("SN-1", port: "COM3", location: null);
+        finder.Reconcile(new[] { device });
+
+        for (var i = 0; i < 15; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        }
+        Assert.Empty(lost);
+
+        finder.Reconcile(new[] { device });          // probed successfully again
+
+        for (var i = 0; i < 15; i++)
+        {
+            finder.Reconcile(Array.Empty<IDeviceInfo>(), Busy("COM3"));
+        }
+
+        Assert.Empty(lost);
+    }
+
     #endregion
 
     #region Constructor / options validation
