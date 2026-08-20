@@ -86,7 +86,7 @@ namespace Daqifi.Core.Device.Internal
         /// </summary>
         void WithChannelsLock(Action action);
 
-        /// <inheritdoc cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// <inheritdoc cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
 #pragma warning disable CA1068 // Matches the seam it forwards to, which orders these for source compatibility.
         Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
@@ -94,7 +94,8 @@ namespace Daqifi.Core.Device.Internal
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null);
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false);
 #pragma warning restore CA1068
 
         /// <inheritdoc cref="DaqifiDevice.DrainErrorQueueAsync"/>

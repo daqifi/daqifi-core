@@ -2938,7 +2938,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
                 Func<CancellationToken, Task>? prepareAsync = null,
-                Func<Task>? finalizeAsync = null)
+                Func<Task>? finalizeAsync = null,
+                bool keepBlankLines = false)
             {
                 try
                 {
@@ -3079,7 +3080,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
                 Func<CancellationToken, Task>? prepareAsync = null,
-                Func<Task>? finalizeAsync = null)
+                Func<Task>? finalizeAsync = null,
+                bool keepBlankLines = false)
             {
                 try
                 {
@@ -3145,7 +3147,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
                 Func<CancellationToken, Task>? prepareAsync = null,
-                Func<Task>? finalizeAsync = null)
+                Func<Task>? finalizeAsync = null,
+                bool keepBlankLines = false)
             {
                 if (finalizeAsync != null)
                 {
@@ -3199,7 +3202,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
                 Func<CancellationToken, Task>? prepareAsync = null,
-                Func<Task>? finalizeAsync = null)
+                Func<Task>? finalizeAsync = null,
+                bool keepBlankLines = false)
             {
                 try
                 {
@@ -3375,7 +3379,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
                 Func<CancellationToken, Task>? prepareAsync = null,
-                Func<Task>? finalizeAsync = null)
+                Func<Task>? finalizeAsync = null,
+                bool keepBlankLines = false)
             {
                 try
                 {
@@ -3677,7 +3682,8 @@ namespace Daqifi.Core.Tests.Device.SdCard
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default,
                 Func<CancellationToken, Task>? prepareAsync = null,
-                Func<Task>? finalizeAsync = null)
+                Func<Task>? finalizeAsync = null,
+                bool keepBlankLines = false)
             {
                 try
                 {

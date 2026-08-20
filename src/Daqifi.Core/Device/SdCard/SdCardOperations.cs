@@ -309,7 +309,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <remarks>
         /// Passed as the <c>prepareAsync</c> phase of
-        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// rather than run
         /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
         /// LAN interface between the switch and the commands that depend on it would leave them
@@ -331,7 +331,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <remarks>
         /// Passed as the <c>finalizeAsync</c> phase of
-        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// rather than run from the caller's own <c>finally</c>, so it holds the same lock
         /// acquisition the matching prepare phase does. Restoring from outside the lock leaves a
         /// window in which a competing exchange runs between this operation's commands and its

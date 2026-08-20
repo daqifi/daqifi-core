@@ -619,7 +619,8 @@ public class DeviceAdministrationOperationsTests
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null)
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false)
         {
             Assert.Null(prepareAsync);
             Assert.Null(finalizeAsync);
