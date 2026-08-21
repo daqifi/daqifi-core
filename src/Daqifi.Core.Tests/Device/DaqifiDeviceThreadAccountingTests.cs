@@ -51,13 +51,16 @@ public class DaqifiDeviceThreadAccountingTests
     {
         // The triage finding this pins down: the exchange does not resume the protobuf consumer's
         // existing reader, it stops it and starts a new one, so the exchange costs a second thread
-        // creation beyond the temporary text consumer's own.
+        // creation beyond the temporary text consumer's own. Compared by Thread instance rather
+        // than ManagedThreadId — the old thread has already exited by the time the new one is
+        // created, so the runtime is free to reuse its id, which would make an id comparison
+        // intermittently pass for the wrong reason.
         using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
         using var device = new ThreadAccountingTestableDevice("Churning Device", transport);
 
         device.Connect();
         var consumer = GetMessageConsumer(device);
-        var beforeId = GetConsumerThread(consumer!)!.ManagedThreadId;
+        var beforeThread = GetConsumerThread(consumer!)!;
 
         await device.CallExecuteTextCommandAsync(() => { });
 
@@ -67,8 +70,11 @@ public class DaqifiDeviceThreadAccountingTests
         Assert.Same(consumer, afterConsumer);
         Assert.True(afterConsumer!.IsRunning);
 
-        var afterId = GetConsumerThread(afterConsumer)!.ManagedThreadId;
-        Assert.NotEqual(beforeId, afterId);
+        var afterThread = GetConsumerThread(afterConsumer)!;
+        Assert.NotSame(beforeThread, afterThread);
+        Assert.True(
+            SpinWait.SpinUntil(() => !beforeThread.IsAlive, TimeSpan.FromSeconds(2)),
+            "The pre-exchange consumer thread never exited.");
 
         device.Disconnect();
     }
@@ -77,7 +83,10 @@ public class DaqifiDeviceThreadAccountingTests
     public async Task ExecuteTextCommand_LeavesTheDeviceBackAtTwoRunningThreadsAfterward()
     {
         // The exchange's thread churn is transient: once it completes, the device is back to
-        // steady state — no leaked text-consumer thread left running behind it.
+        // steady state — no leaked text-consumer thread left running behind it. Proven by
+        // tracking every thread that ever entered the transport's Read (producer/consumer plus
+        // whatever the exchange spun up) and requiring that only the current producer and
+        // consumer threads are still alive afterward.
         using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
         using var device = new ThreadAccountingTestableDevice("Settled Device", transport);
 
@@ -86,11 +95,21 @@ public class DaqifiDeviceThreadAccountingTests
 
         var producer = GetMessageProducer(device);
         var consumer = GetMessageConsumer(device);
+        var producerThread = GetProducerThread(producer!)!;
+        var consumerThread = GetConsumerThread(consumer!)!;
 
         Assert.True(producer!.IsRunning);
         Assert.True(consumer!.IsRunning);
-        Assert.True(GetProducerThread(producer)!.IsAlive);
-        Assert.True(GetConsumerThread(consumer)!.IsAlive);
+        Assert.True(producerThread.IsAlive);
+        Assert.True(consumerThread.IsAlive);
+
+        // Every reader thread the exchange spun up — including the transient text consumer's —
+        // must have exited by now; only the steady-state producer and consumer stay alive.
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => transport.ObservedReaderThreads.All(t => t == consumerThread || !t.IsAlive),
+                TimeSpan.FromSeconds(2)),
+            "A reader thread from the exchange outlived it.");
 
         device.Disconnect();
     }
@@ -161,28 +180,37 @@ public class DaqifiDeviceThreadAccountingTests
 
         public string ConnectionInfo => _isConnected ? "Immediate: Connected" : "Immediate: Disconnected";
 
+        /// <summary>Every distinct thread observed calling <see cref="Stream.Read"/>, in order.</summary>
+        public IReadOnlyList<Thread> ObservedReaderThreads => _stream.ObservedReaderThreads;
+
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(ImmediateReplyMockTransport));
-            _isConnected = true;
-            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            Connect();
             return Task.CompletedTask;
         }
 
         public Task DisconnectAsync()
         {
-            _isConnected = false;
-            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            Disconnect();
             return Task.CompletedTask;
         }
 
-        public void Connect() => ConnectAsync().Wait();
+        public void Connect()
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(ImmediateReplyMockTransport));
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+        }
 
-        public void Disconnect() => DisconnectAsync().Wait();
+        public void Disconnect()
+        {
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+        }
 
         public void Dispose()
         {
@@ -195,9 +223,21 @@ public class DaqifiDeviceThreadAccountingTests
         {
             private readonly byte[] _line;
             private readonly object _gate = new();
+            private readonly List<Thread> _observedReaderThreads = [];
             private int _position;
 
             public ImmediateReplyStream(string line) => _line = Encoding.ASCII.GetBytes(line);
+
+            public IReadOnlyList<Thread> ObservedReaderThreads
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _observedReaderThreads.ToArray();
+                    }
+                }
+            }
 
             public override bool CanRead => true;
             public override bool CanSeek => false;
@@ -211,6 +251,11 @@ public class DaqifiDeviceThreadAccountingTests
             {
                 lock (_gate)
                 {
+                    if (!_observedReaderThreads.Contains(Thread.CurrentThread))
+                    {
+                        _observedReaderThreads.Add(Thread.CurrentThread);
+                    }
+
                     if (_position < _line.Length)
                     {
                         var toCopy = Math.Min(count, _line.Length - _position);
