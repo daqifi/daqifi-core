@@ -121,10 +121,12 @@ public sealed record ChannelScaling
     /// </param>
     /// <returns>
     /// <see langword="true"/> when <paramref name="scaled"/> is <paramref name="value"/> converted
-    /// by <see cref="Gain"/> and <see cref="Offset"/>; <see langword="false"/> when the arithmetic
-    /// overflowed and <paramref name="scaled"/> is the unscaled fallback — in the original unit, not
-    /// <see cref="Unit"/>. A caller that aggregates converted readings (min, max, mean) can use this
-    /// to skip a fallback sample rather than let it silently contaminate the result.
+    /// by <see cref="Gain"/> and <see cref="Offset"/>; <see langword="false"/> when the conversion
+    /// did not happen because the computed result is non-finite — either the arithmetic overflowed,
+    /// or <paramref name="value"/> itself was already NaN or infinite — and <paramref name="scaled"/>
+    /// is the unscaled fallback — in the original unit, not <see cref="Unit"/>. A caller that
+    /// aggregates converted readings (min, max, mean) can use this to skip a fallback sample rather
+    /// than let it silently contaminate the result.
     /// </returns>
     public bool TryApply(double value, out double scaled)
     {
