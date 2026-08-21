@@ -26,6 +26,29 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that can be connected to and communicated with.
     /// This is the base implementation of the IDevice interface.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Thread accounting (issue #491).</b> A connected, idle device holds exactly two dedicated
+    /// background threads: the <see cref="MessageProducer{T}"/> write loop and the protobuf
+    /// <see cref="StreamMessageConsumer{T}"/> read loop started in <c>CompleteConnect</c>. Neither
+    /// spins — the producer parks on a sticky wait with no polling timeout, and the consumer blocks
+    /// in <c>Stream.Read</c> — so a fleet of N connected devices holds 2N threads regardless of
+    /// traffic, not 2N busy loops.
+    /// </para>
+    /// <para>
+    /// A text (SCPI) exchange (<see cref="TextExchangeEngine"/>) temporarily adds a third: the
+    /// protobuf consumer is stopped and, on restart, gets a fresh thread rather than resuming its
+    /// old one, and the transient line-based text consumer used to collect the reply is itself a
+    /// new thread per exchange. That is two thread creations per exchange, not one — but each is
+    /// tens of microseconds next to the exchange's own read-timeout and polling waits, so it does
+    /// not move measured cost the way the idle-cost fixes in #491 items 1 and 2 did (delivered in
+    /// #514). Eliminating it would require the consumer to survive a stop/start cycle by parking
+    /// on an event instead of exiting, which roots the device (and its stream/transport) for as
+    /// long as the thread is parked — a memory-leak risk for no measurable gain, and it overlaps
+    /// the read-loop redesign #485 needs. See #491 for the full triage; this file documents the
+    /// remaining known-cost rather than reworking it.
+    /// </para>
+    /// </remarks>
     public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost
     {
         /// <summary>
