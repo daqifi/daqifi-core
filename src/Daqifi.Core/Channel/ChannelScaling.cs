@@ -98,10 +98,47 @@ public sealed record ChannelScaling
     /// overflowing coefficient, and a reading that was already non-finite is handed back as it came
     /// rather than being disguised as a real measurement.
     /// </returns>
+    /// <remarks>
+    /// The return type cannot distinguish "converted" from "fell back to the unscaled value" — a
+    /// fallback comes back in the original unit with nothing marking it as such. A caller that needs
+    /// to tell the two apart, e.g. to avoid mixing an unscaled reading into a window of converted
+    /// ones, should use <see cref="TryApply"/> instead.
+    /// </remarks>
     public double Apply(double value)
     {
-        var scaled = value * Gain + Offset;
-        return double.IsFinite(scaled) ? scaled : value;
+        TryApply(value, out var result);
+        return result;
+    }
+
+    /// <summary>
+    /// Applies the transform to <paramref name="value"/>, reporting whether the conversion actually
+    /// took place.
+    /// </summary>
+    /// <param name="value">The channel value to convert, typically volts.</param>
+    /// <param name="scaled">
+    /// The converted value, or <paramref name="value"/> unchanged when the conversion would produce
+    /// a non-finite result.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="scaled"/> is <paramref name="value"/> converted
+    /// by <see cref="Gain"/> and <see cref="Offset"/>; <see langword="false"/> when the conversion
+    /// did not happen because the computed result is non-finite — either the arithmetic overflowed,
+    /// or <paramref name="value"/> itself was already NaN or infinite — and <paramref name="scaled"/>
+    /// is the unscaled fallback — in the original unit, not <see cref="Unit"/>. A caller that
+    /// aggregates converted readings (min, max, mean) can use this to skip a fallback sample rather
+    /// than let it silently contaminate the result.
+    /// </returns>
+    public bool TryApply(double value, out double scaled)
+    {
+        var result = value * Gain + Offset;
+        if (double.IsFinite(result))
+        {
+            scaled = result;
+            return true;
+        }
+
+        scaled = value;
+        return false;
     }
 
     /// <summary>

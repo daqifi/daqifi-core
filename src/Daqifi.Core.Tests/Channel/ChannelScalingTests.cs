@@ -111,6 +111,52 @@ public class ChannelScalingTests
     }
 
     [Fact]
+    public void TryApply_OnANormalResult_ReturnsTrueAndTheScaledValue()
+    {
+        var scaling = new ChannelScaling(gain: 20.0, offset: 3.0);
+
+        Assert.True(scaling.TryApply(2.5, out var scaled));
+        Assert.Equal(53.0, scaled);
+    }
+
+    [Fact]
+    public void TryApply_OnAnOverflowingResult_ReturnsFalseAndTheUnscaledValue()
+    {
+        // The signal Apply cannot give: false marks the fallback as a fallback, so a caller can
+        // tell "converted" from "the original value in the original unit, unmarked" and choose to
+        // skip it rather than mix it into an aggregate.
+        var scaling = new ChannelScaling(gain: 1e308);
+
+        Assert.False(scaling.TryApply(1e10, out var scaled));
+        Assert.Equal(1e10, scaled);
+    }
+
+    [Fact]
+    public void TryApply_OnANonFiniteInput_ReturnsFalseAndTheInput()
+    {
+        // Non-finite in, non-finite out is still "the conversion did not happen" -- it is visibly
+        // wrong rather than silently mislabelled, but it is still not a converted value.
+        var scaling = new ChannelScaling(gain: 2.0);
+
+        Assert.False(scaling.TryApply(double.NaN, out var nan));
+        Assert.True(double.IsNaN(nan));
+
+        Assert.False(scaling.TryApply(double.PositiveInfinity, out var infinity));
+        Assert.Equal(double.PositiveInfinity, infinity);
+    }
+
+    [Fact]
+    public void Apply_DelegatesToTryApply()
+    {
+        // Apply is TryApply with the bool dropped, not a second implementation to keep in sync.
+        var scaling = new ChannelScaling(gain: 1e308);
+
+        scaling.TryApply(1e10, out var expected);
+
+        Assert.Equal(expected, scaling.Apply(1e10));
+    }
+
+    [Fact]
     public void Identity_LeavesValuesAlone_AndStatesNoUnit()
     {
         Assert.Equal(4.25, ChannelScaling.Identity.Apply(4.25));
