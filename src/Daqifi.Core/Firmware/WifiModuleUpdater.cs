@@ -55,6 +55,15 @@ internal sealed class WifiModuleUpdater
     {
         const long totalBytes = 100;
 
+        // Read only by the failure paths at the bottom of this method. Once the update-mode command
+        // is on the wire the device may be sitting in LAN firmware-update / USB-transparent bridge
+        // mode, where the SCPI console is bypassed and the module stays unusable until something
+        // takes it back out — a power cycle, or the bridge-exit below. Today only the *successful*
+        // path restores it, so a failed or canceled flash strands the device; that is exactly why
+        // daqifi-desktop still wraps this call in its own recovery finally (part of #269).
+        // Armed inside the prepare step, at the one point where "may be bridged" becomes true.
+        var mayBeInLanUpdateMode = false;
+
         try
         {
             if (!skipVersionCheck
@@ -73,12 +82,45 @@ internal sealed class WifiModuleUpdater
                 {
                     FirmwareUpdateContext.EnsureDeviceConnected(device);
 
+                    // Observe cancellation before the first state-changing Send below: a
+                    // prep step that is already canceled must not still power the module on
+                    // or flip the device into LAN firmware-update mode.
+                    stateToken.ThrowIfCancellationRequested();
+
                     if (device.IsStreaming)
                     {
                         device.StopStreaming();
                     }
 
+                    // The WINC is powered off in standby and right after a PIC32 reflash, and LAN
+                    // commands are rejected (-200) in that state — so LAN:FWUpdate would silently
+                    // fail to take effect and the flash tool would find no bridge. Power it on and
+                    // let it settle first. This is the prep order daqifi-desktop hand-rolls today
+                    // (EnableLanUpdateMode: POWer:STATe 1 → settle → LAN:FWUpdate); owning it here
+                    // is what lets a consumer drop that workaround (part of #269).
+                    if (Options.PowerOnWifiModuleBeforeLanUpdateMode)
+                    {
+                        device.Send(ScpiMessageProducer.TurnDeviceOn);
+                        if (Options.PowerOnWifiModuleSettleDelay > TimeSpan.Zero)
+                        {
+                            await Task.Delay(Options.PowerOnWifiModuleSettleDelay, stateToken).ConfigureAwait(false);
+                        }
+                    }
+
                     device.Send(ScpiMessageProducer.SetLanFirmwareUpdateMode);
+
+                    // Armed here rather than before the whole prepare step. Everything above this
+                    // line fails with the update-mode command definitively un-sent, and arming for
+                    // those turns an immediate "device must be connected" failure into a full
+                    // ReconnectingAfterFlash wait for a transport that was never gone. Immediately
+                    // *after* the Send is as early as it can honestly be: Send is synchronous and
+                    // no await separates it from this line, so nothing can interleave between them.
+                    // From here on Core must assume the mode took — a cancel or state timeout can
+                    // land while the device is still acting on a command it already received. A
+                    // redundant bridge-exit on a device that never entered update mode is a no-op;
+                    // a skipped one leaves a bridged device needing a power cycle.
+                    mayBeInLanUpdateMode = true;
+
                     await Task.Delay(Options.PostLanFirmwareModeDelay, stateToken).ConfigureAwait(false);
                     device.Disconnect();
 
@@ -141,6 +183,28 @@ internal sealed class WifiModuleUpdater
                 {
                     await Task.Delay(Options.PostWifiReconnectDelay, stateToken).ConfigureAwait(false);
                     await _context.WaitForSerialReconnectAsync(device, stateToken).ConfigureAwait(false);
+
+                    // Leave the USB-to-WINC transparent bridge FIRST. While transparent mode is on
+                    // the SCPI console layer is bypassed, so the LAN commands below would be
+                    // forwarded to the WINC as raw bytes instead of being interpreted by the
+                    // device — the LAN configuration would silently not be restored. Sent
+                    // unconditionally: it is a no-op when the device is not in transparent mode,
+                    // and restoring the pre-flash state is the entire job of this step. Completes
+                    // the recovery half of daqifi-desktop's ResetLanAfterUpdate (part of #269).
+                    device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+
+                    // Leaving the bridge is a device-side mode transition, not an instantaneous
+                    // one. Until the SCPI console path is back, bytes on the port are still
+                    // forwarded to the WINC as raw data, so a LAN command sent immediately after
+                    // can be swallowed by the bridge and the restore silently does nothing —
+                    // the same intermittent failure the exit itself exists to prevent.
+                    // WifiBridgeActivator.Deactivate already paces this exact transition by the
+                    // same amount over a raw serial port; this is the managed-connection twin.
+                    if (Options.PostUsbTransparentModeExitDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(Options.PostUsbTransparentModeExitDelay, stateToken).ConfigureAwait(false);
+                    }
+
                     device.Send(ScpiMessageProducer.EnableNetworkLan);
                     device.Send(ScpiMessageProducer.ApplyNetworkLan);
                     device.Send(ScpiMessageProducer.SaveNetworkLan);
@@ -152,6 +216,11 @@ internal sealed class WifiModuleUpdater
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // Before reporting the outcome: a canceled WiFi flash is the single most likely way to
+            // leave the module bridged, so the exit runs here too — on its own token, since the
+            // caller's is already canceled by definition on this path.
+            await TryLeaveLanUpdateModeAfterFailureAsync(device, mayBeInLanUpdateMode).ConfigureAwait(false);
+
             _context.TransitionToState(FirmwareUpdateState.Failed, "WiFi module update canceled.");
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, _context.CurrentOperation, 0, totalBytes);
             Logger.LogWarning("WiFi module update canceled.");
@@ -161,6 +230,11 @@ internal sealed class WifiModuleUpdater
         {
             var failedState = _context.CurrentState;
             var failedOperation = _context.CurrentOperation;
+
+            // Captured above first, so the reported failure names the step that actually failed
+            // rather than the recovery attempt that follows it.
+            await TryLeaveLanUpdateModeAfterFailureAsync(device, mayBeInLanUpdateMode).ConfigureAwait(false);
+
             _context.TransitionToState(FirmwareUpdateState.Failed, failedOperation);
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, failedOperation, 0, totalBytes);
             Logger.LogError(ex, "WiFi module update failed in state {State}.", failedState);
@@ -173,12 +247,23 @@ internal sealed class WifiModuleUpdater
         IStreamingDevice device,
         CancellationToken cancellationToken)
     {
+        // Resolved up front so every return path below can state the bar it judged
+        // against, including the ones that never get to read the device. Parsed
+        // defensively rather than trusting Validate(): the options object stays mutable
+        // after the service is constructed, and an unparseable minimum must degrade to
+        // "no minimum opinion" (null) instead of throwing out of a read-only probe.
+        FirmwareVersion? minimumSupported =
+            FirmwareVersion.TryParse(Options.MinimumSupportedWifiFirmwareVersion, out var parsedMinimum)
+                ? parsedMinimum
+                : null;
+
         if (device is not ILanChipInfoProvider lanChipInfoProvider)
         {
             return new WifiFirmwareStatus
             {
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery,
+                MinimumSupportedVersion = minimumSupported,
             };
         }
 
@@ -215,16 +300,15 @@ internal sealed class WifiModuleUpdater
             }
         }
 
-        // Bounded retry for the LAN chip-info probe (closes #144). Right
-        // after a PIC32 firmware update the application is up while WiFi
-        // is still finishing startup, so the first chip-info query can
-        // transiently fail; without retry, the WiFi version decision
-        // would short-circuit to ChipInfoUnavailable and flow on to a
-        // multi-minute reflash of already-current WiFi firmware. The
-        // retry budget is bounded (LanChipInfoMaxAttempts × RetryDelay)
-        // and observes cancellation between attempts.
-        var (chipInfo, wasLanNotInitialized) = await TryGetLanChipInfoWithRetryAsync(
-            device, lanChipInfoProvider, cancellationToken).ConfigureAwait(false);
+        // Bounded retry for the LAN chip-info probe (closes #144, #203): without it the WiFi
+        // version decision short-circuits to ChipInfoUnavailable on a module that is merely
+        // still starting up, and flows on to a multi-minute reflash of already-current
+        // firmware. The loop itself is public API (issue #269) so consumers share one
+        // implementation of it rather than each hand-rolling their own; see
+        // GetLanChipInfoWithRetryAsync for what it does and why.
+        var (chipInfo, wasLanNotInitialized) = await lanChipInfoProvider
+            .GetLanChipInfoWithRetryAsync(BuildLanChipInfoRetryOptions(), Logger, cancellationToken)
+            .ConfigureAwait(false);
         if (chipInfo == null)
         {
             return new WifiFirmwareStatus
@@ -233,8 +317,16 @@ internal sealed class WifiModuleUpdater
                 Reason = wasLanNotInitialized
                     ? WifiFirmwareStatusReason.LanNotInitialized
                     : WifiFirmwareStatusReason.ChipInfoUnavailable,
+                MinimumSupportedVersion = minimumSupported,
             };
         }
+
+        // Parsed once here, before the release lookup, because the minimum-supported
+        // answer must survive that lookup failing — that is the whole point of it.
+        var deviceVersionParsed = FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion);
+        bool? meetsMinimum = deviceVersionParsed && minimumSupported is { } minimum
+            ? deviceVersion >= minimum
+            : null;
 
         FirmwareReleaseInfo? latestWifi;
         try
@@ -251,6 +343,8 @@ internal sealed class WifiModuleUpdater
                 CurrentChipInfo = chipInfo,
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+                MinimumSupportedVersion = minimumSupported,
+                MeetsMinimumSupportedVersion = meetsMinimum,
             };
         }
 
@@ -261,6 +355,8 @@ internal sealed class WifiModuleUpdater
                 CurrentChipInfo = chipInfo,
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.LatestReleaseUnavailable,
+                MinimumSupportedVersion = minimumSupported,
+                MeetsMinimumSupportedVersion = meetsMinimum,
             };
         }
 
@@ -268,7 +364,7 @@ internal sealed class WifiModuleUpdater
         // is already a strongly-typed FirmwareVersion from FirmwareDownloadService.
         // Re-parsing TagName would risk divergence from the canonical Version
         // (different tag prefix conventions, etc.) and cost an extra parse.
-        if (!FirmwareVersion.TryParse(chipInfo.FwVersion, out var deviceVersion))
+        if (!deviceVersionParsed)
         {
             return new WifiFirmwareStatus
             {
@@ -276,6 +372,8 @@ internal sealed class WifiModuleUpdater
                 LatestRelease = latestWifi,
                 IsUpToDate = false,
                 Reason = WifiFirmwareStatusReason.VersionUnparseable,
+                MinimumSupportedVersion = minimumSupported,
+                MeetsMinimumSupportedVersion = meetsMinimum,
             };
         }
 
@@ -286,6 +384,8 @@ internal sealed class WifiModuleUpdater
             LatestRelease = latestWifi,
             IsUpToDate = isCurrent,
             Reason = isCurrent ? WifiFirmwareStatusReason.UpToDate : WifiFirmwareStatusReason.UpdateAvailable,
+            MinimumSupportedVersion = minimumSupported,
+            MeetsMinimumSupportedVersion = meetsMinimum,
         };
     }
 
@@ -321,153 +421,50 @@ internal sealed class WifiModuleUpdater
             default:
                 // DeviceDoesNotSupportLanQuery, ChipInfoUnavailable,
                 // LanNotInitialized, LatestReleaseUnavailable,
-                // VersionUnparseable — proceed with the flash conservatively.
+                // VersionUnparseable — no latest-release verdict is available.
+                //
+                // "Conservative" here used to mean "flash", but a WINC reflash is a
+                // multi-minute, destructive operation, so flashing on a *network*
+                // failure is the expensive guess, not the safe one. When the device
+                // itself answered and its reported version meets the minimum Core
+                // supports, that is a real verdict reached without the network, so
+                // honor it and skip the flash. Only LatestReleaseUnavailable can
+                // reach here with a non-null answer: every other default reason
+                // means the device version is unknown or unparseable, which leaves
+                // MeetsMinimumSupportedVersion null and still falls through to the
+                // flash. A caller that wants to reflash regardless already has
+                // skipVersionCheck: true.
+                if (status.MeetsMinimumSupportedVersion == true)
+                {
+                    var minimumMessage =
+                        $"WiFi firmware meets the minimum supported version (device: {status.CurrentChipInfo!.FwVersion}, "
+                        + $"minimum: {status.MinimumSupportedVersion}); latest-release lookup was unavailable ({status.Reason}), "
+                        + "so skipping the flash rather than reflashing a supported module.";
+                    Logger.LogInformation(minimumMessage);
+                    _context.TransitionToState(FirmwareUpdateState.Complete, minimumMessage);
+                    _context.ReportProgress(progress, FirmwareUpdateState.Complete, 100, minimumMessage, 100, 100);
+                    return true;
+                }
+
                 return false;
         }
     }
 
-    private async Task<(LanChipInfo? ChipInfo, bool WasLanNotInitialized)> TryGetLanChipInfoWithRetryAsync(
-        IStreamingDevice device,
-        ILanChipInfoProvider lanChipInfoProvider,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Projects this service's chip-info retry settings onto the shared probe's options.
+    /// </summary>
+    /// <remarks>
+    /// Read fresh on every probe rather than cached: <see cref="FirmwareUpdateServiceOptions"/>
+    /// stays mutable after the service is constructed, so a caller that adjusts the budget between
+    /// calls gets the budget it asked for.
+    /// </remarks>
+    private LanChipInfoRetryOptions BuildLanChipInfoRetryOptions() => new()
     {
-        var maxAttempts = Math.Max(1, Options.LanChipInfoMaxAttempts);
-        var retryDelay = Options.LanChipInfoRetryDelay;
-        var totalTimeout = Options.LanChipInfoTotalTimeout;
-
-        // Tracks the most recent failure's classification (reset on any
-        // non-LanNotInitialized outcome) so the caller can report the
-        // specific WifiFirmwareStatusReason.LanNotInitialized only when
-        // that was genuinely the terminal condition, not stale from an
-        // earlier attempt. Sent at most once per probe (closes #203) —
-        // repeatedly kicking APPLY would tear down and re-init the WINC
-        // on every failed attempt, risking disruption of an already-
-        // associated WiFi link for no additional benefit.
-        var lastFailureWasLanNotInitialized = false;
-        var hasSentLanApply = false;
-
-        // Wall-clock budget guards against the pathological case where
-        // attempt-count × per-attempt-timeout + retry-delay sum vastly
-        // exceeds the configured retry budget (e.g., 3 × 2s device timeout
-        // + 2 × 2s delay = ~10s while the operation lock is held). Linking
-        // the caller's CT preserves cancellation semantics; the timeout
-        // CTS just adds a deadline.
-        using var timeoutCts = new CancellationTokenSource(totalTimeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, timeoutCts.Token);
-        var linkedToken = linkedCts.Token;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
-            {
-                linkedToken.ThrowIfCancellationRequested();
-            }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                Logger.LogDebug(
-                    "LAN chip-info probe hit total timeout ({Timeout}) before attempt {Attempt}/{Max}.",
-                    totalTimeout,
-                    attempt,
-                    maxAttempts);
-                return (null, lastFailureWasLanNotInitialized);
-            }
-
-            try
-            {
-                var chipInfo = await lanChipInfoProvider.GetLanChipInfoAsync(linkedToken).ConfigureAwait(false);
-                if (chipInfo != null)
-                {
-                    if (attempt > 1)
-                    {
-                        Logger.LogDebug(
-                            "LAN chip-info query succeeded on attempt {Attempt}/{Max}.",
-                            attempt,
-                            maxAttempts);
-                    }
-                    return (chipInfo, false);
-                }
-                lastFailureWasLanNotInitialized = false;
-                Logger.LogDebug(
-                    "LAN chip-info query returned null on attempt {Attempt}/{Max}.",
-                    attempt,
-                    maxAttempts);
-            }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                Logger.LogDebug(
-                    "LAN chip-info probe hit total timeout ({Timeout}) during attempt {Attempt}/{Max}.",
-                    totalTimeout,
-                    attempt,
-                    maxAttempts);
-                return (null, lastFailureWasLanNotInitialized);
-            }
-            catch (LanNotInitializedException ex)
-            {
-                lastFailureWasLanNotInitialized = true;
-                Logger.LogDebug(
-                    ex,
-                    "LAN chip-info query on attempt {Attempt}/{Max} reported the WINC state machine is not initialized.",
-                    attempt,
-                    maxAttempts);
-
-                if (Options.KickLanApplyOnNotInitialized && !hasSentLanApply && device.IsConnected)
-                {
-                    // Observe cancellation before this state-changing Send, mirroring
-                    // the WINC power-on guard above: a cancelled probe must not still
-                    // kick APPLY on the device. Uses the caller's token (not the
-                    // linked timeout token) so a total-timeout expiry alone doesn't
-                    // suppress a kick the caller never actually asked to cancel.
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    hasSentLanApply = true;
-                    try
-                    {
-                        device.Send(ScpiMessageProducer.ApplyNetworkLan);
-                        Logger.LogDebug("Sent LAN:APPLY to initialize the WINC state machine after a not-initialized chip-info response.");
-                    }
-                    catch (Exception sendEx) when (sendEx is not OperationCanceledException)
-                    {
-                        // Best-effort: falling through to the normal retry delay/loop
-                        // below still gives the device a chance to recover on its own.
-                        Logger.LogDebug(sendEx, "Failed to send LAN:APPLY after a not-initialized chip-info response; continuing retry loop without it.");
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                lastFailureWasLanNotInitialized = false;
-                Logger.LogDebug(
-                    ex,
-                    "LAN chip-info query failed on attempt {Attempt}/{Max}.",
-                    attempt,
-                    maxAttempts);
-            }
-
-            if (attempt < maxAttempts)
-            {
-                try
-                {
-                    await Task.Delay(retryDelay, linkedToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                {
-                    Logger.LogDebug(
-                        "LAN chip-info probe hit total timeout ({Timeout}) during retry delay after attempt {Attempt}/{Max}.",
-                        totalTimeout,
-                        attempt,
-                        maxAttempts);
-                    return (null, lastFailureWasLanNotInitialized);
-                }
-            }
-        }
-
-        Logger.LogDebug(
-            "LAN chip-info query exhausted {Max} attempts; reporting status as {Reason}.",
-            maxAttempts,
-            lastFailureWasLanNotInitialized ? WifiFirmwareStatusReason.LanNotInitialized : WifiFirmwareStatusReason.ChipInfoUnavailable);
-        return (null, lastFailureWasLanNotInitialized);
-    }
+        MaxAttempts = Options.LanChipInfoMaxAttempts,
+        RetryDelay = Options.LanChipInfoRetryDelay,
+        TotalTimeout = Options.LanChipInfoTotalTimeout,
+        KickLanApplyOnNotInitialized = Options.KickLanApplyOnNotInitialized,
+    };
 
     private ExternalProcessRequest BuildWifiProcessRequest(
         IStreamingDevice device,
@@ -812,5 +809,72 @@ internal sealed class WifiModuleUpdater
         }
 
         return $"Process output excerpt: {string.Join(" | ", excerpt)}";
+    }
+
+    /// <summary>
+    /// Best-effort attempt to take the device back out of LAN firmware-update / USB-transparent
+    /// bridge mode after a WiFi update failed or was canceled. Never throws: the original failure
+    /// is what the caller needs to see, and a recovery that cannot reach the device must not
+    /// replace it.
+    /// </summary>
+    /// <remarks>
+    /// This is the managed-connection twin of <see cref="WifiBridgeActivator.Deactivate"/>, and
+    /// sends the same two commands in the same order with the same pause between them:
+    /// <c>SYSTem:USB:SetTransparentMode 0</c> hands the port back to the SCPI console, then
+    /// <c>LAN:APPLY</c> kicks the WiFi manager out of its bridge-mode state machine.
+    /// <para>
+    /// Deliberately NOT the success path's full <c>LAN:ENAbled</c>/<c>APPLY</c>/<c>SAVE</c>
+    /// restore: that persists a configuration, which has no business running off the back of a
+    /// flash that did not complete. The job here is only to make the device answerable again.
+    /// </para>
+    /// </remarks>
+    private async Task TryLeaveLanUpdateModeAfterFailureAsync(IStreamingDevice device, bool mayBeInLanUpdateMode)
+    {
+        if (!mayBeInLanUpdateMode)
+        {
+            return;
+        }
+
+        try
+        {
+            // A fresh token, never the caller's: on the cancellation path the caller's token is
+            // already canceled, and that is precisely the case where the device most needs the
+            // exit. It bounds the reconnect wait and nothing else, because waiting for a serial
+            // transport to come back is the only step here that can take unbounded time. The
+            // post-flash reconnect budget is the natural size for it — the same physical operation,
+            // already tunable by a host that knows its re-enumeration is slow. The worst case (the
+            // device never returns) costs that budget once, which is the right price for not
+            // stranding a bridged module.
+            using var restoreCts = new CancellationTokenSource(
+                Options.GetStateTimeout(FirmwareUpdateState.ReconnectingAfterFlash));
+
+            // Prep disconnects the device, so on almost every failure path the transport has to
+            // come back before anything can be sent. Returns immediately when still connected.
+            await _context.WaitForSerialReconnectAsync(device, restoreCts.Token).ConfigureAwait(false);
+
+            // Past the reconnect the two-command exit runs to completion instead of re-observing
+            // the budget. Half of it is the one outcome worse than not starting: the console is
+            // handed back but the WiFi manager is left in its bridge-mode state machine, so the
+            // device looks answerable while its module still is not. The un-cancelled tail is a
+            // fixed pause plus two synchronous writes, so the helper stays bounded either way.
+            device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+
+            // Leaving the bridge is a device-side mode transition, not an instantaneous one:
+            // until the SCPI console path is back, bytes on the port are still forwarded raw to
+            // the WINC, so a command sent immediately after can be swallowed by the bridge.
+            await Task.Delay(WifiBridgeActivator.InterCommandDelay).ConfigureAwait(false);
+
+            device.Send(ScpiMessageProducer.ApplyNetworkLan);
+
+            Logger.LogInformation(
+                "Sent the WiFi bridge-exit sequence after a failed WiFi module update.");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Could not take the device out of WiFi update mode after a failed update; it may still be in " +
+                "USB-transparent bridge mode and need a power cycle.");
+        }
     }
 }

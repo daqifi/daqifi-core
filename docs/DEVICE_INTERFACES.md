@@ -46,7 +46,13 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 - `IpAddress` - Network address (for WiFi devices)
 - `IsConnected` - Connection status
 - `Status` - Detailed connection status (Disconnected, Connecting, Connected, Lost)
-- `Connect()` / `Disconnect()` - Connection management
+- `Connect()` / `Disconnect()` - Blocking connection management
+- `ConnectAsync(CancellationToken)` / `DisconnectAsync(CancellationToken)` - Non-blocking, cancellable
+  connection management. These are genuine interface members, not default-interface-method shims over
+  the blocking calls — every implementer honors the token.
+- `IAsyncDisposable.DisposeAsync()` - `IDevice` extends `IAsyncDisposable`, so any consumer coding
+  against the interface (not just the concrete `DaqifiDevice`) can tear a device down with
+  `await using`/`await device.DisposeAsync()` — no cast required.
 - `Send<T>(IOutboundMessage<T>)` - Send commands to device
 - `StatusChanged` event - Connection status notifications
 - `MessageReceived` event - Incoming data notifications
@@ -58,6 +64,29 @@ Extends `IDevice` with data streaming functionality for devices that support con
 starting/stopping a stream, per-channel enable/disable, digital I/O, PWM, and analog output.
 `DaqifiStreamingDevice` implements it in this library — see [DaqifiStreamingDevice](#daqifistreamingdevice)
 below.
+
+Every one of those operations — plus `Reboot()` — has an `...Async(CancellationToken)` twin declared
+directly on the interface, so a consumer holding only an `IStreamingDevice` reference gets the same
+cancellable API surface as one holding the concrete `DaqifiStreamingDevice`:
+
+```csharp
+if (device is IStreamingDevice streamingDevice)
+{
+    await streamingDevice.EnableChannelAsync(channel, cancellationToken);
+    await streamingDevice.StartStreamingAsync(cancellationToken);
+}
+```
+
+The synchronous methods (`StartStreaming()`, `EnableChannel()`, etc.) remain, unchanged, for existing
+callers — the `Async` members are additive, not a replacement. Unlike `Connect`/`Disconnect`, most of
+this surface has no genuine async machinery underneath: `DaqifiStreamingDevice`'s streaming/channel/DIO
+/PWM/output/reboot commands are fire-and-forget writes with nothing to await, so the `Async` twin is a
+thin, cancellable wrapper around the same single write.
+
+`IStreamingDevice` also extends `IConfirmingDeviceAdministration`, so the confirming calibration calls
+(`SaveAdcCalibrationAsync`, `LoadAdcCalibrationAsync`, `SetAdcCalibrationSlopeAsync`, and the rest —
+each sends the same firmware primitive as its `void` counterpart and then confirms the device accepted
+it) are reachable directly off an `IStreamingDevice` reference too, with no separate cast needed.
 
 ## Implementation Classes
 
@@ -74,7 +103,8 @@ The primary device class that provides:
 ### DaqifiStreamingDevice
 
 Extends `DaqifiDevice` with the full streaming/configuration surface — this is the class
-`DaqifiDeviceFactory` actually constructs for a connection. It implements:
+`DaqifiDeviceFactory` constructs for a connection, and the type its `Connect*` methods return
+directly (no cast required). It implements:
 
 - `IStreamingDevice` — streaming start/stop, channel enable/disable, digital I/O, PWM, analog output
   (see [Channel Management](#channel-management) below)
@@ -84,6 +114,32 @@ Extends `DaqifiDevice` with the full streaming/configuration surface — this is
 - `ILanChipInfoProvider` — WiFi-module firmware/version info used during firmware updates
 - `IDeviceDiagnostics` — system log, runtime log levels, command history, and performance counters
   (see [Device Diagnostics](#device-diagnostics) below)
+
+### BootloaderSessionDevice
+
+Stands in for a device that is **already sitting in its bootloader**, so a manual bootloader-only
+firmware update can go through the same `IFirmwareUpdateService` entry points as a normal update.
+Every operation is a no-op and every collection is empty — a device in bootloader mode has no SCPI
+transport to talk to.
+
+```csharp
+await using var session = new BootloaderSessionDevice("DAQiFi Bootloader");
+await firmwareUpdateService.UpdateFirmwareAsync(session, hexFilePath, progress);
+```
+
+Three of its behaviours are load-bearing rather than incidental, because the PIC32 update flow
+touches the device before it ever reaches the bootloader:
+
+| Member | Value | Why |
+|--------|-------|-----|
+| `IsConnected` | starts `true` | The flow rejects a disconnected device before it starts |
+| `IsStreaming` | always `false` | Lets the flow skip its `StopStreaming()` call |
+| `Send(...)` | discards silently | The flow sends force-bootloader unconditionally; throwing would abort a valid update |
+
+Prefer this over hand-writing an `IStreamingDevice` stub in your own application. It is the only
+hand-written implementation of that interface shipped with the product, so a member added to
+`IStreamingDevice` is resolved here — in the change that adds it — instead of breaking your build on
+your next Core upgrade.
 
 ### DaqifiDeviceFactory
 
@@ -435,6 +491,16 @@ device in an indeterminate state. On return the device is always disconnected.
 
 The synchronous `Connect`, `Disconnect` and `Dispose` remain, unchanged, for existing callers.
 
+`ConnectAsync` and `DisconnectAsync` are declared directly on `IDevice` (not default-interface-method
+shims over `Connect`/`Disconnect`), and `IDevice` extends `IAsyncDisposable`, so all three are reachable
+through the interface with no cast to `DaqifiDevice`:
+
+```csharp
+IDevice device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await device.DisconnectAsync(cancellationToken);
+await device.DisposeAsync();
+```
+
 ### Error Handling
 
 ```csharp
@@ -584,6 +650,14 @@ device.StatusChanged += (_, e) =>
 };
 ```
 
+Because that callback runs on a background thread, a UI handler that touches a bound control from it
+throws — so the raise is isolated. A `StatusChanged` subscriber that throws cannot stop the
+transition, cannot stop automatic reconnection from starting, and cannot keep the transport from
+releasing its handle; the exception is reported on `ErrorOccurred` as
+`DeviceErrorSource.StatusNotification` and written to the device logger. Isolation is per raise, not
+per subscriber: the first handler to throw ends that one notification for the rest of the invocation
+list.
+
 Custom transports can opt into the same escalation by implementing `ITransportHealthSink`; the
 reader and writer loops report every read/write outcome to a transport that does.
 
@@ -725,9 +799,7 @@ never sets that local state, so `SampleReceived` would not fire.
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 
-// DaqifiDeviceFactory methods return the base DaqifiDevice type, but the constructed instance is
-// always a DaqifiStreamingDevice — cast (or pattern-match with `is`) to reach its streaming API.
-await using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
 ai0.SampleReceived += (sender, e) =>
@@ -751,6 +823,39 @@ arrives outside a streaming session is still re-raised via `MessageReceived` but
 samples. `GetChannelsSnapshot()` is used above (rather than the live `Channels` property) because the
 channel list can be repopulated concurrently when a new device status message arrives.
 
+#### Engineering units (`ChannelScaling`)
+
+A raw reading is volts; what the terminal is actually measuring depends on what is wired to it. Give
+an analog channel a `ChannelScaling` and every sample decoded from then on carries the converted
+reading and its unit alongside the volts:
+
+```csharp
+using Daqifi.Core.Channel;
+
+var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+
+// 0-5 V from a 0-100 PSI transducer.
+((IScaledChannel)ai0).Scaling = new ChannelScaling(gain: 20.0, offset: 0.0, unit: "PSI");
+
+ai0.SampleReceived += (sender, e) =>
+{
+    // e.g. "AI0: 49.6 PSI (2.48 V)"
+    Console.WriteLine($"{e.Channel.Name}: {e.Sample.ScaledValue} {e.Sample.Unit} ({e.Sample.Value} V)");
+};
+```
+
+- `Value` is unchanged — the volts the device reported. `ScaledValue` is `Value * Gain + Offset`, and
+  equals `Value` when no scaling is configured, so existing consumers see exactly what they saw before.
+- `Scaling` is immutable and is stamped onto each sample as it is decoded, so reconfiguring a channel
+  never retroactively reinterprets readings that were already taken. Nothing is mutated in place.
+- Reading the device's capability document (which `InitializeAsync` does on connect, firmware v3.5.0+)
+  fills in the device's own unit — `"V"` on a Nyquist — as an identity scaling, so `Unit` is populated
+  before anyone configures anything. It never overwrites a scaling you have set.
+- A configuration whose arithmetic overflows for a particular reading yields the unscaled value for
+  that reading rather than `NaN`/`Infinity`; the decode thread never throws over scaling.
+- `IScaledChannel` is a capability interface — test for it with `if (channel is IScaledChannel scaled)`.
+  Digital channels do not implement it (a pin's 0/1 state has no engineering quantity to convert).
+
 #### Live async stream (`await foreach`)
 
 `StreamSamplesAsync` exposes the same decoded samples as an `IAsyncEnumerable<LiveSample>`, so a
@@ -759,7 +864,7 @@ cancellation and backpressure instead of hand-building an event/queue bridge. Ea
 the decoded `IDataSample` with the `IChannel` that produced it.
 
 ```csharp
-await using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 device.EnableChannels(device.GetChannelsSnapshot().Where(c => c.Type == ChannelType.Analog));
 device.StreamingFrequency = 100; // Hz
@@ -778,6 +883,22 @@ oldest buffered samples are discarded (memory never grows unbounded) and `Droppe
 increments; the decode thread is never blocked. Cancelling the token ends the enumeration promptly
 (surfaced as `OperationCanceledException`) and unsubscribes, but does **not** stop the device stream —
 call `StopStreaming()` for that. This is additive: `SampleReceived` and `MessageReceived` are unaffected.
+
+**An enumeration is bound to the connected session it starts in.** Samples only ever arrive on one, so
+the loop ends as soon as the device stops being connected, after yielding whatever was already
+buffered:
+
+| What happened | What the `await foreach` does |
+| --- | --- |
+| `Disconnect()` / `DisconnectAsync()` / `Dispose()` | Ends normally |
+| Unplug, WiFi loss, a reconnect that gave up | Throws `DeviceNotConnectedException` |
+| Started while the device is not connected | Throws `DeviceNotConnectedException` on the first `MoveNextAsync` |
+| Token cancelled | Throws `OperationCanceledException`, as before |
+
+A drop is deliberately not silent: an acquisition cut short by a pulled cable must not look identical
+to one that finished. Automatic reconnection (`ReconnectOptions`) does **not** resume an enumeration —
+the drop ends it, and a consumer that wants live samples from the restored session starts a new
+`await foreach` once `Status` reads `Connected` again.
 
 #### Raw protobuf frames
 
@@ -815,51 +936,61 @@ Console.WriteLine($"Received {sampleCount} samples");
 or disabling analog channels recomputes the full `ENAble:VOLTage:DC` bitmask internally; digital
 channels are toggled via the global DIO enable.
 
-`DaqifiDeviceFactory` returns the base `DaqifiDevice` type, so pattern-match to `IStreamingDevice`
-to reach these members — the same way as `INetworkConfigurable` below.
+`Channels`/`GetChannelsSnapshot()`, along with the rest of the members below, are declared directly
+on `IStreamingDevice` (#333) — no cast to the concrete device type needed, whether `device` came
+from `DaqifiDeviceFactory` or is held only as an `IStreamingDevice` reference.
 
 ```csharp
 using Daqifi.Core.Channel;
 
-if (device is IStreamingDevice streamingDevice)
-{
-    // Channels are populated after a status message is received from the device.
-    // Channels itself lives on the DaqifiDevice base class, so it's read from `device`.
-    var ai0 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
-    var ai2 = device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
+// Channels are populated after a status message is received from the device. Channels itself is
+// a live view that can be repopulated concurrently on the consumer thread, so a snapshot (rather
+// than the live property) is what's safe to run LINQ queries against off that thread.
+var channels = device.GetChannelsSnapshot();
+var ai0 = channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+var ai2 = channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 2);
 
-    // Enable analog input channels (the device receives the combined bitmask, e.g. "5").
-    streamingDevice.EnableChannels(new[] { ai0, ai2 });
+// Enable analog input channels (the device receives the combined bitmask, e.g. "5").
+device.EnableChannels(new[] { ai0, ai2 });
 
-    // Disable a single channel — the recomputed mask reflects the remaining enabled channels.
-    streamingDevice.DisableChannel(ai0);
+// Disable a single channel — the recomputed mask reflects the remaining enabled channels.
+device.DisableChannel(ai0);
 
-    // Turn everything off.
-    streamingDevice.DisableAllChannels();
+// Turn everything off.
+device.DisableAllChannels();
 
-    // Digital I/O: set direction and drive an output.
-    var dio1 = device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
-    streamingDevice.SetDioDirection(dio1, ChannelDirection.Output);
-    streamingDevice.SetDioValue(dio1, true); // drive high
+// Digital I/O: set direction and drive an output.
+var dio1 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
+device.SetDioDirection(dio1, ChannelDirection.Output);
+device.SetDioValue(dio1, true); // drive high
 
-    // PWM on a capable channel (IDigitalChannel.IsPwmCapable). Duty is per channel; the
-    // frequency is device-wide because one hardware timer drives every PWM channel.
-    var pwm = device.Channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
-    streamingDevice.SetPwmDutyCycle(pwm, 25);  // 1-100 %
-    streamingDevice.SetPwmFrequency(1000);     // 6-50000 Hz, shared by all PWM channels
-    streamingDevice.SetPwmEnabled(pwm, true);  // start; SetPwmEnabled(pwm, false) stops (pin goes high-impedance)
+// PWM on a capable channel (IDigitalChannel.IsPwmCapable). Duty is per channel; the
+// frequency is device-wide because one hardware timer drives every PWM channel.
+var pwm = channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
+device.SetPwmDutyCycle(pwm, 25);  // 1-100 %
+device.SetPwmFrequency(1000);     // 6-50000 Hz, shared by all PWM channels
+device.SetPwmEnabled(pwm, true);  // start; SetPwmEnabled(pwm, false) stops (pin goes high-impedance)
 
-    // Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
-    streamingDevice.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
+// Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
+device.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
 
-    // Reboot the device (also disconnects, since the device drops its link while restarting).
-    streamingDevice.Reboot();
-}
+// Reboot the device (also disconnects, since the device drops its link while restarting).
+device.Reboot();
 ```
 
 > Channel objects passed to the enable/disable and DIO methods must belong to the device's
 > `Channels` collection (so the internal state and bitmask stay in sync). Analog-output (DAC)
 > channels are not part of `Channels`, so `SetAnalogOutput` takes a channel number directly.
+
+Every method above has a cancellable `...Async` twin (`EnableChannelsAsync`, `DisableChannelAsync`,
+`SetDioValueAsync`, `SetPwmEnabledAsync`, `SetAnalogOutputAsync`, `RebootAsync`, and the rest), declared
+directly on `IStreamingDevice`:
+
+```csharp
+await streamingDevice.EnableChannelsAsync(new[] { ai0, ai2 }, cancellationToken);
+await streamingDevice.SetDioValueAsync(dio1, true, cancellationToken);
+await streamingDevice.RebootAsync(cancellationToken);
+```
 
 ## SCPI Commands
 
@@ -888,39 +1019,37 @@ logging and diagnostics SCPI surface — the system log, runtime log levels, SCP
 error-queue depth, and streaming/memory performance counters. These values originate **on the
 device**; this is not a client-side instrumentation framework.
 
-`DaqifiDeviceFactory` returns the base `DaqifiDevice` type, so pattern-match to `IDeviceDiagnostics`
-to reach these members — the same way as `INetworkConfigurable` below.
+`DaqifiDeviceFactory` returns `DaqifiStreamingDevice` directly, which implements
+`IDeviceDiagnostics` — no cast needed to reach these members.
 
 ```csharp
 using Daqifi.Core.Device.Diagnostics;
 
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-if (device is IDeviceDiagnostics diagnostics)
-{
-    // System log (reading the log also clears the device buffer).
-    IReadOnlyList<SystemLogEntry> log = await diagnostics.GetSystemLogAsync();
-    foreach (var entry in log) Console.WriteLine(entry.Message);
-    await diagnostics.ClearSystemLogAsync();
+// System log (reading the log also clears the device buffer).
+IReadOnlyList<SystemLogEntry> log = await device.GetSystemLogAsync();
+foreach (var entry in log) Console.WriteLine(entry.Message);
+await device.ClearSystemLogAsync();
 
-    // Runtime log levels (0 = None, 1 = Error, 2 = Info, 3 = Debug). The returned
-    // setting reflects the level actually applied, which a module's ceiling may cap.
-    LogLevelSetting applied = await diagnostics.SetLogLevelAsync("STREAM", 2);
-    Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
+// Runtime log levels (0 = None, 1 = Error, 2 = Info, 3 = Debug). The returned
+// setting reflects the level actually applied, which a module's ceiling may cap.
+LogLevelSetting applied = await device.SetLogLevelAsync("STREAM", 2);
+Console.WriteLine($"{applied.Module}: {applied.Level} (ceiling {applied.Ceiling})");
 
-    // SCPI command history (newest first) and error-queue depth (non-destructive).
-    IReadOnlyList<string> history = await diagnostics.GetCommandHistoryAsync();
-    int queuedErrors = await diagnostics.GetSystemErrorCountAsync();
+// SCPI command history (oldest first — the device numbers lines backwards from
+// the present, so the newest command is last) and error-queue depth (non-destructive).
+IReadOnlyList<string> history = await device.GetCommandHistoryAsync();
+int queuedErrors = await device.GetSystemErrorCountAsync();
 
-    // Performance counters. Headline fields are typed (nullable when the running
-    // firmware doesn't emit them); the full set is available via Values.
-    StreamStats stream = await diagnostics.GetStreamStatsAsync();
-    Console.WriteLine($"Samples: {stream.TotalSamplesStreamed}, dropped: {stream.QueueDroppedSamples}");
+// Performance counters. Headline fields are typed (nullable when the running
+// firmware doesn't emit them); the full set is available via Values.
+StreamStats stream = await device.GetStreamStatsAsync();
+Console.WriteLine($"Samples: {stream.TotalSamplesStreamed}, dropped: {stream.QueueDroppedSamples}");
 
-    MemoryDiagnostics mem = await diagnostics.GetMemoryDiagnosticsAsync();
-    Console.WriteLine($"Heap free: {mem.HeapFree}/{mem.HeapTotal}");
-    foreach (var (key, value) in mem.Values) Console.WriteLine($"{key} = {value}");
-}
+MemoryDiagnostics mem = await device.GetMemoryDiagnosticsAsync();
+Console.WriteLine($"Heap free: {mem.HeapFree}/{mem.HeapTotal}");
+foreach (var (key, value) in mem.Values) Console.WriteLine($"{key} = {value}");
 ```
 
 Notes:
@@ -928,10 +1057,18 @@ Notes:
   `Key=Value` lines whose membership grows between firmware versions, so every numeric pair is exposed
   through `Values` and the typed properties return `null` for fields the running firmware omits.
 - Each call runs as a text command (the protobuf consumer is paused for the exchange, like the SD and
-  LAN-chip queries). They do **not** stop streaming, so you can sample live counters — but parsing is
-  most reliable when the device is not actively streaming. Avoid issuing them concurrently.
+  LAN-chip queries). Avoid issuing them concurrently.
+- **Query while the device is not streaming.** These calls do not stop an active capture, but the
+  firmware does not stop either: pausing Core's protobuf reader leaves the device emitting frames, and
+  whatever is in flight lands on the front of the reply and destroys its first line. A mid-capture call
+  is therefore opportunistic — it may fail, and stopping the stream is the only way to be sure of a
+  clean read.
 - A `DeviceDiagnosticsException` (carrying `RawDeviceResponse`) is thrown when the device returns a
-  SCPI error or an unparseable response for the structured queries.
+  SCPI error or an unparseable response for the structured queries. Its subclass
+  `DeviceDiagnosticsCorruptedResponseException` is thrown by the four counter queries
+  (`GetStreamStatsAsync`, `GetMemoryDiagnosticsAsync`, `GetSystemErrorCountAsync`, `SetLogLevelAsync`)
+  when the reply arrived with stream frames welded into it — previously those queries silently dropped
+  the mangled line and reported the rest as a complete reading.
 - `SYSTem:OS:Stats?` (FreeRTOS task stats) is intentionally **not** wrapped: it is commented out in the
   current firmware. It can be added once the firmware re-enables it.
 
@@ -985,6 +1122,15 @@ While the body runs, other threads' `Send()` calls are deferred (they still retu
 other threads' text queries wait. Keep bodies short, and do not start background work inside one:
 a `Task.Run` launched from the body inherits the flow's ownership of the lock, so its commands would
 *not* be deferred and could still interleave.
+
+The deferred backlog is capped at `DaqifiDevice.DefaultMaxDeferredSends` (1024) messages and
+overflows **drop-oldest**. This only matters for the genuinely long exclusive operations — an SD card
+download is allowed thirty minutes, a firmware update longer — where a UI or agent polling at even
+10 Hz would otherwise park tens of thousands of commands and then fire all of them at the device at
+once. Keeping the newest is the right way round for the level-setting commands that get parked ("set
+this pin", "set that duty cycle"), where a superseded instruction is worth less than the memory it
+costs. Discards are counted by `device.DroppedDeferredSendCount`; a non-zero and growing value means
+you are commanding faster than the operation in progress can let the commands out.
 
 `RunExclusiveAsync` is per device. Two devices always run in parallel — there is no global lock.
 
@@ -1064,6 +1210,7 @@ device.ErrorOccurred += (_, e) =>
 |---|---|
 | `MessageConsumer` | A read from the transport stream failed, a frame could not be parsed, or a `MessageReceived` subscriber threw |
 | `StreamDecode` | A streaming frame could not be decoded into channel samples. That frame is dropped; the stream continues |
+| `StatusNotification` | A `StatusChanged` subscriber threw. The status transition itself still completed |
 
 ### Observational, never escalating
 

@@ -1583,9 +1583,16 @@ public class FirmwareUpdateServiceTests
         }
 
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+
+        // The canonical WiFi-update prep and post-flash recovery sequences Core now owns end to
+        // end (part of #269). The power-on leads the prep because LAN commands are rejected while
+        // the WINC is unpowered, and the transparent-mode exit leads the recovery because the LAN
+        // commands after it would otherwise be forwarded to the WINC instead of interpreted.
         Assert.Equal(
             [
+                "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:COMMunicate:LAN:ENAbled 1",
                 "SYSTem:COMMunicate:LAN:APPLY",
                 "SYSTem:COMMunicate:LAN:SAVE"
@@ -1603,6 +1610,346 @@ public class FirmwareUpdateServiceTests
         // means only the PIC32 CRC check (a genuine flash failure) is ever reported as Verifying.
         Assert.Contains(progressEvents, p => p.State == FirmwareUpdateState.ReconnectingAfterFlash);
         Assert.DoesNotContain(progressEvents, p => p.State == FirmwareUpdateState.Verifying);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenPowerOnBeforeLanUpdateModeDisabled_SkipsPowerOnButStillRestoresTransparentMode()
+    {
+        // The opt-out exists for consumers that already powered the module on themselves. It must
+        // affect the prep half ONLY — the post-flash transparent-mode exit is recovery of state
+        // the flash disturbed and is not conditional on it.
+        var device = new FakeStreamingDevice("COM31");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        options.PowerOnWifiModuleBeforeLanUpdateMode = false;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(
+            [
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:COMMunicate:LAN:SAVE"
+            ],
+            device.SentCommands);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledDuringTransparentModeExitSettle_LeavesLanRestoreUnsent()
+    {
+        // Pins that the settle genuinely sits BETWEEN the transparent-mode exit and the LAN
+        // restore, not before the exit or after the whole recovery block: cancellation is raised
+        // from inside the transparent-mode Send, so only a wait positioned between the two can
+        // stop LAN:ENAbled/APPLY/SAVE from going out. Also proves the wait observes the caller's
+        // token rather than sleeping through a cancel.
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM33");
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:USB:SetTransparentMode 0")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        // Long enough that a missing wait would let the LAN restore slip out before the cancel
+        // is seen. The cancel is already raised by the time the wait starts, so it ends at once
+        // rather than actually costing 30s.
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        // The restore is LAN:ENAbled -> APPLY -> SAVE, and the settle holds back all three: not one
+        // of them is here. The APPLY below is a different command with a different job — the
+        // failure recovery's bridge-exit kick, which the cancel itself arms. Two things tell it
+        // apart from a restore that leaked half way out: it re-sends the transparent-mode exit
+        // ahead of itself, and it is never accompanied by ENAbled or SAVE. It persists nothing,
+        // so a canceled flash still cannot write a network configuration.
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:APPLY"
+            ],
+            device.SentCommands);
+
+        // State the guarantee this test exists for on its own terms, not as a side effect of the
+        // sequence above. The Assert.Equal already implies both of these today, but it is the
+        // assertion most likely to be edited: every change to the recovery sequence rewrites that
+        // list, and whoever rewrites it is thinking about the commands they are adding, not about
+        // the two that must never appear. Spelled out separately, a cancel that starts persisting
+        // a network configuration fails on a line that says so, instead of looking like one more
+        // expected-list update to wave through.
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", device.SentCommands);
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:SAVE", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenTransparentModeExitDelayIsZero_StillSendsFullRecoverySequence()
+    {
+        // Zero means "skip the wait", not "skip the step". A consumer that collapses the delay
+        // (or a transport that needs no pacing) must still get the whole recovery sequence.
+        var device = new FakeStreamingDevice("COM34");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["verify passed", "Operation completed successfully"],
+                [])
+        };
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
+        options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
+        options.PostUsbTransparentModeExitDelay = TimeSpan.Zero;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:COMMunicate:LAN:SAVE"
+            ],
+            device.SentCommands);
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_PostUsbTransparentModeExitDelay_DefaultsToBridgeDeactivationPace()
+    {
+        // The default is the behavior: a consumer that upgrades without touching options gets
+        // the pacing. 100ms is not arbitrary — it is the same inter-command wait
+        // WifiBridgeActivator.Deactivate already uses for this exact mode transition over a raw
+        // serial port, so the managed-connection path is paced identically. Pinned so the two
+        // cannot silently drift apart.
+        var options = new FirmwareUpdateServiceOptions();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(100), options.PostUsbTransparentModeExitDelay);
+        options.Validate();
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_Validate_RejectsNegativeTransparentModeExitDelayButAllowsZero()
+    {
+        // Zero is the documented "skip the wait" escape hatch and must stay legal; a negative
+        // value is a misconfiguration that would otherwise reach Task.Delay.
+        var options = new FirmwareUpdateServiceOptions { PostUsbTransparentModeExitDelay = TimeSpan.Zero };
+        options.Validate();
+
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromMilliseconds(-1);
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+        Assert.Equal(nameof(FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay), exception.ParamName);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledDuringPowerOnSettle_NeverEntersLanUpdateMode()
+    {
+        // Pins that the settle delay is genuinely awaited BETWEEN the power-on and the
+        // update-mode command, not before both or after both: cancellation is raised from
+        // inside the power-on Send, so only a wait sitting between the two sends can stop
+        // LAN:FWUpdate from going out. Also proves the wait observes the caller's token
+        // instead of sleeping the device into update mode after a cancel.
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM32");
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:POWer:STATe 1")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var options = CreateFastOptions();
+        // Long enough that the cancel, not the elapsed time, is what ends the wait — and long
+        // enough that a missing wait would let LAN:FWUpdate slip out before the cancel is seen.
+        options.PowerOnWifiModuleSettleDelay = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(["SYSTem:POWer:STATe 1"], device.SentCommands);
+        Assert.Equal(0, device.DisconnectCalls);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledDuringVersionCheck_SendsNoPreparationCommands()
+    {
+        // A cancel that lands after the operation lock is taken but before device prep must not
+        // still power the module on or flip the device into LAN firmware-update mode — update
+        // mode leaves the device unusable until it is taken back out of it, which a canceled
+        // caller will not be around to do. The version check is the real window for this: it
+        // returns a status object rather than observing the token itself, so without an explicit
+        // check the prep step runs both Sends before its first await notices the cancellation.
+        using var cts = new CancellationTokenSource();
+
+        var downloadService = new FakeFirmwareDownloadService
+        {
+            // Cancel from inside the check, then return normally: the check completes, decides a
+            // flash is needed (19.5.4 is below the supported minimum), and hands control to prep.
+            OnGetLatestWifiRelease = cts.Cancel
+        };
+
+        var device = new FakeLanChipInfoStreamingDevice(
+            "COM33",
+            chipInfo: new LanChipInfo
+            {
+                ChipId = 1234,
+                FwVersion = "19.5.4",
+                BuildDate = "Jan  8 2019"
+            });
+
+        var options = CreateFastOptions();
+        // Keeps SentCommands to just the prep commands under test — the probe's own power-on is
+        // a different code path with its own coverage.
+        options.PowerOnWifiModuleBeforeProbe = false;
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Empty(device.SentCommands);
+    }
+
+    [Fact]
+    public void FirmwareUpdateServiceOptions_PowerOnWifiModuleBeforeLanUpdateMode_DefaultsToTrue()
+    {
+        // The default is the behavior change: a consumer that upgrades without touching options
+        // gets the power-on prep. Pinned so it cannot be flipped off silently.
+        var options = new FirmwareUpdateServiceOptions();
+
+        Assert.True(options.PowerOnWifiModuleBeforeLanUpdateMode);
+        Assert.Equal(TimeSpan.FromSeconds(1), options.PowerOnWifiModuleSettleDelay);
+        options.Validate();
     }
 
     [Fact]
@@ -1707,6 +2054,298 @@ public class FirmwareUpdateServiceTests
 
             Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
             Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenFlashToolFails_TakesDeviceBackOutOfLanUpdateMode()
+    {
+        // Once LAN:FWUpdate lands the device bypasses its SCPI console and bridges USB straight
+        // to the WINC. Only the success path used to walk it back out, so a failed flash left the
+        // module unreachable until someone power-cycled it — which is why daqifi-desktop still
+        // wraps this call in its own recovery finally (#269 item 2).
+        var device = new FakeStreamingDevice("COM11");
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                1,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["some output"],
+                ["fatal"])
+        };
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            // The recovery must not swallow or reshape the real failure.
+            Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+
+            // Same two commands, in the same order, as the raw-serial WifiBridgeActivator.Deactivate
+            // twin: hand the port back to the SCPI console, then kick the WiFi manager out of its
+            // bridge-mode state machine. Deliberately no LAN:ENAbled/SAVE — persisting a network
+            // configuration off the back of a flash that did not complete is not this step's job.
+            // The leading power-on is prep's, not the recovery's: LAN commands are rejected while
+            // the WINC is unpowered, so LAN:FWUpdate has to be preceded by it.
+            Assert.Equal(
+                [
+                    "SYSTem:POWer:STATe 1",
+                    "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:USB:SetTransparentMode 0",
+                    "SYSTem:COMMunicate:LAN:APPLY"
+                ],
+                device.SentCommands);
+
+            // Prep disconnected the device to hand the port to the flash tool, so the recovery had
+            // to bring the transport back before it could send anything.
+            Assert.Equal(1, device.DisconnectCalls);
+            Assert.True(device.ConnectAttempts >= 1);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenCanceledAfterEnteringUpdateMode_StillTakesDeviceBackOut()
+    {
+        // The worst stranding case: LAN:FWUpdate is already on the wire and the caller cancels
+        // before prep even gets to the disconnect. The caller's token is canceled by definition
+        // here, so the recovery has to run on a token of its own or it would never send anything.
+        var device = new FakeStreamingDevice("COM12");
+
+        var options = CreateFastOptions();
+        // Long enough that cancellation lands inside it, and inside the 2s PreparingDeviceTimeout
+        // so the state timeout is not what ends the wait.
+        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+
+            Assert.Equal(
+                [
+                    "SYSTem:POWer:STATe 1",
+                    "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:USB:SetTransparentMode 0",
+                    "SYSTem:COMMunicate:LAN:APPLY"
+                ],
+                device.SentCommands);
+
+            // Cancellation landed before prep reached the disconnect, so the recovery found the
+            // transport already up — the exit is not conditional on having been disconnected.
+            Assert.Equal(0, device.DisconnectCalls);
+            Assert.Equal(0, device.ConnectAttempts);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresAfterReconnect_StillFinishesTheBridgeExit()
+    {
+        // The recovery budget bounds the wait for the transport to come back, not the two-command
+        // exit that follows it. Here the budget (50ms) is already spent by the time the pause
+        // between the two commands elapses, and the LAN:APPLY still goes out: stopping half way
+        // would hand the console back while leaving the WiFi manager in its bridge-mode state
+        // machine, which is a worse place to leave the device than either end of the sequence.
+        var device = new FakeStreamingDevice("COM13");
+
+        var options = CreateFastOptions();
+        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
+        // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
+        options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            // The original cancellation still surfaces — the recovery must never turn into the
+            // exception the caller sees.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+
+            Assert.Equal(
+                [
+                    "SYSTem:POWer:STATe 1",
+                    "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:USB:SetTransparentMode 0",
+                    "SYSTem:COMMunicate:LAN:APPLY"
+                ],
+                device.SentCommands);
+
+            Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresWaitingForReconnect_SendsNoBridgeExit()
+    {
+        // The one thing the budget does bound: a transport that never comes back. Prep hands the
+        // port to the flash tool, the flash fails, and the device then refuses every reconnect —
+        // the recovery must give up after the budget instead of waiting forever, and must not
+        // pretend to send commands down a transport that is not there.
+        var device = new FakeStreamingDevice("COM14")
+        {
+            // Consumed one per Connect() attempt; far more than the budget allows, so the
+            // reconnect loop never succeeds.
+            ConnectFailuresBeforeSuccess = int.MaxValue
+        };
+
+        var options = CreateFastOptions();
+        // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
+        options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
+
+        var externalProcessRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                1,
+                timedOut: false,
+                TimeSpan.FromMilliseconds(10),
+                ["some output"],
+                ["fatal"])
+        };
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            externalProcessRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            // The flash failure, not the recovery's timeout, is what the caller sees.
+            Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
+
+            // Prep's power-on and LAN:FWUpdate, and nothing after them: the recovery gave up in the
+            // reconnect wait, so neither half of the bridge exit was sent down a dead transport.
+            Assert.Equal(
+                [
+                    "SYSTem:POWer:STATe 1",
+                    "SYSTem:COMMUnicate:LAN:FWUpdate"
+                ],
+                device.SentCommands);
+            Assert.True(device.ConnectAttempts >= 1);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenDeviceIsNotConnected_DoesNotAttemptTheBridgeExit()
+    {
+        // The connectivity precondition fails with the update-mode command definitively un-sent,
+        // so there is no bridge to leave. Arming the recovery for it would turn an immediate
+        // "device must be connected" failure into a full ReconnectingAfterFlash wait (45s by
+        // default) for a transport that was never gone.
+        var device = new FakeStreamingDevice("COM15");
+        device.Disconnect();
+
+        var options = CreateFastOptions();
+        // Deliberately generous: if the recovery were armed here, its reconnect loop would run for
+        // this long and the assertion on elapsed time below would catch it.
+        options.VerifyingTimeout = TimeSpan.FromSeconds(30);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var exception = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir));
+
+            stopwatch.Stop();
+
+            Assert.Equal(FirmwareUpdateState.PreparingDevice, exception.FailedState);
+
+            // Nothing was sent, and — the point of the test — nothing was retried either. The
+            // device this fake models is one that would reconnect on the very first attempt, so a
+            // single Connect() call would be enough to mask the regression; assert zero.
+            Assert.Empty(device.SentCommands);
+            Assert.Equal(0, device.ConnectAttempts);
+
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+                $"Expected an immediate failure, took {stopwatch.Elapsed}.");
         }
         finally
         {
@@ -2013,6 +2652,140 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
+    public async Task UpdateWifiModuleAsync_WhenLatestReleaseUnavailableButDeviceMeetsMinimum_SkipsFlash()
+    {
+        // The defect this closes: a release lookup failure is a *network* failure, but it
+        // used to fall through to "flash conservatively" — erasing and reprogramming a WINC
+        // module whose own reported version was already supported, for eight minutes, because
+        // GitHub was unreachable. The device answered; that answer is enough.
+        var downloadService = new FakeFirmwareDownloadService
+        {
+            LatestWifiReleaseException = new HttpRequestException("no route to host")
+        };
+        var processRunner = new FakeExternalProcessRunner();
+        var device = new FakeLanChipInfoStreamingDevice("COM47", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            processRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var progressEvents = new List<FirmwareUpdateProgress>();
+        var progress = new CapturingProgress<FirmwareUpdateProgress>(progressEvents);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir, progress);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        // The strongest assertion available: the flash tool was never launched at all.
+        Assert.Equal(0, processRunner.RunCount);
+        Assert.DoesNotContain("SYSTem:COMMUnicate:LAN:FWUpdate", device.SentCommands);
+
+        Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
+        var completeEvent = Assert.Single(progressEvents, p => p.State == FirmwareUpdateState.Complete);
+        Assert.Equal(100, completeEvent.PercentComplete);
+        Assert.Contains("minimum supported version", completeEvent.CurrentOperation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenLatestReleaseUnavailableAndDeviceBelowMinimum_ProceedsWithFlash()
+    {
+        // The guard on the skip above: it is a verdict, not a blanket "give up and assume
+        // fine". A module genuinely below the supported minimum still gets flashed even
+        // though the release lookup failed.
+        var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = null };
+        var processRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0, false, TimeSpan.Zero, ["Operation completed successfully"], [])
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM48", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            processRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.True(processRunner.RunCount > 0);
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenChipInfoUnavailable_StillProceedsWithFlash()
+    {
+        // Regression guard for the null case: "could not read the device" must never be
+        // mistaken for "meets the minimum". This is the path that would silently stop
+        // flashing broken modules if the three-state verdict were collapsed to a bool.
+        var downloadService = new FakeFirmwareDownloadService { LatestWifiRelease = null };
+        var processRunner = new FakeExternalProcessRunner
+        {
+            NextResult = new ExternalProcessResult(
+                0, false, TimeSpan.Zero, ["Operation completed successfully"], [])
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM49", chipInfo: null);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            downloadService,
+            processRunner,
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await service.UpdateWifiModuleAsync(device, firmwareDir);
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.True(processRunner.RunCount > 0);
+    }
+
+    [Fact]
     public async Task UpdateWifiModuleAsync_WhenDeviceVersionIsOlder_ProceedsWithFlash()
     {
         var wifiRelease = new FirmwareReleaseInfo
@@ -2139,9 +2912,24 @@ public class FirmwareUpdateServiceTests
             probeCallCount++;
             return Task.FromResult(probeCallCount >= 3);
         };
-        // Readiness budget must be strictly less than JumpingToApplicationTimeout
-        // (CreateFastOptions uses 2s) — the probe succeeds within 50ms anyway.
-        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(1);
+        // Both budgets are deliberately generous. What this test asserts is behavioural
+        // — the probe is polled until it returns true, and Complete is held back until
+        // then — so the budgets exist only to stop a hung probe from hanging the suite,
+        // never as a deadline the assertions depend on. The probe succeeds after two
+        // 10ms retry delays, so the headroom costs nothing in the normal case: it just
+        // stops a stalled CI runner from failing a behavioural assertion on wall clock.
+        // A 1s budget here did exactly that — a loaded runner got only 2 of the 3
+        // probes away inside the second, and the timeout fired one probe short. The
+        // readiness budget still stays strictly below JumpingToApplicationTimeout, which
+        // FirmwareUpdateServiceOptions.Validate requires whenever a probe is set.
+        //
+        // 10s/15s rather than something enormous: these also bound how long a real
+        // regression in the JumpingToApp state takes to surface, so the aim is comfortably
+        // clear of a stalled runner without going so far that a genuine hang is slow to
+        // diagnose. 10s is an order of magnitude past the ~1s stall that broke the 1s
+        // budget, and ~300x what the probe actually needs.
+        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(15);
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(10);
         options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
 
         var service = new FirmwareUpdateService(
@@ -2251,7 +3039,13 @@ public class FirmwareUpdateServiceTests
                 ? Task.FromException<bool>(new OperationCanceledException("probe-internal-cancel"))
                 : Task.FromResult(true);
         };
-        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(1);
+        // Generous budgets for the same reason as
+        // UpdateFirmwareAsync_PostReconnectReadinessProbe_AwaitedBeforeComplete: the
+        // assertion is that the retry happens and the update still completes, not that
+        // it completes inside a deadline. Leaving a 1s budget here makes a behavioural
+        // test fail whenever the runner stalls long enough to eat the third probe.
+        options.JumpingToApplicationTimeout = TimeSpan.FromSeconds(15);
+        options.PostReconnectReadinessTimeout = TimeSpan.FromSeconds(10);
         options.PostReconnectReadinessRetryDelay = TimeSpan.FromMilliseconds(10);
 
         var service = new FirmwareUpdateService(
@@ -2606,6 +3400,258 @@ public class FirmwareUpdateServiceTests
         Assert.Equal(WifiFirmwareStatusReason.DeviceDoesNotSupportLanQuery, status.Reason);
         Assert.Null(status.CurrentChipInfo);
         Assert.Null(status.LatestRelease);
+
+        // The bar is a property of Core's policy, not of the device, so it is reported
+        // even when no device version was ever read. The verdict is not.
+        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+        Assert.Null(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public void MinimumSupportedWifiFirmwareVersion_DefaultsToTheFirmwareContractValue()
+    {
+        // 19.7.7 is a firmware-contract fact (#269), not a tuning default. Pinned here so a
+        // change to it is a deliberate edit to this assertion rather than a silent drift that
+        // would start accepting or rejecting modules in the field.
+        Assert.Equal("19.7.7", FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion);
+        Assert.Equal(
+            FirmwareUpdateServiceOptions.DefaultMinimumSupportedWifiFirmwareVersion,
+            new FirmwareUpdateServiceOptions().MinimumSupportedWifiFirmwareVersion);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-version")]
+    public void Constructor_WithUnparseableMinimumSupportedWifiFirmwareVersion_Throws(string minimum)
+    {
+        // A typo'd minimum must fail loudly at construction. If it were ignored at compare
+        // time instead, the check would silently degrade to "no version opinion" — exactly
+        // the state this option exists to remove — and the degradation would be invisible.
+        var options = CreateFastOptions();
+        options.MinimumSupportedWifiFirmwareVersion = minimum;
+
+        var ex = Assert.Throws<ArgumentException>(() => new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0xA1, 0x01]]),
+            new FakeHidDeviceEnumerator([Array.Empty<HidDeviceInfo>()]),
+            options));
+
+        Assert.Equal(nameof(FirmwareUpdateServiceOptions.MinimumSupportedWifiFirmwareVersion), ex.ParamName);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLatestReleaseLookupReturnsNull_StillAnswersMinimumSupported()
+    {
+        // The point of the minimum: a release lookup that fails (offline bench, blocked
+        // egress, rate limit) leaves IsUpToDate unanswerable, but the device already told
+        // us its version, so "is this module supported" is still answerable — with no
+        // network at all.
+        var device = new FakeLanChipInfoStreamingDevice("COM40", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        // Unchanged: IsUpToDate stays a strictly latest-release answer and stays false.
+        Assert.False(status.IsUpToDate);
+        Assert.Equal(WifiFirmwareStatusReason.LatestReleaseUnavailable, status.Reason);
+        Assert.Null(status.LatestRelease);
+
+        // New: the network-independent verdict.
+        Assert.True(status.MeetsMinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLatestReleaseLookupThrows_StillAnswersMinimumSupported()
+    {
+        // The throwing half of the same failure — a different catch block in the
+        // implementation, so it needs its own coverage.
+        var device = new FakeLanChipInfoStreamingDevice("COM41", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.8.0",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService
+            {
+                LatestWifiReleaseException = new HttpRequestException("no route to host")
+            },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(WifiFirmwareStatusReason.LatestReleaseUnavailable, status.Reason);
+        Assert.False(status.IsUpToDate);
+        Assert.True(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenDeviceIsBelowMinimum_ReportsFalseNotNull()
+    {
+        // "Below the minimum" and "could not tell" must stay distinguishable — collapsing
+        // them is the conflation the three-state property exists to prevent.
+        var device = new FakeLanChipInfoStreamingDevice("COM42", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.5.4",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.False(status.MeetsMinimumSupportedVersion);
+        Assert.NotNull(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenChipInfoUnavailable_LeavesMinimumVerdictUnknown()
+    {
+        var device = new FakeLanChipInfoStreamingDevice("COM43", chipInfo: null);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(WifiFirmwareStatusReason.ChipInfoUnavailable, status.Reason);
+        Assert.Null(status.MeetsMinimumSupportedVersion);
+        Assert.Equal(new FirmwareVersion(19, 7, 7, null, 0), status.MinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenDeviceVersionUnparseable_LeavesMinimumVerdictUnknown()
+    {
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 7, 7, null, 0),
+            TagName = "19.7.7",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM44", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "garbage",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(WifiFirmwareStatusReason.VersionUnparseable, status.Reason);
+        Assert.Null(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_UsesTheConfiguredMinimum_NotOnlyTheDefault()
+    {
+        // A manufacturing line raising the bar must actually move the verdict; a device that
+        // passes the shipped default has to fail a higher configured minimum.
+        var options = CreateFastOptions();
+        options.MinimumSupportedWifiFirmwareVersion = "19.9.0";
+
+        var device = new FakeLanChipInfoStreamingDevice("COM45", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = null },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        Assert.Equal(new FirmwareVersion(19, 9, 0, null, 0), status.MinimumSupportedVersion);
+        Assert.False(status.MeetsMinimumSupportedVersion);
+    }
+
+    [Fact]
+    public async Task CheckWifiFirmwareStatusAsync_WhenLatestReleaseIsKnown_StillReportsTheMinimumVerdict()
+    {
+        // The minimum is reported on the happy path too, so a caller can use one property
+        // consistently instead of switching on Reason to know whether it is populated.
+        var wifiRelease = new FirmwareReleaseInfo
+        {
+            Version = new FirmwareVersion(19, 8, 0, null, 0),
+            TagName = "19.8.0",
+            IsPreRelease = false
+        };
+        var device = new FakeLanChipInfoStreamingDevice("COM46", chipInfo: new LanChipInfo
+        {
+            ChipId = 1234,
+            FwVersion = "19.7.7",
+            BuildDate = "Jan  8 2019"
+        });
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService { LatestWifiRelease = wifiRelease },
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            CreateFastOptions());
+
+        var status = await service.CheckWifiFirmwareStatusAsync(device);
+
+        // Supported, but not the newest — the two questions genuinely disagree here, which
+        // is the case that motivated modeling them separately.
+        Assert.Equal(WifiFirmwareStatusReason.UpdateAvailable, status.Reason);
+        Assert.False(status.IsUpToDate);
+        Assert.True(status.MeetsMinimumSupportedVersion);
     }
 
     [Fact]
@@ -3017,13 +4063,36 @@ public class FirmwareUpdateServiceTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => ConnectionStatus.Connected;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }
         public void Connect() => IsConnected = true;
         public void Disconnect() => IsConnected = false;
+
+        public Task ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Connect();
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            Disconnect();
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disconnect();
+            return ValueTask.CompletedTask;
+        }
 
         public void Send<T>(IOutboundMessage<T> message)
         {
@@ -3056,6 +4125,16 @@ public class FirmwareUpdateServiceTests
         public void SaveFactoryAdcCalibration() { }
         public void LoadFactoryAdcCalibration() { }
         public void UseAdcCalibration(int bank) { }
+
+        public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadAdcCalibration(); return Task.CompletedTask; }
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) { SetAdcCalibrationSlope(channelNumber, calM); return Task.CompletedTask; }
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) { SetAdcCalibrationOffset(channelNumber, calB); return Task.CompletedTask; }
+        public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) { UseAdcCalibration(bank); return Task.CompletedTask; }
+        public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) { SaveVoltagePrecision(); return Task.CompletedTask; }
+        public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) { LoadVoltagePrecision(); return Task.CompletedTask; }
 
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
@@ -3122,13 +4201,37 @@ public class FirmwareUpdateServiceTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => ConnectionStatus.Connected;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged { add { } remove { } }
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived { add { } remove { } }
         public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred { add { } remove { } }
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated { add { } remove { } }
         public void Connect() => IsConnected = true;
         public void Disconnect() => IsConnected = false;
+
+        public Task ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Connect();
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            Disconnect();
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disconnect();
+            return ValueTask.CompletedTask;
+        }
+
         public void Send<T>(IOutboundMessage<T> message) { }
         public void StartStreaming() => IsStreaming = true;
         public void StopStreaming() => IsStreaming = false;
@@ -3153,6 +4256,17 @@ public class FirmwareUpdateServiceTests
         public void SaveFactoryAdcCalibration() { }
         public void LoadFactoryAdcCalibration() { }
         public void UseAdcCalibration(int bank) { }
+
+        public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadAdcCalibration(); return Task.CompletedTask; }
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) { SetAdcCalibrationSlope(channelNumber, calM); return Task.CompletedTask; }
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) { SetAdcCalibrationOffset(channelNumber, calB); return Task.CompletedTask; }
+        public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) { UseAdcCalibration(bank); return Task.CompletedTask; }
+        public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) { SaveVoltagePrecision(); return Task.CompletedTask; }
+        public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) { LoadVoltagePrecision(); return Task.CompletedTask; }
+
         public async Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
             await Task.Delay(_attemptLatency, cancellationToken).ConfigureAwait(false);
@@ -3815,7 +4929,10 @@ public class FirmwareUpdateServiceTests
             // Skip the WINC power-on settle wait — fakes don't model power state,
             // so the delay is pure latency here. Individual tests re-enable it
             // where the power-on behavior itself is under test.
-            PowerOnWifiModuleSettleDelay = TimeSpan.Zero
+            PowerOnWifiModuleSettleDelay = TimeSpan.Zero,
+            // Same reasoning for the transparent-mode exit settle: the fake device has no
+            // bridge to leave. Tests that exercise the wait itself set it explicitly.
+            PostUsbTransparentModeExitDelay = TimeSpan.Zero
         };
     }
 
@@ -3831,105 +4948,6 @@ public class FirmwareUpdateServiceTests
         var path = Path.Combine(Path.GetTempPath(), "daqifi-core-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
-    }
-
-    private sealed class FakeStreamingDevice : IStreamingDevice
-    {
-        private ConnectionStatus _status = ConnectionStatus.Connected;
-
-        public FakeStreamingDevice(string name)
-        {
-            Name = name;
-            IsConnected = true;
-        }
-
-        public string Name { get; }
-        public IPAddress? IpAddress => null;
-        public bool IsConnected { get; private set; }
-        public ConnectionStatus Status => _status;
-        public int StreamingFrequency { get; set; }
-        public bool IsStreaming { get; private set; }
-
-        public int ConnectAttempts { get; private set; }
-        public int DisconnectCalls { get; private set; }
-
-        public int ConnectFailuresBeforeSuccess { get; set; }
-        public List<string> SentCommands { get; } = [];
-
-        public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
-        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
-        {
-            add { }
-            remove { }
-        }
-
-        public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred
-        {
-            add { }
-            remove { }
-        }
-
-        public void Connect()
-        {
-            ConnectAttempts++;
-            if (ConnectFailuresBeforeSuccess > 0)
-            {
-                ConnectFailuresBeforeSuccess--;
-                throw new IOException("Simulated serial reconnect failure.");
-            }
-
-            IsConnected = true;
-            _status = ConnectionStatus.Connected;
-            StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
-        }
-
-        public void Disconnect()
-        {
-            DisconnectCalls++;
-            IsConnected = false;
-            _status = ConnectionStatus.Disconnected;
-            StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
-        }
-
-        public void Send<T>(IOutboundMessage<T> message)
-        {
-            if (message is IOutboundMessage<string> textMessage)
-            {
-                SentCommands.Add(textMessage.Data);
-            }
-        }
-
-        public void StartStreaming()
-        {
-            IsStreaming = true;
-        }
-
-        public void StopStreaming()
-        {
-            IsStreaming = false;
-        }
-
-        public void EnableChannel(IChannel channel) { }
-        public void EnableChannels(IEnumerable<IChannel> channels) { }
-        public void DisableChannel(IChannel channel) { }
-        public void DisableAllChannels() { }
-        public void SetDioDirection(IChannel channel, ChannelDirection direction) { }
-        public void SetDioValue(IChannel channel, bool value) { }
-        public void SetPwmEnabled(IChannel channel, bool enabled) { }
-        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) { }
-        public void SetPwmFrequency(int frequencyHz) { }
-        public int PwmFrequencyHz => 0;
-        public void SetAnalogOutput(int channelNumber, double voltage) { }
-        public void Reboot() => Disconnect();
-        public void SaveAdcCalibration() { }
-        public void LoadAdcCalibration() { }
-        public void SaveVoltagePrecision() { }
-        public void LoadVoltagePrecision() { }
-        public void SetAdcCalibrationSlope(int channelNumber, double calM) { }
-        public void SetAdcCalibrationOffset(int channelNumber, double calB) { }
-        public void SaveFactoryAdcCalibration() { }
-        public void LoadFactoryAdcCalibration() { }
-        public void UseAdcCalibration(int bank) { }
     }
 
     private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
@@ -3968,6 +4986,9 @@ public class FirmwareUpdateServiceTests
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => _status;
+        public DeviceMetadata Metadata { get; } = new();
+        public IReadOnlyList<IChannel> Channels => Array.Empty<IChannel>();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => Array.Empty<IChannel>();
         public int StreamingFrequency { get; set; }
         public bool IsStreaming { get; private set; }
 
@@ -3992,6 +5013,12 @@ public class FirmwareUpdateServiceTests
             remove { }
         }
 
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated
+        {
+            add { }
+            remove { }
+        }
+
         public void Connect()
         {
             IsConnected = true;
@@ -4004,6 +5031,25 @@ public class FirmwareUpdateServiceTests
             IsConnected = false;
             _status = ConnectionStatus.Disconnected;
             StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+        }
+
+        public Task ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Connect();
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync(CancellationToken cancellationToken = default)
+        {
+            Disconnect();
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disconnect();
+            return ValueTask.CompletedTask;
         }
 
         public void Send<T>(IOutboundMessage<T> message)
@@ -4046,6 +5092,16 @@ public class FirmwareUpdateServiceTests
         public void LoadFactoryAdcCalibration() { }
         public void UseAdcCalibration(int bank) { }
 
+        public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadAdcCalibration(); return Task.CompletedTask; }
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) { SetAdcCalibrationSlope(channelNumber, calM); return Task.CompletedTask; }
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) { SetAdcCalibrationOffset(channelNumber, calB); return Task.CompletedTask; }
+        public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { SaveFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) { LoadFactoryAdcCalibration(); return Task.CompletedTask; }
+        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) { UseAdcCalibration(bank); return Task.CompletedTask; }
+        public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) { SaveVoltagePrecision(); return Task.CompletedTask; }
+        public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) { LoadVoltagePrecision(); return Task.CompletedTask; }
+
         public Task<LanChipInfo?> GetLanChipInfoAsync(CancellationToken cancellationToken = default)
         {
             FirstGetLanChipInfoCallAt ??= _eventStopwatch.Elapsed;
@@ -4066,373 +5122,6 @@ public class FirmwareUpdateServiceTests
                     new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
             }
             return Task.FromResult(_chipInfo);
-        }
-    }
-
-    private sealed class FakeHidTransport : IHidTransport
-    {
-        private readonly Queue<byte[]> _readQueue = new();
-
-        public bool IsConnected { get; private set; }
-        public int? VendorId { get; private set; }
-        public int? ProductId { get; private set; }
-        public string? SerialNumber { get; private set; }
-        public string? DevicePath { get; private set; }
-        public TimeSpan ReadTimeout { get; set; } = TimeSpan.FromSeconds(1);
-        public TimeSpan WriteTimeout { get; set; } = TimeSpan.FromSeconds(1);
-
-        public List<byte[]> Writes { get; } = [];
-        public int ConnectAttempts { get; private set; }
-        public int DisconnectCalls { get; private set; }
-
-        public void EnqueueRead(byte[] response)
-        {
-            _readQueue.Enqueue(response);
-        }
-
-        public Task ConnectAsync(int vendorId, int productId, string? serialNumber = null, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ConnectAttempts++;
-            IsConnected = true;
-            VendorId = vendorId;
-            ProductId = productId;
-            SerialNumber = serialNumber;
-            DevicePath = "fake-path";
-            return Task.CompletedTask;
-        }
-
-        public void Connect(int vendorId, int productId, string? serialNumber = null)
-        {
-            ConnectAsync(vendorId, productId, serialNumber).GetAwaiter().GetResult();
-        }
-
-        public int ConnectByPathAttempts { get; private set; }
-        public string? LastConnectByPath { get; private set; }
-
-        public Task ConnectByPathAsync(string devicePath, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ConnectByPathAttempts++;
-            LastConnectByPath = devicePath;
-            IsConnected = true;
-            DevicePath = devicePath;
-            return Task.CompletedTask;
-        }
-
-        public void ConnectByPath(string devicePath)
-        {
-            ConnectByPathAsync(devicePath).GetAwaiter().GetResult();
-        }
-
-        /// <summary>
-        /// Optional hook invoked by <see cref="WriteAsync"/> before the write is recorded.
-        /// Lets a test make a write hang (honoring the linked cancellation token) to verify
-        /// per-state timeout enforcement.
-        /// </summary>
-        public Func<byte[], CancellationToken, Task>? WriteHook { get; set; }
-
-        public async Task WriteAsync(byte[] data, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!IsConnected)
-            {
-                throw new InvalidOperationException("Not connected.");
-            }
-
-            if (WriteHook is not null)
-            {
-                await WriteHook(data, cancellationToken).ConfigureAwait(false);
-            }
-
-            Writes.Add(data.ToArray());
-        }
-
-        public void Write(byte[] data)
-        {
-            WriteAsync(data).GetAwaiter().GetResult();
-        }
-
-        private bool _dropWhenReadQueueEmpty;
-
-        /// <summary>
-        /// Makes the first ReadAsync after the queued responses are exhausted
-        /// throw and drop the connection, simulating the device disappearing
-        /// from the bus mid-operation.
-        /// </summary>
-        public void DropWhenReadQueueEmpty() => _dropWhenReadQueueEmpty = true;
-
-        public Task<byte[]> ReadAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!IsConnected)
-            {
-                throw new InvalidOperationException("Not connected.");
-            }
-
-            if (_readQueue.Count == 0)
-            {
-                if (_dropWhenReadQueueEmpty)
-                {
-                    _dropWhenReadQueueEmpty = false;
-                    IsConnected = false;
-                    throw new IOException("Simulated HID transport drop.");
-                }
-
-                throw new InvalidOperationException("No queued HID response available.");
-            }
-
-            return Task.FromResult(_readQueue.Dequeue());
-        }
-
-        public byte[] Read(TimeSpan? timeout = null)
-        {
-            return ReadAsync(timeout).GetAwaiter().GetResult();
-        }
-
-        public Task DisconnectAsync()
-        {
-            DisconnectCalls++;
-            IsConnected = false;
-            VendorId = null;
-            ProductId = null;
-            SerialNumber = null;
-            DevicePath = null;
-            return Task.CompletedTask;
-        }
-
-        public void Disconnect()
-        {
-            DisconnectAsync().GetAwaiter().GetResult();
-        }
-
-        public void Dispose()
-        {
-        }
-    }
-
-    private sealed class FakeHidDeviceEnumerator : IHidDeviceEnumerator
-    {
-        private readonly Queue<IReadOnlyList<HidDeviceInfo>> _responses;
-        private readonly IReadOnlyList<HidDeviceInfo> _fallback;
-
-        public FakeHidDeviceEnumerator(
-            IReadOnlyList<IReadOnlyList<HidDeviceInfo>> responses,
-            IReadOnlyList<HidDeviceInfo>? fallback = null)
-        {
-            _responses = new Queue<IReadOnlyList<HidDeviceInfo>>(responses);
-            _fallback = fallback ?? Array.Empty<HidDeviceInfo>();
-        }
-
-        public Task<IReadOnlyList<HidDeviceInfo>> EnumerateAsync(
-            int? vendorId = null,
-            int? productId = null,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (_responses.Count > 0)
-            {
-                return Task.FromResult(_responses.Dequeue());
-            }
-
-            return Task.FromResult(_fallback);
-        }
-    }
-
-    private sealed class ThrowingHidDeviceEnumerator : IHidDeviceEnumerator
-    {
-        private readonly Exception _exception;
-
-        public ThrowingHidDeviceEnumerator(Exception exception)
-        {
-            _exception = exception;
-        }
-
-        public Task<IReadOnlyList<HidDeviceInfo>> EnumerateAsync(
-            int? vendorId = null,
-            int? productId = null,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromException<IReadOnlyList<HidDeviceInfo>>(_exception);
-        }
-    }
-
-    private sealed class FakeUsbLocationProvider : IUsbLocationProvider
-    {
-        private readonly IReadOnlyDictionary<string, string> _locationsByDevicePath;
-
-        public FakeUsbLocationProvider(IReadOnlyDictionary<string, string> locationsByDevicePath)
-        {
-            _locationsByDevicePath = locationsByDevicePath;
-        }
-
-        public List<string> Requests { get; } = [];
-
-        public string? GetLocationKey(string portNameOrDevicePath)
-        {
-            Requests.Add(portNameOrDevicePath);
-            return _locationsByDevicePath.TryGetValue(portNameOrDevicePath, out var location) ? location : null;
-        }
-    }
-
-    private sealed class FakeBootloaderProtocol : IBootloaderProtocol
-    {
-        private readonly IReadOnlyList<byte[]> _hexRecords;
-        private readonly IReadOnlyList<FlashCrcRegion> _crcRegions;
-
-        public FakeBootloaderProtocol(
-            IReadOnlyList<byte[]> hexRecords,
-            IReadOnlyList<FlashCrcRegion>? crcRegions = null)
-        {
-            _hexRecords = hexRecords;
-            _crcRegions = crcRegions ?? Array.Empty<FlashCrcRegion>();
-        }
-
-        public byte[] CreateRequestVersionMessage() => [0x11];
-        public byte[] CreateEraseFlashMessage() => [0x22];
-        public byte[] CreateProgramFlashMessage(byte[] hexRecord) => [0x33, .. hexRecord];
-        public byte[] CreateReadCrcMessage(uint address, uint length) =>
-            [0x44, .. BitConverter.GetBytes(address), .. BitConverter.GetBytes(length)];
-        public byte[] CreateJumpToApplicationMessage() => [0x55];
-
-        public string DecodeVersionResponse(byte[] data)
-        {
-            if (data.Length == 0 || data[0] == 0xEE)
-            {
-                return "Error";
-            }
-
-            return "1.0";
-        }
-
-        public bool DecodeProgramFlashResponse(byte[] data)
-        {
-            return data.Length >= 2 && data[0] == 0x01 && data[1] == 0x03;
-        }
-
-        public bool DecodeEraseFlashResponse(byte[] data)
-        {
-            return data.Length >= 2 && data[0] == 0x01 && data[1] == 0x02;
-        }
-
-        // The enqueued READ_CRC HID response carries the device-reported CRC in
-        // its first two bytes (little-endian), so a test drives match/mismatch
-        // by enqueuing specific bytes.
-        public ushort DecodeReadCrcResponse(byte[] data)
-        {
-            if (data.Length < 2)
-            {
-                throw new InvalidDataException("Fake READ_CRC response was too short.");
-            }
-
-            return (ushort)(data[0] | (data[1] << 8));
-        }
-
-        public IReadOnlyList<FlashCrcRegion> ComputeCrcRegions(string[] hexFileLines) => _crcRegions;
-
-        public List<byte[]> ParseHexFile(string[] hexFileLines)
-        {
-            return _hexRecords.Select(record => record.ToArray()).ToList();
-        }
-    }
-
-    private sealed class FakeExternalProcessRunner : IExternalProcessRunner
-    {
-        public ExternalProcessResult NextResult { get; set; } = new(0, false, TimeSpan.Zero, [], []);
-
-        /// <summary>
-        /// Optional per-attempt results. When non-empty each <see cref="RunAsync"/> call dequeues
-        /// the next result, letting tests model the WINC flash retry path (transient failure →
-        /// success). Once the sequence is drained, subsequent calls return <see cref="NextResult"/>
-        /// — kept deliberately distinct from the scripted results so a test asserting
-        /// <see cref="RunCount"/> can still catch unexpected extra attempts.
-        /// </summary>
-        public Queue<ExternalProcessResult> ResultSequence { get; } = new();
-
-        public ExternalProcessRequest? LastRequest { get; private set; }
-        public int RunCount { get; private set; }
-
-        public Task<ExternalProcessResult> RunAsync(
-            ExternalProcessRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            LastRequest = request;
-            RunCount++;
-
-            var result = ResultSequence.Count > 0 ? ResultSequence.Dequeue() : NextResult;
-
-            foreach (var line in result.StandardOutputLines)
-            {
-                request.OnStandardOutputLine?.Invoke(line);
-                request.StandardInputResponseFactory?.Invoke(line);
-            }
-
-            foreach (var line in result.StandardErrorLines)
-            {
-                request.OnStandardErrorLine?.Invoke(line);
-            }
-
-            return Task.FromResult(result);
-        }
-    }
-
-    private sealed class FakeFirmwareDownloadService : IFirmwareDownloadService
-    {
-        public FirmwareReleaseInfo? LatestWifiRelease { get; set; }
-
-        public Task<FirmwareReleaseInfo?> GetLatestReleaseAsync(bool includePreRelease = false, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<FirmwareReleaseInfo?>(null);
-        }
-
-        public Task<FirmwareUpdateCheckResult> CheckForUpdateAsync(string deviceVersionString, bool includePreRelease = false, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(new FirmwareUpdateCheckResult
-            {
-                UpdateAvailable = false
-            });
-        }
-
-        public Task<string?> DownloadLatestFirmwareAsync(string destinationDirectory, bool includePreRelease = false, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<string?>(null);
-        }
-
-        public Task<string?> DownloadFirmwareByTagAsync(string tagName, string destinationDirectory, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<string?>(null);
-        }
-
-        public Task<(string ExtractedPath, string Version)?> DownloadWifiFirmwareAsync(string destinationDirectory, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<(string ExtractedPath, string Version)?>(null);
-        }
-
-        public Task<FirmwareReleaseInfo?> GetLatestWifiReleaseAsync(CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(LatestWifiRelease);
-        }
-
-        public void InvalidateCache()
-        {
-        }
-    }
-
-    private sealed class CapturingProgress<T> : IProgress<T>
-    {
-        private readonly ICollection<T> _items;
-
-        public CapturingProgress(ICollection<T> items)
-        {
-            _items = items;
-        }
-
-        public void Report(T value)
-        {
-            _items.Add(value);
         }
     }
 }

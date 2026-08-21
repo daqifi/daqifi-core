@@ -28,11 +28,18 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// Claimed <b>before</b> the dequeue that starts a batch, not after: a message leaves the queue
     /// before it is written, so setting this afterwards would leave an instant where the queue is
     /// empty and nothing yet reports a write in progress — exactly the gap
-    /// <see cref="IsIdle"/> exists to close.
+    /// <see cref="IsIdle"/> exists to close. Claiming it early is only half of that guarantee; the
+    /// other half is the order <see cref="IsIdle"/> reads the two fields in.
     /// </remarks>
     private volatile bool _draining;
     private bool _disposed;
     private Thread? _producerThread;
+
+    /// <summary>
+    /// Number of times the background loop has returned from its wait. Exposed for tests: an idle
+    /// producer must not accumulate wakeups (issue #491).
+    /// </summary>
+    private long _wakeCount;
 
     /// <summary>
     /// Initializes a new instance of the MessageProducer class.
@@ -65,12 +72,38 @@ public class MessageProducer<T> : IMessageProducer<T>
     public int QueuedMessageCount => _messageQueue.Count;
 
     /// <inheritdoc />
-    public bool IsIdle => !_draining && _messageQueue.IsEmpty;
+    /// <remarks>
+    /// The queue is read <b>before</b> the draining flag, and the order is load-bearing.
+    /// These are two separate reads, so a caller can straddle the background thread's handover
+    /// from "queued" to "being written"; only this order makes the straddle report busy rather
+    /// than idle. Read the other way round, a caller could see <c>_draining</c> still false (the
+    /// loop has woken but not yet claimed the batch), then — after the loop claims it and
+    /// dequeues — see an empty queue, and conclude the producer was idle while a write was
+    /// actually in flight. That is the same false "all quiet" that
+    /// <see cref="QueuedMessageCount"/> gives on its own, which is the gap this property exists
+    /// to close. In this order the straddle is harmless: whichever side of the handover the reads
+    /// land on, one of them still reports work outstanding.
+    /// </remarks>
+    public bool IsIdle => _messageQueue.IsEmpty && !_draining;
 
     /// <summary>
     /// Gets a value indicating whether the producer is currently running.
     /// </summary>
     public bool IsRunning => _isRunning;
+
+    /// <summary>
+    /// Number of times the background loop has woken from its wait over the life of this instance.
+    /// A producer with nothing to send must never wake at all, so this stays at its value for as
+    /// long as the queue is empty and no stop has been requested.
+    /// </summary>
+    /// <remarks>
+    /// Monotonic, and deliberately not reset by <see cref="Start"/>: a stop whose
+    /// <see cref="Thread.Join(int)"/> timed out leaves the previous background thread alive and
+    /// still able to increment this, so a per-run counter would be a counter with a race in it. The
+    /// property it exists to express — that an idle producer does not accumulate wakeups — is a
+    /// statement about the value not changing, which a cumulative count states just as well.
+    /// </remarks>
+    internal long WakeCount => Interlocked.Read(ref _wakeCount);
 
     /// <inheritdoc />
     public event EventHandler<MessageSendFailedEventArgs<T>>? SendFailed;
@@ -184,8 +217,24 @@ public class MessageProducer<T> : IMessageProducer<T>
             {
                 try
                 {
-                    // Wait for a message to be enqueued or timeout after 100ms
-                    _messageAvailable.Wait(100);
+                    // Park until something actually happens. There is no timeout: a connected but
+                    // silent device used to cost 10 wakeups a second here, forever, per device
+                    // (issue #491), and the timeout was never load-bearing.
+                    //
+                    // Every state change that this loop must observe sets the event, and
+                    // ManualResetEventSlim is sticky, so none of them can be missed:
+                    //   - Send() enqueues and then sets, so a set that is observed always has its
+                    //     message already visible to the TryDequeue below;
+                    //   - Stop() and StopSafely() clear _isRunning and then set, and the while
+                    //     condition above is re-read after this iteration, so a set consumed by the
+                    //     Reset() below still exits the loop on the next pass;
+                    //   - a set that arrives after Reset() but before the drain is picked up by the
+                    //     drain itself, and one that arrives after the drain leaves the event set,
+                    //     so the next wait returns immediately.
+                    // The Reset() stays *before* the drain for that last reason: resetting after it
+                    // would discard a set whose message the drain had already passed.
+                    _messageAvailable.Wait();
+                    Interlocked.Increment(ref _wakeCount);
                     _messageAvailable.Reset();
 
                     // Claimed around the whole batch rather than around each write, so there is

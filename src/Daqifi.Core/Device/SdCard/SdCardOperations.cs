@@ -108,10 +108,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         internal void PrepareSdInterface()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_host.IsUsbConnection)
             {
@@ -130,10 +127,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         internal void PrepareLanInterface()
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.DisableStorageSd);
 
@@ -216,10 +210,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </remarks>
         internal async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             EnsureSdFileTransferSupportedOnTransport();
 
@@ -270,7 +261,7 @@ namespace Daqifi.Core.Device.SdCard
                     completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                     cancellationToken: cancellationToken,
                     prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                    finalizeAsync: RestoreLanInterfaceAsync);
+                    finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                 isComplete = TrySplitAtSdListTerminator(lines, out listing);
 
@@ -287,6 +278,26 @@ namespace Daqifi.Core.Device.SdCard
 
             ThrowIfSdCardListError(listing);
 
+            // The device's own end-of-listing marker (firmware #794), when it sends
+            // one. FAILED means the walk could not open the directory at all, so an
+            // empty result would report "there is nothing there" for what was really
+            // "I could not look" -- the exact confusion the terminator above exists
+            // to prevent, one level deeper. Unterminated is the pre-#794 firmware and
+            // is not an error: the reply framing already told us the exchange
+            // completed, we simply learn nothing more from the device.
+            var listingStatus = SdCardFileListParser.GetListingStatus(listing);
+            if (listingStatus == SdCardListingStatus.Failed
+                || listingStatus == SdCardListingStatus.Incomplete)
+            {
+                // INCOMPLETE throws for the same reason a missing transport
+                // terminator does, a few lines above: the caller is about to
+                // cache this list and answer "is my file on the card?" from it.
+                // A device-truncated listing and a transport-truncated one are
+                // the same class of wrong answer, so they raise the same
+                // exception -- a client that handles one already handles this.
+                throw new SdCardListIncompleteException(lines);
+            }
+
             var files = SdCardFileListParser.ParseFileList(listing);
             _sdCardFiles = files;
             return files;
@@ -298,7 +309,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <remarks>
         /// Passed as the <c>prepareAsync</c> phase of
-        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// rather than run
         /// inline, so it executes inside the text-exchange lock — a competing exchange restoring the
         /// LAN interface between the switch and the commands that depend on it would leave them
@@ -320,7 +331,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         /// <remarks>
         /// Passed as the <c>finalizeAsync</c> phase of
-        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// <see cref="DaqifiDevice.ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// rather than run from the caller's own <c>finally</c>, so it holds the same lock
         /// acquisition the matching prepare phase does. Restoring from outside the lock leaves a
         /// window in which a competing exchange runs between this operation's commands and its
@@ -402,7 +413,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation, containing the SD card storage info.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
         /// <exception cref="FeatureNotSupportedException">
@@ -415,14 +426,11 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="SdCardOperationException">Thrown when the device returned a SCPI error or an unparseable response.</exception>
         internal async Task<SdCardStorageInfo> GetSdCardStorageAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot query SD card storage while logging to SD card.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             // The storage-space query drives the SD card through the same transport-aware
@@ -448,7 +456,7 @@ namespace Daqifi.Core.Device.SdCard
                 responseTimeoutMs: 3000,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                finalizeAsync: RestoreLanInterfaceAsync);
+                finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
             // Only retry transient SCPI errors. A "No SD Card Detected" line
             // is non-transient — retrying just delays the typed exception and
@@ -466,7 +474,7 @@ namespace Daqifi.Core.Device.SdCard
                         responseTimeoutMs: 3000,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                        finalizeAsync: RestoreLanInterfaceAsync);
+                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                     if (!ScpiResponseClassifier.ContainsScpiError(lines) || ContainsNoSdCardMarker(lines))
                     {
@@ -545,10 +553,7 @@ namespace Daqifi.Core.Device.SdCard
                 throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Minimum free space cannot be negative.");
             }
 
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             _host.Send(ScpiMessageProducer.SetSdMinFreeSpace(bytes));
         }
@@ -591,10 +596,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal async Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (!_host.IsUsbConnection)
             {
@@ -621,31 +623,31 @@ namespace Daqifi.Core.Device.SdCard
 
             ValidateSdCardFileName(logFileName);
 
-            // SdCardLogFormat integer values map 1:1 to SYSTem:STReam:FORmat SCPI arguments
-            var formatCommand = new ScpiMessage($"SYSTem:STReam:FORmat {(int)format}");
+            // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
+            var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
 
             // SD card and LAN share the SPI bus on the hardware, so LAN must be
             // disabled before the SD card can be used.
             _host.Send(ScpiMessageProducer.DisableNetworkLan);
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             _host.Send(ScpiMessageProducer.EnableStorageSd);
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             // Route the data stream to the SD card interface.
             _host.Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             _host.Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             _host.Send(formatCommand);
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 
             if (!string.IsNullOrWhiteSpace(channelMask))
             {
                 _host.Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
-                await Task.Delay(100, cancellationToken);
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
             }
 
             _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
@@ -665,12 +667,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal Task StopSdCardLoggingAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            _host.EnsureConnected(cancellationToken);
 
             // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
             _host.Send(ScpiMessageProducer.StopStreaming);
@@ -707,19 +704,16 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal async Task DeleteSdCardFileAsync(string fileName, CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot delete files while logging to SD card.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             EnsureSdFileTransferSupportedOnTransport();
@@ -749,11 +743,29 @@ namespace Daqifi.Core.Device.SdCard
                 {
                     _host.Send(ScpiMessageProducer.DeleteSdFile(fileName));
                     _host.Send(ScpiMessageProducer.GetSdFileList);
+
+                    // Transport terminator, exactly as the read path sends it.
+                    // Without it a reply cut short by the completion window is
+                    // indistinguishable from a complete one that carried no
+                    // device marker -- and the second of those is legitimate
+                    // (pre-#796 firmware), so the status alone cannot tell them
+                    // apart. This is what makes "the exchange finished" a fact
+                    // rather than an assumption.
+                    _host.Send(ScpiMessageProducer.GetSystemError);
                 },
                 responseTimeoutMs: 3000,
+                // Same completion window the read path uses for the same
+                // command. Without it this exchange takes the 250 ms default,
+                // and the firmware walks the directory tree between chunks --
+                // so a merely-slow listing is cut off BEFORE its terminator
+                // arrives, reads as Unterminated (which by design does not
+                // throw) and slips past the guard below to overwrite the cache
+                // with a partial list. The guard can only judge a marker it
+                // was given time to receive.
+                completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                 cancellationToken: cancellationToken,
                 prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                finalizeAsync: RestoreLanInterfaceAsync);
+                finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
             if (ScpiResponseClassifier.ContainsScpiError(lines))
             {
@@ -768,11 +780,17 @@ namespace Daqifi.Core.Device.SdCard
                         {
                             _host.Send(ScpiMessageProducer.DeleteSdFile(fileName));
                             _host.Send(ScpiMessageProducer.GetSdFileList);
+                            _host.Send(ScpiMessageProducer.GetSystemError);
                         },
                         responseTimeoutMs: 3000,
+                        // The retry needs the window as much as the first
+                        // attempt: it is the same listing, and a retry that
+                        // truncates hands the same partial list to the same
+                        // cache.
+                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
                         cancellationToken: cancellationToken,
                         prepareAsync: PrepareSdInterfaceAndSettleAsync,
-                        finalizeAsync: RestoreLanInterfaceAsync);
+                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                     if (!ScpiResponseClassifier.ContainsScpiError(lines))
                     {
@@ -781,7 +799,144 @@ namespace Daqifi.Core.Device.SdCard
                 }
             }
 
-            _sdCardFiles = SdCardFileListParser.ParseFileList(lines);
+            // The error from an exchange that actually SENT the delete, taken
+            // before the relist retry below can reassign `lines`. Without this
+            // capture the check further down reads whichever reply came last,
+            // and a transient error from a LIST-only retry -- a bus still
+            // settling, the -200 this file documents elsewhere -- was reported
+            // as "the delete operation failed" for a delete that had already
+            // succeeded and was never re-sent.
+            var deleteExchangeError = ScpiResponseClassifier.ContainsScpiError(lines)
+                ? lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim()
+                : null;
+
+            // Prove the EXCHANGE finished before judging what it contained. A
+            // reply cut short by the completion window loses the device's
+            // marker too, so it would otherwise read as Unterminated -- which
+            // is legitimate on pre-#796 firmware and therefore cannot be
+            // treated as an error on its own. The transport terminator is what
+            // separates the two, and the read path has always required it.
+            var refreshComplete = TrySplitAtSdListTerminator(lines, out var refreshListing);
+
+            if (!refreshComplete && !ScpiResponseClassifier.ContainsScpiError(lines))
+            {
+                // An unterminated reply with no error is a one-off stall, and
+                // the read path gives that a second attempt for the same
+                // reason. Re-LIST only: the DELETE was accepted -- nothing
+                // reported otherwise -- so re-sending it would ask the device
+                // to remove a file that is already gone and turn a transient
+                // stall into a hard error. That is also why this is a separate
+                // loop from the error retry above, which re-sends both
+                // deliberately because there the delete itself may not have
+                // landed.
+                for (var retry = 0; retry < SD_LIST_MAX_RETRIES && !refreshComplete; retry++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+
+                    lines = await _host.ExecuteTextCommandAsync(
+                        () =>
+                        {
+                            _host.Send(ScpiMessageProducer.GetSdFileList);
+                            _host.Send(ScpiMessageProducer.GetSystemError);
+                        },
+                        responseTimeoutMs: 3000,
+                        completionTimeoutMs: SD_LIST_COMPLETION_TIMEOUT_MS,
+                        cancellationToken: cancellationToken,
+                        prepareAsync: PrepareSdInterfaceAndSettleAsync,
+                        finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
+
+                    refreshComplete = TrySplitAtSdListTerminator(lines, out refreshListing)
+                                      && !ScpiResponseClassifier.ContainsScpiError(refreshListing);
+                }
+            }
+
+            // The DELETE's own outcome, judged before anything about the
+            // listing. The retry loop above exits either way, so a delete the
+            // device refused on BOTH attempts arrives here with its error line
+            // intact -- and ThrowIfSdCardListError alone will not catch it: its
+            // hasContentLine escape returns silently whenever the reply carries
+            // real entries, which is the normal case (you deleted one file, the
+            // others are still there). That escape is right for the read path,
+            // where a stray error has no bearing on the listing; it is wrong
+            // here, where the error line IS the answer to "did the delete
+            // happen?". Reproduced: a card holding fileA and fileB, a DELETE
+            // refused twice, returned success with fileA still in the cache.
+            if (deleteExchangeError != null)
+            {
+                // ...unless the card itself says the file is gone. An error
+                // line carries no origin: the exchange sends DELETE, LIST and
+                // SYSTem:ERRor? together, and the LIST has failure modes of
+                // its own (busy, the 10 s large-directory timeout) that have
+                // nothing to do with the delete. The retry then re-sends the
+                // DELETE for a file the first attempt already removed, the
+                // device answers "delete operation failed" because it is not
+                // there, and that second, genuine error would be reported as
+                // the delete failing.
+                //
+                // The listing in the same exchange settles it. If it rendered
+                // completely and the file is absent, the delete happened --
+                // whatever the error line was about. Verifying the outcome
+                // beats attributing the error, which the wire format does not
+                // let us do.
+                // Absence only proves anything if the listing is WHOLE.
+                // refreshComplete says the transport delivered a terminated
+                // reply; it says nothing about whether the device's walk
+                // reached the end of the tree. A listing the device called
+                // INCOMPLETE, or an Unterminated one, can be missing the
+                // target because it stopped early -- reading that as "deleted"
+                // is the same wrong answer pointed the other way. Only the
+                // device's own Complete marker rules it out, so against
+                // firmware that sends no marker the error stands, exactly as
+                // it did before this check existed.
+                var target = System.IO.Path.GetFileName(fileName);
+                var goneFromCard = refreshComplete
+                    && SdCardFileListParser.GetListingStatus(refreshListing)
+                        == SdCardListingStatus.Complete
+                    && !SdCardFileListParser.ParseFileList(refreshListing).Any(
+                        f => string.Equals(f.FileName, target,
+                                           StringComparison.OrdinalIgnoreCase));
+                if (!goneFromCard)
+                {
+                    throw new SdCardOperationException(
+                        "The SD card delete operation failed: " + deleteExchangeError,
+                        lines,
+                        deleteExchangeError);
+                }
+            }
+
+            if (!refreshComplete)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
+
+            // And the error guard the read path has always applied to its own
+            // listing. Without it a delete that FAILED on the device twice --
+            // the retry above exhausts without throwing -- came back here with
+            // an "**ERROR: -200" line, a valid transport terminator and no
+            // device marker, so nothing fired: ParseFileList skips the error
+            // line, the cache became an EMPTY list, and the method returned
+            // success. The caller was told the delete worked and the card is
+            // empty, in the one case where the device had said neither.
+            ThrowIfSdCardListError(refreshListing);
+
+            // Same guard as the read path: a listing the device itself called
+            // INCOMPLETE or FAILED must not become the cached answer to "what
+            // is on the card?". This refresh follows a DELETE, so the cache it
+            // overwrites is exactly what a caller consults next to decide
+            // whether the file is gone -- and a partial list makes every
+            // absence look confirmed. The cache is left untouched rather than
+            // replaced with a list we know is short.
+            var refreshStatus = SdCardFileListParser.GetListingStatus(refreshListing);
+            if (refreshStatus == SdCardListingStatus.Failed
+                || refreshStatus == SdCardListingStatus.Incomplete)
+            {
+                throw new SdCardListIncompleteException(lines);
+            }
+
+            _sdCardFiles = SdCardFileListParser.ParseFileList(refreshListing);
         }
 
         /// <summary>
@@ -790,18 +945,15 @@ namespace Daqifi.Core.Device.SdCard
         /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
         /// <returns>A task that represents the asynchronous operation.</returns>
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-        /// <exception cref="System.InvalidOperationException">Thrown when the device is currently logging to SD card.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
         internal Task FormatSdCardAsync(CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot format SD card while logging.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -827,11 +979,18 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         /// <exception cref="SdCardEmptyTransferException">
         /// Thrown when the device serves a marker-only (0-byte) transfer across all retry attempts
         /// for a file the last <see cref="GetSdCardFilesAsync"/> listing reported as non-empty (or
         /// whose listed size is unknown), indicating its SD subsystem is not ready. A file the
         /// listing reports as 0 bytes downloads successfully as a legitimate empty file.
+        /// </exception>
+        /// <exception cref="SdCardTruncatedTransferException">
+        /// Thrown when the transfer ends at the end-of-file marker with fewer bytes than the last
+        /// <see cref="GetSdCardFilesAsync"/> listing reported for the file — the device served a
+        /// short reply, such as a SCPI error line, in place of the file. Anything already written
+        /// to <paramref name="destinationStream"/> is not the file and must be discarded.
         /// </exception>
         /// <exception cref="SdCardTransferStalledException">
         /// Thrown when the transfer stops making progress before the end-of-file marker arrives:
@@ -845,6 +1004,13 @@ namespace Daqifi.Core.Device.SdCard
         /// </exception>
         /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
         /// <remarks>
+        /// The transfer holds the device's operation lock for its whole duration (#493), so while it
+        /// runs a text query from another thread waits and a <see cref="DaqifiDevice.Send{T}"/> from
+        /// another thread is deferred and replayed afterwards. That is what keeps a status poll from
+        /// putting a second reader on the stream, and a stray command's reply out of the file's
+        /// bytes. The cost is that an unrelated query on another thread can now wait for the whole
+        /// download rather than corrupting it; pass it a cancellation token if it cannot.
+        /// <para>
         /// On a timeout — or a cancellation the parked transfer cannot itself observe — the
         /// in-flight transfer is <b>abandoned</b> rather than awaited: it may be blocked in native
         /// serial I/O that no token can interrupt, and waiting for it is the hang this method
@@ -855,6 +1021,14 @@ namespace Daqifi.Core.Device.SdCard
         /// not be reused for anything else; and the device is left mid-<c>SD:GET</c> with the
         /// protobuf consumer stopped, so reconnecting (or power-cycling, if its SD subsystem is
         /// genuinely wedged) is the reliable way to resume normal operation.
+        /// </para>
+        /// <para>
+        /// An abandoned transfer also still holds the operation lock. Its token is cancelled on the
+        /// way out, so the usual case — a read that returns late — unwinds at its next token check
+        /// and releases it. A read that never returns keeps the lock, and keeps the transport stream
+        /// with it: a text query blocked on that lock is blocked on a stream nothing could safely
+        /// have used anyway, and the reconnect this case already calls for is what clears it.
+        /// </para>
         /// <para>
         /// The LAN interface is deliberately <b>not</b> restored in that case: the abandoned
         /// transfer still owns the transport, and putting the restore commands onto a link it is
@@ -876,10 +1050,7 @@ namespace Daqifi.Core.Device.SdCard
             IProgress<SdCardTransferProgress>? progress = null,
             CancellationToken cancellationToken = default)
         {
-            if (!_host.IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            _host.EnsureConnected();
 
             // Over WiFi/TCP this requires firmware >= v3.7.0 (#598/#599); over USB it is always
             // available on SD-capable firmware. Older firmware over WiFi gets a typed
@@ -898,7 +1069,7 @@ namespace Daqifi.Core.Device.SdCard
 
             if (_isLoggingToSdCard)
             {
-                throw new InvalidOperationException("Cannot download files while logging to SD card.");
+                throw new SdCardBusyException(Array.Empty<string>());
             }
 
             // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
@@ -968,6 +1139,14 @@ namespace Daqifi.Core.Device.SdCard
                                     listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
                                 break;
                             }
+                            // Only the marker-only case is retried. A SHORT transfer
+                            // (SdCardTruncatedTransferException, #539) is not, even though it is
+                            // the same kind of transient device condition: by then those bytes
+                            // have already been written to the caller's destinationStream, which
+                            // this method cannot rewind, so a second attempt would append to the
+                            // garbage rather than replace it and could land on the listed size by
+                            // sheer accumulation. Letting it out is the honest answer — the caller
+                            // discards the stream and retries the download.
                             catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
                             {
                                 attempt++;
@@ -1057,6 +1236,7 @@ namespace Daqifi.Core.Device.SdCard
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="FeatureNotSupportedException">Thrown over a WiFi/TCP transport when the firmware predates SD-over-WiFi file transfer.</exception>
         /// <exception cref="ArgumentException">Thrown when the filename is null, empty, or contains invalid characters.</exception>
+        /// <exception cref="SdCardBusyException">Thrown when the device is currently logging to SD card.</exception>
         internal async Task<SdCardDownloadResult> DownloadSdCardFileAsync(
             string fileName,
             IProgress<SdCardTransferProgress>? progress = null,
@@ -1067,7 +1247,7 @@ namespace Daqifi.Core.Device.SdCard
             var tempPath = Path.Combine(Path.GetTempPath(), $"daqifi_{Guid.NewGuid():N}{ext}");
             try
             {
-                await using var fileStream = new FileStream(
+                var fileStream = new FileStream(
                     tempPath,
                     FileMode.Create,
                     FileAccess.Write,
@@ -1075,10 +1255,13 @@ namespace Daqifi.Core.Device.SdCard
                     bufferSize: 65536,
                     useAsync: true);
 
-                var result = await DownloadSdCardFileAsync(fileName, fileStream, progress, cancellationToken)
-                    .ConfigureAwait(false);
+                await using (fileStream.ConfigureAwait(false))
+                {
+                    var result = await DownloadSdCardFileAsync(fileName, fileStream, progress, cancellationToken)
+                        .ConfigureAwait(false);
 
-                return result with { FilePath = tempPath };
+                    return result with { FilePath = tempPath };
+                }
             }
             catch
             {
@@ -1272,6 +1455,69 @@ namespace Daqifi.Core.Device.SdCard
 
 
         /// <summary>
+        /// Harmony <c>SYS_FS_ERROR</c> codes meaning "that path is not on the card":
+        /// <c>SYS_FS_ERROR_NO_FILE = 4</c> and <c>SYS_FS_ERROR_NO_PATH = 5</c>. The
+        /// enum runs sequentially from <c>SYS_FS_ERROR_OK = 0</c> — see the
+        /// firmware's <c>config/default/system/fs/sys_fs.h</c>.
+        /// </summary>
+        private static readonly int[] DirectoryNotFoundFsErrors = { 4, 5 };
+
+        /// <summary>
+        /// Reads the <c>N</c> out of a <c>"[Error:N]Failed to open directory [path]"</c>
+        /// line and reports whether it is a not-found code. An unparsable or
+        /// unrecognised code answers false, so anything unfamiliar keeps the broader
+        /// <see cref="SdCardFilesystemException"/> rather than being narrowed on a guess.
+        /// </summary>
+        private static bool IsDirectoryNotFound(string deviceMessage)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                deviceMessage, @"^\[Error:(\d+)\]");
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            return int.TryParse(match.Groups[1].Value, out var code)
+                && System.Array.IndexOf(DirectoryNotFoundFsErrors, code) >= 0;
+        }
+
+        /// <summary>
+        /// Pulls the path out of the trailing <c>[path]</c> of a firmware directory
+        /// error line, or null when there is none.
+        /// </summary>
+        /// <remarks>
+        /// Searches only AFTER the leading <c>[Error:N]</c>. Taking the last bracket
+        /// pair in the whole line looks equivalent and is not: on the older phrasing
+        /// <c>"[Error:5]Failed to open directory /Daqifi"</c>, which has no bracketed
+        /// path at all, the last pair IS the error prefix and the path comes back as
+        /// <c>"Error:5"</c>. Caught by the test that pins that phrasing.
+        /// </remarks>
+        private static string? ExtractBracketedPath(string deviceMessage)
+        {
+            var prefixEnd = deviceMessage.IndexOf(']');
+            var searchFrom = prefixEnd >= 0 ? prefixEnd + 1 : 0;
+            if (searchFrom >= deviceMessage.Length)
+            {
+                return null;
+            }
+
+            var close = deviceMessage.LastIndexOf(']');
+            if (close < searchFrom)
+            {
+                return null;
+            }
+
+            var open = deviceMessage.LastIndexOf('[', close - 1);
+            if (open < searchFrom)
+            {
+                return null;
+            }
+
+            var path = deviceMessage.Substring(open + 1, close - open - 1).Trim();
+            return path.Length == 0 ? null : path;
+        }
+
+        /// <summary>
         /// Inspects the final response from a <c>SYSTem:STORage:SD:LISt?</c> exchange
         /// and throws a typed <see cref="SdCardOperationException"/> when the device
         /// reported a real failure (no SD card, filesystem error, generic SCPI error).
@@ -1299,14 +1545,38 @@ namespace Daqifi.Core.Device.SdCard
                 l.IndexOf("Failed to open directory", StringComparison.OrdinalIgnoreCase) >= 0);
             if (filesystemErrorLine != null)
             {
-                throw new SdCardFilesystemException(lines, lastScpiError, filesystemErrorLine.Trim());
+                var trimmed = filesystemErrorLine.Trim();
+
+                // "The directory is not there" is a normal state, not a fault, and
+                // it is worth telling apart: a freshly formatted card has no log
+                // directory until the first capture writes one, so a caller that
+                // renders every filesystem error identically shows a scary message
+                // for "you have not logged anything yet". Firmware #798 is what
+                // makes this observable at all -- before it, listing a directory
+                // that did not exist created it and reported it empty.
+                if (IsDirectoryNotFound(trimmed))
+                {
+                    throw new SdCardDirectoryNotFoundException(
+                        lines, lastScpiError, trimmed, ExtractBracketedPath(trimmed));
+                }
+
+                throw new SdCardFilesystemException(lines, lastScpiError, trimmed);
             }
 
             // If any line looks like a real result (non-empty, not an error or
             // firmware status line), hand off to the parser. Stray interleaved
             // error lines are still parsed away by SdCardFileListParser.
+            //
+            // The end-of-listing marker is framing, not a result. Counting it as
+            // content would let a stale marker -- one left in the buffer by an
+            // earlier timed-out exchange, which is exactly what
+            // TrySplitAtSdListTerminator warns about -- vouch for a reply whose
+            // only other line is this request's SCPI error, and the caller would
+            // be handed a confidently empty card.
             var hasContentLine = lines.Any(line =>
-                !string.IsNullOrWhiteSpace(line) && !ScpiResponseClassifier.IsErrorResponseLine(line));
+                !string.IsNullOrWhiteSpace(line)
+                && !ScpiResponseClassifier.IsErrorResponseLine(line)
+                && !SdCardFileListParser.IsListEndMarker(line, out _));
             if (hasContentLine)
             {
                 return;

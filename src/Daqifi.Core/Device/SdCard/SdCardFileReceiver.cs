@@ -148,12 +148,15 @@ public sealed class SdCardFileReceiver
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="listedFileSizeBytes">
-    /// The size the device's directory listing reported for this file, when known. It is the only
-    /// thing that separates a wedged SD subsystem from a genuinely 0-byte file, so a marker-only
-    /// transfer raises <see cref="SdCardEmptyTransferException"/> only when this says the file is
-    /// non-empty. Pass <c>0</c> for a listed empty file to have it return 0 bytes as a legitimate
-    /// empty download. When <c>null</c> (no listing available) the conservative behavior is kept
-    /// and a marker-only transfer throws.
+    /// The size the device's directory listing reported for this file, when known. It is what the
+    /// completed transfer is judged against, because the EOF marker is the firmware's only
+    /// completion signal and says nothing about whether the whole file arrived: a transfer shorter
+    /// than this raises <see cref="SdCardTruncatedTransferException"/>, and one with no content
+    /// bytes at all raises <see cref="SdCardEmptyTransferException"/>. It is also the only thing
+    /// that separates a wedged SD subsystem from a genuinely 0-byte file, so pass <c>0</c> for a
+    /// listed empty file to have it return 0 bytes as a legitimate empty download. When
+    /// <c>null</c> (no listing available) there is nothing to judge the size against, so a short
+    /// transfer cannot be detected and only the conservative marker-only behavior applies.
     /// </param>
     /// <returns>The total number of file bytes written (excluding the EOF marker).</returns>
     /// <exception cref="SdCardTransferStalledException">
@@ -166,6 +169,13 @@ public sealed class SdCardFileReceiver
     /// Thrown when the EOF marker arrives with zero preceding file bytes for a file that
     /// <paramref name="listedFileSizeBytes"/> reports as non-empty (or whose listed size is
     /// unknown), meaning the device opened the file but sent no content before closing it.
+    /// </exception>
+    /// <exception cref="SdCardTruncatedTransferException">
+    /// Thrown when the EOF marker arrives after fewer content bytes than
+    /// <paramref name="listedFileSizeBytes"/> reports for the file, meaning the device served a
+    /// short reply — an error line, or a partial file — rather than the file itself. Whatever
+    /// arrived has already been written to <paramref name="destinationStream"/> and must be
+    /// discarded.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="listedFileSizeBytes"/> is negative.
@@ -331,6 +341,26 @@ public sealed class SdCardFileReceiver
                         // legitimate empty download. With no listed size we keep the conservative
                         // #264 behavior so a wedged subsystem is still caught (#398 gap 2).
                         throw new SdCardEmptyTransferException(fileName, listedFileSizeBytes);
+                    }
+
+                    if (listedFileSizeBytes is > 0 && totalBytesReceived < listedFileSizeBytes)
+                    {
+                        // The marker arrived, but with less content than the listing says the file
+                        // holds. The marker is the firmware's ONLY completion signal, so without
+                        // this check a short reply is indistinguishable from a finished download:
+                        // a device that answers SD:GET with `**ERROR: -200, "Execution error"` and
+                        // then the marker hands the caller a 34-byte "log file" and no error at
+                        // all — its error queue reads clean afterwards too (#539). The listed size
+                        // is the only evidence available, and it is already in hand for the
+                        // marker-only case above, so let it settle the short case as well.
+                        //
+                        // Deliberately one-sided: a transfer LONGER than the listed size is left
+                        // alone, because a listing goes stale the moment an active logging session
+                        // appends to the file, and those extra bytes are real content.
+                        throw new SdCardTruncatedTransferException(
+                            fileName,
+                            listedFileSizeBytes.Value,
+                            totalBytesReceived);
                     }
 
                     progress?.Report(new SdCardTransferProgress(totalBytesReceived, fileName));

@@ -10,6 +10,20 @@ namespace Daqifi.Core.Device.Discovery;
 /// </summary>
 internal sealed class LinuxUsbPortDescriptorProvider : IUsbPortDescriptorProvider
 {
+    /// <summary>
+    /// The sysfs directory the kernel gives one entry per tty, each with a <c>device</c> symlink
+    /// into the physical device tree under <c>/sys/devices</c>.
+    /// </summary>
+    internal const string DefaultTtyClassRoot = "/sys/class/tty";
+
+    /// <summary>
+    /// How many levels of the device tree to examine: the tty's own device node plus its seven
+    /// nearest ancestors. The USB device node that holds <c>idVendor</c>/<c>idProduct</c> is only
+    /// a few levels up, so the bound stops an unexpected layout from walking to the filesystem
+    /// root rather than limiting any real device.
+    /// </summary>
+    internal const int MaxDeviceTreeLevels = 8;
+
     public UsbPortDescriptor? GetDescriptor(string portName)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -17,6 +31,22 @@ internal sealed class LinuxUsbPortDescriptorProvider : IUsbPortDescriptorProvide
             return null;
         }
 
+        return Resolve(portName, DefaultTtyClassRoot);
+    }
+
+    /// <summary>
+    /// Resolves the descriptor for <paramref name="portName"/> against the tty class directory
+    /// <paramref name="ttyClassRoot"/>, or returns null when the port has no sysfs entry, is not
+    /// USB-attached, or the layout holds no readable VID/PID.
+    /// </summary>
+    /// <remarks>
+    /// Split out from <see cref="GetDescriptor"/> — which adds the Linux platform gate and supplies
+    /// the real <see cref="DefaultTtyClassRoot"/> — so the walk can be unit tested against a
+    /// fixture tree on any OS, for the same reason
+    /// <see cref="MacOsUsbPortDescriptorProvider.Parse"/> is exposed.
+    /// </remarks>
+    internal static UsbPortDescriptor? Resolve(string portName, string ttyClassRoot)
+    {
         // portName is typically /dev/ttyACM0 or /dev/ttyUSB0.
         // The corresponding sysfs path is /sys/class/tty/<base>/device/...
         // We walk up the device tree looking for idVendor + idProduct,
@@ -25,7 +55,7 @@ internal sealed class LinuxUsbPortDescriptorProvider : IUsbPortDescriptorProvide
         if (string.IsNullOrEmpty(baseName))
             return null;
 
-        var sysfsRoot = $"/sys/class/tty/{baseName}/device";
+        var sysfsRoot = System.IO.Path.Combine(ttyClassRoot, baseName, "device");
         if (!System.IO.Directory.Exists(sysfsRoot))
             return null;
 
@@ -41,7 +71,7 @@ internal sealed class LinuxUsbPortDescriptorProvider : IUsbPortDescriptorProvide
             var dirInfo = new System.IO.DirectoryInfo(sysfsRoot);
             var resolved = dirInfo.ResolveLinkTarget(returnFinalTarget: true);
             var current = (resolved ?? dirInfo).FullName;
-            for (var i = 0; i < 8; i++)
+            for (var i = 0; i < MaxDeviceTreeLevels; i++)
             {
                 var vendorPath = System.IO.Path.Combine(current, "idVendor");
                 var productPath = System.IO.Path.Combine(current, "idProduct");

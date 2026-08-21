@@ -39,11 +39,34 @@ public class DeviceDiagnosticsTests
     [Fact]
     public async Task GetSystemLogAsync_WhenBufferEmpty_ReturnsEmpty()
     {
-        // No lines = genuinely empty buffer (firmware writes nothing); must not throw.
-        var device = new TestableDiagnosticsDevice("TestDevice");
+        // An empty log is a BLANK LINE, not silence. The firmware terminates every
+        // SYSTem:LOG? dump with one whether or not it had anything to say -- measured
+        // on a bench Nq1 running 3.7.2 with a raw pyserial probe: an empty log answers
+        // b'\r\n' in 6 ms (issue #543).
+        //
+        // This test previously canned NOTHING and asserted no-throw, with the comment
+        // "firmware writes nothing". That premise was wrong, and it is what made an
+        // empty log indistinguishable from a dead link: both arrived as zero lines and
+        // both were reported as "your log is empty".
+        var device = new TestableDiagnosticsDevice("TestDevice") { CannedTextResponse = { "" } };
         device.Connect();
 
         Assert.Empty(await device.GetSystemLogAsync());
+    }
+
+    [Fact]
+    public async Task GetSystemLogAsync_WhenDeviceAnswersNothingAtAll_Throws()
+    {
+        // Zero lines -- not even the terminator -- is a silent or unresponsive device.
+        // Returning an empty list here is the failure #543 exists to remove: it reports
+        // a dead link as a clean bill of health, on the one call an operator reaches for
+        // when they suspect the device is unwell.
+        var device = new TestableDiagnosticsDevice("TestDevice");
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(
+            () => device.GetSystemLogAsync());
+        Assert.Contains("did not answer", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -279,6 +302,169 @@ public class DeviceDiagnosticsTests
         await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetMemoryDiagnosticsAsync());
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Issue #537: a diagnostics query issued while the device is streaming gets protobuf frame
+    // bytes welded onto the front of its first reply line, because pausing Core's protobuf reader
+    // does not stop the firmware. CorruptedFirstLine below is the shape captured off the bench --
+    // the key is destroyed, the value survives -- and the tolerant parser used to drop the pair
+    // and report the rest as a complete reading.
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>A first reply line as it arrives mid-stream: binary prefix, real key, real value.</summary>
+    private const string CorruptedFirstLine = "\u0008\uFFFD\\3\uFFFD\u0004\u0012\u0003\u0008\u0000TotalSamplesStreamed=203";
+
+    [Fact]
+    public async Task GetStreamStatsAsync_WhenStreamFramesCorruptTheReply_ThrowsInsteadOfLosingTheCounter()
+    {
+        // Before #537 this returned successfully with a healthy-looking Values dictionary and
+        // TotalSamplesStreamed == null: the headline counter, silently gone.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { CorruptedFirstLine, "QueueDroppedSamples=0", "TimerISRCalls=933" },
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
+            () => device.GetStreamStatsAsync());
+
+        // The raw reply is retained so a caller can still log or salvage what arrived.
+        Assert.Equal(3, ex.RawDeviceResponse.Count);
+        Assert.Contains("TotalSamplesStreamed", ex.RawDeviceResponse[0]);
+    }
+
+    [Fact]
+    public async Task GetSystemErrorCountAsync_WhenStreamFramesCorruptTheReply_ThrowsCorruptedResponse()
+    {
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "\u00000" },
+        };
+        device.Connect();
+
+        await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
+            () => device.GetSystemErrorCountAsync());
+    }
+
+    [Fact]
+    public async Task GetMemoryDiagnosticsAsync_WhenStreamFramesCorruptTheReply_ThrowsCorruptedResponse()
+    {
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "\u0000HeapTotal=75000", "HeapFree=45000" },
+        };
+        device.Connect();
+
+        await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
+            () => device.GetMemoryDiagnosticsAsync());
+    }
+
+    [Fact]
+    public async Task SetLogLevelAsync_WhenStreamFramesCorruptTheEcho_ThrowsCorruptedResponse()
+    {
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "\u0000STREAM: 2 (ceiling 3)" },
+        };
+        device.Connect();
+
+        await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
+            () => device.SetLogLevelAsync("STREAM", 2));
+    }
+
+    [Fact]
+    public async Task SetLogLevelAsync_WhenTheDeviceRejectedTheRequest_ReportsTheRejectionNotTheCorruption()
+    {
+        // A device that answered "no" gave a real answer; that diagnosis outranks "your reply was
+        // mangled", so the rejection check deliberately runs first.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "**ERROR: -224,\"Illegal parameter value\"", "\u0000noise" },
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<DeviceDiagnosticsException>(() => device.SetLogLevelAsync("STREAM", 2));
+        Assert.IsNotType<DeviceDiagnosticsCorruptedResponseException>(ex);
+    }
+
+    [Fact]
+    public async Task GetStreamStatsAsync_WhenReplyContainsATab_IsNotTreatedAsCorrupted()
+    {
+        // Tab is real device output (it appears as a SCPI token delimiter), so it must not be
+        // mistaken for interleaved binary and fail an otherwise clean read.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "TotalSamplesStreamed\t=\t15000" },
+        };
+        device.Connect();
+
+        var stats = await device.GetStreamStatsAsync();
+
+        Assert.Equal(15000UL, stats.TotalSamplesStreamed);
+    }
+
+    [Fact]
+    public async Task GetSystemLogAsync_WhenALineIsCorrupted_StillReturnsTheSurvivingEntries()
+    {
+        // Deliberately NOT guarded: the log read clears the buffer on the device, so the entries
+        // that did arrive are all anyone will ever get. Throwing them away would destroy more than
+        // it protects, and a missing entry is visible in the result anyway.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "\u0000Test log message 1", "Test info message" },
+        };
+        device.Connect();
+
+        var entries = await device.GetSystemLogAsync();
+
+        Assert.Equal(2, entries.Count);
+        Assert.Equal("Test info message", entries[1].Message);
+    }
+
+    [Fact]
+    public async Task GetCommandHistoryAsync_WhenALineIsCorrupted_StillReturnsTheSurvivingCommands()
+    {
+        // Same reasoning as the system log: one lost line out of several is visible in the result.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "\u00002: SYSTem:LOG?", "1: SYSTem:LOG:CMDHistory?" },
+        };
+        device.Connect();
+
+        var commands = await device.GetCommandHistoryAsync();
+
+        Assert.Contains("SYSTem:LOG:CMDHistory?", commands);
+    }
+
+    [Fact]
+    public async Task ClearSystemLogAsync_WhenTheAckIsCorrupted_DoesNotReportAFailure()
+    {
+        // Deliberately NOT guarded: the reply is an ack, not a result. The command ran; failing it
+        // over a mangled ack would report a failure that did not happen.
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "\u0000Log cleared" },
+        };
+        device.Connect();
+
+        await device.ClearSystemLogAsync();
+
+        Assert.Contains("SYSTem:LOG:CLEar", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task TestSystemLogAsync_WhenTheAckIsCorrupted_DoesNotReportAFailure()
+    {
+        var device = new TestableDiagnosticsDevice("TestDevice")
+        {
+            CannedTextResponse = { "\u0000Added test log messages" },
+        };
+        device.Connect();
+
+        await device.TestSystemLogAsync();
+
+        Assert.Contains("SYSTem:LOG:TEST", device.SentCommands);
+    }
+
     /// <summary>
     /// A streaming device whose text-command exchange returns a canned response and records the
     /// SCPI commands sent during the exchange, so diagnostics methods can be tested without a
@@ -308,7 +494,8 @@ public class DeviceDiagnosticsTests
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null)
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false)
         {
             try
             {

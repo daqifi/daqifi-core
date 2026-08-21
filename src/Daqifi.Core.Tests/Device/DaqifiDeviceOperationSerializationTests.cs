@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
@@ -356,6 +357,65 @@ public class DaqifiDeviceOperationSerializationTests
     }
 
     [Fact]
+    public async Task Send_FromInsideATextExchange_GoesStraightOut()
+    {
+        // The mirror of Send_FromTheOwningFlow_GoesStraightOut, for the lock acquisition the text
+        // exchange makes for itself rather than the one RunExclusiveAsync makes. Every text query
+        // depends on it: the setup action's whole job is to Send, and if the exchange's own flow
+        // does not register as the lock's owner then its command is parked by the very deferral it
+        // just switched on. The command reaches the device only after the exchange has closed, so
+        // the exchange collects nothing and reports an empty result — indistinguishable, from the
+        // caller's side, from a device that went silent.
+        //
+        // The claim is written into an AsyncLocal, which propagates from the writing frame to that
+        // frame's callees and no further. Sending from inside the setup action, after an await, is
+        // what pins both halves of that: the exchange's flow owns the lock, and the ownership
+        // survives the thread hop.
+        using var transport = new RecordingTransport();
+        using var device = new TextExchangeDevice("Self-sending Device", transport);
+        device.Connect();
+
+        await device.RunTextExchangeAsync(async _ =>
+        {
+            device.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+
+            // Fails here, inside the exchange, if the send was parked — rather than passing later
+            // on the backlog the exchange flushes on its way out.
+            await WaitForWriteAsync(transport, "DIO:PORt:STATe");
+        }).WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task TextExchange_ReEnteredFromItsOwnSetupAction_IsRejected()
+    {
+        // DaqifiDeviceTextCommandLockTests covers this guard by planting the flag through
+        // reflection, which exercises only the reading half. This drives the real thing: the flag
+        // has to be written where the setup action can see it.
+        //
+        // Getting that wrong does not deadlock, which is what makes it worth pinning. The nested
+        // call would find the lock already held by its own flow, decline to wait for it, and run —
+        // a second consumer swap on a stream mid-swap, which is the framing corruption the guard
+        // was added to prevent. It fails silently, as mangled replies, not as a hang.
+        using var transport = new RecordingTransport();
+        using var device = new TextExchangeDevice("Re-entering Device", transport);
+        device.Connect();
+
+        Exception? nested = null;
+
+        await device.RunTextExchangeAsync(async ct =>
+        {
+            nested = await Record.ExceptionAsync(() => device.RunTextExchangeAsync(() => { }, ct));
+        }).WaitAsync(DeadlockBudget);
+
+        Assert.IsType<InvalidOperationException>(nested);
+        Assert.Contains("not re-entrant", nested!.Message);
+
+        device.Disconnect();
+    }
+
+    [Fact]
     public async Task TextExchange_CancelledWhileTheOutboundQueueDrains_DoesNotResubscribeTheConsumer()
     {
         // The drain added for #342 is the one step before the consumer swap that can throw. If it
@@ -397,6 +457,346 @@ public class DaqifiDeviceOperationSerializationTests
             .GetValue(consumer);
 
         return handler?.GetInvocationList().Length ?? 0;
+    }
+
+    // ── Issue #492: the parked backlog is capped ────────────────────────────────────────────
+
+    [Fact]
+    public async Task Send_PastTheBacklogCap_DropsTheOldestAndReplaysTheNewestInOrder()
+    {
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Capped Device", transport, cap: 4);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:00}"));
+            }
+        });
+
+        // Read while the operation still holds the device, so this is the backlog itself and not
+        // what survived a replay.
+        Assert.Equal(4, DeferredBacklogCount(device));
+        Assert.Equal(6, device.DroppedDeferredSendCount);
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        await WaitForWriteAsync(transport, "m09");
+
+        // Drop-oldest: the four newest survive, still in the order they were sent.
+        Assert.Equal(new[] { "m06", "m07", "m08", "m09" }, TaggedWrites(transport));
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_WithABacklogUnderTheCap_DropsNothing()
+    {
+        // The guard on the existing ordering guarantees: everything already tested here parks a
+        // handful of messages, and none of it may change because a cap now exists.
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Uncapped-In-Practice Device", transport, cap: 8);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:00}"));
+            }
+        });
+
+        Assert.Equal(5, DeferredBacklogCount(device));
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        await WaitForWriteAsync(transport, "m04");
+
+        Assert.Equal(new[] { "m00", "m01", "m02", "m03", "m04" }, TaggedWrites(transport));
+        Assert.Equal(0, device.DroppedDeferredSendCount);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_HammeredThroughoutALongOperation_LeavesTheBacklogBounded()
+    {
+        // The reported failure: an SD card download is allowed thirty minutes, and a UI or agent
+        // polling at 10 Hz throughout it parked ~18,000 closures with nothing to stop it. The
+        // backlog now sits at the cap no matter how long the hammering goes on.
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Hammered Device", transport, cap: 4);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < 2000; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:0000}"));
+
+                // Sampled as it grows, not just at the end: a backlog that ballooned and was
+                // trimmed once at the finish would pass an end-state-only assertion.
+                Assert.True(
+                    DeferredBacklogCount(device) <= 4,
+                    $"The backlog grew to {DeferredBacklogCount(device)} after {i + 1} sends.");
+            }
+        });
+
+        Assert.Equal(4, DeferredBacklogCount(device));
+        Assert.Equal(1996, device.DroppedDeferredSendCount);
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_PastTheDefaultCap_UsesDefaultMaxDeferredSends()
+    {
+        // The production constant, not a test seam: proves the shipped device is the bounded one.
+        using var transport = new RecordingTransport();
+        using var device = new DaqifiDevice("Default Cap Device", transport);
+        device.Connect();
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }));
+
+        await entered.Task.WaitAsync(DeadlockBudget);
+
+        const int overflowBy = 6;
+        await Task.Run(() =>
+        {
+            for (var i = 0; i < DaqifiDevice.DefaultMaxDeferredSends + overflowBy; i++)
+            {
+                device.Send(new TaggedBinaryMessage($"m{i:0000}"));
+            }
+        });
+
+        Assert.Equal(DaqifiDevice.DefaultMaxDeferredSends, DeferredBacklogCount(device));
+        Assert.Equal(overflowBy, device.DroppedDeferredSendCount);
+
+        release.SetResult();
+        await operation.WaitAsync(DeadlockBudget);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public void Send_OnAnIdleDevice_NeverDropsAnything()
+    {
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Idle Device", transport, cap: 1);
+        device.Connect();
+
+        Assert.Equal(0, device.DroppedDeferredSendCount);
+
+        for (var i = 0; i < 20; i++)
+        {
+            device.Send(new TaggedBinaryMessage($"m{i:00}"));
+        }
+
+        // Nothing owns the device, so nothing was parked and nothing could be dropped — even with
+        // a cap of one.
+        Assert.Equal(0, device.DroppedDeferredSendCount);
+        Assert.Equal(20, TaggedWrites(transport).Count);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task Send_OverflowingTwoOperations_AccumulatesTheCountAndWarnsOncePerBacklog()
+    {
+        var logger = new CapturingLogger();
+        using var transport = new RecordingTransport();
+        using var device = new CappedDevice("Twice Overflowed Device", transport, cap: 2, logger: logger);
+        device.Connect();
+
+        for (var round = 0; round < 2; round++)
+        {
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var operation = Task.Run(() => device.RunExclusiveAsync(async _ =>
+            {
+                entered.SetResult();
+                await release.Task;
+            }));
+
+            await entered.Task.WaitAsync(DeadlockBudget);
+
+            await Task.Run(() =>
+            {
+                for (var i = 0; i < 5; i++)
+                {
+                    device.Send(new TaggedBinaryMessage($"r{round}i{i}"));
+                }
+            });
+
+            release.SetResult();
+            await operation.WaitAsync(DeadlockBudget);
+
+            // The backlog has to be observed empty before the next round, or the second round's
+            // overflow would land in the first round's backlog and be reported as one episode.
+            await WaitForBacklogDrainAsync(device);
+        }
+
+        Assert.Equal(6, device.DroppedDeferredSendCount);
+
+        // One line per overflowing backlog, not one per dropped message: three were dropped in
+        // each round, and a warning per drop is how a diagnostic becomes noise nobody reads.
+        var overflowWarnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("reached its cap", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Equal(2, overflowWarnings.Count);
+        Assert.All(overflowWarnings, w => Assert.Contains("DroppedDeferredSendCount", w.Message, StringComparison.Ordinal));
+
+        device.Disconnect();
+    }
+
+    /// <summary>
+    /// The live backlog length, read straight off the serializer's own queue.
+    /// </summary>
+    /// <remarks>
+    /// Both hops fail loudly rather than with a <see cref="NullReferenceException"/> (or, worse, a
+    /// silent zero that would let every backlog assertion pass vacuously) if the field it names is
+    /// ever renamed or moved again.
+    /// </remarks>
+    private static int DeferredBacklogCount(DaqifiDevice device)
+    {
+        var serializer = typeof(DaqifiDevice)
+                .GetField("_operations", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(device)
+            ?? throw new InvalidOperationException(
+                "DaqifiDevice no longer has an _operations field to read the backlog from.");
+
+        var backlogField = serializer.GetType()
+                .GetField("_deferredSends", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                "OperationSerializer no longer has a _deferredSends field.");
+
+        var backlog = (System.Collections.ICollection?)backlogField.GetValue(serializer);
+
+        return backlog?.Count ?? 0;
+    }
+
+    /// <summary>
+    /// Waits for the backlog to reach its resting state. The tail of a flush can be handed to a
+    /// background drain, so "the operation returned" is not yet "the backlog is gone".
+    /// </summary>
+    private static async Task WaitForBacklogDrainAsync(DaqifiDevice device)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (DeferredBacklogCount(device) == 0)
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail("The deferred backlog never drained.");
+    }
+
+    /// <summary>The tagged payloads that reached the wire, in order.</summary>
+    private static List<string> TaggedWrites(RecordingTransport transport) =>
+        transport.Writes
+            .Where(w => w.Length > 1 && (w[0] == 'm' || w[0] == 'r'))
+            .ToList();
+
+    /// <summary>Shrinks the backlog cap so the drop path is reachable in a bounded test.</summary>
+    private sealed class CappedDevice : DaqifiDevice
+    {
+        private readonly int _cap;
+
+        public CappedDevice(string name, IStreamTransport transport, int cap, ILogger? logger = null)
+            : base(name, transport, logger)
+        {
+            _cap = cap;
+        }
+
+        internal override int MaxDeferredSends => _cap;
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        private readonly object _gate = new();
+        private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _entries.ToList();
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+            {
+                _entries.Add((logLevel, formatter(state, exception)));
+            }
+        }
     }
 
     // ── Qodo round 3: teardown must reset deferral state ────────────────────────────────────
@@ -539,6 +939,71 @@ public class DaqifiDeviceOperationSerializationTests
         Assert.False(producer.IsIdle, "IsIdle reported true while a write was still in flight.");
 
         stream.ReleaseWrites();
+    }
+
+    /// <summary>
+    /// The same guarantee, sampled at the moment it is hardest to keep. <c>IsIdle</c> is two field
+    /// reads, so a caller can straddle the background loop's handover from "queued" to "being
+    /// written". Read in the wrong order, those reads land on the queue's after-value and
+    /// <c>_draining</c>'s before-value and report idle with a write still in flight — the same
+    /// false "all quiet" as <c>QueuedMessageCount == 0</c>, and one
+    /// <c>DrainOutboundQueueAsync</c> would act on by swapping consumers mid-write. The test above
+    /// holds the producer still and cannot see this; only sampling the handover can, so this
+    /// hammers it.
+    /// </summary>
+    [Fact]
+    public void Producer_AtTheHandoverFromQueuedToWriting_NeverReportsAPhantomIdle()
+    {
+        // ONE producer, sent to many times, rather than a fresh one per attempt. Every
+        // MessageProducer.Start() creates a Thread, so an attempt-per-producer loop of any
+        // useful density spawns thousands of them for no extra coverage: the background loop
+        // returns to waiting on _messageAvailable after each drain, so the next Send re-enters
+        // the same queued -> writing handover this is here to sample.
+        using var stream = new MemoryStream();
+        using var producer = new MessageProducer<string>(stream);
+        producer.Start();
+
+        // Bounded by TIME, not by a fixed count. A count is the wrong knob for a race sampler:
+        // it makes a slow CI runner pay for the fast one's density. This keeps the cost fixed
+        // and lets a fast machine take more samples inside it.
+        var samplingBudget = TimeSpan.FromSeconds(2);
+        var clock = Stopwatch.StartNew();
+        var attempts = 0;
+        var phantomIdles = 0;
+
+        while (clock.Elapsed < samplingBudget)
+        {
+            attempts++;
+            producer.Send(ScpiMessageProducer.SetDioPortState(4, 1));
+
+            // Spun rather than slept: the window is a handful of instructions wide, and a poll
+            // that sleeps between reads steps straight over it. Bounded all the same -- an empty
+            // spin with no deadline turns a regression that stops the producer idling into a
+            // hung CI job burning a core, instead of a failure with a name.
+            var spin = Stopwatch.StartNew();
+            while (!producer.IsIdle)
+            {
+                Assert.True(spin.Elapsed < DeadlockBudget,
+                    $"The producer never reported idle within {DeadlockBudget.TotalSeconds:0}s on "
+                    + $"attempt {attempts}. Something is keeping it draining, which is a different "
+                    + "bug from the phantom idle this test samples for.");
+            }
+
+            // Nothing has been sent since, and the one wake that drained it is spent, so a
+            // producer that reports idle here must still be idle a moment later.
+            if (!producer.IsIdle)
+            {
+                phantomIdles++;
+            }
+        }
+
+        Assert.Equal(0, phantomIdles);
+
+        // A race sampler that took almost no samples is not evidence of anything, and would pass
+        // silently if the loop above ever became a no-op.
+        Assert.True(attempts > 100,
+            $"Only {attempts} handover samples fit in {samplingBudget.TotalSeconds:0}s; that is "
+            + "too few for the absence of a phantom idle to mean much.");
     }
 
     [Fact]
@@ -834,6 +1299,19 @@ public class DaqifiDeviceOperationSerializationTests
             CancellationToken cancellationToken = default) =>
             ExecuteTextCommandAsync(
                 setupAction,
+                responseTimeoutMs: 300,
+                completionTimeoutMs: 100,
+                cancellationToken: cancellationToken);
+
+        /// <summary>
+        /// The async-setup overload, so a test can observe the wire from <i>inside</i> the exchange
+        /// rather than only after it has closed.
+        /// </summary>
+        public Task<IReadOnlyList<string>> RunTextExchangeAsync(
+            Func<CancellationToken, Task> setupActionAsync,
+            CancellationToken cancellationToken = default) =>
+            ExecuteTextCommandAsync(
+                setupActionAsync,
                 responseTimeoutMs: 300,
                 completionTimeoutMs: 100,
                 cancellationToken: cancellationToken);

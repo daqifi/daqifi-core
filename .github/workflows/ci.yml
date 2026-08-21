@@ -3,6 +3,20 @@ name: CI
 on:
   pull_request:
     branches: [ main ]
+  # Required for the merge queue. A queued PR is tested on a merge_group ref that
+  # contains main's tip plus everything ahead of it in the queue — the state the
+  # commit will actually land in, which a pull_request run cannot see. Without this
+  # trigger the required "build" check never reports for a merge group and every
+  # queued PR sits until it is timed out of the queue.
+  merge_group:
+
+  # Backstop only. The queue tests the real post-merge state, so this should not be
+  # what catches a break — but main can still move without passing through a queue
+  # (a ruleset bypass, an admin push), and #444/#445 showed how expensive an
+  # unnoticed red main is: five later PRs failed on inherited breakage, and CI that
+  # only ran on pull_request had no run on main to point at.
+  push:
+    branches: [ main ]
 
 jobs:
   build:

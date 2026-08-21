@@ -87,28 +87,28 @@ public class CsvExporter
 
         var channelKeys = channels.Select(c => c.Key).ToList();
 
-        await WriteHeaderAsync(writer, channelKeys, options);
+        await WriteHeaderAsync(writer, channelKeys, options).ConfigureAwait(false);
 
         var totalSamples = progress != null
-            ? await source.GetSampleCountAsync(cancellationToken)
+            ? await source.GetSampleCountAsync(cancellationToken).ConfigureAwait(false)
             : 0;
 
         if (options.AverageWindow.HasValue)
-            await ExportAveragedAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken);
+            await ExportAveragedAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken).ConfigureAwait(false);
         else
-            await ExportAllSamplesAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken);
+            await ExportAllSamplesAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task WriteHeaderAsync(TextWriter writer, List<string> channelKeys, CsvExportOptions options)
     {
         var timeHeader = options.UseRelativeTime ? "Relative Time (s)" : "Time";
-        await writer.WriteAsync(EscapeCsvField(timeHeader, options.Delimiter));
+        await writer.WriteAsync(EscapeCsvField(timeHeader, options.Delimiter)).ConfigureAwait(false);
         foreach (var key in channelKeys)
         {
-            await writer.WriteAsync(options.Delimiter);
-            await writer.WriteAsync(EscapeCsvField(key, options.Delimiter));
+            await writer.WriteAsync(options.Delimiter).ConfigureAwait(false);
+            await writer.WriteAsync(EscapeCsvField(key, options.Delimiter)).ConfigureAwait(false);
         }
-        await writer.WriteLineAsync();
+        await writer.WriteLineAsync().ConfigureAwait(false);
     }
 
     private static async Task ExportAllSamplesAsync(
@@ -126,13 +126,13 @@ public class CsvExporter
         var bucket = new List<SampleRow>();
         var processed = 0;
 
-        await foreach (var sample in source.StreamSamples(cancellationToken))
+        await foreach (var sample in source.StreamSamples(cancellationToken).ConfigureAwait(false))
         {
             firstTicks ??= sample.TimestampTicks;
 
             if (currentTick.HasValue && sample.TimestampTicks != currentTick.Value)
             {
-                await WriteTimestampRowAsync(writer, sb, bucket, channelKeys, firstTicks.Value, options);
+                await WriteTimestampRowAsync(writer, sb, bucket, channelKeys, firstTicks.Value, options).ConfigureAwait(false);
                 processed += bucket.Count;
                 ReportProgress(progress, processed, totalSamples);
                 bucket.Clear();
@@ -143,7 +143,7 @@ public class CsvExporter
         }
 
         if (bucket.Count > 0)
-            await WriteTimestampRowAsync(writer, sb, bucket, channelKeys, firstTicks!.Value, options);
+            await WriteTimestampRowAsync(writer, sb, bucket, channelKeys, firstTicks!.Value, options).ConfigureAwait(false);
 
         progress?.Report(100);
     }
@@ -179,7 +179,7 @@ public class CsvExporter
         }
 
         sb.AppendLine();
-        await writer.WriteAsync(sb.ToString());
+        await writer.WriteAsync(sb.ToString()).ConfigureAwait(false);
     }
 
     private static async Task ExportAveragedAsync(
@@ -200,7 +200,7 @@ public class CsvExporter
         var windowCount = 0;
         var processed = 0;
 
-        await foreach (var sample in source.StreamSamples(cancellationToken))
+        await foreach (var sample in source.StreamSamples(cancellationToken).ConfigureAwait(false))
         {
             firstTicks ??= sample.TimestampTicks;
             lastTick = sample.TimestampTicks;
@@ -216,7 +216,7 @@ public class CsvExporter
 
             if (windowCount >= window)
             {
-                await WriteAveragedRowAsync(writer, sb, channelKeys, totals, counts, lastTick, firstTicks.Value, options);
+                await WriteAveragedRowAsync(writer, sb, channelKeys, totals, counts, lastTick, firstTicks.Value, options).ConfigureAwait(false);
 
                 foreach (var key in channelKeys)
                 {
@@ -231,7 +231,7 @@ public class CsvExporter
 
         // Flush any trailing samples that didn't fill a complete window.
         if (windowCount > 0 && firstTicks.HasValue)
-            await WriteAveragedRowAsync(writer, sb, channelKeys, totals, counts, lastTick, firstTicks.Value, options);
+            await WriteAveragedRowAsync(writer, sb, channelKeys, totals, counts, lastTick, firstTicks.Value, options).ConfigureAwait(false);
 
         progress?.Report(100);
     }
@@ -261,7 +261,7 @@ public class CsvExporter
         }
 
         sb.AppendLine();
-        await writer.WriteAsync(sb.ToString());
+        await writer.WriteAsync(sb.ToString()).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -9,9 +9,11 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// </summary>
 /// <remarks>
 /// The firmware returns a <c>Last N commands:</c> header followed by one <c>&lt;n&gt;: &lt;command&gt;</c>
-/// line per remembered command (newest first), or the single line <c>No command history</c> when the
-/// buffer is empty. This parser strips the header and the numeric prefix, returning just the command
-/// text in the order the device reported it.
+/// line per remembered command, or the single line <c>No command history</c> when the buffer is empty.
+/// The <c>&lt;n&gt;</c> prefix counts backwards from the present — <c>1:</c> is the most recent command —
+/// and the firmware prints the lines in descending order, so the newest command comes last. This parser
+/// strips the header and the numeric prefix, returning just the command text in the order the device
+/// reported it: oldest first.
 /// </remarks>
 public static class CommandHistoryParser
 {
@@ -21,7 +23,7 @@ public static class CommandHistoryParser
     /// Parses command-history response lines into command strings.
     /// </summary>
     /// <param name="lines">The raw response lines from the device.</param>
-    /// <returns>The remembered commands (newest first); empty when there is no history.</returns>
+    /// <returns>The remembered commands (oldest first); empty when there is no history.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="lines"/> is null.</exception>
     public static IReadOnlyList<string> Parse(IEnumerable<string> lines)
     {

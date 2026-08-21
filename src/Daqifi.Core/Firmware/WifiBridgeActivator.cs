@@ -36,8 +36,15 @@ public static class WifiBridgeActivator
     // (isCdcHostConnected) before accepting commands. Match SerialStreamTransport
     // defaults so port settings stay in one place.
     private static readonly TimeSpan DtrSettleDelay = TimeSpan.FromMilliseconds(200);
-    private static readonly TimeSpan InterCommandDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan ApplySettleDelay = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>
+    /// Pause between the transparent-mode exit and the command that follows it. Shared with
+    /// <c>WifiModuleUpdater</c>'s managed-connection twin of <see cref="Deactivate"/> so the two
+    /// paths that walk a device out of bridge mode cannot pace it differently: the delay is a
+    /// property of the firmware's mode transition, not of the transport used to drive it.
+    /// </summary>
+    internal static readonly TimeSpan InterCommandDelay = TimeSpan.FromMilliseconds(100);
 
     // Hard ceiling for the async overloads' worker task. The healthy path costs
     // ~600ms of scripted delays (DtrSettleDelay + InterCommandDelay +

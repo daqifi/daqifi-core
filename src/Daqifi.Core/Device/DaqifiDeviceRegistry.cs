@@ -96,8 +96,13 @@ public sealed class DaqifiDeviceRegistry : IDisposable
     /// </param>
     internal DaqifiDeviceRegistry(DeviceConnector? connector)
     {
-        _connector = connector ?? ((info, options, cancellationToken) =>
-            DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(info, options, cancellationToken));
+        // Async, not a direct method-group forward: DaqifiDeviceFactory.ConnectFromDeviceInfoAsync
+        // returns Task<DaqifiStreamingDevice> (#333), one step narrower than this delegate's
+        // Task<DaqifiDevice> — the implicit reference conversion on the awaited result only applies
+        // to an async method's return statement, not to the Task instance itself.
+        _connector = connector ?? (async (info, options, cancellationToken) =>
+            await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(info, options, cancellationToken)
+                .ConfigureAwait(false));
     }
 
     #endregion

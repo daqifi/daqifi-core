@@ -145,6 +145,15 @@ namespace Daqifi.Core.Tests.Device
             yield return Site("GetStreamStatsAsync", d => d.GetStreamStatsAsync());
             yield return Site("GetMemoryDiagnosticsAsync", d => d.GetMemoryDiagnosticsAsync());
             yield return Site("SetFriendlyNameAsync", d => d.SetFriendlyNameAsync("Lab Nq1"));
+            yield return Site("SaveAdcCalibrationAsync", d => d.SaveAdcCalibrationAsync());
+            yield return Site("LoadAdcCalibrationAsync", d => d.LoadAdcCalibrationAsync());
+            yield return Site("SaveFactoryAdcCalibrationAsync", d => d.SaveFactoryAdcCalibrationAsync());
+            yield return Site("LoadFactoryAdcCalibrationAsync", d => d.LoadFactoryAdcCalibrationAsync());
+            yield return Site("UseAdcCalibrationAsync", d => d.UseAdcCalibrationAsync(1));
+            yield return Site("SetAdcCalibrationSlopeAsync", d => d.SetAdcCalibrationSlopeAsync(0, 1.0));
+            yield return Site("SetAdcCalibrationOffsetAsync", d => d.SetAdcCalibrationOffsetAsync(0, 0.0));
+            yield return Site("SaveVoltagePrecisionAsync", d => d.SaveVoltagePrecisionAsync());
+            yield return Site("LoadVoltagePrecisionAsync", d => d.LoadVoltagePrecisionAsync());
 
             static object[] Site(string name, Func<DaqifiStreamingDevice, Task> call) => [name, call];
         }
@@ -227,9 +236,16 @@ namespace Daqifi.Core.Tests.Device
             // on it. That path is also "the device went away", so it carries the same flag rather
             // than leaking a low-level ObjectDisposedException.
             var device = new TextCommandTestableDevice("TestDevice");
-            var semaphore = (SemaphoreSlim)typeof(DaqifiDevice)
-                .GetField("_textExchangeLock", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(device)!;
+            var serializer = typeof(DaqifiDevice)
+                    .GetField("_operations", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.GetValue(device)
+                ?? throw new InvalidOperationException(
+                    "DaqifiDevice no longer has an _operations field to reach the lock through.");
+            var lockField = serializer.GetType()
+                    .GetField("_operationLock", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException(
+                    "OperationSerializer no longer has an _operationLock field.");
+            var semaphore = (SemaphoreSlim)lockField.GetValue(serializer)!;
             semaphore.Dispose();
 
             var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(

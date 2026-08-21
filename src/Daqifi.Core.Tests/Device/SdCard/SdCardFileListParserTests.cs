@@ -7,6 +7,116 @@ namespace Daqifi.Core.Tests.Device.SdCard
 {
     public class SdCardFileListParserTests
     {
+        // ---- firmware #794: the end-of-listing marker -----------------------
+
+        [Fact]
+        public void ParseFileList_WithEndOfListMarker_DoesNotYieldAFile()
+        {
+            // Arrange -- the marker is not blank, is not an error shape, and its
+            // first token is not empty, so every existing filter passes it through.
+            var lines = new[] { "Daqifi/data.csv 1024", "__END_OF_LIST__ OK" };
+
+            // Act
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            // Assert -- one real file, and no phantom named after the marker.
+            Assert.Single(result);
+            Assert.Equal("data.csv", result[0].FileName);
+        }
+
+        [Fact]
+        public void ParseFileList_WithFileNamedLikeTheMarker_KeepsTheFile()
+        {
+            // The marker is matched as a whole token, not as a prefix: a file
+            // whose name merely starts with the marker text is still a file, and
+            // hiding it would be the same defect as inventing one.
+            // No "Daqifi/" prefix on purpose: with one, the line does not start
+            // with the marker text at all and the exactness guard is never
+            // reached -- the test would pass whether or not the guard exists.
+            var lines = new[] { "__END_OF_LIST__notes.csv 12", "__END_OF_LIST__ OK" };
+
+            var result = SdCardFileListParser.ParseFileList(lines);
+
+            Assert.Single(result);
+            Assert.Equal("__END_OF_LIST__notes.csv", result[0].FileName);
+        }
+
+        [Fact]
+        public void GetListingStatus_WithFileNamedLikeTheMarker_IsUnterminated()
+        {
+            // Same rule from the other side: a filename starting with the marker
+            // text must not be read as the listing's terminator.
+            var status = SdCardFileListParser.GetListingStatus(
+                new[] { "__END_OF_LIST__notes.csv 12" });
+
+            Assert.Equal(SdCardListingStatus.Unterminated, status);
+        }
+
+        [Theory]
+        [InlineData("__END_OF_LIST__ OK", SdCardListingStatus.Complete)]
+        [InlineData("__END_OF_LIST__ INCOMPLETE", SdCardListingStatus.Incomplete)]
+        [InlineData("__END_OF_LIST__ FAILED", SdCardListingStatus.Failed)]
+        [InlineData("  __END_OF_LIST__ ok  ", SdCardListingStatus.Complete)]
+        public void GetListingStatus_ReadsTheMarker(string marker, SdCardListingStatus expected)
+        {
+            var status = SdCardFileListParser.GetListingStatus(
+                new[] { "Daqifi/data.csv 1024", marker });
+
+            Assert.Equal(expected, status);
+        }
+
+        [Fact]
+        public void GetListingStatus_WithContentAfterTheMarker_IsUnterminated()
+        {
+            // A marker with entries after it did not terminate THIS listing --
+            // it is left over from an earlier, timed-out exchange. Claiming
+            // Complete there would vouch for a reply we never saw the end of.
+            var status = SdCardFileListParser.GetListingStatus(new[]
+            {
+                "Daqifi/a.csv 1",
+                "__END_OF_LIST__ OK",
+                "Daqifi/b.csv 2",
+            });
+
+            Assert.Equal(SdCardListingStatus.Unterminated, status);
+        }
+
+        [Fact]
+        public void GetListingStatus_WithNoMarker_IsUnterminated()
+        {
+            // Pre-#794 firmware, and the abort case, which deliberately sends none.
+            var status = SdCardFileListParser.GetListingStatus(
+                new[] { "Daqifi/data.csv 1024" });
+
+            Assert.Equal(SdCardListingStatus.Unterminated, status);
+        }
+
+        [Fact]
+        public void GetListingStatus_WithUnknownStatusWord_IsNotTreatedAsComplete()
+        {
+            // A future status word this version does not know still terminated the
+            // listing, but its contents cannot be claimed complete.
+            var status = SdCardFileListParser.GetListingStatus(
+                new[] { "Daqifi/data.csv 1024", "__END_OF_LIST__ SOMETHINGNEW" });
+
+            Assert.Equal(SdCardListingStatus.Incomplete, status);
+        }
+
+        [Fact]
+        public void GetListingStatus_WithStaleMarkerAhead_TakesTheLast()
+        {
+            // A marker from a previous, timed-out exchange can lead this reply. The
+            // one that ENDS the reply describes the walk that produced it.
+            var status = SdCardFileListParser.GetListingStatus(new[]
+            {
+                "__END_OF_LIST__ FAILED",
+                "Daqifi/data.csv 1024",
+                "__END_OF_LIST__ OK",
+            });
+
+            Assert.Equal(SdCardListingStatus.Complete, status);
+        }
+
         [Fact]
         public void ParseFileList_WithValidFiles_ReturnsCorrectCount()
         {

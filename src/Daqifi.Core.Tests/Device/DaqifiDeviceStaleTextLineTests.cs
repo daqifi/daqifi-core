@@ -365,7 +365,8 @@ public class DaqifiDeviceStaleTextLineTests
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null)
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false)
         {
             try
             {

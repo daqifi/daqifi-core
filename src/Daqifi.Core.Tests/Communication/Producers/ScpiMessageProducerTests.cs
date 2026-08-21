@@ -857,6 +857,20 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    [Fact]
+    public void GetAnalogOutputVoltage_ReturnsCorrectQuery()
+    {
+        var message = ScpiMessageProducer.GetAnalogOutputVoltage(2);
+        Assert.Equal("SOURce:VOLTage:LEVel? 2", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void GetAnalogOutputVoltage_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.GetAnalogOutputVoltage(-1));
+    }
+
     // --- Logging & diagnostics ---
 
     [Fact]

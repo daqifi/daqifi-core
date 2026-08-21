@@ -27,6 +27,14 @@ public sealed class SdCardLogSession
     /// <summary>
     /// Gets streaming access to sample data. Samples are produced lazily as the file is read.
     /// </summary>
+    /// <remarks>
+    /// Nothing is decoded until this is enumerated, and the log is re-read from the start on
+    /// each enumeration, so the source must still be readable: a session parsed from a path
+    /// needs the file to still exist, and a session parsed from a stream needs that stream
+    /// still open and left alone. Enumerate a stream-backed session's samples one at a time —
+    /// a stream has a single read position, so a second, overlapping enumeration throws
+    /// rather than silently interleaving reads.
+    /// </remarks>
     public IAsyncEnumerable<SdCardLogEntry> Samples { get; }
 
     /// <summary>

@@ -11,7 +11,13 @@ namespace Daqifi.Core.Device
     /// <summary>
     /// Base interface for all DAQiFi devices.
     /// </summary>
-    public interface IDevice
+    /// <remarks>
+    /// Extends <see cref="IAsyncDisposable"/> so a consumer holding only this interface — the point
+    /// of coding against it in the first place — can tear a device down without a cast to
+    /// <see cref="DaqifiDevice"/>. Implement it the way <see cref="DaqifiDevice.DisposeAsync"/> does:
+    /// disconnect, then release resources, guarded so it is safe to call more than once.
+    /// </remarks>
+    public interface IDevice : IAsyncDisposable
     {
         /// <summary>
         /// Gets the name of the device.
@@ -36,6 +42,16 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Occurs when the device status changes.
         /// </summary>
+        /// <remarks>
+        /// Handlers run synchronously on whatever thread raised the change, and no particular
+        /// thread is guaranteed: a drop is raised from the watchdog or reader thread that detected
+        /// it, a reconnect from the reconnect supervisor, and a connect either from a thread-pool
+        /// thread or inline on the calling thread depending on whether the dial suspended. The
+        /// library resumes its awaits off the caller's <see cref="SynchronizationContext"/> so the
+        /// synchronous <see cref="Connect"/> facade cannot deadlock a UI thread (issue #495), but
+        /// that only declines the context — it is not a promise of a thread hop. Treat the thread
+        /// as arbitrary: a UI consumer must marshal to its own dispatcher before touching controls.
+        /// </remarks>
         event EventHandler<DeviceStatusEventArgs> StatusChanged;
 
         /// <summary>
@@ -77,44 +93,27 @@ namespace Daqifi.Core.Device
         /// is signalled.
         /// </summary>
         /// <remarks>
-        /// The default implementation simply calls <see cref="Connect"/> on the calling thread, so
-        /// an existing <see cref="IDevice"/> implementation keeps compiling and working unchanged —
-        /// it just cannot honor the token beyond the check made before the attempt starts.
-        /// <see cref="DaqifiDevice"/> overrides it with a genuinely asynchronous, cancellable
-        /// implementation.
+        /// A genuine member, not a default-interface-method shim over <see cref="Connect"/> — every
+        /// implementer must honor the token, not merely check it before the attempt starts. See
+        /// <see cref="DaqifiDevice.ConnectAsync"/> for the reference implementation.
         /// </remarks>
         /// <param name="cancellationToken">A cancellation token to observe while connecting.</param>
         /// <returns>A task representing the asynchronous connect operation.</returns>
         /// <exception cref="OperationCanceledException">Thrown when the attempt is canceled.</exception>
-        Task ConnectAsync(CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Connect();
-            return Task.CompletedTask;
-        }
+        Task ConnectAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Disconnects from the device without blocking the calling thread.
         /// </summary>
         /// <remarks>
-        /// The default implementation simply calls <see cref="Disconnect"/> on the calling thread,
-        /// so an existing <see cref="IDevice"/> implementation keeps compiling and working
-        /// unchanged. <see cref="DaqifiDevice"/> overrides it with a genuinely asynchronous
-        /// implementation; see that override for what the token does — teardown always runs to
-        /// completion, so cancellation shortens the wait rather than aborting the disconnect.
+        /// A genuine member, not a default-interface-method shim over <see cref="Disconnect"/>. See
+        /// <see cref="DaqifiDevice.DisconnectAsync"/> for the reference implementation and for what
+        /// the token does there — teardown always runs to completion, so cancellation shortens the
+        /// wait rather than aborting the disconnect; other implementers may choose differently.
         /// </remarks>
-        /// <param name="cancellationToken">
-        /// A cancellation token to observe while disconnecting. Ignored by this default
-        /// implementation: aborting a teardown part-way would leave the device in an
-        /// indeterminate state, which is worse than finishing it.
-        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe while disconnecting.</param>
         /// <returns>A task representing the asynchronous disconnect operation.</returns>
-        Task DisconnectAsync(CancellationToken cancellationToken = default)
-        {
-            _ = cancellationToken;
-            Disconnect();
-            return Task.CompletedTask;
-        }
+        Task DisconnectAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Sends a message to the device.

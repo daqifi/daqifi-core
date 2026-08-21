@@ -219,4 +219,69 @@ public class ProtobufProtocolHandlerTests
         // Assert
         Assert.Equal(ProtobufMessageType.Error, result);
     }
+
+    /// <summary>
+    /// The typed entry point exists so a caller that already holds a <see cref="DaqifiOutMessage"/>
+    /// does not have to wrap it just to be routed — an allocation per frame on a streaming device
+    /// (issue #490). It must route identically to <see cref="ProtobufProtocolHandler.HandleAsync"/>,
+    /// which is now built on it.
+    /// </summary>
+    [Theory]
+    [InlineData(ProtobufMessageType.Status)]
+    [InlineData(ProtobufMessageType.Stream)]
+    [InlineData(ProtobufMessageType.Error)]
+    [InlineData(ProtobufMessageType.Unknown)]
+    public async Task Handle_RoutesTheSameWayHandleAsyncDoes(ProtobufMessageType messageType)
+    {
+        var viaHandle = new List<string>();
+        var viaHandleAsync = new List<string>();
+
+        var handleHandler = HandlerRecording(viaHandle);
+        var handleAsyncHandler = HandlerRecording(viaHandleAsync);
+
+        var message = MessageOfType(messageType);
+
+        handleHandler.Handle(message);
+        await handleAsyncHandler.HandleAsync(new GenericInboundMessage<object>(message));
+
+        Assert.Equal(viaHandleAsync, viaHandle);
+        Assert.Equal(
+            messageType == ProtobufMessageType.Unknown ? 0 : 1,
+            viaHandle.Count);
+    }
+
+    [Fact]
+    public void Handle_RejectsANullMessage()
+    {
+        var handler = new ProtobufProtocolHandler();
+
+        Assert.Throws<ArgumentNullException>(() => handler.Handle(null!));
+    }
+
+    private static ProtobufProtocolHandler HandlerRecording(List<string> routed) =>
+        new(
+            statusMessageHandler: _ => routed.Add("status"),
+            streamMessageHandler: _ => routed.Add("stream"),
+            sdCardMessageHandler: _ => routed.Add("sdcard"),
+            errorMessageHandler: _ => routed.Add("error"));
+
+    private static DaqifiOutMessage MessageOfType(ProtobufMessageType messageType)
+    {
+        switch (messageType)
+        {
+            case ProtobufMessageType.Status:
+                return new DaqifiOutMessage { AnalogInPortNum = 16 };
+
+            case ProtobufMessageType.Stream:
+                var stream = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+                stream.AnalogInDataFloat.Add(1.0f);
+                return stream;
+
+            case ProtobufMessageType.Error:
+                return new DaqifiOutMessage { DeviceStatus = 1 };
+
+            default:
+                return new DaqifiOutMessage();
+        }
+    }
 }

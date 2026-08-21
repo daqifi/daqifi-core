@@ -43,6 +43,20 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
     /// <param name="consumedBytes">The number of bytes consumed from the data during parsing.</param>
     /// <returns>A collection of parsed protobuf messages.</returns>
     public IEnumerable<IInboundMessage<DaqifiOutMessage>> ParseMessages(byte[] data, out int consumedBytes)
+        => ParseMessages(new ReadOnlySpan<byte>(data), out consumedBytes);
+
+    /// <summary>
+    /// Parses raw data into protobuf messages directly from the caller's buffer.
+    /// </summary>
+    /// <remarks>
+    /// The whole method body already worked in spans — only the entry point required an array,
+    /// which forced <see cref="StreamMessageConsumer{T}"/> to copy its accumulation buffer out on
+    /// every read (issue #490). Nothing here retains <paramref name="data"/> past the call.
+    /// </remarks>
+    /// <param name="data">The raw data to parse.</param>
+    /// <param name="consumedBytes">The number of bytes consumed from the data during parsing.</param>
+    /// <returns>A collection of parsed protobuf messages.</returns>
+    public IEnumerable<IInboundMessage<DaqifiOutMessage>> ParseMessages(ReadOnlySpan<byte> data, out int consumedBytes)
     {
         var messages = new List<IInboundMessage<DaqifiOutMessage>>();
         consumedBytes = 0;
@@ -54,7 +68,7 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
 
         while (currentIndex < data.Length)
         {
-            var remainingData = new ReadOnlySpan<byte>(data, currentIndex, data.Length - currentIndex);
+            var remainingData = data.Slice(currentIndex);
 
             if (!TryReadLengthPrefix(remainingData, out var messageLength, out var prefixBytes, out var prefixIsMalformed))
             {
@@ -220,11 +234,11 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
     /// before the expensive ParseFrom, keeping the per-offset cost low even when the
     /// scan covers a large noisy buffer.
     /// </remarks>
-    private static int FindNextParseableFrameStart(byte[] data, int start)
+    private static int FindNextParseableFrameStart(ReadOnlySpan<byte> data, int start)
     {
         for (var i = start; i < data.Length; i++)
         {
-            var remaining = new ReadOnlySpan<byte>(data, i, data.Length - i);
+            var remaining = data.Slice(i);
 
             if (!TryReadLengthPrefix(remaining, out var messageLength, out var prefixBytes, out _))
             {

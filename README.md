@@ -23,7 +23,7 @@ DAQiFi builds wireless data acquisition hardware designed to get out of the way 
 
 Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
 
-Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O and PWM outputs, set the sample rate, and run SD-card logging through plain conversation.
+Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O, PWM and analog outputs, set the sample rate, and run SD-card logging — then list, download, and CSV the recorded data back — through plain conversation.
 
 ## See it in 30 seconds
 
@@ -35,9 +35,8 @@ dotnet add package Daqifi.Core
 using Daqifi.Core.Device;
 using Daqifi.Core.Channel;
 
-// Connect — transport and device initialization handled for you. The factory returns the base
-// DaqifiDevice type, but the constructed instance is always a DaqifiStreamingDevice.
-await using var device = (DaqifiStreamingDevice)await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+// Connect — transport and device initialization handled for you.
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
 // Subscribe to decoded, per-channel samples
 var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
@@ -71,7 +70,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
 | **SDK** | **DAQiFi Core — this library** |
 | App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
-| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM, and SD logging |
+| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM/analog output, SD logging, and SD data retrieval |
 | Your code | Custom apps, dashboards, pipelines, test rigs |
 
 ## What you can do
@@ -81,6 +80,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **Auto-discovery** | Find any DAQiFi on WiFi or USB in seconds — no IP hunting, no config files |
 | **One-line connect** | `DaqifiDeviceFactory.ConnectTcpAsync(...)` wraps transport setup and device init; retries are opt-in via `DeviceConnectionOptions` |
 | **Real-time streaming** | Per-channel `IChannel.SampleReceived` events with decoded, scaled values — or subscribe to the raw protobuf frame directly; no polling loops to write |
+| **Acquisition health** | Attach `AcquisitionStatistics` to a stream and read back the rate you are really getting, per-channel jitter, value range, and how far behind the device's clock the host is |
 | **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
 | **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
 | **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
@@ -169,29 +169,59 @@ var devices = await wifiFinder.DiscoverAsync(cts.Token);
 using var customFinder = new WiFiDeviceFinder(discoveryPort: 12345);
 ```
 
+### Acquisition statistics
+
+"Am I actually getting 1 kHz?" — attach an `AcquisitionStatistics` for the duration of a stream and
+read a snapshot whenever you want the answer. It observes the same per-channel sample events
+streaming already raises, so nothing changes for consumers that do not attach one.
+
+```csharp
+using Daqifi.Core.Device;
+
+using var stats = new AcquisitionStatistics(device);
+
+device.StreamingFrequency = 1000;
+device.StartStreaming();
+await Task.Delay(TimeSpan.FromSeconds(5));
+device.StopStreaming();
+
+var snapshot = stats.Snapshot();
+foreach (var channel in snapshot.Channels)
+{
+    Console.WriteLine(
+        $"{channel.Name}: {channel.SampleCount} samples, " +
+        $"{channel.MeasuredSampleRateHz:F1} Hz measured vs {channel.DeviceClockSampleRateHz:F1} Hz by the device clock, " +
+        $"{channel.MinValue:F3}..{channel.MaxValue:F3} V, worst gap {channel.MaxSampleInterval.TotalMilliseconds:F2} ms");
+}
+```
+
+The two rates are reported side by side on purpose. Both dropping below the commanded rate means
+samples went missing; the two disagreeing means the device's own clock is not keeping real time, and
+it is `MeasuredSampleRateHz` that describes what your application actually received. `Reset()` starts
+a fresh window mid-session, and `stats.Record(sample)` feeds one by hand from `StreamSamplesAsync`
+instead of attaching.
+
 ### Digital output
 
 Digital channels default to inputs. Flip one to output and drive it — the level is applied
 immediately, and flipping back to input releases the pin to high-impedance.
 
-`DaqifiDeviceFactory` returns the base `DaqifiDevice` type, so pattern-match to `IStreamingDevice`
-to reach these members — the same way as `INetworkConfigurable` below.
-
 ```csharp
 using Daqifi.Core.Channel;
 
-if (device is IStreamingDevice streamingDevice)
-{
-    var channels = device.GetChannelsSnapshot();
-    var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
+var channels = device.GetChannelsSnapshot();
+var dio3 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 3);
 
-    streamingDevice.SetDioDirection(dio3, ChannelDirection.Output);
-    streamingDevice.SetDioValue(dio3, true);   // drive high
-    streamingDevice.SetDioValue(dio3, false);  // drive low
+device.SetDioDirection(dio3, ChannelDirection.Output);
+device.SetDioValue(dio3, true);   // drive high
+device.SetDioValue(dio3, false);  // drive low
 
-    streamingDevice.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
-}
+device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed input
 ```
+
+Every `IStreamingDevice` method above (and the rest of the channel/PWM/analog-output/reboot surface)
+has a cancellable `...Async` twin declared on the interface — see
+[IStreamingDevice](docs/DEVICE_INTERFACES.md#istreamingdevice) for the full list.
 
 ### PWM output
 
@@ -202,43 +232,37 @@ one hardware timer drives them all.
 ```csharp
 using Daqifi.Core.Channel;
 
-if (device is IStreamingDevice streamingDevice)
-{
-    var pwm = device.GetChannelsSnapshot()
-        .OfType<IDigitalChannel>()
-        .First(c => c.IsPwmCapable);
+var pwm = device.GetChannelsSnapshot()
+    .OfType<IDigitalChannel>()
+    .First(c => c.IsPwmCapable);
 
-    streamingDevice.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
-    streamingDevice.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
-    streamingDevice.SetPwmEnabled(pwm, true);  // start
+device.SetPwmDutyCycle(pwm, 25);  // 1-100 percent
+device.SetPwmFrequency(1000);     // 6-50000 Hz, applies to every PWM channel
+device.SetPwmEnabled(pwm, true);  // start
 
-    streamingDevice.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
+device.SetPwmDutyCycle(pwm, 75);  // duty changes take effect live
 
-    streamingDevice.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
-}
+device.SetPwmEnabled(pwm, false); // stop — the pin is left high-impedance
 ```
 
 ### Network configuration
 
-Devices implementing `INetworkConfigurable` accept programmatic WiFi and LAN configuration. `Mode`, `Ssid`, and `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
+`DaqifiStreamingDevice` implements `INetworkConfigurable` for programmatic WiFi and LAN configuration. `Mode`, `Ssid`, and `Password` are always applied on every call; only `StaticIP`, `SubnetMask`, and `Gateway` honor `null` as "leave unchanged" — so DHCP-only callers can omit the static-IP fields without affecting their DHCP setup.
 
 ```csharp
 using System.Net;
 using Daqifi.Core.Device.Network;
 
-if (device is INetworkConfigurable networkDevice)
+var config = new NetworkConfiguration
 {
-    var config = new NetworkConfiguration
-    {
-        Ssid       = "MyNetwork",
-        Password   = "secret",
-        Mode       = WifiMode.ExistingNetwork,
-        StaticIP   = IPAddress.Parse("192.168.1.42"),
-        SubnetMask = IPAddress.Parse("255.255.255.0"),
-        Gateway    = IPAddress.Parse("192.168.1.1"),
-    };
-    await networkDevice.UpdateNetworkConfigurationAsync(config);
-}
+    Ssid       = "MyNetwork",
+    Password   = "secret",
+    Mode       = WifiMode.ExistingNetwork,
+    StaticIP   = IPAddress.Parse("192.168.1.42"),
+    SubnetMask = IPAddress.Parse("255.255.255.0"),
+    Gateway    = IPAddress.Parse("192.168.1.1"),
+};
+await device.UpdateNetworkConfigurationAsync(config);
 ```
 
 ### Firmware updates

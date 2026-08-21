@@ -391,6 +391,36 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> GetStreamInterface => new ScpiMessage("SYSTem:STReam:INTerface?");
 
     /// <summary>
+    /// The wire command <see cref="StartStreaming"/> emits, without its frequency argument. Exposed so
+    /// callers that must recognize this command from raw command text — e.g.
+    /// <see cref="Device.Internal.SessionCommandInterpreter"/> — have a single source of truth instead
+    /// of a second, driftable copy of the literal.
+    /// </summary>
+    internal const string StartStreamingCommand = "SYSTem:StartStreamData";
+
+    /// <summary>
+    /// The wire command <see cref="StopStreaming"/> emits. See <see cref="StartStreamingCommand"/> for why
+    /// this is exposed.
+    /// </summary>
+    internal const string StopStreamingCommand = "SYSTem:StopStreamData";
+
+    /// <summary>
+    /// The wire command <see cref="EnableAdcChannels"/> emits, without its bitmask argument. See
+    /// <see cref="StartStreamingCommand"/> for why this is exposed.
+    /// </summary>
+    internal const string EnableAdcChannelsCommand = "ENAble:VOLTage:DC";
+
+    /// <summary>
+    /// The wire command <see cref="SetProtobufStreamFormat"/>/<see cref="SetJsonStreamFormat"/>/
+    /// <see cref="SetCsvStreamFormat"/> emit, without their format argument. Exposed so other call sites
+    /// that need to set a stream format not covered by those three fixed properties — e.g.
+    /// <see cref="Device.SdCard.SdCardOperations"/>, which selects the format from a caller-supplied
+    /// <see cref="Device.SdCard.SdCardLogFormat"/> — compose the same command via <see cref="SetStreamFormat"/>
+    /// instead of re-declaring the literal.
+    /// </summary>
+    internal const string StreamFormatCommand = "SYSTem:STReam:FORmat";
+
+    /// <summary>
     /// Creates a command message to start data streaming at the specified frequency.
     /// </summary>
     /// <param name="frequency">The streaming frequency in Hz.</param>
@@ -407,7 +437,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> StartStreaming(int frequency)
     {
-        return new ScpiMessage($"SYSTem:StartStreamData {frequency}");
+        return new ScpiMessage($"{StartStreamingCommand} {frequency}");
     }
 
     /// <summary>
@@ -417,7 +447,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:StopStreamData
     /// Example: messageProducer.Send(ScpiMessageProducer.StopStreaming);
     /// </remarks>
-    public static IOutboundMessage<string> StopStreaming => new ScpiMessage("SYSTem:StopStreamData");
+    public static IOutboundMessage<string> StopStreaming => new ScpiMessage(StopStreamingCommand);
 
     /// <summary>
     /// Creates a command message to set the stream format to Protocol Buffer.
@@ -427,7 +457,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STReam:FORmat 0
     /// Example: messageProducer.Send(ScpiMessageProducer.SetProtobufStreamFormat);
     /// </remarks>
-    public static IOutboundMessage<string> SetProtobufStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 0");
+    public static IOutboundMessage<string> SetProtobufStreamFormat => SetStreamFormat(0);
 
     /// <summary>
     /// Creates a command message to set the stream format to JSON.
@@ -437,7 +467,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STReam:FORmat 1
     /// Example: messageProducer.Send(ScpiMessageProducer.SetJsonStreamFormat);
     /// </remarks>
-    public static IOutboundMessage<string> SetJsonStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 1");
+    public static IOutboundMessage<string> SetJsonStreamFormat => SetStreamFormat(1);
 
     /// <summary>
     /// Creates a command message to set the stream format to CSV.
@@ -447,7 +477,7 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STReam:FORmat 2
     /// Example: messageProducer.Send(ScpiMessageProducer.SetCsvStreamFormat);
     /// </remarks>
-    public static IOutboundMessage<string> SetCsvStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat 2");
+    public static IOutboundMessage<string> SetCsvStreamFormat => SetStreamFormat(2);
 
     /// <summary>
     /// Creates a query message to get the current stream format.
@@ -460,7 +490,21 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STReam:FORmat?
     /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamFormat);
     /// </remarks>
-    public static IOutboundMessage<string> GetStreamFormat => new ScpiMessage("SYSTem:STReam:FORmat?");
+    public static IOutboundMessage<string> GetStreamFormat => new ScpiMessage($"{StreamFormatCommand}?");
+
+    /// <summary>
+    /// Creates a command message to set the stream format to the given integer code.
+    /// </summary>
+    /// <param name="format">The wire format code (0 = Protobuf, 1 = JSON, 2 = CSV).</param>
+    /// <remarks>
+    /// Internal escape hatch for callers whose format comes from a domain enum rather than one of the
+    /// three fixed properties above — see <see cref="StreamFormatCommand"/>.
+    /// Command: SYSTem:STReam:FORmat format
+    /// </remarks>
+    internal static IOutboundMessage<string> SetStreamFormat(int format)
+    {
+        return new ScpiMessage($"{StreamFormatCommand} {format}");
+    }
 
     /// <summary>
     /// Creates a command message to enable ADC channels using a decimal bitmask.
@@ -484,7 +528,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> EnableAdcChannels(string channelSetString)
     {
-        return new ScpiMessage($"ENAble:VOLTage:DC {channelSetString}");
+        return new ScpiMessage($"{EnableAdcChannelsCommand} {channelSetString}");
     }
 
     /// <summary>
@@ -650,6 +694,29 @@ public class ScpiMessageProducer
     /// Example: messageProducer.Send(ScpiMessageProducer.UpdateDacOutputs);
     /// </remarks>
     public static IOutboundMessage<string> UpdateDacOutputs => new ScpiMessage("CONFigure:DAC:UPDATE");
+
+    /// <summary>
+    /// Creates a query message asking the device for the voltage currently held on an analog
+    /// output (DAC) channel.
+    /// </summary>
+    /// <param name="channel">The analog output channel number.</param>
+    /// <remarks>
+    /// The DAC7718 has no hardware readback, so the device answers with the voltage it was last
+    /// told to drive, formatted to its configured voltage precision. Analog output is available on
+    /// NQ3 hardware only.
+    /// Command: SOURce:VOLTage:LEVel? channel
+    /// Example: messageProducer.Send(ScpiMessageProducer.GetAnalogOutputVoltage(0));
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is negative.</exception>
+    public static IOutboundMessage<string> GetAnalogOutputVoltage(int channel)
+    {
+        if (channel < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+
+        return new ScpiMessage($"SOURce:VOLTage:LEVel? {channel}");
+    }
 
     // ---------------------------------------------------------------------
     // ADC calibration & voltage-precision persistence
@@ -1183,8 +1250,10 @@ public class ScpiMessageProducer
     /// Creates a query message to read the device's recent SCPI command history.
     /// </summary>
     /// <remarks>
-    /// Returns the most recent commands seen on the USB interface, newest first, prefixed with a
-    /// <c>Last N commands:</c> header (or <c>No command history</c> when empty).
+    /// Returns the most recent commands seen on the USB interface, oldest first, prefixed with a
+    /// <c>Last N commands:</c> header (or <c>No command history</c> when empty). Each command line
+    /// carries an <c>&lt;n&gt;:</c> prefix counting backwards from the present — <c>1:</c> is the most
+    /// recent command — so the newest entry is printed last.
     /// Command: SYSTem:LOG:CMDHistory?
     /// Example: messageProducer.Send(ScpiMessageProducer.GetCommandHistory);
     /// </remarks>

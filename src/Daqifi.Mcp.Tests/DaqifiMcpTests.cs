@@ -66,6 +66,36 @@ public class DaqifiAgentTests
         Assert.Contains("discover_devices", ex.Message);
     }
 
+    // A timeout below the identify handshake returns an empty list before the device could ever
+    // answer, indistinguishable from "no device attached" (#448). The handshake measured ~830 ms
+    // when the floor was set and ~320-430 ms after #486; the floor stays at 1000 ms for the reasons
+    // on MinDiscoveryTimeoutMs. These pin the clamp directly rather than through a real discovery run.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(250)]   // the old floor — must no longer be honored
+    [InlineData(999)]
+    public void ClampDiscoveryTimeout_BelowFloor_ClampsToFloor(int timeoutMs)
+    {
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(DaqifiAgent.MinDiscoveryTimeoutMs),
+            DaqifiAgent.ClampDiscoveryTimeout(timeoutMs));
+    }
+
+    [Theory]
+    [InlineData(1000)]
+    [InlineData(2000)]
+    [InlineData(30_000)]
+    public void ClampDiscoveryTimeout_WithinRange_IsUnchanged(int timeoutMs)
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(timeoutMs), DaqifiAgent.ClampDiscoveryTimeout(timeoutMs));
+    }
+
+    [Fact]
+    public void ClampDiscoveryTimeout_AboveCeiling_ClampsTo30Seconds()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(30), DaqifiAgent.ClampDiscoveryTimeout(60_000));
+    }
+
     [Fact]
     public async Task Disconnect_UnknownDevice_ReturnsMessageRatherThanThrows()
     {
@@ -161,5 +191,39 @@ public class DaqifiAgentTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => NewAgent(readOnly: true).DisablePwmAsync("x", 4));
         Assert.Contains("read-only", ex.Message);
+    }
+}
+
+/// <summary>
+/// The one piece of sample-rate policy this server still owns after #481 moved the device half
+/// into <c>Daqifi.Core</c>: the operator's <c>--max-sample-rate-hz</c> clamp. The cases below are
+/// the ones that survived from <c>SampleRateCapCalculatorTests</c>; the rest moved down to
+/// <c>SampleRateCapTests</c> with the logic.
+/// </summary>
+public class ServerRateClampTests
+{
+    [Fact]
+    public void NoServerOption_LeavesTheDeviceCapAlone()
+    {
+        Assert.Equal(7746, DaqifiAgent.ApplyServerRateClamp(7746, maxSampleRateHzOption: null));
+    }
+
+    [Fact]
+    public void ServerOptionBelowTheDeviceCap_Wins()
+    {
+        Assert.Equal(500, DaqifiAgent.ApplyServerRateClamp(7746, maxSampleRateHzOption: 500));
+    }
+
+    [Fact]
+    public void ServerOptionAboveTheDeviceCap_DoesNotRaiseIt()
+    {
+        Assert.Equal(7746, DaqifiAgent.ApplyServerRateClamp(7746, maxSampleRateHzOption: 50000));
+    }
+
+    [Fact]
+    public void ZeroDeviceCap_StaysZero()
+    {
+        // Nothing enabled: the server option cannot conjure capacity the device does not have.
+        Assert.Equal(0, DaqifiAgent.ApplyServerRateClamp(0, maxSampleRateHzOption: 500));
     }
 }

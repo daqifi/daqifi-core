@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Capabilities;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.Protocol;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging;
@@ -14,7 +15,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
-using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,7 +26,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that can be connected to and communicated with.
     /// This is the base implementation of the IDevice interface.
     /// </summary>
-    public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable
+    public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost
     {
         /// <summary>
         /// Gets the name of the device.
@@ -42,6 +42,29 @@ namespace Daqifi.Core.Device
         /// Gets a value indicating whether the device is currently connected.
         /// </summary>
         public bool IsConnected => Status == ConnectionStatus.Connected;
+
+        /// <summary>
+        /// Throws <see cref="DeviceNotConnectedException"/> when this device is not connected.
+        /// </summary>
+        /// <remarks>
+        /// The device-side face of <see cref="ConnectionGuard"/>: the operation collaborators run
+        /// the same guard through their host seam (<c>_host.EnsureConnected()</c>), while the few
+        /// guards that live on the device itself go through here. Declared as an instance method
+        /// rather than another <see cref="ConnectionGuard"/> extension so that a call inside this
+        /// class or <see cref="DaqifiStreamingDevice"/> — which also implements the host interfaces
+        /// — binds here unambiguously.
+        /// </remarks>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        internal void EnsureConnected() => ConnectionGuard.EnsureConnected(IsConnected);
+
+        /// <summary>
+        /// Throws <see cref="DeviceNotConnectedException"/> when this device is not connected, then
+        /// throws if <paramref name="cancellationToken"/> has already been cancelled.
+        /// </summary>
+        /// <param name="cancellationToken">The caller's cancellation token.</param>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        internal void EnsureConnected(CancellationToken cancellationToken)
+            => ConnectionGuard.EnsureConnected(IsConnected, cancellationToken);
 
         /// <summary>
         /// Gets the device metadata containing part number, firmware version, etc.
@@ -272,6 +295,63 @@ namespace Daqifi.Core.Device
         protected IReadOnlyList<IChannel> SnapshotChannels() => GetChannelsSnapshot();
 
         /// <summary>
+        /// A counter that changes whenever this device's set of channels, or any of their enabled
+        /// states, changes.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Lets a caller that would otherwise re-derive something from <see cref="Channels"/> on
+        /// every frame cache that derivation instead and rebuild it only when this value moves. The
+        /// streaming decoder does exactly that with the sorted set of active analog channels, which
+        /// it used to snapshot, filter and sort a thousand times a second for a set that changes
+        /// when someone configures the device (issue #490).
+        /// </para>
+        /// <para>
+        /// It is a change token, not a count: only inequality with a previously observed value is
+        /// meaningful. Read it <em>before</em> taking the snapshot you intend to cache — a change
+        /// landing in between then makes the cached value merely stale-by-one-frame rather than
+        /// stale forever.
+        /// </para>
+        /// </remarks>
+        internal long ChannelStateVersion => Interlocked.Read(ref _channelStateVersion);
+
+        /// <summary>
+        /// Bumps <see cref="ChannelStateVersion"/>. Subscribed to every channel this device owns,
+        /// so that a caller writing <c>channel.IsEnabled = true</c> directly — which
+        /// <see cref="IChannel"/> permits and no device API observes — invalidates the same caches
+        /// that <see cref="PopulateChannelsFromStatus"/> does.
+        /// </summary>
+        private void OnChannelEnablementChanged() => Interlocked.Increment(ref _channelStateVersion);
+
+        /// <summary>
+        /// Whether <paramref name="updated"/> holds a different set of channel instances, in a
+        /// different order, from <paramref name="current"/>.
+        /// </summary>
+        /// <remarks>
+        /// Instance identity, not <c>(type, number)</c> identity. Two channels can carry the same
+        /// number and type and still be different objects — the populator builds a new one whenever
+        /// it cannot reuse the old — and anything caching the old instance would keep writing
+        /// samples into a channel the device has replaced.
+        /// </remarks>
+        private static bool MembershipChanged(List<IChannel> current, List<IChannel> updated)
+        {
+            if (current.Count != updated.Count)
+            {
+                return true;
+            }
+
+            for (var i = 0; i < current.Count; i++)
+            {
+                if (!ReferenceEquals(current[i], updated[i]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Runs <paramref name="action"/> under the same lock that guards structural access to
         /// <see cref="_channels"/> and the status-driven <c>IsEnabled</c> resync in
         /// <see cref="PopulateChannelsFromStatus"/>. A subclass's channel-management API (e.g.
@@ -393,6 +473,14 @@ namespace Daqifi.Core.Device
         // snapshot via SnapshotChannels for the device-level channel-management API.
         private readonly object _channelsLock = new();
 
+        // Backing counter for ChannelStateVersion. Interlocked because it is bumped from whichever
+        // thread changed a channel and read from the message-consumer thread.
+        private long _channelStateVersion;
+
+        // Translates a status frame's channel description into channel instances. Stateless, so
+        // it is built once per device and reused for every population.
+        private readonly StatusChannelPopulator _channelPopulator;
+
         /// <summary>
         /// Default time <see cref="InitializeAsync"/> waits for the device to report its
         /// channel configuration (via the <see cref="ChannelsPopulated"/> event) before
@@ -409,6 +497,35 @@ namespace Daqifi.Core.Device
         private static readonly TimeSpan ChannelPopulationPollInterval = TimeSpan.FromSeconds(1);
 
         /// <summary>
+        /// Default wait for <see cref="RefreshDeviceStatusAsync"/>. A device that is answering at
+        /// all replies in milliseconds; this is a hang detector, not a prediction.
+        /// </summary>
+        private static readonly TimeSpan DefaultStatusRefreshTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// Serializes <see cref="RefreshDeviceStatusAsync"/>. Two concurrent refreshes would both
+        /// subscribe to the same multicast <see cref="StatusMessageReceived"/> event, and a single
+        /// incoming frame -- which answers only one of the two requests -- would complete both, so
+        /// the loser would return a success not tied to its own request.
+        /// </summary>
+        private readonly SemaphoreSlim _statusRefreshGate = new(1, 1);
+
+        /// <summary>
+        /// The waiter for an in-flight <see cref="RefreshDeviceStatusAsync"/>, invoked directly
+        /// rather than through the public <see cref="StatusMessageReceived"/> event.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="RaiseClassifiedEvent"/> wraps the WHOLE multicast delegate in one try/catch,
+        /// which isolates the device from a throwing subscriber but not subscribers from each
+        /// other: .NET stops invoking an invocation list at the first exception, so a consumer
+        /// that subscribed earlier and throws would prevent the refresh from ever seeing its own
+        /// reply -- and it would time out while the status it asked for had already been applied.
+        /// Only one refresh runs at a time (<see cref="_statusRefreshGate"/>), so a single field
+        /// is enough.
+        /// </remarks>
+        private Action<DaqifiOutMessage>? _statusRefreshWaiter;
+
+        /// <summary>
         /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
         /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
         /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
@@ -422,26 +539,17 @@ namespace Daqifi.Core.Device
         /// </summary>
         private const int InitScpiErrorRetryDelayMs = 150;
 
-        // THE device operation lock. Originally introduced to serialize ExecuteTextCommandAsync
-        // calls device-wide (closes #186): multiple callers — e.g. concurrent GetSdCardFilesAsync /
-        // DrainErrorQueueAsync / GetSystemInfoAsync — would otherwise race the protobuf-consumer
-        // pause/swap/restart sequence on the same stream and either intermix SCPI bytes on the wire
-        // or interleave reply lines between callers' returned lists.
-        //
-        // It is now also what RunExclusiveAsync takes (closes #342), so a caller can declare a
-        // multi-command sequence indivisible and have text exchanges, deferred Send()s and teardown
-        // all coordinate against the same one lock. Deliberately ONE lock rather than an operation
-        // lock layered over the text-exchange lock: two locks would need an ordering, and the code
-        // that would have to respect it (Disconnect, Dispose, the reconnect loop, every SD
-        // operation) is exactly the code that must never deadlock. The field name is unchanged
-        // because the text exchange is still its busiest user.
-        //
-        // SemaphoreSlim chosen over Lock because the holders are async; counter is (1, 1) for
-        // mutual exclusion. Not reentrant, so re-entry is tracked by _operationLockGeneration below.
-        private readonly SemaphoreSlim _textExchangeLock = new(1, 1);
+        /// <summary>
+        /// Owns THE device operation lock and the backlog of sends parked behind it. Every text
+        /// exchange, every <see cref="RunExclusiveAsync{TResult}"/> block, every deferred
+        /// <see cref="Send{T}"/> and both teardown paths coordinate through this one collaborator
+        /// (issues #186, #342; extracted by #480).
+        /// </summary>
+        private readonly OperationSerializer _operations;
 
         // Async-context flag that tracks whether the current logical flow
-        // is inside the consumer swap of ExecuteTextCommandAsync. AsyncLocal flows across await
+        // is inside a consumer swap — ExecuteTextCommandAsync's or ExecuteRawCaptureAsync's; both
+        // stop the protobuf consumer and take the stream. AsyncLocal flows across await
         // resumptions on different threads, so a setupAction that re-enters
         // ExecuteTextCommandAsync after a ConfigureAwait(false) hop is still
         // detected and surfaced as InvalidOperationException — instead of
@@ -449,13 +557,14 @@ namespace Daqifi.Core.Device
         // Environment.CurrentManagedThreadId capture wouldn't work — the
         // value seen before await may not match the value seen after.
         //
-        // Distinct from _operationLockGeneration: this one says "a consumer swap is in progress on this
-        // flow" (nesting is a bug), that one says "this flow holds the lock" (nesting is fine).
+        // Distinct from OperationSerializer's ownership generation: this one says "a consumer swap
+        // is in progress on this flow" (nesting is a bug), that one says "this flow holds the lock"
+        // (nesting is fine).
         private readonly AsyncLocal<bool> _isInsideTextExchange = new();
 
         /// <summary>
-        /// How long <see cref="Disconnect"/> / <see cref="DisconnectAsync"/> wait to acquire
-        /// <c>_textExchangeLock</c> before tearing down anyway. See the remarks on
+        /// How long <see cref="Disconnect"/> / <see cref="DisconnectAsync"/> wait to acquire the
+        /// operation lock before tearing down anyway. See the remarks on
         /// <see cref="Disconnect"/> for how the budget is derived.
         /// </summary>
         private static readonly TimeSpan TextExchangeTeardownWait = TimeSpan.FromSeconds(10);
@@ -471,15 +580,107 @@ namespace Daqifi.Core.Device
             {
                 if (_status == value) return;
                 _status = value;
-                StatusChanged?.Invoke(this, new DeviceStatusEventArgs(_status));
+                RaiseConnectionStatusChanged(_status);
+                RaiseStatusChanged(_status);
+            }
+        }
+
+        /// <summary>
+        /// Tells a derived device inside this library that the connection status has changed, before
+        /// consumers are notified on <see cref="StatusChanged"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Internal rather than protected: this is wiring between this class and the collaborators
+        /// the library ships, not an extension point. It exists because some of those collaborators
+        /// hold work that only makes sense on a live session — the live-sample enumerations behind
+        /// <see cref="DaqifiStreamingDevice.StreamSamplesAsync"/>, which used to park forever once
+        /// the device went away (issue #496).
+        /// </para>
+        /// <para>
+        /// Runs before <see cref="StatusChanged"/> so that a consumer's handler already sees the
+        /// library's own reaction as done, and is isolated by <see cref="RaiseConnectionStatusChanged"/>
+        /// exactly as a consumer's handler is. An override still has no business throwing, but a
+        /// transition is never allowed to fail — that is the whole of issue #494, and the rule cannot
+        /// be weaker for the library's own code than it is for a consumer's.
+        /// </para>
+        /// </remarks>
+        /// <param name="status">The status the device has just moved to.</param>
+        internal virtual void OnConnectionStatusChanged(ConnectionStatus status)
+        {
+        }
+
+        /// <summary>
+        /// Calls <see cref="OnConnectionStatusChanged"/>, isolating a throwing override from the
+        /// transition it is reacting to.
+        /// </summary>
+        /// <remarks>
+        /// The same guarantee, for the same reason, as <see cref="RaiseStatusChanged"/> one line
+        /// further on: this runs on the drop path, where an escaping exception used to skip the
+        /// reconnect start and unwind into the transport before it had released the port handle
+        /// (issue #494). A failure here is reported on <see cref="ErrorOccurred"/> and the transition
+        /// completes regardless.
+        /// </remarks>
+        private void RaiseConnectionStatusChanged(ConnectionStatus status)
+        {
+            try
+            {
+                OnConnectionStatusChanged(status);
+            }
+            catch (Exception ex)
+            {
+                RaiseDeviceError(DeviceErrorSource.StatusNotification, ex);
             }
         }
 
         /// <summary>
         /// Occurs when the device status changes.
         /// </summary>
+        /// <remarks>
+        /// Raised on whichever thread observed the change — for a drop, a background watchdog or
+        /// reader thread. A subscriber that throws (a UI framework's cross-thread
+        /// <see cref="InvalidOperationException"/> is the usual one) is isolated: the exception is
+        /// reported on <see cref="ErrorOccurred"/> as
+        /// <see cref="DeviceErrorSource.StatusNotification"/> and the transition completes
+        /// regardless.
+        /// </remarks>
         public event EventHandler<DeviceStatusEventArgs>? StatusChanged;
-        
+
+        /// <summary>
+        /// Raises <see cref="StatusChanged"/>, isolating everything downstream of the transition
+        /// from a subscriber that throws — the same guarantee <see cref="RaiseDeviceError"/>,
+        /// <see cref="RaiseReconnectEvent{TArgs}"/> and <c>SendFailed</c> already give.
+        /// </summary>
+        /// <remarks>
+        /// The drop path is what makes this load-bearing (issue #494). A drop runs
+        /// <c>transport.HandleConnectionLost</c> → <see cref="OnTransportStatusChanged"/> →
+        /// <c>Status = Lost</c> → this event → <c>BeginReconnectIfEnabled</c>, all on one thread.
+        /// An escaping subscriber exception used to skip the reconnect start entirely (so
+        /// <see cref="ReconnectOptions.Enabled"/> silently did nothing) and unwind back into the
+        /// transport before it had released the port handle, leaving the OS port claimed until the
+        /// process exited. It then vanished into a background loop's catch, so the consumer saw a
+        /// dead, unreconnectable device with no error at all.
+        /// </remarks>
+        private void RaiseStatusChanged(ConnectionStatus status)
+        {
+            var handler = StatusChanged;
+            if (handler == null)
+            {
+                return;
+            }
+
+            try
+            {
+                handler(this, new DeviceStatusEventArgs(status));
+            }
+            catch (Exception ex)
+            {
+                // Logs and raises ErrorOccurred, both isolated: a status change is never allowed to
+                // fail, so this must not throw either.
+                RaiseDeviceError(DeviceErrorSource.StatusNotification, ex);
+            }
+        }
+
         /// <summary>
         /// Occurs when a message is received from the device.
         /// </summary>
@@ -599,6 +800,14 @@ namespace Daqifi.Core.Device
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
             _logger = logger ?? NullLogger.Instance;
+            _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
+            _lifecycleGate = new LifecycleGate(
+                _logger,
+                () => Name,
+                () => LifecycleLockTimeout,
+                () => TeardownLockTimeout);
+            _textExchange = new TextExchangeEngine(this);
+            _operations = new OperationSerializer(this);
         }
 
         /// <summary>
@@ -614,6 +823,14 @@ namespace Daqifi.Core.Device
             IpAddress = ipAddress;
             _status = ConnectionStatus.Disconnected;
             _logger = logger ?? NullLogger.Instance;
+            _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
+            _lifecycleGate = new LifecycleGate(
+                _logger,
+                () => Name,
+                () => LifecycleLockTimeout,
+                () => TeardownLockTimeout);
+            _textExchange = new TextExchangeEngine(this);
+            _operations = new OperationSerializer(this);
             _messageProducer = new MessageProducer<string>(stream);
             _messageProducer.SendFailed += OnMessageSendFailed;
             _directStream = stream;
@@ -630,6 +847,14 @@ namespace Daqifi.Core.Device
             Name = name;
             _status = ConnectionStatus.Disconnected;
             _logger = logger ?? NullLogger.Instance;
+            _channelPopulator = new StatusChannelPopulator(_logger, () => Name);
+            _lifecycleGate = new LifecycleGate(
+                _logger,
+                () => Name,
+                () => LifecycleLockTimeout,
+                () => TeardownLockTimeout);
+            _textExchange = new TextExchangeEngine(this);
+            _operations = new OperationSerializer(this);
             _transport = transport;
 
             // Subscribe to transport status changes
@@ -640,46 +865,17 @@ namespace Daqifi.Core.Device
 
         /// <summary>
         /// Serializes connect against disconnect, on both the synchronous and the asynchronous
-        /// paths.
+        /// paths, so the device never drives its transport from two threads at once. See
+        /// <see cref="LifecycleGate"/> for why that invariant exists and what each contention
+        /// policy does.
         /// </summary>
         /// <remarks>
-        /// <para>
-        /// Automatic reconnection (issue #379) introduced a second thread that opens and closes the
-        /// transport, and cancellation is not synchronization: <see cref="SupersedeReconnect"/>
-        /// asks the loop to stop and returns immediately, but a loop already inside a blocking
-        /// <c>Connect()</c> cannot be interrupted and will run to completion. Without this, a
-        /// caller's <see cref="Disconnect"/> could be opening and closing the same serial port
-        /// concurrently, and both threads could build and start a message consumer — leaving two
-        /// readers on one stream, the framing corruption this class refuses to risk anywhere else.
-        /// </para>
-        /// <para>
-        /// Narrow on purpose. This is an internal lifecycle invariant — the device never drives its
-        /// own transport from two threads at once — and deliberately <b>not</b> the general
-        /// per-device operation serialization of issue #342, which has to decide ordering across
-        /// the whole public API and interacts with <c>_textExchangeLock</c>. Nothing here changes
-        /// what any public method does when uncontended.
-        /// </para>
-        /// <para>
-        /// A semaphore rather than a monitor because <see cref="ConnectAsync"/> and
-        /// <see cref="DisconnectAsync"/> hold it across <c>await</c>, which a monitor cannot do —
-        /// its continuation may resume on a different thread. Semaphores are not reentrant, so
-        /// re-entry is tracked separately by <see cref="_isInsideLifecycleOperation"/>.
-        /// </para>
+        /// The timeouts are handed over as delegates so the gate reads them at the moment of
+        /// contention: they are <c>virtual</c> below precisely so a test can shorten them, and a
+        /// test subclass sets its override through an <c>init</c> property that runs after this
+        /// constructor. Reading them here would capture the defaults and ignore every override.
         /// </remarks>
-        private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
-
-        /// <summary>
-        /// True while the current logical flow already holds <see cref="_lifecycleLock"/>.
-        /// </summary>
-        /// <remarks>
-        /// Both connect and disconnect raise <see cref="StatusChanged"/> from inside their critical
-        /// section, and a consumer handler calling <see cref="Disconnect"/> from there is re-entry
-        /// on the same flow — which runs nested today with no lock at all and must keep working
-        /// rather than deadlock against a non-reentrant semaphore. <see cref="AsyncLocal{T}"/>
-        /// rather than a thread id so it survives an <c>await</c> resuming on another thread, the
-        /// same technique <c>_isInsideTextExchange</c> already uses in this class.
-        /// </remarks>
-        private readonly AsyncLocal<bool> _isInsideLifecycleOperation = new();
+        private readonly LifecycleGate _lifecycleGate;
 
         /// <summary>
         /// How long <see cref="Connect"/> waits for a lifecycle operation already in flight before
@@ -695,309 +891,48 @@ namespace Daqifi.Core.Device
         /// </summary>
         internal virtual TimeSpan TeardownLockTimeout => TimeSpan.FromSeconds(30);
 
-        /// <summary>
-        /// What a lifecycle operation does when it cannot have <see cref="_lifecycleLock"/> to
-        /// itself. Running anyway is deliberately not an option: the whole point of the lock is
-        /// that two threads must never drive the transport at once, and a guarantee with a
-        /// "proceed regardless" branch is not a guarantee.
-        /// </summary>
-        private enum LifecycleContention
-        {
-            /// <summary>
-            /// Give up and throw rather than run alongside. For <see cref="Connect"/>: nothing has
-            /// been opened, so failing costs the caller a retry and nothing else.
-            /// </summary>
-            Fail,
-
-            /// <summary>
-            /// Give up and report it, leaving the operation in flight alone. For
-            /// <see cref="Disconnect"/>: the caller is told nothing was torn down rather than being
-            /// blocked forever behind a holder that may never return.
-            /// </summary>
-            Abandon
-        }
-
-        /// <summary>
-        /// The wait a contention policy allows, and what to do when it runs out.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// The two callers want opposite things from contention, so neither a shared timeout nor a
-        /// shared fallback would suit both.
-        /// </para>
-        /// <para>
-        /// <b><see cref="Connect"/> fails.</b> It waits <see cref="LifecycleLockTimeout"/> and then
-        /// throws. Opening a second connection alongside one already in flight is exactly what this
-        /// lock exists to prevent — both threads would find no message consumer, both would build
-        /// and start one, and the loser's reader would be left running on the same stream, silently
-        /// corrupting frame boundaries for the rest of the session. A caller who gets a
-        /// <see cref="TimeoutException"/> instead has lost nothing: no handle was opened, no state
-        /// changed, and they can try again.
-        /// </para>
-        /// <para>
-        /// <b><see cref="Disconnect"/> abandons.</b> It waits <see cref="TeardownLockTimeout"/> —
-        /// far longer, because a teardown that gives up early is a teardown that did not happen —
-        /// and then reports that it did not run, leaving the holder alone. It must not throw
-        /// (<c>Dispose</c> depends on it) and must not run alongside (that is the corruption
-        /// above). An unbounded wait is not an option either: <c>SerialPort.Open</c> is called
-        /// synchronously with no timeout and can wedge in uncancellable native I/O — a hazard this
-        /// codebase already knows well enough to have built a process-wide port quarantine around
-        /// it in <see cref="Discovery.SerialDeviceFinder"/> — so waiting on it forever would turn
-        /// <c>Dispose</c> into a permanent block. Abandoning the stuck operation is the house
-        /// answer to uncancellable native I/O here.
-        /// </para>
-        /// </remarks>
-        private TimeSpan ContentionWait(LifecycleContention onContention) =>
-            onContention == LifecycleContention.Abandon ? TeardownLockTimeout : LifecycleLockTimeout;
-
-        /// <summary>
-        /// Builds the failure for a connect that could not have the lock to itself.
-        /// </summary>
-        private TimeoutException LifecycleTimeout(TimeSpan timeout)
-        {
-            SafeLog(() => _logger.LogError(
-                "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
-                + "within {TimeoutSeconds}s; refusing to connect alongside the operation in flight.",
-                Name,
-                timeout.TotalSeconds));
-
-            return new TimeoutException(
-                $"Device '{Name}' could not start connecting within "
-                + $"{timeout.TotalSeconds:0.#}s because another connect or disconnect "
-                + "was still in progress. Nothing was opened; retry once it has finished.");
-        }
-
-        /// <summary>Reports a teardown that gave up waiting for a stuck lifecycle operation.</summary>
-        private void LogAbandonedTeardown(TimeSpan timeout) =>
-            SafeLog(() => _logger.LogError(
-                "[Lifecycle] Device '{DeviceName}' could not take the connect/disconnect lock "
-                + "within {TimeoutSeconds}s, so nothing was torn down. A connect is most likely "
-                + "wedged in uncancellable native I/O; it will release its own session when it "
-                + "returns.",
-                Name,
-                timeout.TotalSeconds));
-
-        /// <summary>
-        /// Runs a lifecycle operation under <see cref="_lifecycleLock"/>, never alongside another.
-        /// See <see cref="ContentionWait"/> for the per-policy semantics.
-        /// </summary>
-        /// <returns><c>true</c> if the operation ran; <c>false</c> if the wait was abandoned.</returns>
-        /// <exception cref="TimeoutException">
-        /// Thrown when <paramref name="onContention"/> is <see cref="LifecycleContention.Fail"/> and
-        /// another lifecycle operation held the lock for the whole timeout.
-        /// </exception>
-        private bool RunLifecycleExclusive(Action operation, LifecycleContention onContention)
-        {
-            // Re-entry from inside the critical section (a StatusChanged handler calling back in)
-            // proceeds without acquiring, exactly as a reentrant monitor would.
-            if (_isInsideLifecycleOperation.Value)
-            {
-                operation();
-                return true;
-            }
-
-            var timeout = ContentionWait(onContention);
-            var acquired = false;
-
-            try
-            {
-                acquired = _lifecycleLock.Wait(timeout);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Disposed underneath us; there is nothing left to serialize against.
-                operation();
-                return true;
-            }
-
-            if (!acquired)
-            {
-                if (onContention == LifecycleContention.Abandon)
-                {
-                    LogAbandonedTeardown(timeout);
-                    return false;
-                }
-
-                throw LifecycleTimeout(timeout);
-            }
-
-            _isInsideLifecycleOperation.Value = true;
-            try
-            {
-                operation();
-                return true;
-            }
-            finally
-            {
-                _isInsideLifecycleOperation.Value = false;
-                ReleaseLifecycleLock();
-            }
-        }
-
-        /// <inheritdoc cref="RunLifecycleExclusive"/>
-        private async Task<bool> RunLifecycleExclusiveAsync(
-            Func<Task> operation,
-            LifecycleContention onContention,
-            CancellationToken cancellationToken)
-        {
-            if (_isInsideLifecycleOperation.Value)
-            {
-                await operation().ConfigureAwait(false);
-                return true;
-            }
-
-            var timeout = ContentionWait(onContention);
-            var isTeardown = onContention == LifecycleContention.Abandon;
-            var acquired = false;
-
-            // A teardown's token is NOT allowed to govern this wait. Issue #341 defines what the
-            // token means for DisconnectAsync — it shortens the courtesy wait for an in-flight
-            // command exchange, never aborts the disconnect, and never surfaces as an
-            // OperationCanceledException — and this lock is a second, later wait that contract
-            // never covered. Passing the token here made a cancelled DisconnectAsync skip teardown
-            // altogether and report Disconnected with the transport still open and the message
-            // pumps still running; and because SemaphoreSlim throws for an already-cancelled token
-            // even when the semaphore is free, that happened on every cancelled disconnect, not
-            // just a contended one. The wait stays bounded by TeardownLockTimeout, which is what
-            // protects against a genuinely wedged holder (issue #379). The token still reaches
-            // AcquireTextExchangeLockForTeardownAsync inside the teardown, where it means what
-            // #341 says it means.
-            //
-            // The connect path is the opposite case and does honour the token: ConnectAsync is
-            // documented to be abandonable and to throw OperationCanceledException.
-            var acquireToken = isTeardown ? CancellationToken.None : cancellationToken;
-
-            try
-            {
-                acquired = await _lifecycleLock.WaitAsync(timeout, acquireToken).ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException)
-            {
-                await operation().ConfigureAwait(false);
-                return true;
-            }
-
-            if (!acquired)
-            {
-                if (isTeardown)
-                {
-                    LogAbandonedTeardown(timeout);
-                    return false;
-                }
-
-                throw LifecycleTimeout(timeout);
-            }
-
-            _isInsideLifecycleOperation.Value = true;
-            try
-            {
-                await operation().ConfigureAwait(false);
-                return true;
-            }
-            finally
-            {
-                _isInsideLifecycleOperation.Value = false;
-                ReleaseLifecycleLock();
-            }
-        }
-
-        private void ReleaseLifecycleLock()
-        {
-            try
-            {
-                _lifecycleLock.Release();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Raced a Dispose that already tore the semaphore down.
-            }
-        }
-
         #endregion
 
         #region Operation serialization (issue #342)
 
         /// <summary>
-        /// The session generation in which the current logical flow acquired
-        /// <c>_textExchangeLock</c>, or 0 when it does not hold it.
+        /// The most messages <see cref="Send{T}"/> will park while another flow owns the device
+        /// before it starts discarding the oldest of them.
         /// </summary>
         /// <remarks>
-        /// Set by <see cref="RunExclusiveAsync{TResult}"/> and by the text exchange.
-        /// <see cref="AsyncLocal{T}"/> rather than a thread id so it survives an <c>await</c>
-        /// resuming on another thread — the same technique <c>_isInsideLifecycleOperation</c> and
-        /// <c>_isInsideTextExchange</c> use.
-        /// <para>
-        /// A generation rather than a bool because holding the lock and owning the <i>current
-        /// session</i> are different questions, and teardown separates them. See
-        /// <see cref="HoldsOperationLock"/> and <see cref="OwnsCurrentSession"/>.
-        /// </para>
+        /// Exclusive operations can be very long — an SD card download is allowed thirty minutes and
+        /// a firmware update longer — so an uncapped backlog grows with the sender's rate for as
+        /// long as the operation runs, and then fires every one of those stale commands at the
+        /// device in a burst when it ends. The cap is far above any backlog an ordinary text query
+        /// can build (those are measured in milliseconds), so it only ever engages on the long
+        /// exclusive operations it exists for.
         /// </remarks>
-        private readonly AsyncLocal<int> _operationLockGeneration = new();
+        public const int DefaultMaxDeferredSends = 1024;
 
         /// <summary>
-        /// Bumped by every teardown, retiring the ownership of any flow that took the lock in an
-        /// earlier session. Starts at 1 so that 0 always means "does not hold the lock".
+        /// The live backlog cap. A seam for tests, which need a small cap to reach the drop path in
+        /// bounded time; production always reads <see cref="DefaultMaxDeferredSends"/>. Values below
+        /// one are clamped, so an override can never make the append path throw.
         /// </summary>
-        private int _operationGeneration = 1;
+        internal virtual int MaxDeferredSends => DefaultMaxDeferredSends;
 
         /// <summary>
-        /// True when this flow acquired the operation lock — in <i>any</i> session.
+        /// Gets the cumulative number of messages passed to <see cref="Send{T}"/> that were
+        /// discarded because the backlog of messages parked during an exclusive operation was full
+        /// (drop-oldest policy, capped at <see cref="DefaultMaxDeferredSends"/>). A non-zero and
+        /// growing value means commands are being issued faster than a long-running exclusive
+        /// operation can let them out.
+        /// </summary>
+        public long DroppedDeferredSendCount => _operations.DroppedDeferredSendCount;
+
+        /// <summary>
+        /// How long the text exchange lets the outbound queue drain before it takes the stream.
         /// </summary>
         /// <remarks>
-        /// This is the re-entrancy question, and it must stay session-blind. A flow that holds the
-        /// semaphore must never be told to wait for it, whatever has happened to the session in the
-        /// meantime: <c>ExecuteTextCommandAsync</c> waits on it without a timeout, so answering
-        /// "no" to a flow that really does hold it is not a degraded result, it is a hang.
+        /// Short on purpose: it is only covering messages queued microseconds before the exchange
+        /// opened, and the exchange has its own stale-line boundary as a backstop.
         /// </remarks>
-        private bool HoldsOperationLock => _operationLockGeneration.Value != 0;
-
-        /// <summary>
-        /// True when this flow acquired the operation lock in the session that is still current.
-        /// </summary>
-        /// <remarks>
-        /// This is the authority question, and it is the one <see cref="Send{T}"/> asks before
-        /// skipping deferral. Exclusivity is a property of a session: once the transport has been
-        /// torn down and a new one opened, a flow still running from the old session is not the
-        /// owner of the new one and its sends must queue behind that session's rules like anybody
-        /// else's. Without this, a flow that outlived its teardown would keep bypassing deferral
-        /// into a session it has no claim on.
-        /// </remarks>
-        private bool OwnsCurrentSession =>
-            _operationLockGeneration.Value != 0
-            && _operationLockGeneration.Value == Volatile.Read(ref _operationGeneration);
-
-        /// <summary>
-        /// Guards <see cref="_operationInFlight"/> and <see cref="_deferredSends"/> as one unit.
-        /// </summary>
-        /// <remarks>
-        /// They have to move together or the deferral leaks: checking the flag and parking the
-        /// message in two steps lets an operation finish in between, leaving a message in a list
-        /// nobody will ever flush.
-        /// </remarks>
-        private readonly object _deferralGate = new();
-
-        /// <summary>True while some flow owns the operation lock.</summary>
-        private bool _operationInFlight;
-
-        /// <summary>
-        /// The backlog: sends parked by <see cref="Send{T}"/> because another flow held the
-        /// operation lock. Replayed, in order, by that flow on its way out.
-        /// </summary>
-        /// <remarks>
-        /// Non-null means "a backlog exists", and that is itself a reason to keep deferring — a
-        /// message sent straight out while this is draining would overtake messages parked before
-        /// it. It therefore stays non-null (and may be empty) for the whole drain, and is nulled
-        /// only in the same locked moment the drain observes it empty.
-        /// </remarks>
-        private Queue<Action>? _deferredSends;
-
-        /// <summary>
-        /// Serializes writes on the producer-less path, where <see cref="Send{T}"/> writes to the
-        /// stream on the caller's own thread. Two threads writing a stream concurrently is the one
-        /// place SCPI bytes really can interleave mid-command; the queued path is already safe
-        /// because a single producer thread does every write.
-        /// </summary>
-        private readonly object _directWriteGate = new();
+        internal virtual TimeSpan OutboundDrainWait => TimeSpan.FromMilliseconds(250);
 
         /// <summary>
         /// Runs <paramref name="operation"/> with exclusive use of the device: no other operation,
@@ -1015,7 +950,9 @@ namespace Daqifi.Core.Device
         /// While the operation runs, a <see cref="Send{T}"/> from another thread is <b>deferred</b>,
         /// not blocked: it returns immediately, as fire-and-forget always has, and the message goes
         /// out in order once this operation finishes. Text queries from other threads wait, exactly
-        /// as they already waited for each other.
+        /// as they already waited for each other. A long operation paired with a busy sender can
+        /// park more than the backlog holds, in which case the oldest parked messages are dropped —
+        /// see <see cref="Send{T}"/> and <see cref="DroppedDeferredSendCount"/>.
         /// </para>
         /// <para>
         /// Reentrant on the same logical flow, so the body is free to call anything on the device,
@@ -1062,339 +999,10 @@ namespace Daqifi.Core.Device
         {
             ArgumentNullException.ThrowIfNull(operation);
 
-            // Already ours: run nested, exactly as a reentrant monitor would. This is what lets an
-            // exclusive block call GetSdCardFilesAsync — which opens a text exchange on this same
-            // lock — instead of deadlocking against a non-reentrant semaphore.
-            if (HoldsOperationLock)
-            {
-                return await operation(cancellationToken).ConfigureAwait(false);
-            }
-
-            await AcquireOperationLockAsync(cancellationToken).ConfigureAwait(false);
-
-            // Set HERE rather than inside the helper above: an async method's AsyncLocal writes do
-            // not flow back to its caller, only forward to its callees. Assigning it in this frame
-            // is what makes the body — and everything the body awaits — see the ownership.
-            _operationLockGeneration.Value = Volatile.Read(ref _operationGeneration);
-            MarkOperationInFlight();
-
-            try
-            {
-                return await operation(cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                _operationLockGeneration.Value = 0;
-                FlushDeferredSends();
-                ReleaseOperationLock();
-            }
-        }
-
-        /// <summary>
-        /// Waits for the operation lock, translating a disposed semaphore into the same clean
-        /// failure every other caller of this lock reports.
-        /// </summary>
-        private async Task AcquireOperationLockAsync(CancellationToken cancellationToken)
-        {
-            try
-            {
-                await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException ex)
-            {
-                throw new DeviceNotConnectedException(
-                    "No operation can run exclusively on this device because it is disposed.",
-                    ex,
-                    isShuttingDown: true);
-            }
-        }
-
-        /// <summary>
-        /// Publishes "an operation owns the device" so <see cref="Send{T}"/> starts deferring.
-        /// </summary>
-        private void MarkOperationInFlight()
-        {
-            lock (_deferralGate)
-            {
-                _operationInFlight = true;
-            }
-        }
-
-        /// <summary>
-        /// How many parked messages one operation will replay on its way out before handing the
-        /// rest to a background flush.
-        /// </summary>
-        /// <remarks>
-        /// A bound is needed because the operation holding the device is the one doing the
-        /// replaying, and senders can refill the backlog while it works — without a bound, a fast
-        /// enough sender would keep that operation from ever returning, with the operation lock
-        /// held and everything else queued behind it.
-        /// </remarks>
-        private const int MaxDeferredSendsPerFlush = 64;
-
-        /// <summary>
-        /// Sends everything parked while the operation ran, in order, and only then stops deferring.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// Called before the semaphore is released, so the parked messages are queued ahead of
-        /// whatever the next operation does.
-        /// </para>
-        /// <para>
-        /// Deferral stays <b>on</b> for the whole replay. Clearing the flag first and replaying
-        /// afterwards would leave a window where another thread sees "nothing in flight", sends
-        /// straight to the producer, and overtakes messages parked before it — losing exactly the
-        /// ordering this mechanism exists to keep.
-        /// </para>
-        /// <para>
-        /// Every replay runs <i>outside</i> <see cref="_deferralGate"/> — always, with no exception
-        /// for a final round. A replayed send can be a blocking stream write, and
-        /// <see cref="Send{T}"/> takes that same gate, so replaying under it would make
-        /// <c>Send()</c> block on I/O: the exact property deferral was chosen over waiting to
-        /// preserve. Messages are therefore taken one at a time, and the backlog stays non-null
-        /// while the drain runs, which is what keeps a concurrent send parking behind it instead of
-        /// overtaking it.
-        /// </para>
-        /// <para>
-        /// Bounded by <see cref="MaxDeferredSendsPerFlush"/> so a fast sender cannot keep this
-        /// operation from returning. Past that the rest is handed to a background flush, which takes
-        /// the operation lock exactly as any operation does — so it can never replay into somebody
-        /// else's exchange — and drains the same way. The backlog stays non-null across the handoff,
-        /// so ordering survives it.
-        /// </para>
-        /// <para>
-        /// A parked send that fails is logged and dropped rather than thrown: the caller was told
-        /// the message was accepted before this point, and <see cref="Send{T}"/> has never
-        /// guaranteed delivery. The usual case is a device that disconnected while the operation
-        /// ran, where throwing here would surface a teardown as the operation's failure.
-        /// </para>
-        /// </remarks>
-        private void FlushDeferredSends()
-        {
-            for (var sent = 0; sent < MaxDeferredSendsPerFlush; sent++)
-            {
-                Action next;
-                lock (_deferralGate)
-                {
-                    if (_deferredSends == null || _deferredSends.Count == 0)
-                    {
-                        // Drained. Deferral stops here, in the same locked moment that emptiness is
-                        // observed, so no message can be parked into a backlog nobody will drain.
-                        _deferredSends = null;
-                        _operationInFlight = false;
-                        return;
-                    }
-
-                    next = _deferredSends.Dequeue();
-                }
-
-                // Outside the gate on purpose: this can block on a stream write, and Send() takes
-                // the same gate. The backlog is still non-null, so a send arriving now parks behind
-                // what is being replayed rather than overtaking it.
-                ReplayDeferredSend(next);
-            }
-
-            HandOffRemainingDrain();
-        }
-
-        /// <summary>
-        /// Hands an unfinished backlog to a background flush so the current operation can return.
-        /// </summary>
-        /// <remarks>
-        /// An empty exclusive operation <i>is</i> a flush: it takes the operation lock, and its own
-        /// exit path drains the backlog exactly as this one did. Going through the lock is the point
-        /// — a bare background replay could write into a text exchange that started in the meantime.
-        /// <see cref="_operationInFlight"/> is deliberately left set and the backlog left non-null,
-        /// so sends keep deferring across the handoff and ordering holds; whichever operation next
-        /// reaches its exit path (this background one, or a real one that got the lock first) clears
-        /// them.
-        /// </remarks>
-        private void HandOffRemainingDrain()
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await RunExclusiveAsync(_ => Task.CompletedTask).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    // The only way in is a disposed device, where nothing else can be running and
-                    // these sends can never reach anything. Drop the backlog rather than leave
-                    // Send() deferring into one nobody will drain.
-                    lock (_deferralGate)
-                    {
-                        _deferredSends = null;
-                        _operationInFlight = false;
-                    }
-
-                    SafeLog(() => _logger.LogWarning(
-                        ex,
-                        "Messages deferred while an exclusive operation was running were dropped: "
-                        + "the device went away before they could be sent."));
-                }
-            });
-        }
-
-        /// <summary>Sends one parked message, never throwing.</summary>
-        private void ReplayDeferredSend(Action send)
-        {
-            try
-            {
-                send();
-            }
-            catch (Exception ex)
-            {
-                SafeLog(() => _logger.LogWarning(
-                    ex,
-                    "A message deferred while an exclusive operation was running could not be "
-                    + "sent afterwards; it was dropped."));
-            }
-        }
-
-        /// <summary>
-        /// Returns deferral to its resting state: nothing parked, nothing deferring.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// Called when a session is torn down. The parked commands were addressed to a connection
-        /// that no longer exists, and — the part that matters — the "an operation owns the device"
-        /// flag has to go with them.
-        /// </para>
-        /// <para>
-        /// Both, or neither. Dropping the backlog while leaving the flag set is the same hazard
-        /// wearing a different hat: the next session would park every <see cref="Send{T}"/> into a
-        /// fresh backlog with nothing left to drain it, and because <c>Send()</c> reports success
-        /// the moment it parks, the caller would be told the command was on its way while it
-        /// silently went nowhere. Teardown is exactly where that gets stranded, because the
-        /// operation whose completion would normally clear the flag is the one that failed to
-        /// finish inside the bounded wait.
-        /// </para>
-        /// <para>
-        /// The generation bump is what makes the reset safe when a wedged operation is still
-        /// holding the lock. Clearing the flag alone would leave that flow bypassing deferral —
-        /// <see cref="TryDeferSend"/> asks <see cref="OwnsCurrentSession"/> <i>before</i> it looks
-        /// at the flag — so it would keep sending into the next session as though it still owned
-        /// it. Retiring the generation ends that claim: the flow keeps the semaphore (only it can
-        /// release it, and its exit path still must) but stops counting as the owner of a session
-        /// that has been replaced.
-        /// </para>
-        /// <para>
-        /// Note what is deliberately <b>not</b> done here: the reset is unconditional, and in
-        /// particular is not gated on teardown having acquired the lock. Gating it would strand
-        /// <see cref="_operationInFlight"/> exactly when the lock could not be taken — the case a
-        /// bounded teardown exists for — leaving the next session deferring into a backlog with no
-        /// drainer. And it would not achieve isolation either, because the stale flow's bypass does
-        /// not consult that flag at all. What the flag governs is every <i>other</i> flow; gating it
-        /// would silence them and leave the stale one talking.
-        /// </para>
-        /// </remarks>
-        private void ResetDeferralState()
-        {
-            // Retire the outgoing session's ownership before reopening the gate, so no flow can be
-            // both "not deferring" and "not the owner" at the same instant.
-            Interlocked.Increment(ref _operationGeneration);
-
-            lock (_deferralGate)
-            {
-                _deferredSends = null;
-                _operationInFlight = false;
-            }
-        }
-
-        private void ReleaseOperationLock()
-        {
-            try
-            {
-                _textExchangeLock.Release();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Raced a Dispose that already tore the semaphore down.
-            }
-        }
-
-        /// <summary>
-        /// Parks a send if it must not go out yet, and reports whether it did.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// Two reasons to park. An operation owns the device, so writing now would land inside its
-        /// exchange; or a backlog is still being replayed, so writing now would overtake messages
-        /// parked before this one.
-        /// </para>
-        /// <para>
-        /// The flow that owns the lock is never deferred — those are the operation's own commands,
-        /// and parking them would leave the operation waiting for itself.
-        /// </para>
-        /// <para>
-        /// Only ever appends: this holds the gate for a queue insert and nothing else, which is what
-        /// lets <see cref="Send{T}"/> promise it will not block.
-        /// </para>
-        /// </remarks>
-        private bool TryDeferSend<T>(IOutboundMessage<T> message)
-        {
-            if (OwnsCurrentSession)
-            {
-                return false;
-            }
-
-            lock (_deferralGate)
-            {
-                if (!_operationInFlight && _deferredSends == null)
-                {
-                    return false;
-                }
-
-                (_deferredSends ??= new Queue<Action>()).Enqueue(() => SendNow(message));
-                return true;
-            }
-        }
-
-        /// <summary>
-        /// How long the text exchange lets the outbound queue drain before it takes the stream.
-        /// </summary>
-        /// <remarks>
-        /// Short on purpose: it is only covering messages queued microseconds before the exchange
-        /// opened, and the exchange has its own stale-line boundary as a backstop.
-        /// </remarks>
-        internal virtual TimeSpan OutboundDrainWait => TimeSpan.FromMilliseconds(250);
-
-        /// <summary>
-        /// Waits, briefly, for messages queued before this exchange to reach the wire.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// New sends from other threads are already parked by the time this runs, but anything
-        /// queued just before the exchange opened is still on its way out. Written after the
-        /// consumer swap, its reply would land in this exchange's lines instead of the protobuf
-        /// consumer's — a reply matched to the wrong request. Letting the outbound side go quiet
-        /// first puts those replies back where they belong.
-        /// </para>
-        /// <para>
-        /// Waits on <see cref="IMessageProducer{T}.IsIdle"/>, never on
-        /// <c>QueuedMessageCount == 0</c>: the count drops as soon as a message is dequeued, which
-        /// is <i>before</i> it is written, so a count of zero can mean "still writing". That is the
-        /// very case this barrier exists to catch.
-        /// </para>
-        /// <para>
-        /// Bounded, because a device that is not draining its receive buffer must not stall the
-        /// exchange: the stale-line boundary still covers what slips through.
-        /// </para>
-        /// </remarks>
-        private async Task DrainOutboundQueueAsync(CancellationToken cancellationToken)
-        {
-            var producer = _messageProducer;
-            if (producer == null)
-            {
-                return;
-            }
-
-            var deadline = DateTime.UtcNow + OutboundDrainWait;
-            while (!producer.IsIdle && DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
-            }
+            // Delegated whole: the ownership flag the body must observe is an AsyncLocal written in
+            // the serializer's own frame, and the body is that frame's callee. Awaiting here keeps
+            // it that way — see OperationSerializer.RunExclusiveAsync.
+            return await _operations.RunExclusiveAsync(operation, cancellationToken).ConfigureAwait(false);
         }
 
         #endregion
@@ -1435,14 +1043,14 @@ namespace Daqifi.Core.Device
         /// </summary>
         private void ConnectCore()
         {
-            RunLifecycleExclusive(ConnectCoreUnsynchronized, LifecycleContention.Fail);
+            _lifecycleGate.Run(ConnectCoreUnsynchronized, LifecycleContention.Fail);
             HonourTeardownRaisedDuringConnect();
         }
 
         /// <inheritdoc cref="ConnectCore"/>
         private async Task ConnectCoreAsync(CancellationToken cancellationToken)
         {
-            await RunLifecycleExclusiveAsync(
+            await _lifecycleGate.RunAsync(
                 () => ConnectCoreUnsynchronizedAsync(cancellationToken),
                 LifecycleContention.Fail,
                 cancellationToken).ConfigureAwait(false);
@@ -1675,9 +1283,9 @@ namespace Daqifi.Core.Device
         /// Disconnects from the device.
         /// </summary>
         /// <remarks>
-        /// Waits up to 10 seconds to acquire <c>_textExchangeLock</c> before
+        /// Waits up to 10 seconds to acquire the device operation lock before
         /// tearing down the consumer / producer / transport. This prevents
-        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// a race where an in-flight <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// is mid-swap (text consumer running on the stream, protobuf
         /// consumer not yet restarted) and Disconnect rips the transport
         /// out from under it. If the wait times out, Disconnect proceeds
@@ -1727,7 +1335,7 @@ namespace Daqifi.Core.Device
         /// </param>
         private void DisconnectCore(ConnectionStatus finalStatus)
         {
-            if (RunLifecycleExclusive(
+            if (_lifecycleGate.Run(
                     () => DisconnectCoreUnsynchronized(finalStatus),
                     LifecycleContention.Abandon))
             {
@@ -1740,7 +1348,7 @@ namespace Daqifi.Core.Device
         /// <inheritdoc cref="DisconnectCore"/>
         private async Task DisconnectCoreAsync(ConnectionStatus finalStatus, CancellationToken cancellationToken)
         {
-            if (await RunLifecycleExclusiveAsync(
+            if (await _lifecycleGate.RunAsync(
                     () => DisconnectCoreUnsynchronizedAsync(finalStatus, cancellationToken),
                     LifecycleContention.Abandon,
                     cancellationToken).ConfigureAwait(false))
@@ -1865,28 +1473,8 @@ namespace Daqifi.Core.Device
         /// path inside the exchange.
         /// </summary>
         /// <returns><c>true</c> when the lock was acquired and must be released after teardown.</returns>
-        private bool AcquireTextExchangeLockForTeardown()
-        {
-            // This flow already owns the lock — a Disconnect() from inside RunExclusiveAsync, or
-            // from a StatusChanged handler raised within one. Waiting would burn the whole teardown
-            // budget on a lock we are holding ourselves and then tear down anyway; run nested
-            // instead, and leave the release to the owner. Reported as "not acquired" precisely so
-            // FinishDisconnect does not release a lock this teardown never took.
-            if (HoldsOperationLock)
-            {
-                return false;
-            }
-
-            try
-            {
-                return _textExchangeLock.Wait(TextExchangeTeardownWait);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Disconnect called after Dispose — nothing to coordinate.
-                return false;
-            }
-        }
+        private bool AcquireTextExchangeLockForTeardown() =>
+            _operations.TryAcquireForTeardown(TextExchangeTeardownWait);
 
         /// <inheritdoc cref="AcquireTextExchangeLockForTeardown"/>
         /// <param name="cancellationToken">
@@ -1894,30 +1482,8 @@ namespace Daqifi.Core.Device
         /// still run, and the in-flight exchange sees <c>_isDisconnecting == true</c> and bails out
         /// on its own — the same outcome as letting the wait time out.
         /// </param>
-        private async Task<bool> AcquireTextExchangeLockForTeardownAsync(CancellationToken cancellationToken)
-        {
-            // See AcquireTextExchangeLockForTeardown: re-entry from a flow that already owns the
-            // lock runs nested rather than waiting on itself.
-            if (HoldsOperationLock)
-            {
-                return false;
-            }
-
-            try
-            {
-                return await _textExchangeLock.WaitAsync(TextExchangeTeardownWait, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException)
-            {
-                // DisconnectAsync called after Dispose — nothing to coordinate.
-                return false;
-            }
-            catch (OperationCanceledException)
-            {
-                return false;
-            }
-        }
+        private Task<bool> AcquireTextExchangeLockForTeardownAsync(CancellationToken cancellationToken) =>
+            _operations.TryAcquireForTeardownAsync(TextExchangeTeardownWait, cancellationToken);
 
         /// <summary>
         /// Unsubscribes, stops and drops the message producer/consumer. Shared by
@@ -1928,7 +1494,7 @@ namespace Daqifi.Core.Device
             // Unsubscribe from message consumer/producer events
             if (_messageConsumer != null)
             {
-                _messageConsumer.MessageReceived -= OnInboundMessageReceived;
+                DetachInboundMessages(_messageConsumer);
                 _messageConsumer.ErrorOccurred -= OnConsumerErrorOccurred;
             }
 
@@ -1976,16 +1542,10 @@ namespace Daqifi.Core.Device
             // Deferral goes back to its resting state with the session. Both halves — the parked
             // commands and the "an operation owns the device" flag — or the next session defers
             // into a backlog nobody will drain and loses messages silently.
-            ResetDeferralState();
+            _operations.ResetDeferralState();
             if (lockAcquired)
             {
-                try
-                {
-                    _textExchangeLock.Release();
-                }
-                catch (ObjectDisposedException)
-                {
-                }
+                _operations.ReleaseAfterTeardown();
             }
         }
 
@@ -2006,27 +1566,38 @@ namespace Daqifi.Core.Device
         /// command written while a text query owns the stream gets its reply mixed into that
         /// query's answer.
         /// </para>
+        /// <para>
+        /// That held-back backlog is capped at <see cref="DefaultMaxDeferredSends"/> messages, and
+        /// overflows by discarding the <b>oldest</b> of them — so sending continuously through a
+        /// long exclusive operation (an SD card download may run for thirty minutes) costs bounded
+        /// memory and replays a bounded burst afterwards, keeping the most recent commands rather
+        /// than the most stale. Discards are counted by <see cref="DroppedDeferredSendCount"/>.
+        /// Nothing is dropped while the device is idle, and nothing is dropped for a backlog under
+        /// the cap.
+        /// </para>
         /// </remarks>
         /// <typeparam name="T">The type of the message data payload.</typeparam>
         /// <param name="message">The message to send to the device.</param>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">
+        /// Thrown when the device is not connected. Also thrown, with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set, when a disconnect, dispose
+        /// or auto-reconnect on another thread tears the send path down after this call has passed
+        /// its connectivity guard — an ordinary race a long-lived sender should expect, not a defect.
+        /// </exception>
         /// <exception cref="InvalidOperationException">
         /// Thrown when the device is connected but has no transport or stream to send on
         /// (e.g. the producer-less <see cref="DaqifiDevice(string, IPAddress, ILogger)"/> constructor).
         /// </exception>
         public virtual void Send<T>(IOutboundMessage<T> message)
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             // Checked before the message can be parked. A null used to fail loudly at the producer;
             // deferred, it would instead fail on a background flush where the exception is logged
             // and dropped, turning a caller's bug into a silently missing command.
             ArgumentNullException.ThrowIfNull(message);
 
-            if (TryDeferSend(message))
+            if (_operations.TryDeferSend(message))
             {
                 return;
             }
@@ -2035,17 +1606,34 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Serializes writes on the producer-less path, where <see cref="Send{T}"/> writes to the
+        /// stream on the caller's own thread. Two threads writing a stream concurrently is the one
+        /// place SCPI bytes really can interleave mid-command; the queued path is already safe
+        /// because a single producer thread does every write.
+        /// </summary>
+        private readonly object _directWriteGate = new();
+
+        /// <summary>
         /// Puts a message on its way to the device immediately — the body <see cref="Send{T}"/> runs
         /// once it knows nothing else owns the device, and the body a deferred send is replayed
         /// through afterwards.
         /// </summary>
         private void SendNow<T>(IOutboundMessage<T> message)
         {
+            // Snapshotted once, for the reason TextExchangeEngine.SuspendInboundConsumer snapshots
+            // the consumer: the field behind it is mutable and teardown nulls it
+            // (StopMessagePumps) from another thread, under no lock this path takes. Null-checking
+            // the field and then dereferencing it reads it twice, and a teardown landing between
+            // the two reads throws NullReferenceException out of a public API. The window is not
+            // limited to a user-initiated Disconnect() — every auto-reconnect attempt goes through
+            // DisconnectCore(Retrying) and nulls the field the same way (issue #497).
+            var producer = _messageProducer;
+
             // Use the queued message producer when available and the message is string-based;
             // this is the common path (SCPI text commands).
-            if (_messageProducer != null && message is IOutboundMessage<string> stringMessage)
+            if (producer != null && message is IOutboundMessage<string> stringMessage)
             {
-                _messageProducer.Send(stringMessage);
+                SendViaProducer(producer, stringMessage);
                 return;
             }
 
@@ -2072,107 +1660,93 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Temporarily pauses the protobuf message consumer to allow raw byte access to the
-        /// underlying transport stream. The consumer is restored when the returned action completes
-        /// or is disposed.
+        /// Hands a message to the queued producer, reporting a producer that teardown has already
+        /// stopped or disposed as the same typed failure every other guard on this device reports.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Snapshotting the field closes the null-dereference half of the disconnect race; this
+        /// closes the other half. Winning the snapshot only means the reference was still there —
+        /// teardown can have stopped or disposed that very instance a moment later, and the send
+        /// then fails inside the producer. Untranslated, callers would see a bare
+        /// <see cref="InvalidOperationException"/> whose message names an internal lifecycle method
+        /// ("Call Start() first"), or an <see cref="ObjectDisposedException"/> naming an internal
+        /// type — both indistinguishable, without matching on message text, from a genuine
+        /// application defect. That is exactly the distinction
+        /// <see cref="DeviceNotConnectedException"/> was introduced to make (#395), so this reports
+        /// the ordinary, expected condition it is, with
+        /// <see cref="DeviceNotConnectedException.IsShuttingDown"/> set.
+        /// </para>
+        /// <para>
+        /// The original is kept as <see cref="Exception.InnerException"/> so the race stays
+        /// diagnosable, and a <see cref="DeviceNotConnectedException"/> from the producer itself is
+        /// let through unwrapped — it already says what this would say.
+        /// </para>
+        /// <para>
+        /// Internal rather than private so the translation can be tested against a producer that
+        /// throws on demand. Hitting these branches through the public API means winning a race
+        /// against teardown, which no test can schedule reliably; the stress test that exercises the
+        /// real race can only assert the negative (no untyped exception escaped).
+        /// </para>
+        /// </remarks>
+        internal static void SendViaProducer(IMessageProducer<string> producer, IOutboundMessage<string> message)
+        {
+            try
+            {
+                producer.Send(message);
+            }
+            catch (DeviceNotConnectedException)
+            {
+                // Already the failure this method would translate to. Rethrown unchanged so the
+                // producer's own wording and IsShuttingDown value survive.
+                throw;
+            }
+            catch (ObjectDisposedException ex)
+            {
+                // Checked before InvalidOperationException: ObjectDisposedException derives from it,
+                // so the broader filter below would otherwise swallow this case first.
+                throw new DeviceNotConnectedException(
+                    "The message could not be sent because the device's message producer has been "
+                    + "disposed; a disconnect or dispose completed while this send was in flight.",
+                    ex,
+                    isShuttingDown: true);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new DeviceNotConnectedException(
+                    "The message could not be sent because the device's message producer is no "
+                    + "longer running; a disconnect or reconnect is in flight.",
+                    ex,
+                    isShuttingDown: true);
+            }
+        }
+
+        /// <summary>
+        /// Takes exclusive use of the device and hands the transport stream to <paramref name="rawAction"/>
+        /// for raw byte access, with the protobuf consumer paused for the duration. Everything is
+        /// restored when the action completes, however it completes.
+        /// </summary>
+        /// <remarks>
+        /// Runs under the same operation lock as <see cref="RunExclusiveAsync{TResult}"/> and the
+        /// text exchange, so a text query from another thread waits for the capture and a
+        /// <see cref="Send{T}"/> from another thread is deferred and replayed afterwards (#493).
+        /// Reentrant on the flow that already holds the lock. Captures can be long — an SD
+        /// download's budget is 30 minutes — so pass a cancellation token if the caller cannot wait
+        /// that long for the lock.
+        /// </remarks>
         /// <param name="rawAction">
         /// An async function that receives the transport stream and performs raw I/O.
         /// The protobuf consumer will not read from the stream while this action is executing.
         /// </param>
         /// <param name="cancellationToken">A cancellation token to observe.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected, disconnecting or disposed.</exception>
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
-        protected virtual async Task ExecuteRawCaptureAsync(
+        protected virtual Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default)
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            if (_transport == null)
-            {
-                throw new InvalidOperationException("ExecuteRawCaptureAsync requires a transport-based connection.");
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                // Stop the protobuf consumer so it doesn't compete for stream bytes
-                if (_messageConsumer != null)
-                {
-                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
-                    if (!stopped)
-                    {
-                        _messageConsumer.Stop();
-                    }
-                }
-
-                // Hand the stream to the caller for raw I/O
-                await rawAction(_transport.Stream, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                RestartMessageConsumerAfterSwap();
-            }
-        }
-
-        /// <summary>
-        /// Restarts the protobuf consumer after a swap (raw capture or text exchange) has stopped it.
-        /// </summary>
-        /// <remarks>
-        /// The stop paths join the reader thread with a bounded timeout, so a reader parked in a slow
-        /// blocking <see cref="Stream.Read(byte[], int, int)"/> can still be alive here.
-        /// <see cref="StreamMessageConsumer{T}.Start"/> absorbs that case by waiting a grace period
-        /// for the stopped reader to exit, which is what keeps a normal connect from failing with
-        /// "a previous consumer thread has not yet exited" (issue #383).
-        /// <para>
-        /// If it still refuses, the reader's read is not returning at all — the stream is stuck.
-        /// Deliberately do <b>not</b> recover by binding a fresh consumer to that same stream: a new
-        /// instance would be a second concurrent reader on it, which is exactly the framing
-        /// corruption the guard exists to prevent, and it would block on the stuck stream anyway.
-        /// The consumer is left stopped; the operation's own failure (or the next
-        /// <see cref="Connect"/>) surfaces the problem honestly.
-        /// </para>
-        /// <para>
-        /// Never throws: it runs from <c>finally</c> blocks, where an exception would mask the real
-        /// failure already unwinding. The consumer is also snapshotted once up front — the
-        /// text-exchange path holds <c>_textExchangeLock</c> (which <see cref="Disconnect"/> waits
-        /// on), but the raw-capture path does not, so a concurrent teardown could otherwise null the
-        /// field between reads.
-        /// </para>
-        /// </remarks>
-        private void RestartMessageConsumerAfterSwap()
-        {
-            var consumer = _messageConsumer;
-            if (consumer == null)
-            {
-                return;
-            }
-
-            try
-            {
-                consumer.Start();
-                consumer.MessageReceived += OnInboundMessageReceived;
-            }
-            catch (ConsumerThreadNotExitedException ex)
-            {
-                SafeLog(() => _logger.LogError(
-                    ex,
-                    "The previous message consumer thread did not exit, so the consumer was left stopped. "
-                    + "The device stream appears stuck; a reconnect is required to resume inbound messages."));
-            }
-            catch (Exception ex)
-            {
-                // e.g. ObjectDisposedException from a concurrent Dispose(). Swallow rather than let
-                // it escape a finally block and replace the operation's real exception.
-                SafeLog(() => _logger.LogError(ex, "Failed to restart the message consumer after a stream swap."));
-            }
+            return _textExchange.ExecuteRawCaptureAsync(rawAction, cancellationToken);
         }
 
         /// <summary>
@@ -2232,6 +1806,13 @@ namespace Daqifi.Core.Device
         /// <exception cref="InvalidOperationException">Thrown when the device has no transport-based connection.</exception>
         /// <exception cref="TransportNotConnectedException">Thrown when the underlying transport has dropped.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        /// <param name="keepBlankLines">
+        /// When <c>true</c>, blank lines are returned instead of filtered out. Only the system-log
+        /// read wants this: <c>SYSTem:LOG?</c> terminates its dump with a blank line
+        /// unconditionally, so seeing it is what separates "the device answered and its log is
+        /// empty" from "the device never answered" (issue #543). Every other caller parses content
+        /// and has never seen a blank line, so the default is <c>false</c>.
+        /// </param>
         // prepareAsync and finalizeAsync are added AFTER cancellationToken (technically violating
         // CA1068 "CancellationToken should be last") to keep existing positional callers working,
         // matching the convention established in IFirmwareUpdateService for the same reason. They
@@ -2247,7 +1828,8 @@ namespace Daqifi.Core.Device
             int completionTimeoutMs = 250,
             CancellationToken cancellationToken = default,
             Func<CancellationToken, Task>? prepareAsync = null,
-            Func<Task>? finalizeAsync = null)
+            Func<Task>? finalizeAsync = null,
+            bool keepBlankLines = false)
         {
             return ExecuteTextCommandCoreAsync(
                 prepareAsync,
@@ -2255,12 +1837,13 @@ namespace Daqifi.Core.Device
                 _ => { setupAction(); return Task.CompletedTask; },
                 responseTimeoutMs,
                 completionTimeoutMs,
-                cancellationToken);
+                cancellationToken,
+                keepBlankLines);
         }
 #pragma warning restore CA1068
 
         /// <summary>
-        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>
+        /// Async overload of <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>
         /// that accepts an async setup action so callers can <c>await</c> cancellable operations
         /// (e.g. <see cref="Task.Delay(int, CancellationToken)"/>) between SCPI commands without
         /// blocking the thread-pool thread.
@@ -2293,369 +1876,116 @@ namespace Daqifi.Core.Device
                 cancellationToken);
         }
 
-        private async Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
+        private Task<IReadOnlyList<string>> ExecuteTextCommandCoreAsync(
             Func<CancellationToken, Task>? prepareAsync,
             Func<Task>? finalizeAsync,
             Func<CancellationToken, Task> setupActionAsync,
             int responseTimeoutMs,
             int completionTimeoutMs,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool keepBlankLines = false)
         {
-            if (responseTimeoutMs <= 0)
-                throw new ArgumentOutOfRangeException(nameof(responseTimeoutMs), responseTimeoutMs, "Timeout must be positive.");
-            if (completionTimeoutMs <= 0)
-                throw new ArgumentOutOfRangeException(nameof(completionTimeoutMs), completionTimeoutMs, "Timeout must be positive.");
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Async-context re-entrancy detection: a setupAction that calls
-            // ExecuteTextCommandAsync on the same device would corrupt the
-            // consumer swap mid-flight. Surface as a clean exception rather
-            // than wedging on _textExchangeLock.WaitAsync() forever.
-            // AsyncLocal flows across await thread hops so this catches
-            // re-entry even when the inner call resumes on a different
-            // thread than the outer call.
-            if (_isInsideTextExchange.Value)
-            {
-                throw new InvalidOperationException(
-                    "ExecuteTextCommandAsync is not re-entrant on the same device; "
-                    + "do not call it from inside a setupAction callback.");
-            }
-
-            // The exchange runs under the device's operation lock. A flow that already owns it —
-            // one inside RunExclusiveAsync, typically — runs nested rather than waiting on a
-            // semaphore it is itself holding, and leaves the release to the owner.
-            var ownsLock = !HoldsOperationLock;
-            if (ownsLock)
-            {
-                try
-                {
-                    await _textExchangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (ObjectDisposedException ex)
-                {
-                    // Dispose() raced ahead of us and disposed the semaphore.
-                    // Surface the same clean failure as the post-acquisition
-                    // _disposed check below, instead of leaking a low-level
-                    // teardown exception to callers. The original is kept as
-                    // InnerException so this rare race stays diagnosable.
-                    throw new DeviceNotConnectedException(
-                        "ExecuteTextCommandAsync cannot run because the device is disposed.",
-                        ex,
-                        isShuttingDown: true);
-                }
-
-                // Assigned in this frame, not in a helper: an async method's AsyncLocal writes flow
-                // forward to its callees but never back to its caller.
-                _operationLockGeneration.Value = Volatile.Read(ref _operationGeneration);
-                MarkOperationInFlight();
-            }
-
-            _isInsideTextExchange.Value = true;
-
-            // Whether the exchange got past validation and so owes its finalize phase, and whether
-            // it is on its way out normally rather than with an exception unwinding. Both are read
-            // only by the finalize block in the outer finally below.
-            var exchangeStarted = false;
-            var completedNormally = false;
-            try
-            {
-                // All validation runs INSIDE the lock so a competing thread
-                // calling DisconnectAsync() / Dispose() while we're blocked
-                // on WaitAsync() doesn't leave us with a stale _transport /
-                // _messageConsumer reference (closes the TOCTOU window
-                // documented in #186).
-                if (_disposed || _isDisconnecting)
-                {
-                    throw new DeviceNotConnectedException(
-                        "ExecuteTextCommandAsync cannot run while the device is "
-                        + "disposing or disconnecting.",
-                        isShuttingDown: true);
-                }
-
-                if (!IsConnected)
-                {
-                    throw new DeviceNotConnectedException();
-                }
-
-                if (_transport == null)
-                {
-                    throw new InvalidOperationException("ExecuteTextCommandAsync requires a transport-based connection.");
-                }
-
-                // The device-level IsConnected check above is status-based and can still report
-                // Connected when the underlying transport has dropped (e.g. a serial port closed
-                // by an unplug or a DTR-triggered MCU reset mid-connect). Detect that here and
-                // fail with the typed transport-disconnected exception, rather than dereferencing
-                // Stream below and surfacing the framework's raw "BaseStream is only available
-                // when the port is open." message (issue #238).
-                if (!_transport.IsConnected)
-                {
-                    throw new TransportNotConnectedException(
-                        "Device transport is no longer connected.");
-                }
-
-                // Past validation: from here on the exchange acts on the device, so its finalize
-                // phase (if any) is owed however this ends — including a prepare phase that failed
-                // part-way and left the device half-way into the state it was establishing.
-                exchangeStarted = true;
-
-                var sw = Stopwatch.StartNew();
-
-                // Prepare phase, if any. Deliberately here: inside the lock, so no competing text
-                // exchange can interleave between it and the setup action below and undo the state
-                // it establishes; and before the consumer swap, so the wait it typically needs
-                // cannot widen the stale-line boundary taken further down. Any device output it
-                // provokes goes to the protobuf consumer, which is still running at this point.
-                if (prepareAsync != null)
-                {
-                    await prepareAsync(cancellationToken).ConfigureAwait(false);
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-                }
-
-                // Let anything queued before this exchange opened reach the wire while the protobuf
-                // consumer is still the one reading, so its reply is not mistaken for an answer to
-                // a command this exchange is about to send (issue #342). New sends from other
-                // threads are already parked by this point, so the queue can only shrink.
-                //
-                // Deliberately OUTSIDE the swap's try/finally below: this is the one step here that
-                // can throw (a cancelled token) before the consumer has been stopped, and that
-                // finally restarts the consumer — which on a consumer that was never stopped means
-                // subscribing the inbound handler a second time and dispatching every frame twice.
-                await DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
-
-                var collectedLines = new List<string>();
-                var stream = _transport.Stream;
-                int? originalReadTimeout = null;
-
-                // Number of lines that were already in flight when this exchange opened — see the
-                // note at the point it is captured, below.
-                var staleLineCount = 0;
-
-                try
-                {
-                    if (stream.CanTimeout)
-                    {
-                        try
-                        {
-                            originalReadTimeout = stream.ReadTimeout;
-                            stream.ReadTimeout = Math.Min(500, Math.Max(100, responseTimeoutMs / 4));
-                        }
-                        catch
-                        {
-                            // Some streams may not allow setting read timeout; ignore.
-                            originalReadTimeout = null;
-                        }
-                    }
-
-                    // Stop the protobuf consumer so it doesn't compete for stream bytes.
-                    // The serial transport sets ReadTimeout=500ms after connect, so the
-                    // consumer thread's blocking Read will unblock within 500ms.
-                    if (_messageConsumer != null)
-                    {
-                        _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                        var stopped = _messageConsumer.StopSafely(timeoutMs: 1000);
-                        if (!stopped)
-                        {
-                            _messageConsumer.Stop();
-                        }
-                    }
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-
-                    // Create a temporary text consumer on the same stream
-                    using var textConsumer = new StreamMessageConsumer<string>(
-                        _transport.Stream,
-                        new LineBasedMessageParser(),
-                        healthSink: _transport as ITransportHealthSink);
-
-                    textConsumer.MessageReceived += (_, e) =>
-                    {
-                        collectedLines.Add(e.Message.Data);
-                    };
-
-                    // The protobuf consumer is stopped for the duration of this exchange, so
-                    // without this a read failure during a text command (an unplug mid-SD-listing,
-                    // say) would be the one background failure with nowhere to go (issue #378).
-                    //
-                    // Scoped rather than a bare '+=' because this consumer can outlive the block:
-                    // its stop and dispose are both time-bounded and may return with the reader
-                    // thread still parked in an un-returning read. A live thread roots the consumer,
-                    // which would root this device through the handler — retaining the whole object
-                    // graph and, worse, letting a zombie reader keep raising errors on a device that
-                    // has since been disconnected. 'using' disposes in reverse declaration order, so
-                    // this detaches before textConsumer itself is disposed, on every exit path
-                    // including a cancellation or a throwing setup action.
-                    using var textConsumerErrors = new ConsumerErrorSubscription(this, textConsumer);
-
-                    textConsumer.Start();
-                    // ConfigureAwait(false): the lock is held, so resuming on a captured
-                    // sync context (e.g. UI thread) would deadlock if that thread calls Disconnect().
-                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-
-                    // Mark the boundary between "already in flight" and "answers to this exchange".
-                    // Anything captured before the setup action has sent anything is a late reply to
-                    // an EARLIER command, or line noise — never a response to a command this exchange
-                    // has yet to send. Those lines are dropped from the result below.
-                    //
-                    // Position matters as much as content: a caller that keys off response content —
-                    // e.g. the SD listing's end-of-listing terminator (#396) — would otherwise accept
-                    // a stale line as proof that the device answered a query it never even received,
-                    // and report a complete listing for a device that has gone silent.
-                    staleLineCount = collectedLines.Count;
-                    if (staleLineCount > 0)
-                    {
-                        SafeLog(() => _logger.LogDebug(
-                            "[ExecuteTextCommandAsync] Discarding {StaleLineCount} line(s) received before this exchange sent anything",
-                            staleLineCount));
-                    }
-
-                    // Execute the setup action (sends SCPI commands). ConfigureAwait(false)
-                    // matches the surrounding lock-protected awaits.
-                    await setupActionAsync(cancellationToken).ConfigureAwait(false);
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-
-                    // Wait for responses using a two-phase inactivity-based timeout:
-                    // Phase 1: Wait up to responseTimeoutMs for the first response.
-                    // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
-                    var lastMessageTime = DateTime.UtcNow;
-                    var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
-                    var startTime = DateTime.UtcNow;
-                    var hasReceivedAny = false;
-
-                    while (DateTime.UtcNow - startTime < maxWait)
-                    {
-                        var previousCount = collectedLines.Count;
-                        await Task.Delay(50, cancellationToken).ConfigureAwait(false);
-                        if (collectedLines.Count > previousCount)
-                        {
-                            lastMessageTime = DateTime.UtcNow;
-                            if (!hasReceivedAny)
-                            {
-                                hasReceivedAny = true;
-                                SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-                            }
-                        }
-
-                        var elapsed = DateTime.UtcNow - lastMessageTime;
-
-                        if (hasReceivedAny)
-                        {
-                            // Phase 2: short completion timeout after first data
-                            if (elapsed >= TimeSpan.FromMilliseconds(completionTimeoutMs))
-                            {
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            // Phase 1: full initial timeout waiting for first data
-                            if (elapsed >= TimeSpan.FromMilliseconds(responseTimeoutMs))
-                            {
-                                break;
-                            }
-                        }
-                    }
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", sw.ElapsedMilliseconds, collectedLines.Count));
-
-                    // Stop the text consumer
-                    textConsumer.StopSafely();
-                }
-                finally
-                {
-                    if (originalReadTimeout.HasValue && stream.CanTimeout)
-                    {
-                        try
-                        {
-                            stream.ReadTimeout = originalReadTimeout.Value;
-                        }
-                        catch
-                        {
-                            // Ignore failures when restoring timeout.
-                        }
-                    }
-
-                    // Restart the protobuf consumer
-                    RestartMessageConsumerAfterSwap();
-
-                    SafeLog(() => _logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
-                }
-
-                // The text consumer is stopped by this point, so the list is no longer being
-                // appended to concurrently and can be re-projected safely.
-                var result = staleLineCount > 0
-                    ? collectedLines.Skip(staleLineCount).ToList()
-                    : collectedLines;
-
-                completedNormally = true;
-                return result;
-            }
-            finally
-            {
-                // Finalize phase, if any — the mirror of the prepare phase above, and deliberately
-                // still inside the lock: an exchange that switches shared device state on the way in
-                // has to switch it back before anything else can run, or the pairing is only half
-                // serialized (#407). It runs after the protobuf consumer has been restarted, just as
-                // the prepare phase ran before the consumer was swapped out.
-                // A failure here is never thrown from this point: doing so would abandon the rest of
-                // the finally, leaking the lock this exchange holds. It is held until after the
-                // release below and dealt with there.
-                Exception? finalizeFailure = null;
-                if (exchangeStarted && finalizeAsync != null)
-                {
-                    try
-                    {
-                        await finalizeAsync().ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        finalizeFailure = ex;
-                    }
-                }
-
-                _isInsideTextExchange.Value = false;
-
-                // Only the flow that took the lock releases it; a nested exchange leaves it to the
-                // RunExclusiveAsync block that owns it. Parked sends are flushed before the release
-                // so they are queued ahead of whatever runs next, and ReleaseOperationLock absorbs
-                // a Dispose that already tore the semaphore down (Dispose acquires the lock first,
-                // but proceeds anyway if that acquisition times out).
-                if (ownsLock)
-                {
-                    _operationLockGeneration.Value = 0;
-                    FlushDeferredSends();
-                    ReleaseOperationLock();
-                }
-
-                if (finalizeFailure != null)
-                {
-                    if (completedNormally)
-                    {
-                        // Nothing else is unwinding, so a failed restore is the only failure there
-                        // is. Surface it rather than report a success the device never got back
-                        // from — the caller's next command would run against the wrong state.
-                        // Rethrown only now, with the lock already released, so a failed restore
-                        // cannot also wedge the device.
-                        ExceptionDispatchInfo.Capture(finalizeFailure).Throw();
-                    }
-
-                    // Otherwise an exception is already on its way to the caller, and it is the one
-                    // that explains what went wrong. Replacing it with this one would lose the
-                    // diagnosis, so the cleanup failure is logged instead: cleanup never hides the
-                    // failure that caused the cleanup.
-                    SafeLog(() => _logger.LogError(
-                        finalizeFailure,
-                        "The text exchange's finalize phase failed while another failure was already "
-                        + "unwinding. The original failure is being surfaced to the caller; the device "
-                        + "may be left in the state the prepare phase established."));
-                }
-            }
+            return _textExchange.ExecuteAsync(
+                prepareAsync,
+                finalizeAsync,
+                setupActionAsync,
+                responseTimeoutMs,
+                completionTimeoutMs,
+                cancellationToken,
+                keepBlankLines);
         }
+
+        /// <summary>
+        /// The text (SCPI) exchange primitive and the raw-capture swap it shares its consumer
+        /// handling with, extracted so this class delegates rather than hosts them (issue #344).
+        /// </summary>
+        private readonly TextExchangeEngine _textExchange;
+
+        #region ITextExchangeHost — the engine's view of this device
+
+        /// <inheritdoc />
+        bool ITextExchangeHost.IsConnected => IsConnected;
+
+        /// <inheritdoc />
+        bool ITextExchangeHost.IsShuttingDown => _disposed || _isDisconnecting;
+
+        /// <inheritdoc />
+        IStreamTransport? ITextExchangeHost.Transport => _transport;
+
+        /// <inheritdoc />
+        IMessageConsumer<DaqifiOutMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;
+
+        /// <inheritdoc />
+        void ITextExchangeHost.AttachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
+            AttachInboundMessages(consumer);
+
+        /// <inheritdoc />
+        void ITextExchangeHost.DetachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) =>
+            DetachInboundMessages(consumer);
+
+        /// <inheritdoc />
+        bool ITextExchangeHost.HoldsOperationLock => _operations.HoldsOperationLock;
+
+        /// <inheritdoc />
+        Task ITextExchangeHost.WaitForOperationLockAsync(CancellationToken cancellationToken) =>
+            _operations.WaitForOperationLockAsync(cancellationToken);
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// Forwarded synchronously, and must stay that way: the <see cref="AsyncLocal{T}"/> write it
+        /// performs flows forward from whichever frame performs it. A plain synchronous call chain
+        /// keeps it in the engine's own frame; behind an <c>await</c> it would land in a frame
+        /// nobody reads and the exchange would stop recognising its own ownership.
+        /// </remarks>
+        void ITextExchangeHost.EnterOperationLockOwnership() => _operations.EnterOperationLockOwnership();
+
+        /// <inheritdoc />
+        /// <remarks>Synchronous for the same reason as <see cref="ITextExchangeHost.EnterOperationLockOwnership"/>.</remarks>
+        void ITextExchangeHost.ExitOperationLockOwnership() => _operations.ExitOperationLockOwnership();
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// The setter is synchronous for the same reason as
+        /// <see cref="ITextExchangeHost.EnterOperationLockOwnership"/>: the re-entrancy guard only
+        /// works if the flag reaches the callbacks the engine invokes.
+        /// </remarks>
+        bool ITextExchangeHost.IsInsideTextExchange
+        {
+            get => _isInsideTextExchange.Value;
+            set => _isInsideTextExchange.Value = value;
+        }
+
+        /// <inheritdoc />
+        Task ITextExchangeHost.DrainOutboundQueueAsync(CancellationToken cancellationToken) =>
+            _operations.DrainOutboundQueueAsync(cancellationToken);
+
+        /// <inheritdoc />
+        IDisposable ITextExchangeHost.SubscribeConsumerErrors(IMessageConsumer<string> consumer) =>
+            new ConsumerErrorSubscription(this, consumer);
+
+        /// <inheritdoc />
+        ILogger ITextExchangeHost.Logger => _logger;
+
+        #endregion
+
+        #region IOperationSerializationHost — the serializer's view of this device
+
+        /// <inheritdoc />
+        ILogger IOperationSerializationHost.Logger => _logger;
+
+        /// <inheritdoc />
+        int IOperationSerializationHost.MaxDeferredSends => MaxDeferredSends;
+
+        /// <inheritdoc />
+        TimeSpan IOperationSerializationHost.OutboundDrainWait => OutboundDrainWait;
+
+        /// <inheritdoc />
+        IMessageProducer<string>? IOperationSerializationHost.MessageProducer => _messageProducer;
+
+        /// <inheritdoc />
+        void IOperationSerializationHost.SendNow<T>(IOutboundMessage<T> message) => SendNow(message);
+
+        #endregion
 
         /// <summary>
         /// Pops <c>SYSTem:ERRor?</c> entries from the device until the queue reports
@@ -2676,7 +2006,7 @@ namespace Daqifi.Core.Device
         /// on hardware faults, or discard them if known-stale.
         /// </para>
         /// <para>
-        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task})"/>, which
+        /// Each iteration uses <see cref="ExecuteTextCommandAsync(Action, int, int, CancellationToken, Func{CancellationToken, Task}, Func{Task}, bool)"/>, which
         /// pauses the protobuf consumer for the duration of the text exchange.
         /// Avoid calling this during active streaming or concurrently with
         /// other text commands.
@@ -2817,10 +2147,7 @@ namespace Daqifi.Core.Device
         public virtual async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
             CancellationToken cancellationToken = default)
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             if (!Supports(DeviceFeature.CapabilityDocument))
             {
@@ -2886,16 +2213,57 @@ namespace Daqifi.Core.Device
             }
 
             Metadata.ApplyCapabilityDocument(document);
+
+            // The document is also the only description of the device's DAC channels, so this is
+            // the moment they can be modelled (#499).
+            SyncAnalogOutputChannelsFromCapabilities();
+
+            // The document is the only place the device says what its analog readings are measured
+            // in, so this is where a channel learns its unit (#501). Never overwrites a scaling a
+            // caller configured, which matters because this method is re-run on every capability
+            // refresh.
+            var unitsApplied = CapabilityChannelUnits.Apply(GetChannelsSnapshot(), document);
+            if (unitsApplied > 0)
+            {
+                SafeLog(() => _logger.LogDebug(
+                    "[ReadCapabilityDocumentAsync] Applied the document's unit to {ChannelCount} analog channel(s).",
+                    unitsApplied));
+            }
+
             return document;
         }
 
         /// <summary>
         /// Raises the <see cref="MessageReceived"/> event when a message is received from the device.
         /// </summary>
+        /// <remarks>
+        /// Not called for a device frame while <see cref="MessageReceived"/> has no subscribers: the
+        /// frame would have to be wrapped in an <see cref="IInboundMessage{T}"/> to be passed here,
+        /// and on a streaming device that is an allocation per frame with nowhere to go
+        /// (issue #490). An override that must see every frame regardless should use
+        /// <see cref="StatusMessageReceived"/>/<see cref="StreamMessageReceived"/> or override
+        /// <see cref="OnStatusMessageReceived"/>/<see cref="OnStreamMessageReceived"/>, which are
+        /// unconditional.
+        /// </remarks>
         /// <param name="message">The message received from the device.</param>
         protected virtual void OnMessageReceived(IInboundMessage<object> message)
         {
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(message));
+        }
+
+        /// <summary>
+        /// Wraps <paramref name="message"/> and hands it to <see cref="OnMessageReceived"/>, but
+        /// only when <see cref="MessageReceived"/> actually has a subscriber to receive it.
+        /// </summary>
+        /// <param name="message">The device frame to re-raise.</param>
+        private void RaiseUndifferentiatedMessage(DaqifiOutMessage message)
+        {
+            if (MessageReceived is null)
+            {
+                return;
+            }
+
+            OnMessageReceived(new ProtobufMessage(message));
         }
 
         /// <summary>
@@ -3646,11 +3014,42 @@ namespace Daqifi.Core.Device
         /// </remarks>
         private void ReleaseResources()
         {
-            _messageConsumer?.Dispose();
-            _messageProducer?.Dispose();
-            _transport?.Dispose();
-            _textExchangeLock.Dispose();
-            _disposed = true;
+            try
+            {
+                ReleaseDerivedResources();
+            }
+            catch (Exception ex)
+            {
+                // Disposal must not fail on account of the library's own cleanup — the handles
+                // released below are what a caller is actually relying on this for, and a throwing
+                // Dispose would hide them behind an exception nobody can act on. Reported rather
+                // than swallowed.
+                RaiseDeviceError(DeviceErrorSource.Unknown, ex);
+            }
+            finally
+            {
+                _messageConsumer?.Dispose();
+                _messageProducer?.Dispose();
+                _transport?.Dispose();
+                _operations.Dispose();
+                _disposed = true;
+            }
+        }
+
+        /// <summary>
+        /// Releases what a derived device inside this library owns, ahead of the handles this class
+        /// owns.
+        /// </summary>
+        /// <remarks>
+        /// The companion to <see cref="OnConnectionStatusChanged"/>, and internal for the same
+        /// reason. It covers the one teardown a status transition cannot: disposing a device that
+        /// was never connected, or was already disconnected, moves it nowhere, so nothing would tell
+        /// a live-sample enumeration parked on it that the device is gone (issue #496). An override
+        /// that throws is caught and reported on <see cref="ErrorOccurred"/>: the handles this method
+        /// exists to release are freed regardless, and <see cref="Dispose()"/> does not fail.
+        /// </remarks>
+        internal virtual void ReleaseDerivedResources()
+        {
         }
 
         /// <summary>
@@ -3734,8 +3133,8 @@ namespace Daqifi.Core.Device
                 // process every inbound message twice; '-=' is a no-op when not subscribed.
                 if (_messageConsumer != null)
                 {
-                    _messageConsumer.MessageReceived -= OnInboundMessageReceived;
-                    _messageConsumer.MessageReceived += OnInboundMessageReceived;
+                    DetachInboundMessages(_messageConsumer);
+                    AttachInboundMessages(_messageConsumer);
                 }
 
                 // Snapshot into a local, once. Every retry attempt and the derived-class hook
@@ -3918,6 +3317,134 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Asks the device for a fresh status message and waits for it to arrive, updating
+        /// <see cref="Metadata"/> — including <see cref="DeviceMetadata.Health"/> — from the reply.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Health telemetry is <b>not</b> live. The device sends a status message when asked and at
+        /// no other time: a connected link carries stream frames only (the firmware builds each one
+        /// from four tags, none of them health), so without this call the values captured during
+        /// <c>InitializeAsync</c> stay frozen for the life of the connection. Measured on an Nq1
+        /// running 3.7.2: 1,587 inbound messages over 65 s, of which exactly one carried health —
+        /// the one the harness explicitly asked for (issue #535).
+        /// </para>
+        /// <para>
+        /// Cadence is deliberately the caller's, not Core's. A self-poll inside the library would
+        /// contend for the operation lock against streaming and SD work, so how often "current"
+        /// needs to be is a decision only the application can make.
+        /// </para>
+        /// <para>
+        /// <b>Known limitation.</b> A status frame carries nothing saying which request it answers,
+        /// so if one refresh times out and its reply arrives late, the NEXT refresh can be
+        /// completed by that older frame rather than its own. The value is still a genuine device
+        /// reading — just one taken before this call, bounded by the previous refresh's timeout —
+        /// and this call's own reply lands moments later and updates
+        /// <see cref="DeviceMetadata.Health"/> again.
+        /// </para>
+        /// <para>
+        /// It is documented rather than worked around because the protocol offers no correlation
+        /// to work around it with. The obvious heuristic — skip one frame after a timeout — makes
+        /// the more common case worse: if the earlier reply never arrives at all, the next refresh
+        /// would discard its OWN reply and time out too. Concurrent refreshes, which had the same
+        /// shape for a different reason, are prevented outright by serializing them.
+        /// </para>
+        /// </remarks>
+        /// <param name="timeout">
+        /// How long to wait, in total. Defaults to 5 seconds when omitted, so a silent device
+        /// surfaces as a <see cref="TimeoutException"/> rather than hanging the caller.
+        /// <para>
+        /// The deadline covers the whole operation, not just the device round-trip: waiting behind
+        /// another refresh, and waiting for the request itself to be sent. <see cref="Send"/> is
+        /// fire-and-forget and is <b>deferred</b> while an exclusive operation holds the device
+        /// (an SD download can hold it for many minutes), so a short timeout taken during one can
+        /// elapse before the device is ever asked. That is a real outcome, and the exception says
+        /// only that no status arrived — pass a timeout that suits what else the device is doing.
+        /// </para>
+        /// </param>
+        /// <param name="cancellationToken">A cancellation token to observe.</param>
+        /// <returns>A task that completes once a status message has been received and applied.</returns>
+        /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+        /// <exception cref="TimeoutException">Thrown when no status message arrives in time.</exception>
+        /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
+        public async Task RefreshDeviceStatusAsync(
+            TimeSpan? timeout = null,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureConnected(cancellationToken);
+
+            var wait = timeout ?? DefaultStatusRefreshTimeout;
+            if (wait <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(timeout), wait, "Timeout must be positive.");
+            }
+
+            // One deadline covers the whole operation: waiting for the gate, waiting for the send
+            // to leave the queue, and waiting for the reply. See the timeout parameter's note.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(wait);
+
+            try
+            {
+                await _statusRefreshGate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {wait.TotalSeconds:0.##}s waiting for an earlier status "
+                    + "refresh on this device to finish.");
+            }
+
+            try
+            {
+                var statusTcs = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+                void OnStatus(DaqifiOutMessage _) => statusTcs.TrySetResult(true);
+
+                // Subscribed before the send, so a device that answers immediately cannot slip the
+                // reply through the gap between Send() and the subscription -- the same ordering
+                // WaitForChannelsPopulatedAsync relies on.
+                //
+                // Metadata is updated by OnStatusMessageReceived BEFORE this event is raised, so by
+                // the time the wait completes the caller can read Metadata.Health and see the reply.
+                _statusRefreshWaiter = OnStatus;
+                try
+                {
+                    Send(ScpiMessageProducer.GetDeviceInfo);
+
+                    try
+                    {
+                        await statusTcs.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // A reply landing in the same instant the deadline fires can cancel the
+                        // wait even though the status DID arrive and was applied. Reporting that
+                        // as a timeout would tell the caller the refresh failed while the data
+                        // they asked for is sitting in Metadata.
+                        if (statusTcs.Task.IsCompletedSuccessfully)
+                        {
+                            return;
+                        }
+
+                        throw new TimeoutException(
+                            $"The device did not return a status message within {wait.TotalSeconds:0.##}s.");
+                    }
+                }
+                finally
+                {
+                    _statusRefreshWaiter = null;
+                }
+            }
+            finally
+            {
+                _statusRefreshGate.Release();
+            }
+        }
+
+        /// <summary>
         /// Sends <c>GetDeviceInfo</c> and waits for the device to report its channel
         /// configuration via the <see cref="ChannelsPopulated"/> event, re-sending the request
         /// periodically until channels populate or the timeout elapses.
@@ -4028,6 +3555,23 @@ namespace Daqifi.Core.Device
             // Populate channels from the status message
             PopulateChannelsFromStatus(message);
 
+            // The refresh waiter runs BEFORE any consumer subscriber and outside the multicast
+            // event, so no third party can delay or prevent a caller of RefreshDeviceStatusAsync
+            // from seeing the reply it asked for. Its own faults are contained here for the same
+            // reason the classified event contains a subscriber's.
+            var waiter = _statusRefreshWaiter;
+            if (waiter != null)
+            {
+                try
+                {
+                    waiter(message);
+                }
+                catch (Exception ex)
+                {
+                    SafeLog(() => _logger.LogWarning(ex, "[RefreshDeviceStatus] waiter threw"));
+                }
+            }
+
             // Raise the classified event first so consumers that only care about status
             // messages can react before the undifferentiated MessageReceived below. A
             // misbehaving subscriber must not prevent MessageReceived from firing for this
@@ -4036,8 +3580,7 @@ namespace Daqifi.Core.Device
             RaiseClassifiedEvent(StatusMessageReceived, message, nameof(StatusMessageReceived));
 
             // Raise event for external consumers
-            var inboundMessage = new ProtobufMessage(message);
-            OnMessageReceived(inboundMessage);
+            RaiseUndifferentiatedMessage(message);
         }
 
         /// <summary>
@@ -4118,44 +3661,70 @@ namespace Daqifi.Core.Device
                 TimestampFrequency = message.TimestampFreq;
             }
 
-            var analogCount = 0;
-            var digitalCount = 0;
+            int analogCount;
+            int digitalCount;
             IChannel[] channelsSnapshot;
 
             // Repopulate under the channels lock so a caller folding over a snapshot on
             // another thread (the device-level channel-management API) never observes a
-            // half-cleared or torn list.
+            // half-cleared or torn list. The mapping itself runs inside the lock exactly as it
+            // did before the extraction — it reads the current channels to reuse them in place.
             lock (_channelsLock)
             {
-                // Index existing channels by identity (type, number). Channels whose identity
-                // is unchanged are updated in place rather than replaced below, so consumer-held
-                // IChannel references — and the configuration on them (direction/output/PWM
-                // state) — survive a routine status re-population untouched. IsEnabled is the
-                // exception: analog channels resync it from the device-reported enabled mask
-                // (field 22) whenever the device sends one, so Core's view cannot silently drift
-                // from the device's (#409).
-                var existingByKey = new Dictionary<(ChannelType, int), IChannel>();
-                foreach (var existing in _channels)
-                {
-                    existingByKey[(existing.Type, existing.ChannelNumber)] = existing;
-                }
-
                 var updatedChannels = new List<IChannel>();
 
-                // Populate analog input channels
-                if (message.AnalogInPortNum > 0)
+                (analogCount, digitalCount) = _channelPopulator.Populate(message, _channels, updatedChannels);
+
+                // Analog-output (DAC) channels are described only by the capability document —
+                // the protobuf declares analog_out_port_num/_res/_range but the firmware never
+                // fills them in — so a status message says nothing about them and must not be read
+                // as "this device has none". Carry the modelled ones across untouched, in the same
+                // order, so the membership comparison below still sees no change.
+                //
+                // Their lifetime is the document's: metadata is updated from this same message
+                // before we get here, so a reconnect that lands this instance on a *different*
+                // known board has already dropped the document it read from the previous one, and
+                // the channels it described go with it rather than lingering as another board's
+                // DACs.
+                if (Metadata.CapabilityDocument is not null)
                 {
-                    analogCount = PopulateAnalogChannels(message, existingByKey, updatedChannels);
+                    CarryForwardAnalogOutputChannels(_channels, updatedChannels);
                 }
 
-                // Populate digital channels
-                if (message.DigitalPortNum > 0)
+                // Only a change of *membership* needs handling here. A status that re-asserts a
+                // different enabled mask on channels the device already had has moved the version
+                // already, through those channels' own notifications — they were still subscribed
+                // while Populate ran, which is why the comparison and the swap happen after it.
+                //
+                // Compared by reference rather than by (type, number): the populator builds a fresh
+                // instance whenever it cannot reuse one, and a cache holding the instance it
+                // replaced would go on delivering samples to a channel the device no longer has.
+                // Identical by reference and in order means the list it just built is the list the
+                // device already holds, so there is nothing to swap, re-subscribe or invalidate.
+                if (MembershipChanged(_channels, updatedChannels))
                 {
-                    digitalCount = PopulateDigitalChannels(message, existingByKey, updatedChannels);
-                }
+                    foreach (var channel in _channels)
+                    {
+                        if (channel is IChannelEnablementNotifier notifier)
+                        {
+                            notifier.EnablementChanged -= OnChannelEnablementChanged;
+                        }
+                    }
 
-                _channels.Clear();
-                _channels.AddRange(updatedChannels);
+                    _channels.Clear();
+                    _channels.AddRange(updatedChannels);
+
+                    foreach (var channel in _channels)
+                    {
+                        if (channel is IChannelEnablementNotifier notifier)
+                        {
+                            notifier.EnablementChanged += OnChannelEnablementChanged;
+                        }
+                    }
+
+                    // No per-channel notification covers the set itself changing.
+                    Interlocked.Increment(ref _channelStateVersion);
+                }
 
                 channelsSnapshot = _channels.ToArray();
             }
@@ -4170,194 +3739,200 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Populates analog channels from the protobuf message, updating existing channel
-        /// instances in place where their identity (type, number) is unchanged.
+        /// Appends the analog-output channels already modelled on this device to a freshly-built
+        /// channel list, preserving their instances and their order.
         /// </summary>
-        /// <param name="message">The protobuf message containing analog channel data.</param>
-        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
-        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
-        /// <returns>The number of analog channels populated.</returns>
-        private int PopulateAnalogChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
+        private static void CarryForwardAnalogOutputChannels(
+            IReadOnlyList<IChannel> existing, List<IChannel> destination)
         {
-            var analogInPortRanges = message.AnalogInPortRange;
-            var analogInCalibrationBValues = message.AnalogInCalB;
-            var analogInCalibrationMValues = message.AnalogInCalM;
-            var analogInInternalScaleMValues = message.AnalogInIntScaleM;
-            var analogInResolution = message.AnalogInRes;
-            var analogInPortEnabled = message.AnalogInPortEnabled;
-
-            // Firmware before v3.5.0 never populates this field, so an empty byte string is
-            // ambiguous between "no channels enabled" and "not reported". Only trust it as the
-            // source of truth for IsEnabled when the device actually sent something.
-            var enabledIsReported = analogInPortEnabled.Length > 0;
-
-            var count = (int)message.AnalogInPortNum;
-
-            // Treat both a missing (0) and a physically-implausible out-of-range resolution as
-            // "assumed": the AnalogChannel constructor/setters now reject anything outside
-            // [MinResolution, MaxResolution], so passing a corrupt non-zero value straight through
-            // would throw and abort channel population mid-stream. Fall back to a safe default and
-            // log instead, so a corrupted status frame can neither crash population nor silently
-            // corrupt every scaled sample on the reuse path (UpdateScalingFromStatus below).
-            var resolutionIsAssumed = analogInResolution is < AnalogChannel.MinResolution or > AnalogChannel.MaxResolution;
-            var resolution = resolutionIsAssumed ? 65535u : analogInResolution;
-
-            if (resolutionIsAssumed && count > 0)
+            foreach (var channel in existing)
             {
-                SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported no usable ADC resolution (analog_in_res={Resolution}) for {ChannelCount} analog channel(s); assuming {AssumedResolution}. Scaled samples on this device may be systematically wrong.", Name, analogInResolution, count, resolution));
+                if (channel.Type == ChannelType.AnalogOutput)
+                {
+                    destination.Add(channel);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Brings the device's analog-output (DAC) channels into line with the capability document
+        /// the device most recently reported, so they appear in <see cref="GetChannelsSnapshot"/>
+        /// alongside the input channels.
+        /// </summary>
+        /// <remarks>
+        /// The capability document is the <b>only</b> place the firmware describes its DAC
+        /// channels: the protobuf status message declares
+        /// <c>analog_out_port_num</c>/<c>_res</c>/<c>_range</c> but never populates them, which is
+        /// why analog outputs are not built in <see cref="PopulateChannelsFromStatus"/> with
+        /// everything else. <see cref="ReadCapabilityDocumentAsync"/> calls this for you; call it
+        /// yourself only if you applied a document by hand through
+        /// <see cref="DeviceMetadata.ApplyCapabilityDocument"/>. With no document in hand, or on a
+        /// device whose document lists no analog outputs, the channel collection is left alone.
+        /// Existing instances are refreshed in place so a consumer-held reference survives a
+        /// re-read.
+        /// </remarks>
+        /// <returns>The number of analog-output channels the device now has.</returns>
+        public int SyncAnalogOutputChannelsFromCapabilities()
+        {
+            var document = Metadata.CapabilityDocument;
+            if (document is null || document.Channels.Count == 0)
+            {
+                return 0;
             }
 
-            for (var i = 0; i < count; i++)
+            IChannel[]? channelsSnapshot = null;
+            var analogCount = 0;
+            var digitalCount = 0;
+            int outputCount;
+
+            lock (_channelsLock)
             {
-                var calibrationB = GetWithDefault(analogInCalibrationBValues, i, 0.0f);
-                var calibrationM = GetWithDefault(analogInCalibrationMValues, i, 1.0f);
-                var internalScaleM = GetWithDefault(analogInInternalScaleMValues, i, 1.0f);
-                var portRange = GetWithDefault(analogInPortRanges, i, 1.0f);
+                var existingOutputs = new Dictionary<int, AnalogOutputChannel>();
+                var retained = new List<IChannel>(_channels.Count);
 
-                // A corrupted device response can carry NaN/Infinity or physically nonsensical
-                // scaling coefficients. Feeding those into AnalogChannel would either throw from its
-                // validating setters (killing channel population mid-stream) or silently propagate
-                // garbage into every scaled sample. Fall back to safe defaults and log instead —
-                // mirroring the analog_in_res=0 handling above.
-                calibrationB = (float)SanitizeScalingValue(calibrationB, 0.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: false, i, nameof(calibrationB));
-                calibrationM = (float)SanitizeScalingValue(calibrationM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(calibrationM));
-                internalScaleM = (float)SanitizeScalingValue(internalScaleM, 1.0, AnalogChannel.MaxCalibrationMagnitude, requireNonZero: true, i, nameof(internalScaleM));
-                portRange = (float)SanitizePortRange(portRange, i);
-
-                if (existingByKey.TryGetValue((ChannelType.Analog, i), out var existing) && existing is AnalogChannel existingAnalog)
+                foreach (var channel in _channels)
                 {
-                    existingAnalog.UpdateScalingFromStatus(resolution, calibrationB, calibrationM, internalScaleM, portRange, resolutionIsAssumed);
-                    if (enabledIsReported)
+                    if (channel is AnalogOutputChannel output)
                     {
-                        existingAnalog.IsEnabled = IsChannelBitSet(analogInPortEnabled, i);
+                        existingOutputs[output.ChannelNumber] = output;
                     }
-                    destination.Add(existingAnalog);
-                    continue;
+                    else
+                    {
+                        retained.Add(channel);
+
+                        if (channel.Type == ChannelType.Analog)
+                        {
+                            analogCount++;
+                        }
+                        else if (channel.Type == ChannelType.Digital)
+                        {
+                            digitalCount++;
+                        }
+                    }
                 }
 
-                var channel = new AnalogChannel(i, resolution, resolutionIsAssumed)
+                var rebuiltOutputs = new List<IChannel>();
+                var seenNumbers = new HashSet<int>();
+
+                foreach (var descriptor in document.Channels)
                 {
-                    Name = $"AI{i}",
-                    Direction = ChannelDirection.Input,
-                    IsEnabled = enabledIsReported && IsChannelBitSet(analogInPortEnabled, i),
-                    CalibrationB = calibrationB,
-                    CalibrationM = calibrationM,
-                    InternalScaleM = internalScaleM,
-                    PortRange = portRange
-                };
+                    if (descriptor.Kind != CapabilityChannelKind.AnalogOutput)
+                    {
+                        continue;
+                    }
 
-                destination.Add(channel);
-            }
+                    if (descriptor.Id < 0)
+                    {
+                        var negativeId = descriptor.Id;
+                        SafeLog(() => _logger.LogWarning(
+                            "[SyncAnalogOutputChannels] Device '{DeviceName}' described an analog output with a negative id ({ChannelId}); ignoring it.",
+                            Name, negativeId));
+                        continue;
+                    }
 
-            return count;
-        }
+                    if (!seenNumbers.Add(descriptor.Id))
+                    {
+                        var duplicateId = descriptor.Id;
+                        SafeLog(() => _logger.LogWarning(
+                            "[SyncAnalogOutputChannels] Device '{DeviceName}' described analog output {ChannelId} more than once; keeping the first description.",
+                            Name, duplicateId));
+                        continue;
+                    }
 
-        /// <summary>
-        /// Clamps a device-reported calibration/scale coefficient to a value <see cref="AnalogChannel"/>
-        /// will accept, substituting <paramref name="fallback"/> and logging when the reported value is
-        /// non-finite, out of magnitude range, or (when <paramref name="requireNonZero"/>) zero.
-        /// </summary>
-        private double SanitizeScalingValue(double value, double fallback, double maxMagnitude, bool requireNonZero, int channelIndex, string fieldName)
-        {
-            var invalid = !double.IsFinite(value)
-                || Math.Abs(value) > maxMagnitude
-                || (requireNonZero && value == 0.0);
+                    var (resolutionBits, minimumVoltage, maximumVoltage, rangeIsAssumed) =
+                        ResolveAnalogOutputDescriptor(descriptor);
 
-            if (invalid)
-            {
-                SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid {FieldName}={Value} for analog channel {ChannelIndex}; substituting {Fallback}. Scaled samples on this channel may be affected.", Name, fieldName, value, channelIndex, fallback));
-                return fallback;
-            }
-
-            return value;
-        }
-
-        /// <summary>
-        /// Clamps a device-reported port range to a value <see cref="AnalogChannel"/> will accept,
-        /// substituting the 1.0 default and logging when the reported value is non-finite, non-positive,
-        /// or beyond <see cref="AnalogChannel.MaxPortRangeVolts"/>.
-        /// </summary>
-        private double SanitizePortRange(double value, int channelIndex)
-        {
-            if (!double.IsFinite(value) || value <= 0.0 || value > AnalogChannel.MaxPortRangeVolts)
-            {
-                SafeLog(() => _logger.LogWarning("[PopulateAnalogChannels] Device '{DeviceName}' reported invalid portRange={Value} for analog channel {ChannelIndex}; substituting 1.0. Scaled samples on this channel may be affected.", Name, value, channelIndex));
-                return 1.0;
-            }
-
-            return value;
-        }
-
-        /// <summary>
-        /// Bitmask of digital channels whose hardware supports PWM output (bit n = channel n).
-        /// Channels 0, 3, 4, 5, 6 and 7 route to output-compare modules; the mask comes from the
-        /// firmware's board configuration and is identical across Nyquist variants.
-        /// </summary>
-        private const int PwmCapableChannelMask = 0x00F9;
-
-        /// <summary>
-        /// Populates digital channels from the protobuf message, updating existing channel
-        /// instances in place where their identity (type, number) is unchanged.
-        /// </summary>
-        /// <param name="message">The protobuf message containing digital channel data.</param>
-        /// <param name="existingByKey">Existing channels from the prior population, keyed by (type, number).</param>
-        /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
-        /// <returns>The number of digital channels populated.</returns>
-        private int PopulateDigitalChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
-        {
-            var count = (int)message.DigitalPortNum;
-
-            for (var i = 0; i < count; i++)
-            {
-                var isPwmCapable = i < 32 && (PwmCapableChannelMask & (1 << i)) != 0;
-
-                if (existingByKey.TryGetValue((ChannelType.Digital, i), out var existing) && existing is DigitalChannel existingDigital)
-                {
-                    existingDigital.IsPwmCapable = isPwmCapable;
-                    destination.Add(existingDigital);
-                    continue;
+                    if (existingOutputs.TryGetValue(descriptor.Id, out var existing))
+                    {
+                        existing.UpdateFromCapabilities(resolutionBits, minimumVoltage, maximumVoltage, rangeIsAssumed);
+                        rebuiltOutputs.Add(existing);
+                    }
+                    else
+                    {
+                        rebuiltOutputs.Add(new AnalogOutputChannel(
+                            descriptor.Id, resolutionBits, minimumVoltage, maximumVoltage, rangeIsAssumed));
+                    }
                 }
 
-                var channel = new DigitalChannel(i, isPwmCapable)
+                outputCount = rebuiltOutputs.Count;
+
+                // Only disturb the collection when the set of output channels actually changed; a
+                // re-read describing the same DACs updates them in place and raises nothing.
+                var compositionChanged =
+                    outputCount != existingOutputs.Count ||
+                    !seenNumbers.SetEquals(existingOutputs.Keys);
+
+                if (compositionChanged)
                 {
-                    Name = $"DIO{i}",
-                    Direction = ChannelDirection.Input,
-                    IsEnabled = false
-                };
+                    retained.AddRange(rebuiltOutputs);
+                    _channels.Clear();
+                    _channels.AddRange(retained);
+                    channelsSnapshot = _channels.ToArray();
 
-                destination.Add(channel);
+                    // An analog output carries no enablement notification of its own, so the set
+                    // changing is the only thing a cache keyed on the channel list can observe.
+                    Interlocked.Increment(ref _channelStateVersion);
+                }
             }
 
-            return count;
-        }
-
-        /// <summary>
-        /// Reads bit <paramref name="channelNumber"/> from a device-reported per-channel enable
-        /// bitmask (analog_in_port_enabled, field 22 — confirmed bit-packed on the bench: 2 bytes
-        /// for 16 channels, little-endian, bit <c>n</c> = channel <c>n</c> — the same layout Core
-        /// sends outbound via <see cref="Communication.Producers.ScpiMessageProducer.EnableAdcChannels"/>).
-        /// Returns false when the channel number falls outside the bytes actually sent.
-        /// </summary>
-        private static bool IsChannelBitSet(Google.Protobuf.ByteString mask, int channelNumber)
-        {
-            var byteIndex = channelNumber / 8;
-            return byteIndex < mask.Length && (mask[byteIndex] & (1 << (channelNumber % 8))) != 0;
-        }
-
-        /// <summary>
-        /// Gets a value from a list with a default fallback if the index is out of range.
-        /// </summary>
-        /// <param name="list">The list to get the value from.</param>
-        /// <param name="index">The index to retrieve.</param>
-        /// <param name="defaultValue">The default value if the index is out of range.</param>
-        /// <returns>The value at the index or the default value.</returns>
-        private static T GetWithDefault<T>(IList<T> list, int index, T defaultValue)
-        {
-            if (list.Count > index)
+            if (channelsSnapshot is not null)
             {
-                return list[index];
+                // Outside the lock: a handler calling back into a channel method takes the same
+                // lock. Mirrors PopulateChannelsFromStatus.
+                ChannelsPopulated?.Invoke(this, new ChannelsPopulatedEventArgs(
+                    Array.AsReadOnly(channelsSnapshot), analogCount, digitalCount));
             }
-            return defaultValue;
+
+            return outputCount;
+        }
+
+        /// <summary>
+        /// Derives the resolution and voltage range to model an analog-output channel with, falling
+        /// back to <see cref="AnalogOutputChannel"/>'s NQ3 defaults for anything the document does
+        /// not state or states implausibly.
+        /// </summary>
+        private (int ResolutionBits, double MinimumVoltage, double MaximumVoltage, bool RangeIsAssumed)
+            ResolveAnalogOutputDescriptor(CapabilityChannel descriptor)
+        {
+            var resolutionBits = descriptor.ResolutionBits ?? AnalogOutputChannel.DefaultResolutionBits;
+
+            if (resolutionBits is < AnalogOutputChannel.MinResolutionBits or > AnalogOutputChannel.MaxResolutionBits)
+            {
+                var stated = resolutionBits;
+                SafeLog(() => _logger.LogWarning(
+                    "[SyncAnalogOutputChannels] Device '{DeviceName}' reported an implausible DAC resolution ({Resolution} bits) for analog output {ChannelId}; assuming {AssumedResolution}.",
+                    Name, stated, descriptor.Id, AnalogOutputChannel.DefaultResolutionBits));
+                resolutionBits = AnalogOutputChannel.DefaultResolutionBits;
+            }
+
+            var minimum = descriptor.RangeMinimum;
+            var maximum = descriptor.RangeMaximum;
+
+            var statedRangeIsUsable =
+                minimum.HasValue && maximum.HasValue &&
+                double.IsFinite(minimum.Value) && double.IsFinite(maximum.Value) &&
+                Math.Abs(minimum.Value) <= AnalogOutputChannel.MaxRangeMagnitudeVolts &&
+                Math.Abs(maximum.Value) <= AnalogOutputChannel.MaxRangeMagnitudeVolts &&
+                minimum.Value < maximum.Value;
+
+            if (statedRangeIsUsable)
+            {
+                return (resolutionBits, minimum!.Value, maximum!.Value, false);
+            }
+
+            if (minimum.HasValue || maximum.HasValue)
+            {
+                SafeLog(() => _logger.LogWarning(
+                    "[SyncAnalogOutputChannels] Device '{DeviceName}' reported an unusable output range ({Minimum} to {Maximum}) for analog output {ChannelId}; assuming {AssumedMinimum} to {AssumedMaximum} V.",
+                    Name, minimum, maximum, descriptor.Id,
+                    AnalogOutputChannel.DefaultMinimumVoltage, AnalogOutputChannel.DefaultMaximumVoltage));
+            }
+
+            return (
+                resolutionBits,
+                AnalogOutputChannel.DefaultMinimumVoltage,
+                AnalogOutputChannel.DefaultMaximumVoltage,
+                true);
         }
 
         /// <summary>
@@ -4373,8 +3948,46 @@ namespace Daqifi.Core.Device
             RaiseClassifiedEvent(StreamMessageReceived, message, nameof(StreamMessageReceived));
 
             // Raise event for external consumers
-            var inboundMessage = new ProtobufMessage(message);
-            OnMessageReceived(inboundMessage);
+            RaiseUndifferentiatedMessage(message);
+        }
+
+        /// <summary>
+        /// Subscribes this device's inbound routing to <paramref name="consumer"/>.
+        /// </summary>
+        /// <remarks>
+        /// Prefers <see cref="StreamMessageConsumer{T}.MessageParsed"/>, which carries the parsed
+        /// message and nothing else. The public <c>MessageReceived</c> event additionally carries a
+        /// snapshot of everything buffered at the time of the read, and taking that snapshot costs
+        /// a copy of the wire throughput on every read of a streaming device (issue #490) — a cost
+        /// this device has never had a use for. Any other consumer implementation falls back to the
+        /// interface event, which behaves exactly as before.
+        /// </remarks>
+        /// <param name="consumer">The consumer to subscribe to.</param>
+        private void AttachInboundMessages(IMessageConsumer<DaqifiOutMessage> consumer)
+        {
+            if (consumer is StreamMessageConsumer<DaqifiOutMessage> streamConsumer)
+            {
+                streamConsumer.MessageParsed += OnInboundMessageParsed;
+                return;
+            }
+
+            consumer.MessageReceived += OnInboundMessageReceived;
+        }
+
+        /// <summary>
+        /// Reverses <see cref="AttachInboundMessages"/>. Both events are detached rather than only
+        /// the one that would have been attached, so a consumer that somehow carries both
+        /// subscriptions cannot be left half-subscribed.
+        /// </summary>
+        /// <param name="consumer">The consumer to unsubscribe from.</param>
+        private void DetachInboundMessages(IMessageConsumer<DaqifiOutMessage> consumer)
+        {
+            if (consumer is StreamMessageConsumer<DaqifiOutMessage> streamConsumer)
+            {
+                streamConsumer.MessageParsed -= OnInboundMessageParsed;
+            }
+
+            consumer.MessageReceived -= OnInboundMessageReceived;
         }
 
         /// <summary>
@@ -4383,12 +3996,36 @@ namespace Daqifi.Core.Device
         /// <param name="sender">The message consumer that raised the event.</param>
         /// <param name="e">The message received event arguments.</param>
         private void OnInboundMessageReceived(object? sender, MessageReceivedEventArgs<DaqifiOutMessage> e)
-        {
-            // Convert to generic inbound message and route through protocol handler
-            var genericMessage = new GenericInboundMessage<object>(e.Message.Data);
+            => OnInboundMessageParsed(e.Message);
 
-            // Route through protocol handler if available
-            if (_protocolHandler != null && _protocolHandler.CanHandle(genericMessage))
+        /// <summary>
+        /// Routes a parsed inbound message through the protocol handler.
+        /// </summary>
+        /// <remarks>
+        /// The consumer is typed to <see cref="DaqifiOutMessage"/>, so the handler's type test can
+        /// never fail here — yet satisfying <see cref="IProtocolHandler.CanHandle"/> used to mean
+        /// boxing every single frame into a <c>GenericInboundMessage&lt;object&gt;</c> just to ask.
+        /// The typed entry point skips both the wrapper and the question (issue #490); a custom
+        /// <see cref="IProtocolHandler"/> still goes the long way round.
+        /// </remarks>
+        /// <param name="message">The parsed message.</param>
+        private void OnInboundMessageParsed(IInboundMessage<DaqifiOutMessage> message)
+        {
+            if (_protocolHandler is ProtobufProtocolHandler protobufHandler)
+            {
+                protobufHandler.Handle(message.Data);
+                return;
+            }
+
+            if (_protocolHandler == null)
+            {
+                return;
+            }
+
+            // Convert to generic inbound message and route through protocol handler
+            var genericMessage = new GenericInboundMessage<object>(message.Data);
+
+            if (_protocolHandler.CanHandle(genericMessage))
             {
                 // Fire and forget - we don't need to wait for the handler to complete
                 _ = _protocolHandler.HandleAsync(genericMessage);

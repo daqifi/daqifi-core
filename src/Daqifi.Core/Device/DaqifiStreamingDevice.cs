@@ -3,6 +3,7 @@ using Daqifi.Core.Communication;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Device.Diagnostics;
 using Daqifi.Core.Device.Internal;
 using Microsoft.Extensions.Logging;
@@ -12,13 +13,10 @@ using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 
 #nullable enable
@@ -29,76 +27,13 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
     {
         /// <summary>
-        /// Maximum number of retry attempts for the USB stream-interface command sent during
-        /// <see cref="OnDeviceInitializingAsync"/> when the device returns a transient SCPI error
-        /// (e.g. because the firmware still has the interface set from a prior WiFi session).
+        /// Response window allowed for the USB stream-interface command sent during
+        /// <see cref="OnDeviceInitializingAsync"/>.
         /// </summary>
-        private const int UsbStreamInterfaceMaxRetries = 1;
-
-        /// <summary>
-        /// Delay in milliseconds before retrying the USB stream-interface command after a
-        /// transient SCPI error.
-        /// </summary>
-        private const int UsbStreamInterfaceRetryDelayMs = 150;
-
-        /// <summary>
-        /// Reconstructs host timestamps from the device's rolling 32-bit tick counter during a
-        /// streaming session. Scoped to this device instance, so a single fixed key suffices.
-        /// </summary>
-        private readonly ITimestampProcessor _timestampProcessor = new TimestampProcessor();
-
-        /// <summary>
-        /// The per-device key used with <see cref="_timestampProcessor"/>. The processor is not
-        /// shared across devices, so the key only needs to be stable within this instance.
-        /// </summary>
-        private const string StreamTimestampKey = "stream";
-
-        /// <summary>
-        /// Detects dropped samples from the device-clock delta between frames. Reset at the start of
-        /// every streaming session alongside <see cref="_timestampProcessor"/>. Drives <see cref="GapDetected"/>.
-        /// </summary>
-        private readonly TimestampGapDetector _gapDetector = new();
-
-        /// <summary>
-        /// Keeps frames the device latched from the previous streaming session out of this one
-        /// (daqifi-nyquist-firmware #533). Re-armed by <see cref="BeginStreamingSession"/>.
-        /// </summary>
-        private readonly StreamFrameGate _frameGate = new();
-
-        /// <summary>
-        /// The maximum number of leading short-analog frames suppressed at stream start
-        /// (see <see cref="_awaitingFirstFullAnalogFrame"/>). Bounds the warmup-frame guard so a
-        /// genuinely short stream can never be withheld indefinitely.
-        /// </summary>
-        private const int MaxSuppressedWarmupFrames = 5;
-
-        /// <summary>
-        /// True from the start of a streaming session that begins with analog channels enabled,
-        /// until the first analog-bearing frame carrying the full enabled-channel complement has
-        /// been decoded (disarmed for a digital-only start). Guards the malformed warmup frame
-        /// the firmware emits at stream start (issue #351): its fast streaming encoder can emit a
-        /// leading frame with fewer analog values than the enabled channel mask, which would
-        /// otherwise reach every consumer as a partial <see cref="DataSample"/> (silently corrupting
-        /// first-value baselining, gap detection, and export). For such leading short frames only
-        /// the malformed analog decode is skipped — a combined frame's digital payload is still
-        /// decoded and the raw frame is still re-raised — until the first full frame arrives,
-        /// bounded by <see cref="MaxSuppressedWarmupFrames"/>.
-        /// </summary>
-        private bool _awaitingFirstFullAnalogFrame;
-
-        /// <summary>
-        /// Count of leading short-analog frames suppressed in the current session; capped by
-        /// <see cref="MaxSuppressedWarmupFrames"/>.
-        /// </summary>
-        private int _suppressedWarmupFrameCount;
-
-        /// <summary>
-        /// Backing counter for <see cref="DiscardedStreamFrameCount"/>.
-        /// </summary>
-        private long _discardedStreamFrameCount;
+        private const int UsbStreamInterfaceResponseTimeoutMs = 500;
 
         /// <summary>
         /// Raised when a stream frame was withheld from consumers because the device should not have
@@ -137,12 +72,7 @@ namespace Daqifi.Core.Device
         /// reported.
         /// </para>
         /// </remarks>
-        public long DiscardedStreamFrameCount => Interlocked.Read(ref _discardedStreamFrameCount);
-
-        /// <summary>
-        /// Backing counter for <see cref="DecodeFailureCount"/>.
-        /// </summary>
-        private long _decodeFailureCount;
+        public long DiscardedStreamFrameCount => _frameDecoder.DiscardedStreamFrameCount;
 
         /// <summary>
         /// Gets the number of streaming frames whose decode threw and was discarded since the
@@ -161,7 +91,7 @@ namespace Daqifi.Core.Device
         /// stream leaves it at zero.
         /// </para>
         /// </remarks>
-        public long DecodeFailureCount => Interlocked.Read(ref _decodeFailureCount);
+        public long DecodeFailureCount => _frameDecoder.DecodeFailureCount;
 
         /// <summary>
         /// Gets a value indicating whether the device is currently streaming data.
@@ -200,6 +130,22 @@ namespace Daqifi.Core.Device
                 _streamingFrequency = value;
             }
         }
+
+        /// <summary>
+        /// Gets the highest streaming frequency in Hz this device can actually sustain with the
+        /// channels it has enabled right now.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately separate from the <see cref="StreamingFrequency"/> setter's own validation,
+        /// which stays on the absolute board ceiling: this figure moves with the channel set, and a
+        /// setter that rejected against it would fail a perfectly reasonable
+        /// "set the rate, then enable the channels" ordering. Call
+        /// <see cref="EnforceStreamingFrequencyCap"/> after changing the channel set instead.
+        /// </remarks>
+        public int MaximumStreamingFrequencyHz => SampleRateCap.ComputeForDevice(this);
+
+        /// <inheritdoc cref="IStreamingDevice.EnforceStreamingFrequencyCap" />
+        public int? EnforceStreamingFrequencyCap() => SampleRateCap.EnforceOn(this);
 
         /// <summary>
         /// Gets a value indicating whether the device is currently logging data to the SD card.
@@ -259,7 +205,10 @@ namespace Daqifi.Core.Device
             // Built here rather than in field initializers because each needs `this` as its host,
             // which a field initializer cannot reference. Every constructor routes through this
             // method, so they are always in place before the device is handed to a caller.
+            _frameDecoder = new StreamFrameDecoder(this);
+            _liveSampleStream = new LiveSampleStream(this);
             _channelControl = new ChannelControlOperations(this);
+            _administration = new DeviceAdministrationOperations(this);
             _networkOperations = new NetworkConfigurationOperations(this);
             _sdCardOperations = new SdCardOperations(this);
             _lanChipInfoOperations = new LanChipInfoOperations(this);
@@ -287,20 +236,17 @@ namespace Daqifi.Core.Device
         /// <see cref="DaqifiDevice.InitializeAsync"/> after the standard SCPI sequence.
         /// </summary>
         /// <remarks>
-        /// The DAQiFi firmware persists the last configured stream interface across sessions.
-        /// If the device was previously set to stream to WiFi (<c>SYSTem:STReam:INTerface 1</c>),
-        /// it will continue sending data over WiFi even when connected via USB — causing the serial
-        /// consumer to receive nothing. Sending <c>SYSTem:STReam:INTerface 0</c> during USB
-        /// initialization ensures data flows to the serial port.
+        /// Whether to route at all, and how hard to retry a transient rejection, is
+        /// <see cref="UsbStreamInterfaceInitializer"/>'s decision; this hook supplies the effect —
+        /// the actual command send — and the connection facts the decision needs.
+        ///
+        /// The send goes through <c>DaqifiDevice.ExecuteTextCommandAsync</c> so the command is sent
+        /// in text mode (protobuf consumer temporarily stopped) and any SCPI error response is
+        /// captured rather than garbling the protobuf stream.
         ///
         /// This runs inside the base <see cref="DaqifiDevice.InitializeAsync"/> exception handling
         /// (before the device is marked initialized/ready), so a cancellation or SCPI error here
         /// leaves the device in a consistent state and re-initializable, rather than falsely Ready.
-        ///
-        /// The routing command is global device state: it takes the stream away from whatever
-        /// interface it was going to, so a second session running it steals another session's data
-        /// (#385). It is therefore skipped entirely when <paramref name="preserveActiveStream"/>
-        /// is set.
         /// </remarks>
         /// <param name="preserveActiveStream">
         /// When <c>true</c>, this initialization must leave a stream another session is already
@@ -314,59 +260,17 @@ namespace Daqifi.Core.Device
         /// command because it still has the interface set from a prior WiFi-streaming session,
         /// within the tight response window right after connect.
         /// </exception>
-        protected override async Task OnDeviceInitializingAsync(
+        protected override Task OnDeviceInitializingAsync(
             bool preserveActiveStream,
-            CancellationToken cancellationToken)
-        {
-            if (!IsUsbConnection)
-            {
-                return;
-            }
-
-            // An observe-only session must not re-route the device's single global stream: doing so
-            // would take the data away from the session that is already receiving it (#385). The
-            // interface is left exactly as the owning session configured it.
-            //
-            // Returning without observing the token is deliberate: there is no work to abandon, and
-            // InitializeAsync re-checks cancellation before it marks the device Ready, so a token
-            // cancelled during this hook is still honored.
-            if (preserveActiveStream)
-            {
-                return;
-            }
-
-            // Direct streaming to the USB interface. Uses ExecuteTextCommandAsync so the
-            // command is sent in text mode (protobuf consumer temporarily stopped) and any
-            // SCPI error response is captured rather than garbling the protobuf stream.
-            //
-            // The firmware persists the last-used stream interface across sessions, so this can
-            // transiently reject with a -200 "Execution error" right after connect. Retry with a
-            // settle delay before treating it as a hard failure (mirrors the SD card retry).
-            IReadOnlyList<string> lines = Array.Empty<string>();
-            for (var attempt = 0; attempt <= UsbStreamInterfaceMaxRetries; attempt++)
-            {
-                if (attempt > 0)
-                {
-                    await Task.Delay(UsbStreamInterfaceRetryDelayMs, cancellationToken).ConfigureAwait(false);
-                }
-
-                lines = await ExecuteTextCommandAsync(
+            CancellationToken cancellationToken) =>
+            UsbStreamInterfaceInitializer.RouteStreamToUsbAsync(
+                IsUsbConnection,
+                preserveActiveStream,
+                ct => ExecuteTextCommandAsync(
                     () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
-                    responseTimeoutMs: 500,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                if (!ScpiResponseClassifier.ContainsScpiError(lines))
-                {
-                    return;
-                }
-            }
-
-            var lastScpiError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
-            throw new ScpiInitializationErrorException(
-                "Device returned a SCPI error while setting stream interface to USB.",
-                lines,
-                lastScpiError);
-        }
+                    responseTimeoutMs: UsbStreamInterfaceResponseTimeoutMs,
+                    cancellationToken: ct),
+                cancellationToken);
 
         /// <summary>
         /// Starts streaming data from the device at the configured frequency.
@@ -374,10 +278,7 @@ namespace Daqifi.Core.Device
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void StartStreaming()
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             if (IsStreaming) return;
 
@@ -398,31 +299,8 @@ namespace Daqifi.Core.Device
         /// previous session's anchor and re-use its gap detector, producing samples stamped with
         /// times that never happened — silently.
         /// </remarks>
-        private void BeginStreamingSession()
-        {
-            // Re-anchor per-session timestamp reconstruction: the first frame of this session
-            // anchors to the current host time, and subsequent frames advance by the device-tick
-            // delta. Apply the device-reported tick frequency (falls back to the 50 MHz default
-            // when unreported, e.g. older firmware).
-            _timestampProcessor.Reset(StreamTimestampKey);
-            _timestampProcessor.SetTimestampFrequency(StreamTimestampKey, TimestampFrequency);
-            _gapDetector.Reset();
-
-            // Arm the warmup-frame guard only when analog channels are enabled at stream start —
-            // the reproduced failure mode (issue #351) is the firmware's leading partial-analog
-            // frame at the start of an *analog* stream. A digital-only start needs no guard; leaving
-            // it disarmed there also avoids suppressing short analog frames that could arrive far
-            // from session start if analog channels are enabled mid-stream (a scenario with no
-            // observed warmup frame).
-            _awaitingFirstFullAnalogFrame = CountEnabledAnalogChannels(SnapshotChannels()) > 0;
-            _suppressedWarmupFrameCount = 0;
-            Interlocked.Exchange(ref _decodeFailureCount, 0);
-
-            // Re-arm the cross-session leftover guard against the counter value this session
-            // inherits, and at this session's rate — the window is measured in sample periods.
-            _frameGate.BeginSession(TimestampFrequency, StreamingFrequency);
-            Interlocked.Exchange(ref _discardedStreamFrameCount, 0);
-        }
+        private void BeginStreamingSession() =>
+            _frameDecoder.BeginSession(TimestampFrequency, StreamingFrequency);
 
         /// <summary>
         /// Stops streaming data from the device.
@@ -430,10 +308,7 @@ namespace Daqifi.Core.Device
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         public void StopStreaming()
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            EnsureConnected();
 
             if (!IsStreaming) return;
 
@@ -441,16 +316,23 @@ namespace Daqifi.Core.Device
             Send(ScpiMessageProducer.StopStreaming);
         }
 
+        /// <inheritdoc cref="IStreamingDevice.StartStreamingAsync" />
+        public Task StartStreamingAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StartStreaming();
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc cref="IStreamingDevice.StopStreamingAsync" />
+        public Task StopStreamingAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StopStreaming();
+            return Task.CompletedTask;
+        }
+
         #region Session state tracking for commands sent directly (issue #379)
-
-        /// <summary>The command <see cref="ScpiMessageProducer.StartStreaming"/> emits.</summary>
-        private const string StartStreamingCommand = "SYSTem:StartStreamData";
-
-        /// <summary>The command <see cref="ScpiMessageProducer.StopStreaming"/> emits.</summary>
-        private const string StopStreamingCommand = "SYSTem:StopStreamData";
-
-        /// <summary>The command <see cref="ScpiMessageProducer.EnableAdcChannels"/> emits.</summary>
-        private const string EnableAdcChannelsCommand = "ENAble:VOLTage:DC";
 
         /// <summary>
         /// Sends a command, and keeps this device's view of the streaming session in step with it.
@@ -461,21 +343,13 @@ namespace Daqifi.Core.Device
         /// example CLI does the whole job that way — but a session driven through it used to be
         /// completely invisible to this class: <see cref="IsStreaming"/> stayed <c>false</c> while
         /// data poured in, and the enabled-channel set stayed empty. That mattered once reconnect
-        /// arrived (issue #379). A physical cable pull on the bench recovered the link and then
-        /// reported <c>StreamingResumed: false</c>, because as far as Core was concerned nothing had
-        /// ever been streaming — while re-initialization had in fact just stopped the stream that
-        /// was running. The session looked restored and was not.
+        /// arrived (issue #379). <see cref="SessionCommandInterpreter"/> reads the commands that
+        /// define a session; this method applies what they imply, so the same state is updated that
+        /// <see cref="StartStreaming"/> / <see cref="StopStreaming"/> and <see cref="EnableChannel"/>
+        /// would have set.
         /// </para>
         /// <para>
-        /// So the two commands that define a streaming session are recognized here regardless of
-        /// which API produced them, and the same state is updated that
-        /// <see cref="StartStreaming"/> / <see cref="StopStreaming"/> and
-        /// <see cref="EnableChannel"/> would have set. This is the same principle as #409, where
-        /// analog <c>IsEnabled</c> is resynced from the device's own reported mask: what Core
-        /// believes about a session has to track what is actually true of it.
-        /// </para>
-        /// <para>
-        /// Only these commands are interpreted, and only after the send itself has succeeded.
+        /// Only those commands are interpreted, and only after the send itself has succeeded.
         /// Everything else passes through untouched.
         /// </para>
         /// <para>
@@ -503,13 +377,6 @@ namespace Daqifi.Core.Device
         /// </description></item>
         /// </list>
         /// <para>
-        /// <b>Deliberately outside it.</b> The global DIO enable is one switch for the whole port
-        /// rather than a per-channel mask, so a raw <c>DIO:PORt:ENAble</c> carries no information
-        /// about <i>which</i> digital channels were wanted and none is inferred. Argument validation
-        /// is not replayed either: by the time a command is seen here it has already gone to the
-        /// device, and the device is the authority on whether it accepted it.
-        /// </para>
-        /// <para>
         /// Running after the send is safe rather than merely convenient. A string command is handed
         /// to the background producer, so it has not reached the wire when this runs, and the device
         /// cannot answer a command it has not received; on the producer-less path that writes
@@ -534,100 +401,55 @@ namespace Daqifi.Core.Device
         /// <summary>
         /// Updates the streaming-session view from a command that has just been sent.
         /// </summary>
+        /// <remarks>
+        /// The sampling ceiling is read exactly once and handed to the interpreter, which validates
+        /// the rate against it; the value that comes back is then assigned to the backing field
+        /// rather than through the validating <see cref="StreamingFrequency"/> setter. That setter
+        /// re-reads <see cref="DeviceCapabilities.MaxSamplingRate"/>, which is a mutable public
+        /// property — so validating against one read and assigning through a setter that takes
+        /// another would let a concurrent capabilities update throw out of a <see cref="Send{T}"/>
+        /// whose command has already gone to the device. Tracking a command must never be able to
+        /// fail the send that carried it.
+        /// </remarks>
         private void TrackSessionCommand(string? command)
         {
-            if (string.IsNullOrWhiteSpace(command))
+            var effect = SessionCommandInterpreter.Interpret(command, Metadata.Capabilities.MaxSamplingRate);
+
+            switch (effect.Kind)
             {
-                return;
+                case SessionCommandEffectKind.StopStreaming:
+                    IsStreaming = false;
+                    break;
+
+                case SessionCommandEffectKind.StartStreaming:
+                    // Frequency first: anything observing IsStreaming must never catch it true next
+                    // to a rate belonging to a previous session.
+                    _streamingFrequency = effect.StreamingFrequency;
+
+                    // A restart while already streaming is not a session boundary — the typed API
+                    // cannot even express it (StartStreaming returns early) — so there is nothing to
+                    // re-anchor and recording the new rate is all that is warranted.
+                    if (!IsStreaming)
+                    {
+                        // A session is beginning, so it gets exactly the preparation StartStreaming
+                        // would have given it. Ordering matches too: the state is ready before the
+                        // flag flips.
+                        BeginStreamingSession();
+                        IsStreaming = true;
+                    }
+
+                    break;
+
+                case SessionCommandEffectKind.UnusableStreamingStart:
+                    SafeTrace(
+                        $"[{nameof(TrackSessionCommand)}] Ignoring a start-streaming command with an unusable rate "
+                        + $"('{effect.RejectedRate}'); the session state is unchanged.");
+                    break;
+
+                case SessionCommandEffectKind.SetAdcEnableMask:
+                    ApplyAdcEnableMask(effect.AdcEnableMask);
+                    break;
             }
-
-            var trimmed = command.Trim();
-
-            if (trimmed.StartsWith(StopStreamingCommand, StringComparison.OrdinalIgnoreCase))
-            {
-                IsStreaming = false;
-                return;
-            }
-
-            if (trimmed.StartsWith(StartStreamingCommand, StringComparison.OrdinalIgnoreCase))
-            {
-                TrackStreamingStart(trimmed.AsSpan(StartStreamingCommand.Length));
-                return;
-            }
-
-            if (trimmed.StartsWith(EnableAdcChannelsCommand, StringComparison.OrdinalIgnoreCase))
-            {
-                TrackAdcEnableMask(trimmed.AsSpan(EnableAdcChannelsCommand.Length));
-            }
-        }
-
-        /// <summary>
-        /// Records a start-streaming command, but only one carrying a rate this device can model.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// A command whose argument is missing, unparseable, or outside the device's sampling range
-        /// is <b>not</b> treated as the start of a session. Marking one as streaming anyway would be
-        /// wrong three times over: the firmware rejects such a command and does not start streaming,
-        /// so the flag would not describe the device; <see cref="StreamingFrequency"/> would be left
-        /// holding a rate from some earlier session, which a reconnect would then faithfully restore
-        /// — resuming at a rate nobody asked for is the silent-wrong-data failure this whole feature
-        /// exists to prevent; and a stale <see cref="IsStreaming"/> makes the next legitimate
-        /// <see cref="StartStreaming"/> a silent no-op, which is the same stale-flag trap that
-        /// issue #118 and the defensive stops scattered through the SD paths already guard against.
-        /// </para>
-        /// <para>
-        /// The existing state is left alone rather than cleared. A device already streaming at a
-        /// good rate goes on doing exactly that when the firmware rejects a malformed start, so
-        /// <see cref="IsStreaming"/> and <see cref="StreamingFrequency"/> both remain true of it;
-        /// forcing them off would swap one inaccuracy for another.
-        /// </para>
-        /// <para>
-        /// Because of this, <see cref="IsStreaming"/> is never <c>true</c> alongside a rate that was
-        /// not validated — so session restore has no "streaming at an unknown rate" case to decide
-        /// what to do about. The state it replays is always one that was really commanded.
-        /// </para>
-        /// </remarks>
-        private void TrackStreamingStart(ReadOnlySpan<char> argument)
-        {
-            var rate = argument.Trim();
-
-            // One read of the ceiling, used for both the check and the assignment below. The public
-            // StreamingFrequency setter re-reads it and throws when it does not like the value, and
-            // MaxSamplingRate is a mutable public property — so validating against one read and
-            // then assigning through a setter that takes another would let a concurrent
-            // capabilities update throw out of a Send whose command has already gone to the device.
-            // Tracking a command must never be able to fail the send that carried it.
-            var maxSamplingRate = Math.Max(1, Metadata.Capabilities.MaxSamplingRate);
-
-            if (!int.TryParse(rate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frequency)
-                || frequency < 1
-                || frequency > maxSamplingRate)
-            {
-                SafeTrace(
-                    $"[{nameof(TrackStreamingStart)}] Ignoring a start-streaming command with an unusable rate "
-                    + $"('{rate.ToString()}'); the session state is unchanged.");
-                return;
-            }
-
-            // Frequency first: anything observing IsStreaming must never catch it true next to a
-            // rate belonging to a previous session. Assigned to the backing field, not through the
-            // validating setter, for the reason above — the value has just been validated against
-            // the same rule.
-            _streamingFrequency = frequency;
-
-            if (IsStreaming)
-            {
-                // A restart while already streaming. The typed API cannot even express this
-                // (StartStreaming returns early), so there is no session boundary to re-anchor at
-                // and no equivalence to preserve; recording the new rate is all that is warranted.
-                return;
-            }
-
-            // A session is beginning, so it gets exactly the preparation StartStreaming would have
-            // given it. Ordering matches too: the state is ready before the flag flips.
-            BeginStreamingSession();
-            IsStreaming = true;
         }
 
         /// <summary>
@@ -641,13 +463,8 @@ namespace Daqifi.Core.Device
         /// next status frame (#409) — that is the device's own view, and it outranks what was asked
         /// for.
         /// </remarks>
-        private void TrackAdcEnableMask(ReadOnlySpan<char> argument)
+        private void ApplyAdcEnableMask(uint mask)
         {
-            if (!uint.TryParse(argument.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var mask))
-            {
-                return;
-            }
-
             WithChannelsLock(() =>
             {
                 foreach (var channel in SnapshotChannels())
@@ -672,42 +489,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         private volatile StreamingSessionSnapshot? _sessionSnapshot;
 
-        /// <summary>
-        /// The subset of a streaming session that Core owns and can therefore put back: which
-        /// channels were enabled, and whether data was flowing.
-        /// </summary>
-        private sealed class StreamingSessionSnapshot
-        {
-            public StreamingSessionSnapshot(HashSet<(ChannelType Type, int Number)> enabledChannels, bool wasStreaming)
-            {
-                EnabledChannels = enabledChannels;
-                WasStreaming = wasStreaming;
-            }
-
-            /// <summary>
-            /// The enabled channels, held by identity rather than by reference: a reconnect can
-            /// replace the channel objects, and a device that came back with a different channel
-            /// count should restore the intersection rather than fail.
-            /// </summary>
-            public HashSet<(ChannelType Type, int Number)> EnabledChannels { get; }
-
-            public bool WasStreaming { get; }
-        }
-
         /// <inheritdoc />
-        protected override void CaptureSessionSnapshot()
-        {
-            var enabled = new HashSet<(ChannelType, int)>();
-            foreach (var channel in GetChannelsSnapshot())
-            {
-                if (channel.IsEnabled)
-                {
-                    enabled.Add((channel.Type, channel.ChannelNumber));
-                }
-            }
-
-            _sessionSnapshot = new StreamingSessionSnapshot(enabled, IsStreaming);
-        }
+        protected override void CaptureSessionSnapshot() =>
+            _sessionSnapshot = StreamingSessionSnapshot.Capture(GetChannelsSnapshot(), IsStreaming);
 
         /// <summary>
         /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
@@ -715,16 +499,9 @@ namespace Daqifi.Core.Device
         /// </summary>
         /// <remarks>
         /// <para>
-        /// The enable set has to be replayed from the snapshot rather than read back off the
-        /// channel objects: <see cref="DaqifiDevice.PopulateChannelsFromStatus"/> resyncs analog
-        /// <c>IsEnabled</c> from the device's own enabled mask on every status message (#409), so by
-        /// the time re-initialization is done the in-memory view reflects the freshly reconnected
-        /// device, not the session that was lost.
-        /// </para>
-        /// <para>
-        /// The streaming frequency needs no replay — it is a host-side setting that the drop never
-        /// touched — but it does have to reach the device again, which is what the resumed
-        /// <see cref="StartStreaming"/> does.
+        /// What to restore is <see cref="StreamingSessionSnapshot.PlanRestore"/>'s decision; this
+        /// method owns the effects, and their order is the part that matters. See that method for
+        /// why the enable set is replayed from the snapshot rather than read back off the channels.
         /// </para>
         /// <para>
         /// A resumed stream is a genuinely new session: timestamp reconstruction re-anchors and the
@@ -755,32 +532,24 @@ namespace Daqifi.Core.Device
             cancellationToken.ThrowIfCancellationRequested();
 
             // Normalize to a known state before re-applying: whatever the device came back with is
-            // not necessarily what it had, and the enable commands are set-replace anyway.
+            // not necessarily what it had, and the enable commands are set-replace anyway. The
+            // channel list is read afterwards so the plan is built against the post-reset objects.
             DisableAllChannels();
 
-            var toEnable = new List<IChannel>();
-            foreach (var channel in GetChannelsSnapshot())
+            var plan = snapshot.PlanRestore(GetChannelsSnapshot(), options);
+            if (plan.ChannelsToEnable.Count > 0)
             {
-                if (snapshot.EnabledChannels.Contains((channel.Type, channel.ChannelNumber)))
-                {
-                    toEnable.Add(channel);
-                }
-            }
-
-            if (toEnable.Count > 0)
-            {
-                EnableChannels(toEnable);
+                EnableChannels(plan.ChannelsToEnable);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            var resumeStreaming = snapshot.WasStreaming && options.ResumeStreaming;
-            if (resumeStreaming)
+            if (plan.ResumeStreaming)
             {
                 StartStreaming();
             }
 
-            return Task.FromResult(resumeStreaming);
+            return Task.FromResult(plan.ResumeStreaming);
         }
 
         #endregion
@@ -790,14 +559,12 @@ namespace Daqifi.Core.Device
         /// </summary>
         public const int DefaultLiveSampleBufferCapacity = 4096;
 
-        private long _droppedLiveSampleCount;
-
         /// <summary>
         /// Gets the cumulative number of live samples dropped across all <see cref="StreamSamplesAsync"/>
         /// enumerations because a consumer could not keep up with the incoming rate (drop-oldest policy).
         /// A non-zero and growing value means a live consumer is too slow for the current stream rate.
         /// </summary>
-        public long DroppedLiveSampleCount => Interlocked.Read(ref _droppedLiveSampleCount);
+        public long DroppedLiveSampleCount => _liveSampleStream.DroppedSampleCount;
 
         /// <summary>
         /// Exposes decoded live samples as an <see cref="IAsyncEnumerable{T}"/> for pull-based
@@ -806,6 +573,7 @@ namespace Daqifi.Core.Device
         /// per-channel <see cref="IChannel.SampleReceived"/> and raw-frame events are unaffected.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Samples are buffered in a bounded channel with a <b>drop-oldest</b> overflow policy: if the
         /// consumer falls behind, the oldest buffered samples are discarded (memory never grows
         /// unbounded) and <see cref="DroppedLiveSampleCount"/> is incremented — the decode thread that
@@ -813,6 +581,44 @@ namespace Daqifi.Core.Device
         /// cancelling <paramref name="cancellationToken"/> ends it promptly (surfaced as
         /// <see cref="OperationCanceledException"/>) and unsubscribes, but does <b>not</b> stop the
         /// device's stream — call <see cref="StopStreaming"/> for that.
+        /// </para>
+        /// <para>
+        /// <b>An enumeration is bound to the connected session it starts in</b> (issue #496), because
+        /// samples only ever arrive on one. It ends as soon as the device stops being connected, after
+        /// yielding whatever was already buffered:
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>
+        /// A teardown that was asked for — <see cref="DaqifiDevice.Disconnect"/>,
+        /// <see cref="DaqifiDevice.DisconnectAsync"/>, or <see cref="DaqifiDevice.Dispose()"/> — ends
+        /// the <c>await foreach</c> normally.
+        /// </description></item>
+        /// <item><description>
+        /// A drop the caller did not ask for — an unplug, a WiFi loss, a reconnect that gives up —
+        /// throws <see cref="DeviceNotConnectedException"/>. A cut-short acquisition must not be
+        /// indistinguishable from a complete one.
+        /// </description></item>
+        /// <item><description>
+        /// Starting an enumeration on a device that is not connected throws
+        /// <see cref="DeviceNotConnectedException"/> on the first <c>MoveNextAsync</c>, rather than
+        /// waiting for samples that cannot come.
+        /// </description></item>
+        /// </list>
+        /// <para>
+        /// Automatic reconnection (<see cref="DaqifiDevice.ReconnectOptions"/>) does <b>not</b> resume
+        /// an enumeration: the drop ends it, and a caller that wants live samples from the restored
+        /// session starts a new one once <see cref="DaqifiDevice.Status"/> reads
+        /// <see cref="ConnectionStatus.Connected"/> again. Ending is what makes the outcome the same
+        /// whether or not reconnect is enabled, and the restored session may not even be built from
+        /// the same channel objects this enumeration subscribed to.
+        /// </para>
+        /// <para>
+        /// This returns <see cref="LiveSampleStream"/>'s async iterator directly rather than wrapping
+        /// it in one of its own, which is what keeps the two deferred behaviors a caller can observe
+        /// exactly as they were: <c>WithCancellation</c> still reaches the iterator's own
+        /// <c>[EnumeratorCancellation]</c> parameter, and an invalid <paramref name="bufferCapacity"/>
+        /// still throws on the first <c>MoveNextAsync</c> rather than at the call.
+        /// </para>
         /// </remarks>
         /// <param name="cancellationToken">Ends enumeration when cancelled.</param>
         /// <param name="bufferCapacity">
@@ -820,57 +626,44 @@ namespace Daqifi.Core.Device
         /// </param>
         /// <returns>An async stream of <see cref="LiveSample"/> (channel + decoded sample).</returns>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferCapacity"/> is less than 1.</exception>
-        public async IAsyncEnumerable<LiveSample> StreamSamplesAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        /// <exception cref="DeviceNotConnectedException">
+        /// The device is not connected when enumeration starts, or the connection was lost while it
+        /// was running. Both are raised from <c>MoveNextAsync</c>, after any buffered samples.
+        /// </exception>
+        public IAsyncEnumerable<LiveSample> StreamSamplesAsync(
+            CancellationToken cancellationToken = default,
             int? bufferCapacity = null)
+            => _liveSampleStream.StreamSamplesAsync(cancellationToken, bufferCapacity);
+
+        /// <summary>
+        /// Ends the live-sample enumerations when the device stops being connected (issue #496).
+        /// </summary>
+        /// <remarks>
+        /// The only device state that has to react to a transition before consumers do. Everything
+        /// else the streaming device owns is either driven by inbound frames — which stop on their
+        /// own — or torn down by the disconnect itself.
+        /// </remarks>
+        internal override void OnConnectionStatusChanged(ConnectionStatus status)
         {
-            var capacity = bufferCapacity ?? DefaultLiveSampleBufferCapacity;
-            if (capacity < 1)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(bufferCapacity), capacity, "Buffer capacity must be at least 1.");
-            }
+            base.OnConnectionStatusChanged(status);
 
-            var buffer = System.Threading.Channels.Channel.CreateBounded<LiveSample>(
-                new BoundedChannelOptions(capacity)
-                {
-                    FullMode = BoundedChannelFullMode.DropOldest,
-                    SingleReader = true,
-                    SingleWriter = false,
-                },
-                _ => Interlocked.Increment(ref _droppedLiveSampleCount));
+            // Null only if a transition could somehow beat InitializeStreamingDevice, which no
+            // constructor path allows; cheap enough to not depend on that staying true.
+            _liveSampleStream?.OnConnectionStatusChanged(status);
+        }
 
-            void OnSample(object? sender, SampleReceivedEventArgs e) =>
-                buffer.Writer.TryWrite(new LiveSample(e.Channel, e.Sample));
-
-            var channels = SnapshotChannels();
-            foreach (var channel in channels)
-            {
-                channel.SampleReceived += OnSample;
-            }
-
-            try
-            {
-                await foreach (var sample in buffer.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    yield return sample;
-                }
-            }
-            finally
-            {
-                foreach (var channel in channels)
-                {
-                    channel.SampleReceived -= OnSample;
-                }
-                buffer.Writer.TryComplete();
-            }
+        /// <inheritdoc />
+        internal override void ReleaseDerivedResources()
+        {
+            base.ReleaseDerivedResources();
+            _liveSampleStream?.OnDeviceReleased();
         }
 
         /// <summary>
-        /// Handles a streaming data frame: screens out the frames the device should not have sent,
-        /// then re-raises the frame for raw-frame consumers (via the base implementation) and, while
-        /// streaming, decodes it into per-channel samples that drive
-        /// <see cref="IChannel.SampleReceived"/>.
+        /// Handles a streaming data frame by handing it to <see cref="StreamFrameDecoder"/>, which
+        /// screens out the frames the device should not have sent, then re-raises what survives for
+        /// raw-frame consumers (via the base implementation) and, while streaming, decodes it into
+        /// per-channel samples that drive <see cref="IChannel.SampleReceived"/>.
         /// </summary>
         /// <remarks>
         /// Screening covers both consumer paths, which is the whole point of issue #425. The
@@ -879,167 +672,26 @@ namespace Daqifi.Core.Device
         /// the frame verbatim — and that is the path most callers actually use, including the
         /// example CLI, whose offline export inferred a channel count of one from it and truncated
         /// every sample that followed. Whatever is unfit for the decoded path is unfit for the raw
-        /// one; both are now gated together, and every drop is reported through
+        /// one; both are gated together, and every drop is reported through
         /// <see cref="StreamFrameDiscarded"/>.
         /// </remarks>
         /// <param name="message">The streaming message from the device.</param>
-        protected override void OnStreamMessageReceived(DaqifiOutMessage message)
-        {
-            if (IsStreaming && _frameGate.IsValidating && _frameGate.IsLeftoverFromPreviousSession(message))
-            {
-                RaiseStreamFrameDiscarded(
-                    StreamFrameDiscardReason.StaleLeftoverFrame,
-                    message,
-                    CountAnalogValues(message),
-                    CountEnabledAnalogChannels(SnapshotChannels()));
-                return;
-            }
-
-            _frameGate.TrackFrame(message.MsgTimeStamp);
-
-            // Only decode into channel samples while an app-driven stream is active. A stray frame
-            // that arrives outside a streaming session is still re-raised but not decoded.
-            if (!IsStreaming)
-            {
-                base.OnStreamMessageReceived(message);
-                return;
-            }
-
-            EmitStreamFrame(message);
-        }
+        protected override void OnStreamMessageReceived(DaqifiOutMessage message) =>
+            _frameDecoder.ProcessFrame(message);
 
         /// <summary>
-        /// Delivers a frame that has cleared <see cref="_frameGate"/>: re-raises it for raw-frame
-        /// consumers and decodes it into per-channel samples.
+        /// Raises <see cref="StreamFrameDiscarded"/> for a frame the decoder withheld. Subscriber
+        /// exceptions are isolated, mirroring <see cref="RaiseGapDetected"/>.
         /// </summary>
         /// <remarks>
-        /// The firmware's malformed leading frame (issue #351) is caught here rather than by the
-        /// gate, because it needs the enabled-channel count and because what it costs is narrower:
-        /// only the analog payload is unusable. Such a frame is withheld from raw consumers — they
-        /// read <c>AnalogInData</c> straight off it, so there is no way to hand it over safely — but
-        /// its digital payload is still decoded and its timestamp still anchors the session clock,
-        /// exactly as before.
+        /// Kept on the device rather than moved into <see cref="StreamFrameDecoder"/> so the event's
+        /// <c>sender</c> stays the device a subscriber attached to. The decoder counts the discard
+        /// before calling this, so <see cref="DiscardedStreamFrameCount"/> read inside a handler
+        /// still already includes the frame being reported.
         /// </remarks>
-        /// <param name="message">The frame to deliver.</param>
-        private void EmitStreamFrame(DaqifiOutMessage message)
+        /// <param name="e">The discard to report.</param>
+        private void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
         {
-            var suppressAnalog = false;
-            var analogValueCount = 0;
-            var enabledAnalogChannelCount = 0;
-
-            if (_awaitingFirstFullAnalogFrame)
-            {
-                suppressAnalog = ShouldSuppressPartialAnalog(
-                    message, out analogValueCount, out enabledAnalogChannelCount);
-            }
-
-            if (suppressAnalog)
-            {
-                // The counts reported here are the very ones the suppression decision was made on,
-                // not a fresh reading: channel enablement can change from another thread, and a
-                // discard whose reported numbers disagree with the reason it was discarded would
-                // make the telemetry harder to trust than no telemetry at all.
-                RaiseStreamFrameDiscarded(
-                    StreamFrameDiscardReason.PartialAnalogFrame,
-                    message,
-                    analogValueCount,
-                    enabledAnalogChannelCount);
-            }
-            else
-            {
-                // Preserve the raw-frame MessageReceived event so existing consumers that hand-demux
-                // the protobuf frame keep working unchanged.
-                base.OnStreamMessageReceived(message);
-            }
-
-            try
-            {
-                DecodeStreamFrame(message, suppressAnalog);
-            }
-            catch (Exception ex)
-            {
-                // A single malformed frame must never tear down the stream or starve other
-                // consumers; decoding is best-effort per frame. That isolation stays exactly as it
-                // was — the frame is dropped and the loop continues — but it is no longer silent
-                // (issue #378): a decode that throws on every frame yields no samples, which used
-                // to be indistinguishable from a device sending nothing at all. Both the counter
-                // and the (throttled) event are observation only; neither changes what happens to
-                // this frame or the next one.
-                Interlocked.Increment(ref _decodeFailureCount);
-                RaiseDeviceError(DeviceErrorSource.StreamDecode, ex);
-            }
-        }
-
-        /// <summary>
-        /// Decides whether a leading frame's analog payload is the firmware's malformed warmup frame
-        /// (issue #351): fewer analog values than there are enabled analog channels. Disarms the
-        /// guard on the first analog-bearing frame that is not short, or once
-        /// <see cref="MaxSuppressedWarmupFrames"/> have been suppressed.
-        /// </summary>
-        /// <param name="message">The frame about to be delivered.</param>
-        /// <param name="analogValueCount">The number of analog values the frame carried.</param>
-        /// <param name="enabledAnalogChannelCount">
-        /// The number of enabled analog channels the decision was made against. Handed back so the
-        /// discard event reports the same numbers the decision used rather than re-reading channel
-        /// state that another thread may have changed in between.
-        /// </param>
-        /// <returns><c>true</c> when the frame's analog values must be withheld.</returns>
-        private bool ShouldSuppressPartialAnalog(
-            DaqifiOutMessage message,
-            out int analogValueCount,
-            out int enabledAnalogChannelCount)
-        {
-            analogValueCount = CountAnalogValues(message);
-            enabledAnalogChannelCount = 0;
-
-            // A frame with no analog payload says nothing about the warmup frame either way, so the
-            // guard stays armed for the first analog-bearing frame.
-            if (analogValueCount == 0)
-            {
-                return false;
-            }
-
-            enabledAnalogChannelCount = CountEnabledAnalogChannels(SnapshotChannels());
-            if (enabledAnalogChannelCount > 0
-                && analogValueCount < enabledAnalogChannelCount
-                && _suppressedWarmupFrameCount < MaxSuppressedWarmupFrames)
-            {
-                _suppressedWarmupFrameCount++;
-                return true;
-            }
-
-            _awaitingFirstFullAnalogFrame = false;
-            return false;
-        }
-
-        /// <summary>
-        /// The number of analog values a frame carries, from whichever payload the transport used —
-        /// USB streams pre-scaled floats, WiFi streams raw ADC counts.
-        /// </summary>
-        private static int CountAnalogValues(DaqifiOutMessage message) =>
-            message.AnalogInDataFloat.Count > 0
-                ? message.AnalogInDataFloat.Count
-                : message.AnalogInData.Count;
-
-        /// <summary>
-        /// Raises <see cref="StreamFrameDiscarded"/> for a frame that was withheld, and counts it.
-        /// Subscriber exceptions are isolated, mirroring <see cref="RaiseGapDetected"/>.
-        /// </summary>
-        /// <param name="reason">Why the frame was withheld.</param>
-        /// <param name="frame">The frame that was withheld.</param>
-        /// <param name="analogValueCount">The number of analog values the frame carried.</param>
-        /// <param name="enabledAnalogChannelCount">
-        /// The number of enabled analog channels to report. Passed in rather than re-derived so it
-        /// is the same reading the discard decision was made against.
-        /// </param>
-        private void RaiseStreamFrameDiscarded(
-            StreamFrameDiscardReason reason,
-            DaqifiOutMessage frame,
-            int analogValueCount,
-            int enabledAnalogChannelCount)
-        {
-            Interlocked.Increment(ref _discardedStreamFrameCount);
-
             var handler = StreamFrameDiscarded;
             if (handler == null)
             {
@@ -1048,8 +700,7 @@ namespace Daqifi.Core.Device
 
             try
             {
-                handler(this, new StreamFrameDiscardedEventArgs(
-                    reason, frame.MsgTimeStamp, analogValueCount, enabledAnalogChannelCount));
+                handler(this, e);
             }
             catch (Exception ex)
             {
@@ -1083,60 +734,6 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Decodes a streaming frame into per-channel samples: selects the active channels in
-        /// device order, chooses the correct value source (USB pre-scaled float vs. WiFi raw ADC
-        /// count scaled via calibration), unpacks digital bits, and pushes a sample to each channel.
-        /// </summary>
-        /// <param name="message">The streaming message to decode.</param>
-        /// <param name="suppressAnalog">
-        /// When <c>true</c>, the frame's analog payload is the firmware's malformed warmup frame
-        /// (issue #351) and is skipped. Only the analog values are withheld — a combined frame's
-        /// digital payload is still decoded, and the frame's (normal one-period) timestamp still
-        /// anchors the session clock, so digital state and edges are not lost.
-        /// </param>
-        private void DecodeStreamFrame(DaqifiOutMessage message, bool suppressAnalog)
-        {
-            var hasFloat = message.AnalogInDataFloat.Count > 0;
-            var hasRawAnalog = message.AnalogInData.Count > 0;
-            var hasDigital = message.DigitalData.Length > 0;
-
-            if (!hasFloat && !hasRawAnalog && !hasDigital)
-            {
-                return;
-            }
-
-            // Snapshot channels once: the consumer thread that repopulates channels is the same
-            // thread that runs this decode, so the structure is stable for the duration of the call.
-            var channels = SnapshotChannels();
-
-            // Reconstruct a host timestamp from the device tick counter (rollover-aware) and carry
-            // the raw device tick value through to each decoded sample.
-            var deviceTimestamp = message.MsgTimeStamp;
-            var timestampResult = _timestampProcessor.ProcessTimestamp(StreamTimestampKey, deviceTimestamp);
-            var hostTimestamp = timestampResult.Timestamp;
-
-            // Flag dropped samples from the device-clock delta (immune to host arrival jitter).
-            // Isolate subscriber exceptions (see RaiseGapDetected) so a throwing GapDetected handler
-            // cannot skip the per-channel decode below — which the caller's broad catch would then
-            // silently drop.
-            if (_gapDetector.IsGap(timestampResult.SecondsBetweenMessages))
-            {
-                RaiseGapDetected(new TimestampGapEventArgs(
-                    hostTimestamp, timestampResult.SecondsBetweenMessages, deviceTimestamp));
-            }
-
-            if ((hasFloat || hasRawAnalog) && !suppressAnalog)
-            {
-                DecodeAnalog(message, channels, hostTimestamp, deviceTimestamp, hasFloat);
-            }
-
-            if (hasDigital)
-            {
-                DecodeDigital(message, channels, hostTimestamp, deviceTimestamp);
-            }
-        }
-
-        /// <summary>
         /// Raises <see cref="GapDetected"/>, isolating the decode pipeline from a subscriber
         /// exception so a throwing handler cannot skip this frame's per-channel decode (which the
         /// broad catch in <see cref="OnStreamMessageReceived"/> would then silently drop). Mirrors
@@ -1160,133 +757,72 @@ namespace Daqifi.Core.Device
             }
         }
 
-        /// <summary>
-        /// Maps a frame's analog values to the enabled analog channels, in ascending channel order.
-        /// USB firmware streams pre-scaled floats (used directly); WiFi firmware streams raw ADC
-        /// counts (scaled per channel via <see cref="IAnalogChannel.GetScaledValue"/>).
-        /// </summary>
-        private static int CountEnabledAnalogChannels(IReadOnlyList<IChannel> channels)
-        {
-            var count = 0;
-            foreach (var channel in channels)
-            {
-                if (channel.IsEnabled && channel is IAnalogChannel)
-                {
-                    count++;
-                }
-            }
-            return count;
-        }
-
-        private static void DecodeAnalog(
-            DaqifiOutMessage message,
-            IReadOnlyList<IChannel> channels,
-            DateTime hostTimestamp,
-            uint deviceTimestamp,
-            bool hasFloat)
-        {
-            // The device streams one value per enabled analog channel, ordered by channel number,
-            // not by activation order — so re-derive that ordering here.
-            var activeAnalog = new List<IAnalogChannel>();
-            foreach (var channel in channels)
-            {
-                if (channel.IsEnabled && channel is IAnalogChannel analog)
-                {
-                    activeAnalog.Add(analog);
-                }
-            }
-            activeAnalog.Sort((a, b) => a.ChannelNumber.CompareTo(b.ChannelNumber));
-
-            var dataCount = hasFloat ? message.AnalogInDataFloat.Count : message.AnalogInData.Count;
-            var count = Math.Min(dataCount, activeAnalog.Count);
-
-            for (var i = 0; i < count; i++)
-            {
-                var channel = activeAnalog[i];
-                double scaled;
-                int? raw;
-
-                if (hasFloat)
-                {
-                    // USB firmware already scaled to volts; no raw ADC count is available.
-                    scaled = message.AnalogInDataFloat[i];
-                    raw = null;
-                }
-                else
-                {
-                    // WiFi firmware sent a raw ADC count; apply this channel's calibration.
-                    var rawValue = message.AnalogInData[i];
-                    scaled = channel.GetScaledValue(rawValue);
-                    raw = rawValue;
-                }
-
-                channel.SetActiveSample(new DataSample(hostTimestamp, scaled, raw, deviceTimestamp));
-            }
-        }
-
-        /// <summary>
-        /// Unpacks a frame's digital byte(s) into per-channel high/low samples for the enabled
-        /// digital input channels. The firmware streams the whole DIO port as a raw pin-state
-        /// snapshot (the wire-level DIO enable is global, not per pin), so a channel's bit
-        /// position is its channel number — bit <c>n</c> lives at byte <c>n / 8</c>, bit
-        /// <c>n % 8</c> (LSB first) — independent of which channels the client has enabled.
-        /// Output-direction channels are not sampled (their state is client-driven via
-        /// <see cref="SetDioValue"/>). Channels whose number lies beyond the payload get no
-        /// sample rather than a bogus "low" reading.
-        /// </summary>
-        private static void DecodeDigital(
-            DaqifiOutMessage message,
-            IReadOnlyList<IChannel> channels,
-            DateTime hostTimestamp,
-            uint deviceTimestamp)
-        {
-            var digitalData = message.DigitalData;
-            var bitCount = digitalData.Length * 8;
-
-            foreach (var channel in channels)
-            {
-                if (!channel.IsEnabled || channel.Type != ChannelType.Digital)
-                {
-                    continue;
-                }
-
-                // Only input-direction channels carry a meaningful streamed reading.
-                if (channel.Direction != ChannelDirection.Input)
-                {
-                    continue;
-                }
-
-                var bitIndex = channel.ChannelNumber;
-                if (bitIndex >= bitCount)
-                {
-                    continue;
-                }
-
-                var bit = (digitalData[bitIndex / 8] & (1 << (bitIndex % 8))) != 0;
-
-                channel.SetActiveSample(
-                    new DataSample(hostTimestamp, bit ? 1.0 : 0.0, bit ? 1 : 0, deviceTimestamp));
-            }
-        }
-
         /// <inheritdoc />
         public void EnableChannel(IChannel channel) => _channelControl.EnableChannel(channel);
+
+        /// <inheritdoc cref="IStreamingDevice.EnableChannelAsync" />
+        public Task EnableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnableChannel(channel);
+            return Task.CompletedTask;
+        }
 
         /// <inheritdoc />
         public void EnableChannels(IEnumerable<IChannel> channels) => _channelControl.EnableChannels(channels);
 
+        /// <inheritdoc cref="IStreamingDevice.EnableChannelsAsync" />
+        public Task EnableChannelsAsync(IEnumerable<IChannel> channels, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnableChannels(channels);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void DisableChannel(IChannel channel) => _channelControl.DisableChannel(channel);
 
+        /// <inheritdoc cref="IStreamingDevice.DisableChannelAsync" />
+        public Task DisableChannelAsync(IChannel channel, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisableChannel(channel);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void DisableAllChannels() => _channelControl.DisableAllChannels();
+
+        /// <inheritdoc cref="IStreamingDevice.DisableAllChannelsAsync" />
+        public Task DisableAllChannelsAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DisableAllChannels();
+            return Task.CompletedTask;
+        }
 
         /// <inheritdoc />
         public void SetDioDirection(IChannel channel, ChannelDirection direction)
             => _channelControl.SetDioDirection(channel, direction);
 
+        /// <inheritdoc cref="IStreamingDevice.SetDioDirectionAsync" />
+        public Task SetDioDirectionAsync(IChannel channel, ChannelDirection direction, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetDioDirection(channel, direction);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void SetDioValue(IChannel channel, bool value) => _channelControl.SetDioValue(channel, value);
+
+        /// <inheritdoc cref="IStreamingDevice.SetDioValueAsync" />
+        public Task SetDioValueAsync(IChannel channel, bool value, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetDioValue(channel, value);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// The lowest PWM frequency the firmware reproduces correctly. Below this the firmware's
@@ -1316,12 +852,36 @@ namespace Daqifi.Core.Device
         /// <inheritdoc />
         public void SetPwmEnabled(IChannel channel, bool enabled) => _channelControl.SetPwmEnabled(channel, enabled);
 
+        /// <inheritdoc cref="IStreamingDevice.SetPwmEnabledAsync" />
+        public Task SetPwmEnabledAsync(IChannel channel, bool enabled, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmEnabled(channel, enabled);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent)
             => _channelControl.SetPwmDutyCycle(channel, dutyCyclePercent);
 
+        /// <inheritdoc cref="IStreamingDevice.SetPwmDutyCycleAsync" />
+        public Task SetPwmDutyCycleAsync(IChannel channel, int dutyCyclePercent, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmDutyCycle(channel, dutyCyclePercent);
+            return Task.CompletedTask;
+        }
+
         /// <inheritdoc />
         public void SetPwmFrequency(int frequencyHz) => _channelControl.SetPwmFrequency(frequencyHz);
+
+        /// <inheritdoc cref="IStreamingDevice.SetPwmFrequencyAsync" />
+        public Task SetPwmFrequencyAsync(int frequencyHz, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetPwmFrequency(frequencyHz);
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Sets and persists the device's user-defined friendly name to NVM, then optimistically
@@ -1351,165 +911,171 @@ namespace Daqifi.Core.Device
         /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
         /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
         public Task SetFriendlyNameAsync(string name, CancellationToken cancellationToken = default)
-        {
-            if (name is null)
-            {
-                throw new ArgumentNullException(nameof(name));
-            }
-
-            if (!ScpiMessageProducer.IsFriendlyNameValid(name))
-            {
-                throw new ArgumentException(
-                    $"Device name must be 1-{ScpiMessageProducer.MaxFriendlyNameLength} printable ASCII characters and cannot contain '\"' or '\\'.",
-                    nameof(name));
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            Send(ScpiMessageProducer.SetDeviceName(name));
-            Send(ScpiMessageProducer.SaveDeviceName);
-            Metadata.FriendlyName = name;
-
-            return Task.CompletedTask;
-        }
+            => _administration.SetFriendlyNameAsync(name, cancellationToken);
 
         /// <inheritdoc />
         public void SetAnalogOutput(int channelNumber, double voltage)
             => _channelControl.SetAnalogOutput(channelNumber, voltage);
 
-        /// <inheritdoc />
-        public void Reboot()
+        /// <inheritdoc cref="IStreamingDevice.SetAnalogOutputAsync" />
+        public Task SetAnalogOutputAsync(int channelNumber, double voltage, CancellationToken cancellationToken = default)
         {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            SetAnalogOutput(channelNumber, voltage);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Stages an analog output (DAC) voltage without applying it. The value takes effect on the
+        /// next <see cref="LatchAnalogOutputs"/>, so several channels can be made to change together.
+        /// </summary>
+        /// <param name="channelNumber">The analog output channel number.</param>
+        /// <param name="voltage">
+        /// The output voltage, in volts. Must be finite, and within the channel's range when the
+        /// device described one.
+        /// </param>
+        /// <remarks>
+        /// This is the device's own two-step protocol made explicit:
+        /// <see cref="SetAnalogOutput"/> is exactly a stage followed by a latch. Until the latch,
+        /// <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.PendingVoltage"/> reports the staged
+        /// value and <see cref="Daqifi.Core.Channel.IAnalogOutputChannel.OutputVoltage"/> still
+        /// reports what the pin is driving. Analog output is available on NQ3 hardware only.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The channel number is negative, or the voltage falls outside the channel's stated range.
+        /// </exception>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        public void StageAnalogOutput(int channelNumber, double voltage)
+            => _channelControl.StageAnalogOutput(channelNumber, voltage);
+
+        /// <summary>
+        /// Applies every analog output (DAC) voltage staged since the last latch, so the staged
+        /// channels change together.
+        /// </summary>
+        /// <remarks>
+        /// Latching with nothing staged is harmless — the device re-applies what it already holds.
+        /// Analog output is available on NQ3 hardware only.
+        /// </remarks>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        public void LatchAnalogOutputs() => _channelControl.LatchAnalogOutputs();
+
+        /// <summary>
+        /// Asks the device what voltage an analog output (DAC) channel is holding, and records it
+        /// on the modelled channel.
+        /// </summary>
+        /// <param name="channelNumber">The analog output channel number.</param>
+        /// <param name="cancellationToken">Cancels the exchange.</param>
+        /// <returns>The voltage the device reports, in volts.</returns>
+        /// <remarks>
+        /// The DAC has no hardware readback, so the device answers with the value it was last told
+        /// to drive. That still makes this the authoritative round-trip: it reflects what the
+        /// device actually accepted, including a write made before this session connected.
+        /// Analog output is available on NQ3 hardware only.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="channelNumber"/> is negative.</exception>
+        /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// The device rejected the query or answered with something that is not a voltage.
+        /// </exception>
+        public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
+            => _channelControl.GetAnalogOutputAsync(channelNumber, cancellationToken);
+
+        /// <inheritdoc />
+        public void Reboot() => _administration.Reboot();
+
+        /// <summary>
+        /// Reboots the device and disconnects from it, without blocking the calling thread.
+        /// </summary>
+        /// <remarks>
+        /// Unlike <see cref="IStreamingDevice.RebootAsync"/>'s default implementation, this override
+        /// does not call the blocking <see cref="Reboot"/>: that path tears down through
+        /// <see cref="DaqifiDevice.Disconnect"/>, which can stall the caller for the full teardown
+        /// wait (up to <see cref="DaqifiDevice.TextExchangeTeardownWait"/>) — exactly the freeze the
+        /// async surface exists to avoid. This sends the same reboot command and then awaits
+        /// <see cref="DaqifiDevice.DisconnectAsync"/> instead, so the local teardown is genuinely
+        /// asynchronous.
+        /// </remarks>
+        /// <inheritdoc cref="IStreamingDevice.RebootAsync" path="/param|/returns|/exception" />
+        public async Task RebootAsync(CancellationToken cancellationToken = default)
+        {
+            // Cancellation is checked before validation, matching every other ...Async member on
+            // this class: a pre-cancelled token must surface as OperationCanceledException even on
+            // a disconnected device, not be masked by DeviceNotConnectedException.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            EnsureConnected();
 
             Send(ScpiMessageProducer.RebootDevice);
 
-            // The device drops its link while restarting, so tear down the local
-            // connection rather than leaving a stale one that reports Connected.
-            Disconnect();
+            // The device drops its link while restarting, so tear down the local connection —
+            // without blocking the caller, unlike Reboot()'s synchronous Disconnect().
+            await DisconnectAsync(cancellationToken).ConfigureAwait(false);
         }
 
         /// <inheritdoc />
-        public void SaveAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SaveAdcCalibration);
-        }
+        public void SaveAdcCalibration() => _administration.SaveAdcCalibration();
 
         /// <inheritdoc />
-        public void LoadAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.LoadAdcCalibration);
-        }
+        public void LoadAdcCalibration() => _administration.LoadAdcCalibration();
 
         /// <inheritdoc />
         public void SetAdcCalibrationSlope(int channelNumber, double calM)
-        {
-            if (channelNumber < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SetAdcCalibrationSlope(channelNumber, calM));
-        }
+            => _administration.SetAdcCalibrationSlope(channelNumber, calM);
 
         /// <inheritdoc />
         public void SetAdcCalibrationOffset(int channelNumber, double calB)
-        {
-            if (channelNumber < 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(channelNumber), channelNumber, "Channel number cannot be negative.");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SetAdcCalibrationOffset(channelNumber, calB));
-        }
+            => _administration.SetAdcCalibrationOffset(channelNumber, calB);
 
         /// <inheritdoc />
-        public void SaveFactoryAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
-        }
+        public void SaveFactoryAdcCalibration() => _administration.SaveFactoryAdcCalibration();
 
         /// <inheritdoc />
-        public void LoadFactoryAdcCalibration()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
-        }
+        public void LoadFactoryAdcCalibration() => _administration.LoadFactoryAdcCalibration();
 
         /// <inheritdoc />
-        public void UseAdcCalibration(int bank)
-        {
-            if (bank is < 0 or > 1)
-            {
-                throw new ArgumentOutOfRangeException(nameof(bank), bank, "Calibration bank must be 0 (factory) or 1 (user).");
-            }
-
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.UseAdcCalibration(bank));
-        }
+        public void UseAdcCalibration(int bank) => _administration.UseAdcCalibration(bank);
 
         /// <inheritdoc />
-        public void SaveVoltagePrecision()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
-
-            Send(ScpiMessageProducer.SaveVoltagePrecision);
-        }
+        public void SaveVoltagePrecision() => _administration.SaveVoltagePrecision();
 
         /// <inheritdoc />
-        public void LoadVoltagePrecision()
-        {
-            if (!IsConnected)
-            {
-                throw new DeviceNotConnectedException();
-            }
+        public void LoadVoltagePrecision() => _administration.LoadVoltagePrecision();
 
-            Send(ScpiMessageProducer.LoadVoltagePrecision);
-        }
+        /// <inheritdoc />
+        public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.SaveAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.LoadAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default)
+            => _administration.SetAdcCalibrationSlopeAsync(channelNumber, calM, cancellationToken);
+
+        /// <inheritdoc />
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default)
+            => _administration.SetAdcCalibrationOffsetAsync(channelNumber, calB, cancellationToken);
+
+        /// <inheritdoc />
+        public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.SaveFactoryAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default)
+            => _administration.LoadFactoryAdcCalibrationAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default)
+            => _administration.UseAdcCalibrationAsync(bank, cancellationToken);
+
+        /// <inheritdoc />
+        public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default)
+            => _administration.SaveVoltagePrecisionAsync(cancellationToken);
+
+        /// <inheritdoc />
+        public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default)
+            => _administration.LoadVoltagePrecisionAsync(cancellationToken);
 
 
         // -----------------------------------------------------------------
@@ -1523,8 +1089,17 @@ namespace Daqifi.Core.Device
         // virtual members and any subclass override of them.
         // -----------------------------------------------------------------
 
+        /// <summary>The streaming hot path: frame screening, timestamps, gaps, per-channel decode.</summary>
+        private StreamFrameDecoder _frameDecoder = null!;
+
+        /// <summary>The pull-based live-sample view: bounded buffer, drop-oldest, drop counter.</summary>
+        private LiveSampleStream _liveSampleStream = null!;
+
         /// <summary>Channel enable/disable, DIO, PWM and analog output (<see cref="IStreamingDevice"/>).</summary>
         private ChannelControlOperations _channelControl = null!;
+
+        /// <summary>Reboot, ADC calibration banks, voltage precision and the friendly-name write.</summary>
+        private DeviceAdministrationOperations _administration = null!;
 
         /// <summary>WiFi/LAN configuration (<see cref="INetworkConfigurable"/>).</summary>
         private NetworkConfigurationOperations _networkOperations = null!;
@@ -1719,7 +1294,14 @@ namespace Daqifi.Core.Device
 
         void IDeviceOperationHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
+        DeviceMetadata IDeviceOperationHost.Metadata => Metadata;
+
+        void IDeviceOperationHost.Disconnect() => Disconnect();
+
         IReadOnlyList<IChannel> IDeviceOperationHost.SnapshotChannels() => SnapshotChannels();
+
+        /// <inheritdoc />
+        long IDeviceOperationHost.ChannelStateVersion => ChannelStateVersion;
 
         void IDeviceOperationHost.WithChannelsLock(Action action) => WithChannelsLock(action);
 
@@ -1730,10 +1312,17 @@ namespace Daqifi.Core.Device
             int completionTimeoutMs,
             CancellationToken cancellationToken,
             Func<CancellationToken, Task>? prepareAsync,
-            Func<Task>? finalizeAsync)
+            Func<Task>? finalizeAsync,
+            bool keepBlankLines)
             => ExecuteTextCommandAsync(
-                setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync, finalizeAsync);
+                setupAction, responseTimeoutMs, completionTimeoutMs, cancellationToken, prepareAsync,
+                finalizeAsync, keepBlankLines);
 #pragma warning restore CA1068
+
+        Task<IReadOnlyList<string>> IDeviceOperationHost.DrainErrorQueueAsync(
+            int maxIterations,
+            CancellationToken cancellationToken)
+            => DrainErrorQueueAsync(maxIterations, cancellationToken);
 
         Task IDeviceOperationHost.ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
@@ -1750,6 +1339,20 @@ namespace Daqifi.Core.Device
         TimeSpan IDeviceOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
 
         void IDeviceOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
+
+        void IDeviceOperationHost.RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
+            => RaiseStreamFrameDiscarded(e);
+
+        void IDeviceOperationHost.RaiseGapDetected(TimestampGapEventArgs e) => RaiseGapDetected(e);
+
+        // Deliberately base.OnStreamMessageReceived and not the override: the override is what hands
+        // the frame to the decoder in the first place, so calling it here would recurse. This is the
+        // same base call the decode block made before it moved out.
+        void IDeviceOperationHost.RaiseRawStreamFrame(DaqifiOutMessage message)
+            => base.OnStreamMessageReceived(message);
+
+        void IDeviceOperationHost.RaiseStreamDecodeFailure(Exception error)
+            => RaiseDeviceError(DeviceErrorSource.StreamDecode, error);
 
         #endregion
     }

@@ -518,4 +518,101 @@ public class AnalogChannelTests
         // Assert
         Assert.Equal("Test Channel", result);
     }
+
+    #region Engineering units (#501)
+
+    [Fact]
+    public void Scaling_IsNullUntilSomethingStatesOne()
+    {
+        var channel = new AnalogChannel(0);
+
+        Assert.Null(channel.Scaling);
+        Assert.Null(((IScaledChannel)channel).Unit);
+    }
+
+    [Fact]
+    public void Unit_IsShorthandForTheScalingsUnit()
+    {
+        IScaledChannel channel = new AnalogChannel(0) { Scaling = new ChannelScaling(2.0, 0.0, "PSI") };
+
+        Assert.Equal("PSI", channel.Unit);
+    }
+
+    [Fact]
+    public void SetActiveSample_StampsTheChannelsScalingOntoTheSample()
+    {
+        // The value overload builds the sample itself, so it is the only place that can attach the
+        // scaling — a sample from here has to report engineering units exactly as a decoded one does.
+        var channel = new AnalogChannel(0) { Scaling = new ChannelScaling(gain: 20.0, unit: "PSI") };
+
+        channel.SetActiveSample(2.5, DateTime.UtcNow);
+
+        Assert.Equal(2.5, channel.ActiveSample!.Value);
+        Assert.Equal(50.0, channel.ActiveSample.ScaledValue);
+        Assert.Equal("PSI", channel.ActiveSample.Unit);
+    }
+
+    [Fact]
+    public void SetActiveSample_WithACallerSuppliedSample_LeavesItExactlyAsGiven()
+    {
+        // The counterpart rule: a caller who hands over a whole sample has already said what it
+        // carries, so the channel does not overwrite its scaling.
+        var channel = new AnalogChannel(0) { Scaling = new ChannelScaling(20.0, unit: "PSI") };
+
+        channel.SetActiveSample(new DataSample(DateTime.UtcNow, 2.5));
+
+        Assert.Null(channel.ActiveSample!.Scaling);
+        Assert.Equal(2.5, channel.ActiveSample.ScaledValue);
+    }
+
+    [Fact]
+    public void ReconfiguringScaling_DoesNotReinterpretSamplesAlreadyTaken()
+    {
+        // The reason the scaling travels on the sample rather than being read back off the channel:
+        // a reading taken in volts must not silently become a pressure an hour later.
+        var channel = new AnalogChannel(0) { Scaling = new ChannelScaling(1.0, unit: "V") };
+        channel.SetActiveSample(2.5, DateTime.UtcNow);
+        var before = channel.ActiveSample!;
+
+        channel.Scaling = new ChannelScaling(20.0, unit: "PSI");
+
+        Assert.Equal(2.5, before.ScaledValue);
+        Assert.Equal("V", before.Unit);
+    }
+
+    [Fact]
+    public void Scaling_CanBeClearedBackToNull()
+    {
+        var channel = new AnalogChannel(0) { Scaling = new ChannelScaling(20.0, unit: "PSI") };
+
+        channel.Scaling = null;
+        channel.SetActiveSample(2.5, DateTime.UtcNow);
+
+        Assert.Null(channel.ActiveSample!.Unit);
+        Assert.Equal(2.5, channel.ActiveSample.ScaledValue);
+    }
+
+    [Fact]
+    public void Scaling_SitsAboveTheDeviceCalibration_RatherThanReplacingIt()
+    {
+        // Two conversions, in order: counts -> volts by the device's calibration, volts ->
+        // engineering units by the caller's scaling. Getting this backwards (or collapsing the two)
+        // is the failure this pins.
+        var channel = new AnalogChannel(0, resolution: 65535)
+        {
+            PortRange = 10.0,
+            CalibrationM = 1.0,
+            InternalScaleM = 1.0,
+            CalibrationB = 0.0,
+            Scaling = new ChannelScaling(gain: 20.0, unit: "PSI")
+        };
+
+        var volts = channel.GetScaledValue(32768); // ~5 V
+        channel.SetActiveSample(volts, DateTime.UtcNow);
+
+        Assert.Equal(5.0, channel.ActiveSample!.Value, precision: 2);
+        Assert.Equal(100.0, channel.ActiveSample.ScaledValue, precision: 1);
+    }
+
+    #endregion
 }

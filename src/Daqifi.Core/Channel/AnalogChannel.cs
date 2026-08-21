@@ -3,7 +3,7 @@ namespace Daqifi.Core.Channel;
 /// <summary>
 /// Represents an analog input/output channel with scaling and calibration capabilities.
 /// </summary>
-public class AnalogChannel : IAnalogChannel
+public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementNotifier
 {
     /// <summary>
     /// Smallest <see cref="Resolution"/> (maximum raw count) accepted as a physically plausible ADC
@@ -36,6 +36,7 @@ public class AnalogChannel : IAnalogChannel
     private IDataSample? _activeSample;
     private string _name;
     private bool _isEnabled;
+    private Action? _enablementChanged;
     private ChannelDirection _direction;
     private double _minValue;
     private double _maxValue;
@@ -45,6 +46,7 @@ public class AnalogChannel : IAnalogChannel
     private double _portRange;
     private uint _resolution;
     private bool _resolutionIsAssumed;
+    private ChannelScaling? _scaling;
 
     /// <summary>
     /// Gets the channel number/index.
@@ -60,13 +62,39 @@ public class AnalogChannel : IAnalogChannel
         set { lock (_lock) { _name = value; } }
     }
 
+    /// <inheritdoc />
+    event Action? IChannelEnablementNotifier.EnablementChanged
+    {
+        add { lock (_lock) { _enablementChanged += value; } }
+        remove { lock (_lock) { _enablementChanged -= value; } }
+    }
+
     /// <summary>
     /// Gets or sets whether the channel is enabled.
     /// </summary>
     public bool IsEnabled
     {
         get { lock (_lock) { return _isEnabled; } }
-        set { lock (_lock) { _isEnabled = value; } }
+        set
+        {
+            Action? subscribers;
+            lock (_lock)
+            {
+                if (_isEnabled == value)
+                {
+                    return;
+                }
+
+                _isEnabled = value;
+                subscribers = _enablementChanged;
+            }
+
+            // Raised outside the lock: the owning device's handler is free to read back from this
+            // channel, and holding _lock across it would make that a self-deadlock waiting to
+            // happen. The subscriber list was captured inside, so a concurrent unsubscribe cannot
+            // tear it.
+            subscribers?.Invoke();
+        }
     }
 
     /// <summary>
@@ -95,6 +123,22 @@ public class AnalogChannel : IAnalogChannel
                 return _activeSample;
             }
         }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The one piece of channel state read without taking <c>_lock</c>, and the reason is specific:
+    /// a <see cref="ChannelScaling"/> is immutable and stands alone, so a reader either sees the
+    /// whole old instance or the whole new one — there is no torn state to protect and no invariant
+    /// shared with the calibration fields. That matters because the decode path reads this once per
+    /// sample on the USB float path, which otherwise takes no lock at all;
+    /// <see cref="Volatile"/> keeps the publication safe without putting a lock back into the hot
+    /// path.
+    /// </remarks>
+    public ChannelScaling? Scaling
+    {
+        get => Volatile.Read(ref _scaling);
+        set => Volatile.Write(ref _scaling, value);
     }
 
     /// <summary>
@@ -297,9 +341,15 @@ public class AnalogChannel : IAnalogChannel
     /// </summary>
     /// <param name="value">The raw or scaled value.</param>
     /// <param name="timestamp">The timestamp when the sample was taken.</param>
+    /// <remarks>
+    /// The channel's current <see cref="Scaling"/> is stamped onto the sample, so a value pushed
+    /// through this overload reports engineering units exactly as a decoded one does. The
+    /// <see cref="SetActiveSample(IDataSample)"/> overload does not: a caller who supplies a whole
+    /// sample has already said what it carries.
+    /// </remarks>
     public void SetActiveSample(double value, DateTime timestamp)
     {
-        SetActiveSample(new DataSample(timestamp, value));
+        SetActiveSample(new DataSample(timestamp, value) { Scaling = Scaling });
     }
 
     /// <summary>

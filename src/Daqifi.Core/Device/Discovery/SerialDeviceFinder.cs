@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Ports;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -18,12 +19,76 @@ namespace Daqifi.Core.Device.Discovery;
 /// Discovers DAQiFi devices connected via USB/Serial ports.
 /// Probes each port by sending SCPI commands and validating protobuf responses.
 /// </summary>
-public class SerialDeviceFinder : DeviceFinderBase
+/// <remarks>
+/// <para>
+/// Port probes are claimed process-wide so a wedged USB CDC device can block at
+/// most one thread per port (see issues #294 / #295). A pass that ends by timeout
+/// or cancellation abandons its in-flight probe and leaves the claim behind while
+/// that probe unwinds — bench-measured at ~57ms on a real Nq1 (was ~490ms before
+/// the probe teardown was fixed in #486).
+/// </para>
+/// <para>
+/// A pass that starts inside that drain window waits (bounded by both the window
+/// and the caller's own timeout / token) for the claim to clear before probing, so
+/// a prompt retry after a timed-out pass finds the device instead of silently
+/// reporting none. Callers therefore do not need to hand-roll a backoff, but they
+/// should still allow a realistic timeout: a retry given less budget than the drain
+/// needs will report nothing, exactly as it would have before.
+/// </para>
+/// </remarks>
+public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
 {
     #region Constants
 
     private const int DefaultBaudRate = 9600;
     private const int ProbeTimeoutMs = 1000;
+
+    /// <summary>
+    /// Read timeout applied to the probe stream the moment the device has identified itself, in
+    /// milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Pure stop latency, and only for the tail of a successful probe. The consumer's reader thread
+    /// spends the probe parked in a blocking <see cref="Stream.Read(byte[], int, int)"/> and can
+    /// only notice a stop request when that read returns, so the teardown join at the end of
+    /// <see cref="RequestDeviceStatusAsync"/> is bounded by whatever timeout the in-flight read was
+    /// issued with — at <see cref="ProbeTimeoutMs"/> that was up to a second of waiting after the
+    /// device had already answered (#486).
+    /// </para>
+    /// <para>
+    /// Applied from inside the status dispatch, which runs on the reader thread between two reads:
+    /// the next read — the one teardown has to wait out — picks it up, and no read is in flight to
+    /// be disturbed. Deliberately <em>not</em> applied for the whole probe. A port that never
+    /// answers would then wake twenty times a second instead of once, and each of those wake-ups
+    /// ends in a thrown <see cref="TimeoutException"/>; bench-measured on this hardware at ~180ms of
+    /// CPU per 2s of probing against ~5-13ms at the one-second timeout. A silent port therefore
+    /// still idles exactly as it did before this change, and only a probe that has something to show
+    /// for itself pays the faster teardown.
+    /// </para>
+    /// </remarks>
+    private const int PostIdentifyReadTimeoutMs = 50;
+
+    /// <summary>
+    /// How long the probe's teardown waits for the consumer's reader thread to exit, in milliseconds.
+    /// </summary>
+    /// <remarks>
+    /// A probe that identified a device joins within <see cref="PostIdentifyReadTimeoutMs"/>; one
+    /// that found nothing is still bounded by the read timeout it was running at. Left at the value
+    /// the probe has always used.
+    /// </remarks>
+    private const int ConsumerStopTimeoutMs = 500;
+
+    /// <summary>
+    /// How long the probe's teardown waits for the producer's send queue to drain, in milliseconds.
+    /// </summary>
+    private const int ProducerStopTimeoutMs = 500;
+
+    /// <summary>
+    /// Pause between dropping DTR and closing the probe port, in milliseconds, so the device sees the
+    /// de-assert before the handle goes away.
+    /// </summary>
+    private const int DtrSettleMs = 50;
     // Tightened for the GetDeviceInfo-only probe (closes #157):
     //   - 200ms wake instead of 1s — USB CDC enumerates fast
     //   - 1s response timeout instead of 4s — DAQiFi devices reply within
@@ -40,7 +105,11 @@ public class SerialDeviceFinder : DeviceFinderBase
     // pass. Most OS serial stacks tolerate 4-8 simultaneous opens cleanly;
     // beyond that, IO failures and slow opens stack up. Common case (with
     // VID/PID classifier) leaves 0-1 candidates so this cap rarely engages.
-    private const int MaxParallelProbes = 4;
+    //
+    // Internal so the slot-contention test can size its port list from the cap
+    // instead of hard-coding it — a raised cap would otherwise leave that test
+    // silently under-subscribed and no longer testing contention at all.
+    internal const int MaxParallelProbes = 4;
     // Hard ceiling on a single port probe. A wedged USB CDC device can hang
     // SerialPort.Open() inside native GetCommState indefinitely — no exception,
     // no cancellation (Open is uncancellable blocking I/O) — observed live on a
@@ -78,6 +147,10 @@ public class SerialDeviceFinder : DeviceFinderBase
     // attempt replace a still-stuck claim per TTL window, so a recovered port
     // re-appears without a process restart at a bounded leak rate).
     //
+    // A claim abandoned by a timed-out / cancelled pass is usually NOT wedged; it
+    // drains in ~57ms. Within AbandonedClaimDrainWaitMs a fresh pass waits for it
+    // rather than reporting the port absent — see ProbeSafelyAsync.
+    //
     // STATIC on purpose: a wedged COM port is machine-global state, not finder
     // state.
     private static readonly ConcurrentDictionary<string, PortProbeClaim> PortClaims = new();
@@ -109,6 +182,30 @@ public class SerialDeviceFinder : DeviceFinderBase
 
     // Internal so tests can exercise the TTL retry without waiting 30s.
     internal static int QuarantineRetryTtlMs { get; set; } = DefaultQuarantineRetryTtlMs;
+
+    // How long AFTER abandonment a claim is still treated as "probably draining"
+    // rather than "wedged". A pass that ends by timeout or caller cancellation
+    // abandons its in-flight probe, but that probe is usually NOT wedged — it is
+    // unwinding the probe's cleanup (consumer/producer StopSafely, DTR drop + 50ms
+    // settle, port close). Bench-measured on a real Nq1 (fw 3.7.2, USB, macOS): the
+    // claim is held 58/57/55ms across three runs, then auto-released by the
+    // abandonment continuation. It was 488/490/491ms before #486, when the consumer
+    // stop self-joined the reader thread and burned its whole 500ms budget. Both
+    // figures are for a port whose device answered before the pass was abandoned; a
+    // port that never answers unwinds at its own read timeout instead, as it always
+    // has (see PostIdentifyReadTimeoutMs).
+    //
+    // Within this window a fresh pass WAITS for the claim to clear instead of
+    // skipping the port; past it, the port is presumed genuinely wedged and skipped
+    // immediately as before. 1s is now ~17x the measured drain rather than ~2x —
+    // deliberately left alone, because it is a ceiling on how long a fresh pass may
+    // wait, not a cost anything pays: the wait ends the moment the claim clears, so
+    // the extra headroom is free for healthy ports and still bounds a truly wedged
+    // one at a single sub-second wait before it ages out of the window entirely.
+    private const int DefaultAbandonedClaimDrainWaitMs = 1000;
+
+    // Internal so tests can shrink the drain wait instead of burning ~1s per case.
+    internal int AbandonedClaimDrainWaitMs { get; set; } = DefaultAbandonedClaimDrainWaitMs;
 
     /// <summary>
     /// Test seam: clears the process-wide port quarantine so hang-simulation
@@ -192,6 +289,16 @@ public class SerialDeviceFinder : DeviceFinderBase
     #region Public Methods
 
     /// <summary>
+    /// Ports that were present but already open during the most recent pass. Probes run
+    /// concurrently and can finish out of order, so the pass bookkeeping lives in its own type.
+    /// </summary>
+    private readonly BusyPortLedger _busyPorts = new();
+
+    /// <inheritdoc />
+    IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass()
+        => _busyPorts.TakePortsFromLastPass();
+
+    /// <summary>
     /// Discovers devices asynchronously with a cancellation token.
     /// Probes each serial port to identify DAQiFi devices.
     /// </summary>
@@ -202,9 +309,12 @@ public class SerialDeviceFinder : DeviceFinderBase
         ThrowIfDisposed();
 
         // Prevent concurrent discovery operations
-        await DiscoverySemaphore.WaitAsync(cancellationToken);
+        await DiscoverySemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Describes this pass alone; a port freed since the last one must not stay "busy".
+            _busyPorts.BeginPass();
+
             var discoveredDevices = new List<IDeviceInfo>();
             // Pre-filter by USB VID/PID where the platform supports it
             // (closes #157). This drops discovery time from ~1 minute on a
@@ -229,30 +339,29 @@ public class SerialDeviceFinder : DeviceFinderBase
             // Cap concurrency at MaxParallelProbes so a 20-port system with
             // a missing descriptor provider doesn't open 20 serial handles at
             // once — most platforms throttle quietly above ~8 concurrent opens.
+            //
+            // The gate is taken INSIDE ProbeSafelyAsync, around the port open only.
+            // Holding it across the whole call would let the abandoned-claim drain
+            // wait — which opens nothing and merely awaits an already-running task —
+            // occupy a slot, so a pass whose predecessor timed out with every slot
+            // busy could park all MaxParallelProbes slots on drain waits and delay a
+            // healthy port behind them (Qodo #454 pass 1 #2).
             var maxConcurrency = Math.Max(1, Math.Min(MaxParallelProbes, availablePorts.Count));
             using var probeGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
 
             var probeTasks = availablePorts.Select(async portName =>
             {
-                await probeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                try
+                var deviceInfo = await ProbeSafelyAsync(portName, probeGate, cancellationToken).ConfigureAwait(false);
+                if (deviceInfo != null)
                 {
-                    var deviceInfo = await ProbeSafelyAsync(portName, cancellationToken).ConfigureAwait(false);
-                    if (deviceInfo != null)
-                    {
-                        // Raise per-probe rather than after Task.WhenAll: one hung port
-                        // must not silence every healthy device on the system (#294).
-                        // Fires on a worker thread, possibly concurrently with other
-                        // probes' events — handlers own their thread marshaling (both
-                        // desktop apps already dispatch to their UI thread).
-                        OnDeviceDiscovered(deviceInfo);
-                    }
-                    return deviceInfo;
+                    // Raise per-probe rather than after Task.WhenAll: one hung port
+                    // must not silence every healthy device on the system (#294).
+                    // Fires on a worker thread, possibly concurrently with other
+                    // probes' events — handlers own their thread marshaling (both
+                    // desktop apps already dispatch to their UI thread).
+                    OnDeviceDiscovered(deviceInfo);
                 }
-                finally
-                {
-                    probeGate.Release();
-                }
+                return deviceInfo;
             }).ToList();
 
             // Catch OCE here so the DiscoveryCompleted event always fires
@@ -298,16 +407,60 @@ public class SerialDeviceFinder : DeviceFinderBase
     #region Private Methods
 
     /// <summary>
+    /// Whether the OS still enumerates <paramref name="portName"/> right now.
+    /// </summary>
+    /// <remarks>
+    /// Used only to tell "present but locked" from "gone", which the platform exception cannot.
+    /// A provider that throws is treated as "still present": the busy report is an optimisation
+    /// over counting a miss, and losing it should not be worse than not having it.
+    /// </remarks>
+    private bool IsPortStillPresent(string portName)
+    {
+        try
+        {
+            var ports = _portNameProvider?.Invoke()
+                ?? SerialStreamTransport.GetAvailablePortNames();
+
+            foreach (var p in ports)
+            {
+                if (string.Equals(p, portName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch
+        {
+            // Fail CLOSED. This method exists to stop an absent port being rescued, so answering
+            // "present" when we could not tell re-opens the exact hole it was added to close --
+            // and feeds it into the location-confirmed path, which is deliberately unbounded. A
+            // wrong "gone" costs one miss and MissThreshold absorbs it; a wrong "present" can keep
+            // a phantom alive forever. It also matches the behaviour before any of this existed.
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Attempts to probe a serial port and retrieve device information.
     /// Opens the port, sends GetDeviceInfo command, and waits for a status response.
     /// </summary>
     /// <param name="portName">The serial port name.</param>
+    /// <param name="probeGate">
+    /// Caps concurrent port opens for the sweep. Held only around the probe itself,
+    /// never around claim acquisition or the abandoned-claim drain wait — neither
+    /// opens a port, and holding a slot through them would throttle healthy ports
+    /// behind ports that are merely draining.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Device info if a DAQiFi device responds, null otherwise. Swallows
-    /// non-cancellation exceptions so a single failing port doesn't tear down the
-    /// whole concurrent probe pass; cancellation propagates so Task.WhenAll
+    /// <returns>Device info if a DAQiFi device responds, null otherwise — including
+    /// when the port is claimed by a probe that is still genuinely in flight.
+    /// Swallows non-cancellation exceptions so a single failing port doesn't tear
+    /// down the whole concurrent probe pass; cancellation propagates so Task.WhenAll
     /// short-circuits when the caller's token is canceled.</returns>
-    private async Task<IDeviceInfo?> ProbeSafelyAsync(string portName, CancellationToken cancellationToken)
+    private async Task<IDeviceInfo?> ProbeSafelyAsync(
+        string portName, SemaphoreSlim probeGate, CancellationToken cancellationToken)
     {
         PortProbeClaim? claim = null;
         var claimHandedToContinuation = false;
@@ -319,12 +472,15 @@ public class SerialDeviceFinder : DeviceFinderBase
             // instances sweep concurrently.
             claim = new PortProbeClaim();
             var claimed = false;
-            // Two attempts: the second handles exactly one stale-completed claim
-            // (its release continuation raced us) by clearing it and re-claiming
-            // immediately, so an available port isn't skipped for a whole sweep —
-            // that miss is invisible to the 2-3s desktop sweeps but real for
-            // one-shot MCP discovery calls (Qodo pass 5 #3).
-            for (var attempt = 0; attempt < 2 && !claimed; attempt++)
+            var drainWaited = false;
+            // Up to three attempts. Attempt 2 handles exactly one stale-completed
+            // claim (its release continuation raced us) by clearing it and
+            // re-claiming immediately, so an available port isn't skipped for a
+            // whole sweep — that miss is invisible to the 2-3s desktop sweeps but
+            // real for one-shot MCP discovery calls (Qodo pass 5 #3). Attempt 3
+            // covers the drain wait below, whose worst path is
+            // wait -> observe completed claim -> clear -> claim.
+            for (var attempt = 0; attempt < 3 && !claimed; attempt++)
             {
                 var existing = PortClaims.GetOrAdd(portName, claim);
                 if (ReferenceEquals(existing, claim))
@@ -341,17 +497,66 @@ public class SerialDeviceFinder : DeviceFinderBase
                 }
 
                 var abandonedAt = existing.AbandonedAtTicks;
-                if (abandonedAt >= 0
-                    && Environment.TickCount64 - abandonedAt >= QuarantineRetryTtlMs
-                    && PortClaims.TryUpdate(portName, claim, existing))
+                if (abandonedAt >= 0)
                 {
-                    // TTL elapsed on a still-stuck claim — we won the retry.
-                    claimed = true;
-                    break;
+                    var abandonedForMs = Environment.TickCount64 - abandonedAt;
+                    if (abandonedForMs >= QuarantineRetryTtlMs
+                        && PortClaims.TryUpdate(portName, claim, existing))
+                    {
+                        // TTL elapsed on a still-stuck claim — we won the retry.
+                        claimed = true;
+                        break;
+                    }
+
+                    // Freshly abandoned: the PREVIOUS pass ended by timeout or
+                    // caller cancellation and left this claim behind while its
+                    // probe unwinds — measured ~490ms, not wedged. The
+                    // skip below costs ~1ms, so a caller that retries promptly
+                    // (the MCP DaqifiAgent builds a fresh finder per call) would
+                    // burn every retry inside the drain window and conclude no
+                    // device exists. Wait for the claim to clear instead, bounded
+                    // by both the drain window and the caller's own budget.
+                    //
+                    // This starts NO new probe and blocks NO new thread — we await
+                    // the EXISTING probe task — so the one-blocked-thread-per-port
+                    // bound from #294/#295 is untouched. A genuinely wedged port
+                    // just burns the remaining window once and then ages out of it.
+                    var pending = existing.Probe;
+                    // Long arithmetic on purpose: abandonedForMs is unbounded (a
+                    // claim whose TTL retry lost the race can be arbitrarily old),
+                    // so narrowing it first could overflow into a large positive
+                    // budget. Computed this way the result is always
+                    // <= AbandonedClaimDrainWaitMs, making the cast below safe.
+                    var drainBudgetMs = AbandonedClaimDrainWaitMs - abandonedForMs;
+                    if (!drainWaited && pending != null && drainBudgetMs > 0
+                        && !cancellationToken.IsCancellationRequested)
+                    {
+                        drainWaited = true;
+                        using (var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                        {
+                            drainCts.CancelAfter((int)drainBudgetMs);
+                            try
+                            {
+                                await pending.WaitAsync(drainCts.Token).ConfigureAwait(false);
+                            }
+                            catch
+                            {
+                                // Drain window elapsed, caller cancelled, or the
+                                // abandoned probe faulted. Its own continuation
+                                // already observed any fault; all we needed was the
+                                // "no longer in flight" edge. Re-check below.
+                            }
+                        }
+
+                        // Surface caller cancellation rather than reporting the port
+                        // as absent (mirrors the hard-timeout path below).
+                        cancellationToken.ThrowIfCancellationRequested();
+                        continue;
+                    }
                 }
 
-                // In flight elsewhere, inside the TTL window, or another instance
-                // won the race — the port is spoken for.
+                // In flight elsewhere, still wedged past the drain window but inside
+                // the TTL, or another instance won the race — the port is spoken for.
                 return null;
             }
             if (!claimed)
@@ -361,64 +566,76 @@ public class SerialDeviceFinder : DeviceFinderBase
 
             var probe = _probeOverride ?? TryGetDeviceInfoAsync;
 
-            // Task.Run: SerialPort.Open() (and DiscardInBuffer etc.) are synchronous
-            // blocking I/O that would otherwise run on the CALLING thread up to the
-            // probe's first await — in the desktop apps that thread is the UI thread,
-            // and a slow or stuck open froze the whole window (#294). Pass
-            // CancellationToken.None to Task.Run itself: the inner token still
-            // cancels the probe's delays; we never want "cancelled before start"
-            // to look like a probe fault.
-            var probeTask = Task.Run(() => probe(portName, cancellationToken), CancellationToken.None);
-            claim.Probe = probeTask;
-
-            // Hard per-port ceiling: a wedged CDC device hangs Open() inside native
-            // GetCommState with no exception, so the catch below never fires and,
-            // pre-#294, Task.WhenAll in DiscoverAsync never settled. Open() is
-            // uncancellable, so on timeout the stuck task is ABANDONED — its own
-            // finally block closes the port if the kernel ever completes the I/O.
-            var winner = await Task.WhenAny(
-                probeTask,
-                Task.Delay(PortProbeHardTimeoutMs, cancellationToken)).ConfigureAwait(false);
-
-            if (winner != probeTask)
+            // Take a probe slot only now. Claim acquisition and the drain wait above
+            // open no port, so gating them would just throttle healthy ports behind
+            // ports that are draining. Released the moment this probe settles or is
+            // abandoned — an abandoned probe holds no slot on later sweeps either.
+            await probeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                if (probeTask.IsCompletedSuccessfully)
+                // Task.Run: SerialPort.Open() (and DiscardInBuffer etc.) are synchronous
+                // blocking I/O that would otherwise run on the CALLING thread up to the
+                // probe's first await — in the desktop apps that thread is the UI thread,
+                // and a slow or stuck open froze the whole window (#294). Pass
+                // CancellationToken.None to Task.Run itself: the inner token still
+                // cancels the probe's delays; we never want "cancelled before start"
+                // to look like a probe fault.
+                var probeTask = Task.Run(() => probe(portName, cancellationToken), CancellationToken.None);
+                claim.Probe = probeTask;
+
+                // Hard per-port ceiling: a wedged CDC device hangs Open() inside native
+                // GetCommState with no exception, so the catch below never fires and,
+                // pre-#294, Task.WhenAll in DiscoverAsync never settled. Open() is
+                // uncancellable, so on timeout the stuck task is ABANDONED — its own
+                // finally block closes the port if the kernel ever completes the I/O.
+                var winner = await Task.WhenAny(
+                    probeTask,
+                    Task.Delay(PortProbeHardTimeoutMs, cancellationToken)).ConfigureAwait(false);
+
+                if (winner != probeTask)
                 {
-                    // The probe finished right at the timeout/cancellation boundary —
-                    // honor DiscoverAsync's "settle for whatever probes already
-                    // finished cleanly" contract instead of discarding a completed
-                    // result (Qodo pass 5 #4). The finally releases our claim.
-                    return await probeTask.ConfigureAwait(false);
+                    if (probeTask.IsCompletedSuccessfully)
+                    {
+                        // The probe finished right at the timeout/cancellation boundary —
+                        // honor DiscoverAsync's "settle for whatever probes already
+                        // finished cleanly" contract instead of discarding a completed
+                        // result (Qodo pass 5 #4). The finally releases our claim.
+                        return await probeTask.ConfigureAwait(false);
+                    }
+
+                    // Whether the wait ended by timeout or by caller cancellation, the
+                    // uncancellable probe may still be blocked in native I/O — mark the
+                    // claim abandoned BEFORE surfacing cancellation, so a cancelled sweep
+                    // can't walk away from an untracked probe (Qodo PR #295 pass 2 #1).
+                    claim.AbandonedAtTicks = Environment.TickCount64;
+                    claimHandedToContinuation = true;
+
+                    // When the abandoned I/O finally completes (any way), observe its
+                    // fault so it can't surface as an UnobservedTaskException, and release
+                    // the claim — atomically only if it's still ours (a TTL retry may have
+                    // replaced it with a newer attempt that must survive).
+                    var abandonedClaim = claim;
+                    _ = probeTask.ContinueWith(
+                        t =>
+                        {
+                            _ = t.Exception;
+                            ReleaseClaimIfOwned(portName, abandonedClaim);
+                        },
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+
+                    // Surface caller cancellation only after tracking the abandoned probe.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return null;
                 }
 
-                // Whether the wait ended by timeout or by caller cancellation, the
-                // uncancellable probe may still be blocked in native I/O — mark the
-                // claim abandoned BEFORE surfacing cancellation, so a cancelled sweep
-                // can't walk away from an untracked probe (Qodo PR #295 pass 2 #1).
-                claim.AbandonedAtTicks = Environment.TickCount64;
-                claimHandedToContinuation = true;
-
-                // When the abandoned I/O finally completes (any way), observe its
-                // fault so it can't surface as an UnobservedTaskException, and release
-                // the claim — atomically only if it's still ours (a TTL retry may have
-                // replaced it with a newer attempt that must survive).
-                var abandonedClaim = claim;
-                _ = probeTask.ContinueWith(
-                    t =>
-                    {
-                        _ = t.Exception;
-                        ReleaseClaimIfOwned(portName, abandonedClaim);
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-
-                // Surface caller cancellation only after tracking the abandoned probe.
-                cancellationToken.ThrowIfCancellationRequested();
-                return null;
+                return await probeTask.ConfigureAwait(false);
             }
-
-            return await probeTask.ConfigureAwait(false);
+            finally
+            {
+                probeGate.Release();
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -451,9 +668,12 @@ public class SerialDeviceFinder : DeviceFinderBase
     /// <returns>Device info if a DAQiFi device responds, null otherwise.</returns>
     private async Task<IDeviceInfo?> TryGetDeviceInfoAsync(string portName, CancellationToken cancellationToken)
     {
+        // Captured at ENTRY, not at write time. A probe abandoned on the hard per-port timeout
+        // keeps running and may reach its catch during a LATER pass; stamping it with the pass it
+        // actually belongs to is what stops that late answer being consumed as a fresh observation.
+        var probePass = _busyPorts.CurrentPass;
+
         SerialPort? port = null;
-        MessageProducer<string>? producer = null;
-        StreamMessageConsumer<DaqifiOutMessage>? consumer = null;
 
         try
         {
@@ -469,67 +689,10 @@ public class SerialDeviceFinder : DeviceFinderBase
             port.DtrEnable = true;
 
             // Wait for device to wake up (devices need time after DTR is enabled)
-            await Task.Delay(DeviceWakeUpDelayMs, cancellationToken);
+            await Task.Delay(DeviceWakeUpDelayMs, cancellationToken).ConfigureAwait(false);
 
-            // Set up message producer and consumer
-            var stream = port.BaseStream;
-            producer = new MessageProducer<string>(stream);
-            producer.Start();
-
-            var parser = new ProtobufMessageParser();
-            consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
-
-            // Track status message reception
-            DaqifiOutMessage? statusMessage = null;
-            var messageReceived = new TaskCompletionSource<bool>();
-
-            consumer.MessageReceived += (_, args) =>
-            {
-                if (args.Message.Data is DaqifiOutMessage message)
-                {
-                    var messageType = ProtobufProtocolHandler.DetectMessageType(message);
-                    if (messageType == ProtobufMessageType.Status)
-                    {
-                        statusMessage = message;
-                        messageReceived.TrySetResult(true);
-                    }
-                }
-            };
-
-            consumer.Start();
-
-            // Identity probe: GetDeviceInfo only. The rest of the old setup sequence
-            // (StopStreaming / TurnDeviceOn / SetProtobufStreamFormat) is connection setup, not
-            // identification — a healthy DAQiFi answers SYSTem:SYSInfoPB? regardless of stream format or
-            // power state, so the caller setting up an actual connection still owns those. Echo is left
-            // alone too: an echo-on device wraps its reply in the echoed command text plus a trailing
-            // "DAQIFI>" prompt, but ProtobufMessageParser now resyncs past that non-protobuf noise to
-            // the embedded frame (issue #268), so the probe stays GetDeviceInfo-only (closes #157)
-            // instead of toggling device echo.
-            // Send GetDeviceInfo command with retry logic
-            var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
-            var lastRequestTime = DateTime.MinValue;
-            var retryCount = 0;
-
-            while (statusMessage == null && DateTime.UtcNow < timeout && !cancellationToken.IsCancellationRequested)
-            {
-                // Send request every RetryIntervalMs, up to MaxRetries times
-                if ((DateTime.UtcNow - lastRequestTime).TotalMilliseconds >= RetryIntervalMs && retryCount < MaxRetries)
-                {
-                    producer.Send(ScpiMessageProducer.GetDeviceInfo);
-                    lastRequestTime = DateTime.UtcNow;
-                    retryCount++;
-                }
-
-                // Wait a bit for response
-                var remainingTime = Math.Min(PollIntervalMs, (int)(timeout - DateTime.UtcNow).TotalMilliseconds);
-                if (remainingTime > 0)
-                {
-                    await Task.WhenAny(
-                        messageReceived.Task,
-                        Task.Delay(remainingTime, cancellationToken));
-                }
-            }
+            var statusMessage = await RequestDeviceStatusAsync(port.BaseStream, cancellationToken)
+                .ConfigureAwait(false);
 
             if (statusMessage == null)
             {
@@ -555,7 +718,46 @@ public class SerialDeviceFinder : DeviceFinderBase
         }
         catch (UnauthorizedAccessException)
         {
-            // Port is in use by another application
+            // The port is there; something else already has it open — very often the caller's
+            // own application, holding the device it is actively using. Recorded rather than
+            // folded into the null below, because "busy" and "not a DAQiFi device" are the same
+            // answer to this method and completely different answers to the caller (issue #532).
+            //
+            // Measured 2026-08-20: opening a COM port twice on Windows with
+            // System.IO.Ports.SerialPort throws System.UnauthorizedAccessException ("Access to
+            // the port 'COM12' is denied"), so a LOCKED port does raise this. That is all it
+            // shows -- see the presence check below for why it is not sufficient on its own.
+            // The USB physical location is resolved from the OS, not from the port, so it is
+            // available precisely here — on the one path where the port cannot be opened. It is
+            // what stops a reused port name from vouching for a device that has gone.
+            string? busyLocationKey;
+            try
+            {
+                busyLocationKey = _usbLocationProvider.GetLocationKey(portName);
+            }
+            catch
+            {
+                // Same contract as the success path: a misbehaving custom provider degrades the
+                // match to port-name-only, it does not take out the busy report.
+                busyLocationKey = null;
+            }
+
+            // "Access is denied" does NOT mean "the port is there". This repository already
+            // documents the trap (SerialPortConnectException): on macOS and Linux a MISSING port
+            // and a port held by another process produce byte-identical exceptions -- same type,
+            // same message. My Windows measurement only ever showed that a LOCKED port throws
+            // this; it never showed the converse, and generalising from it would have been wrong
+            // on the very platform issue #532 was reproduced on.
+            //
+            // So presence is established the way SerialPortConnectException establishes it: by
+            // asking the OS separately, not by reading the exception. A port unplugged between
+            // enumeration and Open() is gone, not busy, and must not suppress a genuine miss.
+            if (!IsPortStillPresent(portName))
+            {
+                return null;
+            }
+
+            _busyPorts.Record(probePass, new BusyPort(portName, busyLocationKey));
             return null;
         }
         catch (OperationCanceledException)
@@ -571,33 +773,15 @@ public class SerialDeviceFinder : DeviceFinderBase
         }
         finally
         {
-            // Clean up resources
-            try
-            {
-                consumer?.StopSafely(500);
-                consumer?.Dispose();
-            }
-            catch
-            {
-                // Ignore cleanup errors
-            }
-
-            try
-            {
-                producer?.StopSafely(500);
-                producer?.Dispose();
-            }
-            catch
-            {
-                // Ignore cleanup errors
-            }
-
+            // Clean up resources. The producer and consumer are already gone by here —
+            // RequestDeviceStatusAsync owns them and tears them down inside its own finally, so the
+            // reader thread has provably exited before the port below is closed under it.
             try
             {
                 if (port is { IsOpen: true })
                 {
                     port.DtrEnable = false;
-                    await Task.Delay(50); // Give DTR time to be processed
+                    await Task.Delay(DtrSettleMs).ConfigureAwait(false); // Give DTR time to be processed
                     port.Close();
                 }
 
@@ -607,6 +791,217 @@ public class SerialDeviceFinder : DeviceFinderBase
             {
                 // Ignore cleanup errors
             }
+        }
+    }
+
+    /// <summary>
+    /// Asks an already-open device stream to identify itself and returns its status message, or
+    /// <c>null</c> if nothing answered within <see cref="ResponseTimeoutMs"/>.
+    /// </summary>
+    /// <param name="stream">
+    /// The open device stream. Owned by the caller: this method starts and stops its own producer
+    /// and consumer over it, and both are fully torn down before it returns, but the stream itself
+    /// is left open.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// Split out of <see cref="TryGetDeviceInfoAsync"/> — which owns the port lifecycle — so the
+    /// request/reply exchange and its teardown can be exercised against a scripted stream with no
+    /// serial hardware attached (#486).
+    /// </remarks>
+    internal static async Task<DaqifiOutMessage?> RequestDeviceStatusAsync(
+        Stream stream, CancellationToken cancellationToken)
+    {
+        MessageProducer<string>? producer = null;
+        StreamMessageConsumer<DaqifiOutMessage>? consumer = null;
+        // Noted before anything touches the stream so the shortened teardown timeout can be put back
+        // — the stream belongs to the caller, and a probe has no business changing how it reads
+        // afterwards.
+        var originalReadTimeout = TryGetReadTimeout(stream);
+
+        try
+        {
+            producer = new MessageProducer<string>(stream);
+            producer.Start();
+
+            var parser = new ProtobufMessageParser();
+            consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
+
+            // Carries the status message itself rather than signalling a separately-assigned local:
+            // the message is published on the consumer's reader thread and read back on whichever
+            // thread resumes below, and handing it through the completion source is what makes that
+            // hand-off ordered instead of a bare cross-thread field write.
+            //
+            // RunContinuationsAsynchronously is load-bearing, not a style choice (#486). This source
+            // is completed from inside the consumer's MessageReceived dispatch, i.e. ON the reader
+            // thread. With inline continuations the rest of this method — the poll-loop exit and the
+            // whole finally block below — resumed on that same reader thread, and the first thing
+            // the finally does is StopSafely, which joins it. The reader was then waiting for
+            // itself: the join could never succeed, so it burned its full timeout on every
+            // successful probe and left the consumer un-joined afterwards. Bench-measured on a real
+            // Nq1: that single self-join was ~500ms of an ~830ms serial identify.
+            var statusReceived =
+                new TaskCompletionSource<DaqifiOutMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            // MessageParsed rather than MessageReceived: the probe never looks at the raw buffer,
+            // and subscribing to the event that carries it would make the consumer snapshot the
+            // buffer on every read for nothing (issue #490).
+            consumer.MessageParsed += parsed =>
+            {
+                if (parsed.Data is DaqifiOutMessage message
+                    && ProtobufProtocolHandler.DetectMessageType(message) == ProtobufMessageType.Status)
+                {
+                    // We have what we came for, so shorten the reader's next read before releasing
+                    // the waiter below — see PostIdentifyReadTimeoutMs. This runs on the reader
+                    // thread, between two reads, which is the one moment the timeout can be changed
+                    // without a read already in flight under the old value.
+                    ShortenReadTimeoutForTeardown(stream);
+                    statusReceived.TrySetResult(message);
+                }
+            };
+
+            consumer.Start();
+
+            // Identity probe: GetDeviceInfo only. The rest of the old setup sequence
+            // (StopStreaming / TurnDeviceOn / SetProtobufStreamFormat) is connection setup, not
+            // identification — a healthy DAQiFi answers SYSTem:SYSInfoPB? regardless of stream format or
+            // power state, so the caller setting up an actual connection still owns those. Echo is left
+            // alone too: an echo-on device wraps its reply in the echoed command text plus a trailing
+            // "DAQIFI>" prompt, but ProtobufMessageParser now resyncs past that non-protobuf noise to
+            // the embedded frame (issue #268), so the probe stays GetDeviceInfo-only (closes #157)
+            // instead of toggling device echo.
+            // Send GetDeviceInfo command with retry logic
+            var timeout = DateTime.UtcNow.AddMilliseconds(ResponseTimeoutMs);
+            var lastRequestTime = DateTime.MinValue;
+            var retryCount = 0;
+
+            while (!statusReceived.Task.IsCompleted && DateTime.UtcNow < timeout
+                                                    && !cancellationToken.IsCancellationRequested)
+            {
+                // Send request every RetryIntervalMs, up to MaxRetries times
+                if ((DateTime.UtcNow - lastRequestTime).TotalMilliseconds >= RetryIntervalMs && retryCount < MaxRetries)
+                {
+                    producer.Send(ScpiMessageProducer.GetDeviceInfo);
+                    lastRequestTime = DateTime.UtcNow;
+                    retryCount++;
+                }
+
+                // Wait a bit for response
+                var remainingTime = Math.Min(PollIntervalMs, (int)(timeout - DateTime.UtcNow).TotalMilliseconds);
+                if (remainingTime > 0)
+                {
+                    await Task.WhenAny(
+                        statusReceived.Task,
+                        Task.Delay(remainingTime, cancellationToken)).ConfigureAwait(false);
+                }
+            }
+
+            return statusReceived.Task.IsCompletedSuccessfully ? statusReceived.Task.Result : null;
+        }
+        finally
+        {
+            // Clean up resources
+            try
+            {
+                consumer?.StopSafely(ConsumerStopTimeoutMs);
+                consumer?.Dispose();
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+
+            // Strictly after the consumer has been joined: the short timeout is what makes that join
+            // quick, so restoring any earlier would give the benefit back. By here the reader has
+            // exited, so this is also the only thread touching the stream.
+            RestoreReadTimeout(stream, originalReadTimeout);
+
+            try
+            {
+                producer?.StopSafely(ProducerStopTimeoutMs);
+                producer?.Dispose();
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads a stream's current read timeout, or <c>null</c> when it does not have one.
+    /// </summary>
+    private static int? TryGetReadTimeout(Stream stream)
+    {
+        try
+        {
+            return stream.CanTimeout ? stream.ReadTimeout : null;
+        }
+        catch
+        {
+            // A stream that claims CanTimeout but refuses the getter has nothing to restore either.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Puts back the read timeout the stream had before the probe shortened it.
+    /// </summary>
+    /// <remarks>
+    /// Writes only when the value actually differs, so a probe that never shortened anything — a
+    /// port that answered nothing, most commonly — leaves the stream completely untouched rather
+    /// than rewriting it with its own value.
+    /// </remarks>
+    private static void RestoreReadTimeout(Stream stream, int? originalReadTimeout)
+    {
+        if (originalReadTimeout is not { } original)
+        {
+            return;
+        }
+
+        try
+        {
+            if (stream.CanTimeout && stream.ReadTimeout != original)
+            {
+                stream.ReadTimeout = original;
+            }
+        }
+        catch
+        {
+            // Best-effort, exactly as the shortening was.
+        }
+    }
+
+    /// <summary>
+    /// Drops the probe stream's read timeout to <see cref="PostIdentifyReadTimeoutMs"/> so the
+    /// reader notices the imminent stop promptly.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort by design. A stream that does not support timeouts, or refuses this one, simply
+    /// keeps the timeout it had — the teardown is correct either way, just slower — and this runs
+    /// inside a consumer callback, where an escaping exception would be reported as a message-
+    /// handling failure and hide a perfectly good status message.
+    /// </remarks>
+    private static void ShortenReadTimeoutForTeardown(Stream stream)
+    {
+        try
+        {
+            if (!stream.CanTimeout)
+            {
+                return;
+            }
+
+            // Infinite reads as "smaller than any timeout" numerically (-1) and is the one case that
+            // most needs shortening, so it is tested for rather than compared.
+            var current = stream.ReadTimeout;
+            if (current == Timeout.Infinite || current > PostIdentifyReadTimeoutMs)
+            {
+                stream.ReadTimeout = PostIdentifyReadTimeoutMs;
+            }
+        }
+        catch
+        {
+            // Not supported on this stream — leave it as it is.
         }
     }
 

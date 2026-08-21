@@ -129,3 +129,5 @@ artifacts/
 *.pidb
 *.svclog
 *.scc
+# Agent scratch journal — local-only, never committed
+SESSION_LOG.md

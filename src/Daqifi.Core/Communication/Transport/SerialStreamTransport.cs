@@ -18,12 +18,13 @@ namespace Daqifi.Core.Communication.Transport;
 /// <list type="bullet">
 /// <item><description>
 /// <b>Port-presence polling</b> at <see cref="DefaultLivenessCheckInterval"/> (1 s), requiring two
-/// consecutive misses. This bounds detection of an unplug at <b>roughly three seconds</b> even on
-/// a completely idle connection. Presence is <see cref="SerialPort.GetPortNames"/> containing the
-/// port, falling back to the device node still existing on Unix — no WMI, so it behaves
-/// identically on Windows, macOS, and Linux. It is armed only if the port is visible to that probe
-/// at connect time, so a platform or port-name spelling the probe cannot see disables the check
-/// rather than reporting a false drop.
+/// consecutive misses. This bounds detection of an unplug at <b>roughly three to four seconds</b>
+/// even on a completely idle connection (the extra second is the shared enumeration snapshot's
+/// lifetime — see <see cref="SerialPortNameSnapshot"/>). Presence is the device node still existing
+/// on Unix, where a port name is a path, falling back to <see cref="SerialPort.GetPortNames"/>
+/// listing the port — no WMI, so it behaves identically on Windows, macOS, and Linux. It is armed
+/// only if the port is visible to that probe at connect time, so a platform or port-name spelling
+/// the probe cannot see disables the check rather than reporting a false drop.
 /// </description></item>
 /// <item><description>
 /// <b>I/O fault escalation</b> via <see cref="ITransportHealthSink"/>: the reader/writer loops
@@ -232,7 +233,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </exception>
     public async Task ConnectAsync()
     {
-        await ConnectAsync(null);
+        await ConnectAsync(null).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -246,13 +247,13 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// </exception>
     public async Task ConnectAsync(ConnectionRetryOptions? retryOptions)
     {
-        await ConnectAsync(retryOptions, CancellationToken.None);
+        await ConnectAsync(retryOptions, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
-        await ConnectAsync(null, cancellationToken);
+        await ConnectAsync(null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -346,7 +347,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
                 _serialPort = null;
             },
             onStatusChanged: OnStatusChanged,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         StartDropDetection();
     }
@@ -394,7 +395,7 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             OnStatusChanged(false, null);
         }
 
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     /// <summary>
@@ -573,36 +574,50 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// look like two consecutive misses and close a healthy connection. A failed enumeration is
     /// therefore only swallowed when the filesystem check can still answer for this port name.
     /// </para>
+    /// <para>
+    /// The two sources are OR-ed, so the order they run in cannot change the answer — and the
+    /// filesystem check goes first because it is by far the cheaper one. On Unix, where the port
+    /// name <em>is</em> a device node path, that single stat answers the overwhelmingly common case
+    /// (the port is still there) outright, and the system-wide enumeration never runs at all. When
+    /// it does run it comes from <see cref="SerialPortNameSnapshot"/>, one snapshot shared by every
+    /// polling transport in the process (issue #491).
+    /// </para>
     /// </remarks>
     /// <exception cref="Exception">
     /// Propagates whatever the underlying probe raised when no source could answer.
     /// </exception>
-    internal static bool IsPortEnumerated(string portName)
+    internal static bool IsPortEnumerated(string portName) =>
+        IsPortEnumerated(portName, SerialPortNameSnapshot.Shared);
+
+    /// <inheritdoc cref="IsPortEnumerated(string)"/>
+    /// <param name="portName">The port name to probe.</param>
+    /// <param name="snapshot">
+    /// The enumeration cache to consult. Tests pass their own so the ordering can be asserted
+    /// without touching the process-wide instance.
+    /// </param>
+    internal static bool IsPortEnumerated(string portName, SerialPortNameSnapshot snapshot)
     {
         var isDeviceNodePath = portName.StartsWith('/');
 
+        if (isDeviceNodePath && File.Exists(portName))
+        {
+            return true;
+        }
+
         try
         {
-            foreach (var name in SerialPort.GetPortNames())
-            {
-                if (string.Equals(name, portName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
+            return snapshot.Contains(portName);
         }
         catch (Exception) when (isDeviceNodePath)
         {
             // Enumeration can fail transiently (a /dev scan racing a device change). A Unix port
             // name is also a filesystem path, so an independent answer is still available — the
             // failure is only swallowed because that second source can actually answer. When it
-            // cannot (a Windows-style name), the exception propagates as "no observation".
-            return File.Exists(portName);
+            // cannot (a Windows-style name), the exception propagates as "no observation". Here
+            // that second source has already spoken: the device node check above ran first and did
+            // not find it.
+            return false;
         }
-
-        // The enumeration answered and did not list this port. On Unix it may simply not enumerate
-        // the spelling the caller opened, so the device node is the tie-breaker.
-        return isDeviceNodePath && File.Exists(portName);
     }
 
     /// <summary>
@@ -617,15 +632,67 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
         // so it happens after the notification.
         var port = Interlocked.Exchange(ref _serialPort, null);
 
-        OnStatusChanged(false, error);
-
         try
         {
-            port?.Dispose();
+            OnStatusChanged(false, error);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // The device is already gone; failing to close its handle changes nothing.
+            // A subscriber that throws must not cost us the port handle (issue #494). The reference
+            // has already been taken out of the field, so if this unwound past the dispose below,
+            // Disconnect() and Dispose() would both find null and skip it too — the OS port would
+            // stay claimed for the life of the process and re-plugging the device would fail with
+            // "Access is denied". Not rethrown: the callers of this are a watchdog timer thread and
+            // the reader/writer loops, all of which already absorb it, so propagating only risks
+            // disturbing them. A DaqifiDevice surfaces its own StatusChanged subscriber failures on
+            // ErrorOccurred; this transport carries no logger, so a consumer working against a bare
+            // transport gets the same best-effort trace DeviceFinderBase gives its event raises.
+            SafeTrace(ex);
+        }
+        finally
+        {
+            try
+            {
+                port?.Dispose();
+            }
+            catch (Exception)
+            {
+                // The device is already gone; failing to close its handle changes nothing.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the diagnostic line for a <see cref="StatusChanged"/> subscriber failure, swallowing
+    /// anything a misbehaving <see cref="System.Diagnostics.TraceListener"/> throws.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="System.Diagnostics.Trace"/> dispatches to listeners the consumer installed, so it
+    /// is consumer code and can throw like any other. A listener throwing out of the <c>catch</c>
+    /// that was containing a bad subscriber would defeat the containment and cost the port handle
+    /// anyway. Same guarantee as <c>DeviceFinderBase.RaiseIsolated</c> and
+    /// <c>DaqifiStreamingDevice.SafeTrace</c>; this transport has no <c>ILogger</c>, hence the local
+    /// twin rather than a shared one.
+    /// <para>
+    /// The message is composed <em>inside</em> the guard rather than passed in ready-made, because
+    /// <paramref name="subscriberFailure"/> came out of consumer code too: rendering an exception
+    /// whose <see cref="object.ToString"/> or <see cref="Exception.Message"/> throws would otherwise
+    /// escape the <c>catch</c> from the interpolation itself and leave the drop path exactly as
+    /// disrupted as an unguarded raise.
+    /// </para>
+    /// </remarks>
+    /// <param name="subscriberFailure">The exception the subscriber threw.</param>
+    private static void SafeTrace(Exception subscriberFailure)
+    {
+        try
+        {
+            System.Diagnostics.Trace.WriteLine(
+                $"[{nameof(SerialStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {subscriberFailure}");
+        }
+        catch
+        {
+            // A trace listener — or an exception that cannot render itself — is not permitted to
+            // affect the drop path.
         }
     }
 

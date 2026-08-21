@@ -84,5 +84,66 @@ namespace Daqifi.Core.Tests.Device
         {
             Assert.False(ScpiResponseClassifier.IsSystemErrorReplyLine(line));
         }
+
+        [Theory]
+        [InlineData("0,\"No error\"", 0)]
+        [InlineData("+0,\"No error\"", 0)]
+        [InlineData("-200,\"Execution error\"", -200)]
+        [InlineData("-420, \"Query UNTERMINATED\"", -420)]
+        [InlineData("  -113,\"Undefined header\"  \r\n", -113)]
+        public void TryParseSystemErrorReplyCode_ReadsTheCode(string line, int expected)
+        {
+            Assert.True(ScpiResponseClassifier.TryParseSystemErrorReplyCode(line, out var code));
+            Assert.Equal(expected, code);
+        }
+
+        [Theory]
+        [InlineData("**ERROR: -200,\"Execution error\"")]  // the volunteered form, not a queue reply
+        [InlineData("Error !! No SD Card Detected")]
+        [InlineData("99999999999999,\"Overflows an int\"")]
+        [InlineData("")]
+        public void TryParseSystemErrorReplyCode_RejectsWhatIsNotACode(string line)
+        {
+            Assert.False(ScpiResponseClassifier.TryParseSystemErrorReplyCode(line, out var code));
+            Assert.Equal(0, code);
+        }
+
+        [Theory]
+        // The shape captured off the bench in #537: a partial protobuf frame welded onto the front
+        // of the first reply line, with the real key and value still attached behind it.
+        [InlineData("\u0008\uFFFD\\3\uFFFD\u0004\u0012\u0003\u0008\u0000TotalSamplesStreamed=203")]
+        [InlineData("\u0000TotalSamplesStreamed=203")]        // a lone NUL is enough
+        [InlineData("STREAM: 2 (ceiling 3)\u0007")]           // junk trailing the line, not leading it
+        [InlineData("\uFFFD3")]                               // UTF-8 could not decode the byte at all
+        [InlineData("\u007F42")]                              // DEL
+        [InlineData("\u009F42")]                              // a C1 control from a decoded 2-byte sequence
+        public void IsBinaryCorruptedLine_DetectsNonTextBytes(string line)
+        {
+            Assert.True(ScpiResponseClassifier.IsBinaryCorruptedLine(line));
+        }
+
+        [Theory]
+        [InlineData("TotalSamplesStreamed=203")]
+        [InlineData("STREAM: 2 (ceiling 3)")]
+        [InlineData("**ERROR: -200, \"Execution error\"")]
+        [InlineData("ERROR\t-200, \"Execution error\"")]      // tab is real device output, not corruption
+        [InlineData("DAQiFi/log_20260802_153435.bin 1539")]
+        [InlineData("  padded  ")]
+        [InlineData("")]
+        [InlineData(null)]
+        public void IsBinaryCorruptedLine_PassesRealDeviceText(string? line)
+        {
+            Assert.False(ScpiResponseClassifier.IsBinaryCorruptedLine(line));
+        }
+
+        [Fact]
+        public void ContainsBinaryCorruptedLine_FindsCorruptionAnywhereInTheResponse()
+        {
+            var clean = new[] { "TotalSamplesStreamed=203", "QueueDroppedSamples=0" };
+            var corrupted = new[] { "TotalSamplesStreamed=203", "\u0000QueueDroppedSamples=0" };
+
+            Assert.False(ScpiResponseClassifier.ContainsBinaryCorruptedLine(clean));
+            Assert.True(ScpiResponseClassifier.ContainsBinaryCorruptedLine(corrupted));
+        }
     }
 }
