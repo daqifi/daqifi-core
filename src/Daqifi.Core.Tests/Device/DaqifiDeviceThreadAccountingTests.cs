@@ -84,9 +84,9 @@ public class DaqifiDeviceThreadAccountingTests
     {
         // The exchange's thread churn is transient: once it completes, the device is back to
         // steady state — no leaked text-consumer thread left running behind it. Proven by
-        // tracking every thread that ever entered the transport's Read (producer/consumer plus
-        // whatever the exchange spun up) and requiring that only the current producer and
-        // consumer threads are still alive afterward.
+        // tracking every thread that ever entered the transport's Read — the protobuf consumer's
+        // restarts plus the transient text consumer's, the producer never reads — and requiring
+        // that only the current consumer thread is still alive afterward.
         using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
         using var device = new ThreadAccountingTestableDevice("Settled Device", transport);
 
