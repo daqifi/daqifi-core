@@ -3584,13 +3584,33 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
-        /// Invokes a classified message event, isolating the caller from a subscriber exception.
+        /// Invokes a classified message event, isolating each subscriber from the others' exceptions.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// <see cref="OnStatusMessageReceived"/> and <see cref="OnStreamMessageReceived"/> still have
         /// work to do after raising their classified event (the undifferentiated <see cref="MessageReceived"/>
         /// event, and for <see cref="DaqifiStreamingDevice"/> the per-channel sample decode) — an exception
         /// escaping a classified-event subscriber must not skip that remaining work for the frame.
+        /// </para>
+        /// <para>
+        /// A plain <c>try { handler(message); }</c> around the whole multicast delegate only isolates
+        /// the device from the subscriber list as a whole — .NET invokes a multicast delegate's
+        /// invocation list in order and stops at the first exception, so a throwing subscriber
+        /// silently starves every subscriber added after it for the life of the connection (issue #560).
+        /// Walking <see cref="Delegate.GetInvocationList"/> and wrapping each entry isolates subscribers
+        /// from each other too — strictly more robust, since it can only run more handlers, never fewer.
+        /// </para>
+        /// <para>
+        /// This is on the per-frame path, and <see cref="Delegate.GetInvocationList"/> allocates an
+        /// array per call regardless of subscriber count — at 100 Hz with several channels that is a
+        /// real allocation rate. Measured against the by-far-common case of a single subscriber (see
+        /// <c>DeviceStatusChangedIsolationTests</c>-style allocation tests elsewhere in this repo, e.g.
+        /// <c>AcquisitionStatisticsTests</c>), it costs one small array per classified frame. That is
+        /// accepted here in exchange for correctness: a cached invocation list refreshed on subscribe/
+        /// unsubscribe would avoid it, but adds real complexity for a cost that has not shown up as a
+        /// problem in practice. Revisit if profiling ever says otherwise.
+        /// </para>
         /// </remarks>
         /// <param name="handler">The event delegate to invoke, or <c>null</c> if unsubscribed.</param>
         /// <param name="message">The message to pass to subscribers.</param>
@@ -3602,9 +3622,24 @@ namespace Daqifi.Core.Device
                 return;
             }
 
+            foreach (var subscriber in handler.GetInvocationList())
+            {
+                InvokeClassifiedSubscriber((Action<DaqifiOutMessage>)subscriber, message, eventName);
+            }
+        }
+
+        /// <summary>
+        /// Invokes a single classified-event subscriber, containing any exception it throws so it
+        /// cannot stop sibling subscribers (or the device) from seeing the frame.
+        /// </summary>
+        /// <param name="subscriber">The single subscriber delegate to invoke.</param>
+        /// <param name="message">The message to pass to the subscriber.</param>
+        /// <param name="eventName">The event name, for the trace log if the subscriber throws.</param>
+        private void InvokeClassifiedSubscriber(Action<DaqifiOutMessage> subscriber, DaqifiOutMessage message, string eventName)
+        {
             try
             {
-                handler(message);
+                subscriber(message);
             }
             catch (Exception ex)
             {
