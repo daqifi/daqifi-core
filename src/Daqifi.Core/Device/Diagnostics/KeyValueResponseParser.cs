@@ -88,6 +88,7 @@ internal static class KeyValueResponseParser
     /// </param>
     /// <param name="result">The built result, or <see langword="null"/> if no field could be parsed.</param>
     /// <returns><see langword="true"/> if at least one field was parsed; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="factory"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException"><paramref name="factory"/> returned <see langword="null"/>.</exception>
     public static bool TryParse<T>(
         IEnumerable<string> lines,
