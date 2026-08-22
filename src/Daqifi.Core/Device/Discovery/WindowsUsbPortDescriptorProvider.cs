@@ -27,8 +27,10 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
     /// <see cref="GetDescriptor"/> — which adds the Windows platform gate and supplies the real
     /// <see cref="WindowsPnpPortMap.Shared"/> — so the lookup can be unit tested against a fake map
     /// on any OS, for the same reason <see cref="LinuxUsbPortDescriptorProvider.Resolve"/> is
-    /// exposed. Unlike <see cref="GetDescriptor"/>, this never touches WMI, so it carries no
-    /// platform attribute of its own.
+    /// exposed. Unlike <see cref="GetDescriptor"/>, this never calls into <c>System.Management</c>
+    /// directly and carries no platform attribute of its own — whether the call reaches WMI depends
+    /// entirely on the <see cref="WindowsPnpPortMap"/> passed in, which is what lets a fake one keep
+    /// this path off WMI in tests.
     /// </summary>
     internal static UsbPortDescriptor? Resolve(string portName, WindowsPnpPortMap map)
     {

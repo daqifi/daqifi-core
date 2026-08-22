@@ -80,28 +80,15 @@ public class WindowsUsbPortDescriptorProviderTests
     }
 
     // ---- the platform gate ------------------------------------------------
-    // Written in the style of LinuxUsbPortDescriptorProviderTests.GetDescriptor_OffLinux: an
-    // unconditional call whose answer is the same either side of the gate, plus one guarded to the
-    // platform where the gate is actually exercised, so neither ever passes without asserting.
-
-    [Fact]
-    public void GetDescriptor_PortNoEntityClaims_ReturnsNull()
-    {
-        // On Windows this reaches WindowsPnpPortMap.Shared and finds nothing for a port name no
-        // real device uses. Off Windows the platform gate answers directly. Either way the port is
-        // unclassified.
-        var provider = new WindowsUsbPortDescriptorProvider();
-
-#pragma warning disable CA1416 // GetDescriptor is Windows-gated at runtime, not by this call site.
-        Assert.Null(provider.GetDescriptor("COM_DAQIFI_TEST_" + Guid.NewGuid().ToString("N")));
-#pragma warning restore CA1416
-    }
 
     [Fact]
     public void GetDescriptor_OffWindows_ReturnsNullWithoutTouchingTheMap()
     {
-        // On Windows the same call is covered above; here the assertion only adds value where the
-        // gate itself is what has to produce the answer.
+        // Unlike LinuxUsbPortDescriptorProviderTests.GetDescriptor_OffLinux, there is no
+        // unconditional twin of this test that also exercises GetDescriptor on Windows: doing so
+        // would reach WindowsPnpPortMap.Shared, whose first lookup can rebuild the map and run a
+        // real WMI query — slow and flaky in a unit-test run. The Windows-side lookup logic is
+        // fully covered above through the injectable Resolve seam instead.
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             return;
