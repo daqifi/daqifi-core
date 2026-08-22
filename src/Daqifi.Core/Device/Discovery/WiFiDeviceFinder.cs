@@ -24,7 +24,6 @@ public class WiFiDeviceFinder : DeviceFinderBase
     private const string NativeFinderQuery = "Discovery: Who is out there?\r\n";
     private const string PowerEvent = "Power event occurred";
     private const int DefaultDiscoveryPort = 30303;
-    private const int DefaultTimeoutSeconds = 5;
 
     #endregion
 
