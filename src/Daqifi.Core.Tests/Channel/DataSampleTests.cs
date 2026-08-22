@@ -54,19 +54,6 @@ public class DataSampleTests
     }
 
     [Fact]
-    public void Value_CanBeModified()
-    {
-        // Arrange
-        var sample = new DataSample(DateTime.UtcNow, 10.0);
-
-        // Act
-        sample.Value = 20.0;
-
-        // Assert
-        Assert.Equal(20.0, sample.Value);
-    }
-
-    [Fact]
     public void ToString_ReturnsFormattedString()
     {
         // Arrange

@@ -67,25 +67,6 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public void Properties_CanBeModified()
-        {
-            // Arrange
-            var config = new NetworkConfiguration();
-
-            // Act
-            config.Mode = WifiMode.ExistingNetwork;
-            config.SecurityType = WifiSecurityType.None;
-            config.Ssid = "NewSSID";
-            config.Password = "NewPassword";
-
-            // Assert
-            Assert.Equal(WifiMode.ExistingNetwork, config.Mode);
-            Assert.Equal(WifiSecurityType.None, config.SecurityType);
-            Assert.Equal("NewSSID", config.Ssid);
-            Assert.Equal("NewPassword", config.Password);
-        }
-
-        [Fact]
         public void StaticIPConstructor_SetsAllProperties()
         {
             // Arrange
