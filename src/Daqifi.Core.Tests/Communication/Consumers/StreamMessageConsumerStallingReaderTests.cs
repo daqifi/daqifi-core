@@ -45,14 +45,12 @@ public class StreamMessageConsumerStallingReaderTests
             Name = "TestReleaser"
         };
         releaser.Start();
-        try
-        {
-            consumer.Start();
-        }
-        finally
-        {
-            releaser.Join(TimeSpan.FromSeconds(2));
-        }
+        consumer.Start();
+
+        // Join before the test's `using` disposals run: a still-alive releaser calling
+        // stream.Release() after the stream is disposed would throw ObjectDisposedException on a
+        // background thread, which is process-terminating rather than a clean test failure.
+        Assert.True(releaser.Join(TimeSpan.FromSeconds(2)), "releaser thread did not finish in time");
 
         Assert.True(consumer.IsRunning);
         Assert.True(consumer.StopSafely(timeoutMs: 2000));
