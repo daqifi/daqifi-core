@@ -12,12 +12,10 @@ internal static class UsbPortDescriptorProviderFactory
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            // The WindowsUsbPortDescriptorProvider type is annotated
-            // [SupportedOSPlatform("windows")]; constructor only runs after
-            // the runtime check above, so the analyzer warning is suppressed.
-#pragma warning disable CA1416
+            // Only WindowsUsbPortDescriptorProvider.GetDescriptor carries
+            // [SupportedOSPlatform("windows")] — the constructor itself is
+            // unannotated, so no CA1416 suppression is needed here.
             return new WindowsUsbPortDescriptorProvider();
-#pragma warning restore CA1416
         }
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
