@@ -33,6 +33,13 @@ public class UsbStreamInterfaceInitializerTests
 
         public List<CancellationToken> ObservedTokens { get; } = new();
 
+        /// <summary>
+        /// Invoked synchronously after an attempt is recorded but before its response is returned,
+        /// so a test can react to "attempt N happened" deterministically instead of racing a
+        /// wall-clock timer against it.
+        /// </summary>
+        public Action? OnAttempt { get; set; }
+
         public ScriptedSender Answers(params string[] lines)
         {
             _responses.Enqueue(lines);
@@ -43,6 +50,7 @@ public class UsbStreamInterfaceInitializerTests
         {
             AttemptCount++;
             ObservedTokens.Add(cancellationToken);
+            OnAttempt?.Invoke();
 
             // An unscripted attempt is a test bug, not a silent success: surface it.
             Assert.True(_responses.Count > 0, "The sender was invoked more times than the test scripted.");
@@ -182,10 +190,15 @@ public class UsbStreamInterfaceInitializerTests
     public async Task CancellationBetweenAttempts_StopsBeforeTheRetry()
     {
         // The settle delay is cancellable, so a token cancelled while waiting must abandon the retry
-        // rather than send a command into a session that is being torn down.
+        // rather than send a command into a session that is being torn down. Cancel synchronously
+        // from the first attempt itself (rather than racing a wall-clock timer against the 150 ms
+        // retry delay) so the token is guaranteed to already be cancelled by the time the loop reaches
+        // the delay — a timer-based CancelAfter(10 ms) was observed to fire late under CI scheduling
+        // load, letting a second, unscripted attempt through and failing the test on that assertion
+        // instead of the intended OperationCanceledException.
         using var cts = new CancellationTokenSource();
         var sender = new ScriptedSender().Answers(ScpiError);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(10));
+        sender.OnAttempt = () => cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => RouteAsync(sender, cancellationToken: cts.Token));
