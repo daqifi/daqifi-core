@@ -29,9 +29,29 @@ public class StreamMessageConsumerStallingReaderTests
         Assert.True(stream.WaitForReadEntered(TimeSpan.FromSeconds(2)));
         Assert.False(consumer.StopSafely(timeoutMs: 200));
 
-        using (var releaser = new Timer(_ => stream.Release(), null, 200, Timeout.Infinite))
+        // A dedicated thread, not a System.Threading.Timer callback, releases the stale reader
+        // while Start() is parked in its grace-period join below. A Timer callback is queued onto
+        // the shared ThreadPool, which under CI load (many test classes running in parallel) can
+        // be starved well past its 200ms due time — long enough to blow the join's 1000ms grace
+        // and turn this into a flaky ConsumerThreadNotExitedException. A dedicated background
+        // thread's Sleep is not subject to that queuing delay.
+        var releaser = new Thread(() =>
+        {
+            Thread.Sleep(200);
+            stream.Release();
+        })
+        {
+            IsBackground = true,
+            Name = "TestReleaser"
+        };
+        releaser.Start();
+        try
         {
             consumer.Start();
+        }
+        finally
+        {
+            releaser.Join(TimeSpan.FromSeconds(2));
         }
 
         Assert.True(consumer.IsRunning);
