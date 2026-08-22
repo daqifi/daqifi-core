@@ -209,7 +209,7 @@ public sealed class SdCardJsonFileParser
                 }
                 else
                 {
-                    var delta = ComputeTickDelta(previousTimestamp.Value, timestamp);
+                    var delta = SdCardTickDelta.Compute(previousTimestamp.Value, timestamp);
                     elapsedSeconds += delta * tickPeriod;
                     previousTimestamp = timestamp;
                 }
@@ -349,20 +349,6 @@ public sealed class SdCardJsonFileParser
             Resolution: inferred.Resolution > 0 ? inferred.Resolution : overrideConfig.Resolution,
             PortRange: inferred.PortRange ?? overrideConfig.PortRange,
             InternalScaleM: inferred.InternalScaleM ?? overrideConfig.InternalScaleM);
-    }
-
-    /// <summary>
-    /// Computes the tick delta between two uint32 timestamps, handling rollover.
-    /// </summary>
-    private static long ComputeTickDelta(uint previous, uint current)
-    {
-        if (current >= previous)
-        {
-            return current - previous;
-        }
-
-        // Rollover: ticks remaining to max + current
-        return (long)(uint.MaxValue - previous) + current + 1;
     }
 
 #pragma warning disable CS1998 // Async iterator: yield break requires async; no real awaits.
