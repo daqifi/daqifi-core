@@ -48,11 +48,10 @@ public class SdCardTickDeltaTests
     }
 
     [Fact]
-    public void Compute_WithPreviousAtZeroAndRollover_ReturnsCurrentPlusOne()
+    public void Compute_WithPreviousAtMaxValueAndCurrentAtZero_ReturnsOne()
     {
-        // previous == 0 is not "at max", so current < previous never happens here except when
-        // current itself wrapped past zero — covered by the general rollover case above. This
-        // instead exercises the boundary where previous is the last possible value before max.
+        // previous is exactly uint.MaxValue and current has wrapped to 0 — the tightest
+        // possible rollover boundary (one tick past the wrap).
         var delta = SdCardTickDelta.Compute(previous: uint.MaxValue, current: 0u);
 
         Assert.Equal(1L, delta);
