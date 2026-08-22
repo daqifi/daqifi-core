@@ -64,25 +64,6 @@ public class DeviceCapabilitiesTests
     }
 
     [Fact]
-    public void Properties_CanBeSetAndRetrieved()
-    {
-        // Arrange
-        var capabilities = new DeviceCapabilities();
-
-        // Act
-        capabilities.AnalogInputChannels = 8;
-        capabilities.AnalogOutputChannels = 2;
-        capabilities.DigitalChannels = 16;
-        capabilities.MaxSamplingRate = 2000;
-
-        // Assert
-        Assert.Equal(8, capabilities.AnalogInputChannels);
-        Assert.Equal(2, capabilities.AnalogOutputChannels);
-        Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(2000, capabilities.MaxSamplingRate);
-    }
-
-    [Fact]
     public void Clone_RoundTripsEveryPublicProperty()
     {
         // Arrange: set every public property to a non-default value so a dropped copy is detectable.
