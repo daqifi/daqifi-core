@@ -4,6 +4,7 @@ using Daqifi.Core.Device.Diagnostics;
 using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -201,7 +202,7 @@ public class DeviceDiagnosticsOperationsTests
         // Checked after the rejection check but before the parse -- a mangled echo would otherwise
         // fail the parse with a less useful message.
         var host = new FakeHost();
-        host.EnqueueResponse("STREAM: 2 (ceiling 3)");
+        host.EnqueueResponse("STR\u0001EAM: 2 (ceiling 3)");
         var ops = new DeviceDiagnosticsOperations(host);
 
         await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
@@ -293,7 +294,7 @@ public class DeviceDiagnosticsOperationsTests
         // A control character welded into the reply is the #537 signature. Checked before the
         // numeric parse, so this must be the corrupted-response type, not the generic unparseable one.
         var host = new FakeHost();
-        host.EnqueueResponse("3");
+        host.EnqueueResponse("\u00013");
         var ops = new DeviceDiagnosticsOperations(host);
 
         await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
@@ -343,7 +344,7 @@ public class DeviceDiagnosticsOperationsTests
     public async Task GetStreamStatsAsync_CorruptedByStreamData_Throws()
     {
         var host = new FakeHost();
-        host.EnqueueResponse("TotalSamplesStreamed=1000");
+        host.EnqueueResponse("Total\u0001SamplesStreamed=1000");
         var ops = new DeviceDiagnosticsOperations(host);
 
         await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
@@ -378,7 +379,7 @@ public class DeviceDiagnosticsOperationsTests
     public async Task GetMemoryDiagnosticsAsync_CorruptedByStreamData_Throws()
     {
         var host = new FakeHost();
-        host.EnqueueResponse("HeapTotal=65536");
+        host.EnqueueResponse("Heap\u0001Total=65536");
         var ops = new DeviceDiagnosticsOperations(host);
 
         await Assert.ThrowsAsync<DeviceDiagnosticsCorruptedResponseException>(
@@ -449,7 +450,17 @@ public class DeviceDiagnosticsOperationsTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             setupAction();
-            var lines = _responses.Count > 0 ? _responses.Dequeue() : Array.Empty<string>();
+            IReadOnlyList<string> lines = _responses.Count > 0 ? _responses.Dequeue() : Array.Empty<string>();
+
+            // Mirror the real TextExchangeEngine: blank lines are dropped unless the caller opted
+            // into keepBlankLines. Without this, a regression that stops passing keepBlankLines: true
+            // for SYSTem:LOG? would go undetected -- the fake would keep handing back the queued
+            // terminator regardless of what the collaborator actually requested.
+            if (!keepBlankLines)
+            {
+                lines = lines.Where(line => line.Length > 0).ToList();
+            }
+
             return Task.FromResult(lines);
         }
 
