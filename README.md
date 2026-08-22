@@ -327,7 +327,8 @@ Semver here tracks **source** compatibility, not binary compatibility: appending
 to a public positional record (with a default) is not treated as a breaking change requiring
 a major bump, and is called out in release notes instead. Consumers who need binary
 compatibility across versions should recompile against each release rather than swap the DLL
-in place. See [ADR 0002](docs/adr/0002-binary-compatibility-policy.md) for the reasoning.
+in place. See [ADR 0002](https://github.com/daqifi/daqifi-core/blob/main/docs/adr/0002-binary-compatibility-policy.md)
+for the reasoning.
 
 ---
 
