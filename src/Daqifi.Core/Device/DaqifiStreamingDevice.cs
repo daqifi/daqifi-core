@@ -1292,6 +1292,8 @@ namespace Daqifi.Core.Device
 
         void IDeviceOperationHost.StopStreaming() => StopStreaming();
 
+        void IDeviceOperationHost.StartStreaming() => StartStreaming();
+
         void IDeviceOperationHost.Send<T>(IOutboundMessage<T> message) => Send(message);
 
         DeviceMetadata IDeviceOperationHost.Metadata => Metadata;

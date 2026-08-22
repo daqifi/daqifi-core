@@ -897,6 +897,7 @@ public class StreamFrameDecoderTests
         public TimeSpan SdCardDownloadTimeout => throw new NotSupportedException();
         public TimeSpan SdCardTransferIdleTimeout => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
+        public void StartStreaming() => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();
         public void Send<T>(IOutboundMessage<T> message) => throw new NotSupportedException();
         public void WithChannelsLock(Action action) => throw new NotSupportedException();
