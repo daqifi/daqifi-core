@@ -1,0 +1,277 @@
+using Daqifi.Core.Communication.Consumers;
+using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Device;
+using System.Reflection;
+using System.Text;
+
+namespace Daqifi.Core.Tests.Device;
+
+/// <summary>
+/// Documents and verifies the thread accounting from issue #491's triage: a connected, idle
+/// device holds exactly two dedicated background threads (the producer and the protobuf
+/// consumer), and a text exchange transiently spawns fresh threads for both the protobuf
+/// consumer restart and the temporary text consumer rather than reusing them. That per-exchange
+/// churn is deliberately left in place — see the remarks on <see cref="DaqifiDevice"/> — so this
+/// is a characterization test, not a target for these counts to shrink to.
+/// </summary>
+public class DaqifiDeviceThreadAccountingTests
+{
+    [Fact]
+    public void Connect_IdleDevice_HasExactlyTwoRunningDedicatedThreads()
+    {
+        using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
+        using var device = new ThreadAccountingTestableDevice("Idle Device", transport);
+
+        device.Connect();
+
+        var producer = GetMessageProducer(device);
+        var consumer = GetMessageConsumer(device);
+
+        Assert.NotNull(producer);
+        Assert.NotNull(consumer);
+        Assert.True(producer!.IsRunning);
+        Assert.True(consumer!.IsRunning);
+
+        var producerThread = GetProducerThread(producer);
+        var consumerThread = GetConsumerThread(consumer);
+
+        Assert.NotNull(producerThread);
+        Assert.NotNull(consumerThread);
+        Assert.True(producerThread!.IsAlive);
+        Assert.True(consumerThread!.IsAlive);
+        Assert.NotEqual(producerThread.ManagedThreadId, consumerThread.ManagedThreadId);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_RestartsTheProtobufConsumerOnAFreshThread()
+    {
+        // The triage finding this pins down: the exchange does not resume the protobuf consumer's
+        // existing reader, it stops it and starts a new one, so the exchange costs a second thread
+        // creation beyond the temporary text consumer's own. Compared by Thread instance rather
+        // than ManagedThreadId — the old thread has already exited by the time the new one is
+        // created, so the runtime is free to reuse its id, which would make an id comparison
+        // intermittently pass for the wrong reason.
+        using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
+        using var device = new ThreadAccountingTestableDevice("Churning Device", transport);
+
+        device.Connect();
+        var consumer = GetMessageConsumer(device);
+        var beforeThread = GetConsumerThread(consumer!)!;
+
+        await device.CallExecuteTextCommandAsync(() => { });
+
+        // Same consumer instance, restarted — the exchange swaps the reader, not the object
+        // (issue #383's invariant), but the thread backing it is a new one.
+        var afterConsumer = GetMessageConsumer(device);
+        Assert.Same(consumer, afterConsumer);
+        Assert.True(afterConsumer!.IsRunning);
+
+        var afterThread = GetConsumerThread(afterConsumer)!;
+        Assert.NotSame(beforeThread, afterThread);
+        Assert.True(
+            SpinWait.SpinUntil(() => !beforeThread.IsAlive, TimeSpan.FromSeconds(2)),
+            "The pre-exchange consumer thread never exited.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_LeavesTheDeviceBackAtTwoRunningThreadsAfterward()
+    {
+        // The exchange's thread churn is transient: once it completes, the device is back to
+        // steady state — no leaked text-consumer thread left running behind it. Proven by
+        // tracking every thread that ever entered the transport's Read — the protobuf consumer's
+        // restarts plus the transient text consumer's, the producer never reads — and requiring
+        // that only the current consumer thread is still alive afterward.
+        using var transport = new ImmediateReplyMockTransport("0,\"No error\"\r\n");
+        using var device = new ThreadAccountingTestableDevice("Settled Device", transport);
+
+        device.Connect();
+        await device.CallExecuteTextCommandAsync(() => { });
+
+        var producer = GetMessageProducer(device);
+        var consumer = GetMessageConsumer(device);
+        var producerThread = GetProducerThread(producer!)!;
+        var consumerThread = GetConsumerThread(consumer!)!;
+
+        Assert.True(producer!.IsRunning);
+        Assert.True(consumer!.IsRunning);
+        Assert.True(producerThread.IsAlive);
+        Assert.True(consumerThread.IsAlive);
+
+        // Every reader thread the exchange spun up — including the transient text consumer's —
+        // must have exited by now; only the steady-state producer and consumer stay alive.
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => transport.ObservedReaderThreads.All(t => t == consumerThread || !t.IsAlive),
+                TimeSpan.FromSeconds(2)),
+            "A reader thread from the exchange outlived it.");
+
+        device.Disconnect();
+    }
+
+    private static IMessageProducer<string>? GetMessageProducer(DaqifiDevice device)
+    {
+        return (IMessageProducer<string>?)typeof(DaqifiDevice)
+            .GetField("_messageProducer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(device);
+    }
+
+    private static IMessageConsumer<DaqifiOutMessage>? GetMessageConsumer(DaqifiDevice device)
+    {
+        return (IMessageConsumer<DaqifiOutMessage>?)typeof(DaqifiDevice)
+            .GetField("_messageConsumer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(device);
+    }
+
+    private static Thread? GetProducerThread(object producer)
+    {
+        return (Thread?)producer.GetType()
+            .GetField("_producerThread", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(producer);
+    }
+
+    private static Thread? GetConsumerThread(object consumer)
+    {
+        return (Thread?)consumer.GetType()
+            .GetField("_consumerThread", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(consumer);
+    }
+
+    /// <summary>Exposes the protected text-exchange entry point.</summary>
+    private sealed class ThreadAccountingTestableDevice : DaqifiDevice
+    {
+        public ThreadAccountingTestableDevice(string name, IStreamTransport transport)
+            : base(name, transport)
+        {
+        }
+
+        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(Action setupAction)
+        {
+            return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 500, completionTimeoutMs: 150);
+        }
+    }
+
+    /// <summary>
+    /// Transport whose stream hands back one canned line on its first read and then idles
+    /// (returns 0 with a short sleep, never blocking indefinitely) — enough for a text exchange
+    /// to complete promptly without needing to be released from another thread.
+    /// </summary>
+    private sealed class ImmediateReplyMockTransport : IStreamTransport
+    {
+        private readonly ImmediateReplyStream _stream;
+        private bool _isConnected;
+        private bool _disposed;
+
+        public ImmediateReplyMockTransport(string line)
+        {
+            _stream = new ImmediateReplyStream(line);
+        }
+
+        public Stream Stream => _disposed
+            ? throw new ObjectDisposedException(nameof(ImmediateReplyMockTransport))
+            : _stream;
+
+        public bool IsConnected => _isConnected && !_disposed;
+
+        public string ConnectionInfo => _isConnected ? "Immediate: Connected" : "Immediate: Disconnected";
+
+        /// <summary>Every distinct thread observed calling <see cref="Stream.Read"/>, in order.</summary>
+        public IReadOnlyList<Thread> ObservedReaderThreads => _stream.ObservedReaderThreads;
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            Connect();
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            Disconnect();
+            return Task.CompletedTask;
+        }
+
+        public void Connect()
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(ImmediateReplyMockTransport));
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+        }
+
+        public void Disconnect()
+        {
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _isConnected = false;
+            _disposed = true;
+        }
+
+        private sealed class ImmediateReplyStream : Stream
+        {
+            private readonly byte[] _line;
+            private readonly object _gate = new();
+            private readonly List<Thread> _observedReaderThreads = [];
+            private int _position;
+
+            public ImmediateReplyStream(string line) => _line = Encoding.ASCII.GetBytes(line);
+
+            public IReadOnlyList<Thread> ObservedReaderThreads
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _observedReaderThreads.ToArray();
+                    }
+                }
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+            public override void Flush() { }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                lock (_gate)
+                {
+                    if (!_observedReaderThreads.Contains(Thread.CurrentThread))
+                    {
+                        _observedReaderThreads.Add(Thread.CurrentThread);
+                    }
+
+                    if (_position < _line.Length)
+                    {
+                        var toCopy = Math.Min(count, _line.Length - _position);
+                        Array.Copy(_line, _position, buffer, offset, toCopy);
+                        _position += toCopy;
+                        return toCopy;
+                    }
+                }
+
+                Thread.Sleep(10);
+                return 0;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) { }
+        }
+    }
+}
