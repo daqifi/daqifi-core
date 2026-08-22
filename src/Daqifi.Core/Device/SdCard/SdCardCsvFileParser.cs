@@ -408,7 +408,7 @@ public sealed class SdCardCsvFileParser
                 }
                 else
                 {
-                    var delta = ComputeTickDelta(previousTimestamp.Value, rowTimestamp);
+                    var delta = SdCardTickDelta.Compute(previousTimestamp.Value, rowTimestamp);
                     elapsedSeconds += delta * tickPeriod;
                     previousTimestamp = rowTimestamp;
                 }
@@ -534,20 +534,6 @@ public sealed class SdCardCsvFileParser
             Resolution: parsed.Resolution > 0 ? parsed.Resolution : overrideConfig.Resolution,
             PortRange: parsed.PortRange ?? overrideConfig.PortRange,
             InternalScaleM: parsed.InternalScaleM ?? overrideConfig.InternalScaleM);
-    }
-
-    /// <summary>
-    /// Computes the tick delta between two uint32 timestamps, handling rollover.
-    /// </summary>
-    private static long ComputeTickDelta(uint previous, uint current)
-    {
-        if (current >= previous)
-        {
-            return current - previous;
-        }
-
-        // Rollover: ticks remaining to max + current
-        return (long)(uint.MaxValue - previous) + current + 1;
     }
 
 #pragma warning disable CS1998 // Async iterator: yield break requires async; no real awaits.

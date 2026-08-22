@@ -382,7 +382,7 @@ public sealed class SdCardFileParser
                     }
                     else
                     {
-                        var delta = ComputeTickDelta(previousTimestamp.Value, msg.MsgTimeStamp);
+                        var delta = SdCardTickDelta.Compute(previousTimestamp.Value, msg.MsgTimeStamp);
                         elapsedSeconds += delta * tickPeriod;
                         previousTimestamp = msg.MsgTimeStamp;
                     }
@@ -437,19 +437,6 @@ public sealed class SdCardFileParser
         }
     }
 
-    /// <summary>
-    /// Computes the tick delta between two uint32 timestamps, handling rollover.
-    /// </summary>
-    private static long ComputeTickDelta(uint previous, uint current)
-    {
-        if (current >= previous)
-        {
-            return current - previous;
-        }
-
-        // Rollover: ticks remaining to max + current
-        return (long)(uint.MaxValue - previous) + current + 1;
-    }
 
     /// <summary>
     /// Determines whether a message contains stream sample payload fields.
