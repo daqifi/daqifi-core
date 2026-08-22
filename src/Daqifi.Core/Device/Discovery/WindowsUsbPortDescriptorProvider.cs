@@ -18,12 +18,25 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
             return null;
         }
 
+        return Resolve(portName, WindowsPnpPortMap.Shared);
+    }
+
+    /// <summary>
+    /// Resolves the descriptor for <paramref name="portName"/> against <paramref name="map"/>, or
+    /// null if the map lists no USB-attached entity for it. Split out from
+    /// <see cref="GetDescriptor"/> — which adds the Windows platform gate and supplies the real
+    /// <see cref="WindowsPnpPortMap.Shared"/> — so the lookup can be unit tested against a fake map
+    /// on any OS, for the same reason <see cref="LinuxUsbPortDescriptorProvider.Resolve"/> is
+    /// exposed.
+    /// </summary>
+    internal static UsbPortDescriptor? Resolve(string portName, WindowsPnpPortMap map)
+    {
         try
         {
             // A port the map doesn't list is left unclassified rather than refreshed: the caller
             // probes anything it can't classify, so a miss costs one probe, while refreshing for
             // every miss would put a WMI query back on the per-port path this exists to remove.
-            return PnpDeviceIdParser.SelectUsbDescriptor(WindowsPnpPortMap.Shared.GetDeviceIds(portName));
+            return PnpDeviceIdParser.SelectUsbDescriptor(map.GetDeviceIds(portName));
         }
         catch
         {
