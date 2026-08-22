@@ -53,6 +53,15 @@ namespace Daqifi.Core.Device.Internal
         /// <inheritdoc cref="DaqifiStreamingDevice.StopStreaming"/>
         void StopStreaming();
 
+        /// <inheritdoc cref="DaqifiStreamingDevice.StartStreaming"/>
+        /// <remarks>
+        /// Used by the SD operations to resume a live stream their own defensive stop suspended, so
+        /// the resume runs through the device's own session bookkeeping
+        /// (<see cref="DaqifiStreamingDevice.StartStreaming"/> resets the frame decoder's session)
+        /// rather than a raw <see cref="Send{T}"/> that would skip it.
+        /// </remarks>
+        void StartStreaming();
+
         /// <inheritdoc cref="DaqifiDevice.Send{T}"/>
         void Send<T>(IOutboundMessage<T> message);
 

@@ -388,6 +388,117 @@ public class SdCardOperationsCollaboratorTests
         Assert.DoesNotContain(host.Calls, c => c.StartsWith("ensure:", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task GetSdCardFilesAsync_WasStreaming_ResumesStreamingAfterTheLanRestore()
+    {
+        // #533: a live StreamSamplesAsync consumer must not go silent forever just because
+        // something else asked the device to list its SD card.
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse(NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        await ops.GetSdCardFilesAsync();
+
+        Assert.True(host.IsStreaming);
+        Assert.Equal(1, host.StartStreamingCallCount);
+        // Restored after the exchange (and its finalize-phase LAN restore) has fully closed —
+        // not from inside it — the same way this whole method's try/finally sits outside the
+        // exchange it wraps.
+        Assert.Equal("send:SYSTem:StartStreamData 100", host.Calls[^1]);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_WasNotStreaming_LeavesStreamingOff()
+    {
+        var host = new FakeHost { IsStreaming = false };
+        host.EnqueueResponse(NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        await ops.GetSdCardFilesAsync();
+
+        Assert.False(host.IsStreaming);
+        Assert.Equal(0, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_WasStreaming_RestoresEvenWhenTheListingIsIncomplete()
+    {
+        // The stream must come back whether the SD operation it interrupted succeeded or not —
+        // the live consumer has no idea the SD operation happened at all, let alone how it ended.
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("Daqifi/a.bin 10");
+        host.EnqueueResponse("Daqifi/a.bin 10");
+        var ops = new SdCardOperations(host);
+
+        await Assert.ThrowsAsync<SdCardListIncompleteException>(() => ops.GetSdCardFilesAsync());
+
+        Assert.Equal(1, host.StartStreamingCallCount);
+        Assert.True(host.IsStreaming);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_WasStreaming_RestoresOnceEvenAcrossARetry()
+    {
+        // The restore is a property of the whole operation, not of each attempt inside it — firing
+        // it per-attempt would flip streaming on and off mid-retry.
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("Daqifi/a.bin 10");
+        host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        await ops.GetSdCardFilesAsync();
+
+        Assert.Equal(2, host.ExchangeCount);
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_WasStreamingButDeviceDropsMidExchange_SkipsTheStreamingRestoreToo()
+    {
+        // Same reasoning as the LAN restore this mirrors: nothing to resume once the link is gone.
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
+        host.AfterExchangeSetup = _ => host.IsConnected = false;
+        var ops = new SdCardOperations(host);
+
+        await ops.GetSdCardFilesAsync();
+
+        Assert.Equal(0, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_ResumeFailure_DoesNotMaskTheListingResult()
+    {
+        // Qodo review (#566): the resume runs in a finally, so a device that drops between the
+        // IsConnected check and the resume send must not turn a listing that already succeeded
+        // into a failure the caller never asked about. And DaqifiStreamingDevice.StartStreaming
+        // sets IsStreaming = true before it sends, so a failed resume must not leave that flag
+        // true for a stream that never actually came back — the fake reproduces that ordering.
+        var host = new FakeHost { IsStreaming = true, ThrowOnStartStreaming = true };
+        host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        var files = await ops.GetSdCardFilesAsync();
+
+        Assert.Equal("a.bin", Assert.Single(files).FileName);
+        Assert.Equal(1, host.StartStreamingCallCount);
+        Assert.False(host.IsStreaming);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_ResumeFailure_DoesNotMaskTheOriginalException()
+    {
+        var host = new FakeHost { IsStreaming = true, ThrowOnStartStreaming = true };
+        host.EnqueueResponse("Daqifi/a.bin 10");
+        host.EnqueueResponse("Daqifi/a.bin 10");
+        var ops = new SdCardOperations(host);
+
+        var ex = await Assert.ThrowsAsync<SdCardListIncompleteException>(() => ops.GetSdCardFilesAsync());
+
+        Assert.Contains("Daqifi/a.bin 10", ex.RawDeviceResponse);
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
     #endregion
 
     #region GetSdCardStorageAsync
@@ -474,6 +585,60 @@ public class SdCardOperationsCollaboratorTests
 
         await Assert.ThrowsAsync<SdCardBusyException>(() => ops.GetSdCardStorageAsync());
         Assert.Equal(0, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardStorageAsync_WasStreaming_ResumesStreamingAfterTheLanRestore()
+    {
+        // #533: the storage query is one of the bench-reproduced culprits — it must not leave a
+        // concurrent live capture stalled.
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("1000,2000");
+        var ops = new SdCardOperations(host);
+
+        await ops.GetSdCardStorageAsync();
+
+        Assert.True(host.IsStreaming);
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardStorageAsync_WasNotStreaming_LeavesStreamingOff()
+    {
+        var host = new FakeHost { IsStreaming = false };
+        host.EnqueueResponse("1000,2000");
+        var ops = new SdCardOperations(host);
+
+        await ops.GetSdCardStorageAsync();
+
+        Assert.False(host.IsStreaming);
+        Assert.Equal(0, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardStorageAsync_WasStreaming_RestoresOnceEvenAcrossARetry()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("**ERROR: -200,\"Execution error\"");
+        host.EnqueueResponse("1000,2000");
+        var ops = new SdCardOperations(host);
+
+        await ops.GetSdCardStorageAsync();
+
+        Assert.Equal(2, host.ExchangeCount);
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardStorageAsync_WasStreaming_RestoresEvenWhenTheResponseIsUnparseable()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("not a space report");
+        var ops = new SdCardOperations(host);
+
+        await Assert.ThrowsAsync<SdCardOperationException>(() => ops.GetSdCardStorageAsync());
+
+        Assert.Equal(1, host.StartStreamingCallCount);
     }
 
     #endregion
@@ -743,6 +908,46 @@ public class SdCardOperationsCollaboratorTests
         Assert.Equal(0, host.ExchangeCount);
     }
 
+    [Fact]
+    public async Task DeleteSdCardFileAsync_WasStreaming_ResumesStreamingAfterTheLanRestore()
+    {
+        // #533
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("Daqifi/keep.bin 10", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        await ops.DeleteSdCardFileAsync("gone.bin");
+
+        Assert.True(host.IsStreaming);
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_WasNotStreaming_LeavesStreamingOff()
+    {
+        var host = new FakeHost { IsStreaming = false };
+        host.EnqueueResponse("Daqifi/keep.bin 10", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        await ops.DeleteSdCardFileAsync("gone.bin");
+
+        Assert.False(host.IsStreaming);
+        Assert.Equal(0, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_WasStreaming_RestoresEvenWhenTheDeleteFails()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.EnqueueResponse("**ERROR: -200,\"Execution error\"", NoErrorTerminator);
+        host.EnqueueResponse("**ERROR: -200,\"Execution error\"", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        await Assert.ThrowsAsync<SdCardOperationException>(() => ops.DeleteSdCardFileAsync("gone.bin"));
+
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
     #endregion
 
     #region FormatSdCardAsync
@@ -761,6 +966,58 @@ public class SdCardOperationsCollaboratorTests
             new[] { "send:" + StopStreaming, "send:" + EnableSd, "send:SYSTem:STORage:SD:FORmat" },
             host.Calls);
         Assert.Equal(0, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task FormatSdCardAsync_WasStreaming_ResumesStreamingAfterward()
+    {
+        // #533
+        var host = new FakeHost { IsStreaming = true };
+        var ops = new SdCardOperations(host);
+
+        await ops.FormatSdCardAsync();
+
+        Assert.True(host.IsStreaming);
+        Assert.Equal(1, host.StartStreamingCallCount);
+        Assert.Equal(
+            new[]
+            {
+                "send:" + StopStreaming,
+                "send:" + EnableSd,
+                "send:SYSTem:STORage:SD:FORmat",
+                "send:SYSTem:StartStreamData 100",
+            },
+            host.Calls);
+    }
+
+    [Fact]
+    public async Task FormatSdCardAsync_WasNotStreaming_LeavesStreamingOff()
+    {
+        var host = new FakeHost { IsStreaming = false };
+        var ops = new SdCardOperations(host);
+
+        await ops.FormatSdCardAsync();
+
+        Assert.False(host.IsStreaming);
+        Assert.Equal(0, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task FormatSdCardAsync_WasStreaming_RestoresEvenWhenTheFormatCommandThrows()
+    {
+        // Qodo review (#566): the restore must not be reachable only from the success path — a
+        // device that drops between EnableStorageSd and FormatSdCard must not leave a live stream
+        // that was active before this call silenced for good.
+        var host = new FakeHost
+        {
+            IsStreaming = true,
+            ThrowOnSend = ("SYSTem:STORage:SD:FORmat", new DeviceNotConnectedException()),
+        };
+        var ops = new SdCardOperations(host);
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => ops.FormatSdCardAsync());
+
+        Assert.Equal(1, host.StartStreamingCallCount);
     }
 
     #endregion
@@ -782,6 +1039,44 @@ public class SdCardOperationsCollaboratorTests
         Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
         Assert.Contains("send:" + DisableSd, host.Calls);
         Assert.Contains("send:" + EnableLan, host.Calls);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_WasStreaming_ResumesStreamingAfterTheLanRestore()
+    {
+        // #533
+        var payload = new byte[] { 1, 2, 3 };
+        var host = new FakeHost
+        {
+            IsStreaming = true,
+            RawCaptureStreamFactory = () => ScriptedStream.Of(Concat(payload, EofMarker)),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await ops.DownloadSdCardFileAsync("data.bin", destination);
+
+        Assert.True(host.IsStreaming);
+        Assert.Equal(1, host.StartStreamingCallCount);
+        Assert.Equal("send:SYSTem:StartStreamData 100", host.Calls[^1]);
+    }
+
+    [Fact]
+    public async Task DownloadSdCardFileAsync_WasNotStreaming_LeavesStreamingOff()
+    {
+        var payload = new byte[] { 1, 2, 3 };
+        var host = new FakeHost
+        {
+            IsStreaming = false,
+            RawCaptureStreamFactory = () => ScriptedStream.Of(Concat(payload, EofMarker)),
+        };
+        var ops = new SdCardOperations(host);
+        using var destination = new MemoryStream();
+
+        await ops.DownloadSdCardFileAsync("data.bin", destination);
+
+        Assert.False(host.IsStreaming);
+        Assert.Equal(0, host.StartStreamingCallCount);
     }
 
     [Fact]
@@ -887,6 +1182,7 @@ public class SdCardOperationsCollaboratorTests
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var host = new FakeHost
         {
+            IsStreaming = true,
             // 200ms budget → a ~300ms hard deadline (the grace is clamped to a 100ms floor).
             SdCardDownloadTimeout = TimeSpan.FromMilliseconds(200),
             RawCaptureStreamFactory = () => new ParkedStream(entered, release.Task),
@@ -914,6 +1210,10 @@ public class SdCardOperationsCollaboratorTests
             Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
             Assert.DoesNotContain("send:" + DisableSd, host.Calls);
             Assert.DoesNotContain("send:" + EnableLan, host.Calls);
+            // #533: the same reasoning that skips the LAN restore applies here — the abandoned
+            // worker still owns the transport, so a StartStreamData write would be a second writer
+            // on a stream a transfer is still reading.
+            Assert.Equal(0, host.StartStreamingCallCount);
         }
         finally
         {
@@ -1125,8 +1425,12 @@ public class SdCardOperationsCollaboratorTests
 
         public bool IsConnected { get; set; } = true;
         public bool IsUsbConnection { get; set; } = true;
-        public bool IsStreaming { get; set; } = true;
+        public bool IsStreaming { get; set; }
         public int StreamingFrequency { get; set; } = 100;
+
+        /// <summary>Number of times <see cref="StartStreaming"/> was called, for tests that only
+        /// care that a restore happened without pinning the exact position in <see cref="Calls"/>.</summary>
+        public int StartStreamingCallCount { get; private set; }
 
         public TimeSpan SdCardDownloadTimeout { get; set; } = TimeSpan.FromMinutes(30);
         public TimeSpan SdCardTransferIdleTimeout { get; set; } = TimeSpan.FromSeconds(20);
@@ -1151,6 +1455,16 @@ public class SdCardOperationsCollaboratorTests
         /// <summary>Supplies the stream a raw capture reads from. Defaults to an immediately-closed stream.</summary>
         public Func<Stream>? RawCaptureStreamFactory { get; set; }
 
+        /// <summary>When set, <see cref="Send{T}"/> throws this the first time it is called with a
+        /// message whose data equals this value — simulating a command that fails outright rather
+        /// than one that gets a reply, e.g. a device that drops mid-command.</summary>
+        public (string Data, Exception Exception)? ThrowOnSend { get; set; }
+
+        /// <summary>When true, <see cref="StartStreaming"/> throws instead of recording a call —
+        /// simulating a resume attempt that fails, e.g. the device dropped after the
+        /// <see cref="IsConnected"/> check that gates it.</summary>
+        public bool ThrowOnStartStreaming { get; set; }
+
         public void EnqueueResponse(params string[] lines)
         {
             lock (_responses) { _responses.Enqueue(lines); }
@@ -1161,7 +1475,16 @@ public class SdCardOperationsCollaboratorTests
             lock (_calls) { _calls.Add(call); }
         }
 
-        public void Send<T>(IOutboundMessage<T> message) => Record("send:" + message.Data);
+        public void Send<T>(IOutboundMessage<T> message)
+        {
+            if (ThrowOnSend is { } throwOn && Equals(message.Data, throwOn.Data))
+            {
+                ThrowOnSend = null;
+                throw throwOn.Exception;
+            }
+
+            Record("send:" + message.Data);
+        }
 
         public void EnsureSupported(DeviceFeature feature)
         {
@@ -1236,6 +1559,24 @@ public class SdCardOperationsCollaboratorTests
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public long ChannelStateVersion => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
+
+        public void StartStreaming()
+        {
+            StartStreamingCallCount++;
+
+            if (ThrowOnStartStreaming)
+            {
+                // Mirrors DaqifiStreamingDevice.StartStreaming, which sets IsStreaming = true
+                // BEFORE sending the SCPI command — so a Send failure there leaves the flag true
+                // for a stream that never actually resumed, exactly what a caller of this fake
+                // needs to be able to reproduce.
+                IsStreaming = true;
+                throw new InvalidOperationException("Simulated StartStreaming failure.");
+            }
+
+            Record("send:SYSTem:StartStreamData " + StreamingFrequency);
+            IsStreaming = true;
+        }
         public void Disconnect() => throw new NotSupportedException();
         public IReadOnlyList<IChannel> SnapshotChannels() => throw new NotSupportedException();
         public void WithChannelsLock(Action action) => throw new NotSupportedException();

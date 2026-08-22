@@ -141,6 +141,7 @@ public class ConnectionGuardTests
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public long ChannelStateVersion => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
+        public void StartStreaming() => throw new NotSupportedException();
         public void Send<T>(IOutboundMessage<T> message) => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();
         public IReadOnlyList<IChannel> SnapshotChannels() => throw new NotSupportedException();

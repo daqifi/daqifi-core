@@ -605,6 +605,7 @@ public class DeviceAdministrationOperationsTests
         public TimeSpan SdCardDownloadTimeout => throw new NotSupportedException();
         public TimeSpan SdCardTransferIdleTimeout => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
+        public void StartStreaming() => throw new NotSupportedException();
         public IReadOnlyList<IChannel> SnapshotChannels() => throw new NotSupportedException();
         public long ChannelStateVersion => throw new NotSupportedException();
         public void WithChannelsLock(Action action) => throw new NotSupportedException();
