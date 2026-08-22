@@ -231,20 +231,16 @@ public class IntelHexParser
     private bool IsProtectedHexRecord(byte[] hexRecord, ushort baseAddress)
     {
         var recordType = hexRecord[3];
-
-        if (recordType == 0x00)
+        if (recordType != 0x00)
         {
-            var offsetAddressArray = hexRecord.Skip(1).Take(2).ToArray();
-            if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
-            var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
-            var hexRecordAddress = ((uint)baseAddress << 16) | offsetAddress;
-
-            if (hexRecordAddress >= _beginProtectedAddress && hexRecordAddress <= _endProtectedAddress)
-            {
-                return true;
-            }
+            return false;
         }
 
-        return false;
+        var offsetAddressArray = hexRecord.Skip(1).Take(2).ToArray();
+        if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
+        var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
+        var hexRecordAddress = ((uint)baseAddress << 16) | offsetAddress;
+
+        return hexRecordAddress >= _beginProtectedAddress && hexRecordAddress <= _endProtectedAddress;
     }
 }
