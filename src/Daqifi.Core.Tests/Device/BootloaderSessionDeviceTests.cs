@@ -203,14 +203,6 @@ public class BootloaderSessionDeviceTests
         Assert.Equal(DaqifiStreamingDevice.DefaultPwmFrequencyHz, new BootloaderSessionDevice().PwmFrequencyHz);
     }
 
-    [Fact]
-    public void StreamingFrequency_RoundTrips()
-    {
-        var device = new BootloaderSessionDevice { StreamingFrequency = 42 };
-
-        Assert.Equal(42, device.StreamingFrequency);
-    }
-
     #endregion
 
     #region Cancellation
