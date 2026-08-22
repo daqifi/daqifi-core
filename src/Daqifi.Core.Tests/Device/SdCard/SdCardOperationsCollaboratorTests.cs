@@ -471,7 +471,9 @@ public class SdCardOperationsCollaboratorTests
     {
         // Qodo review (#566): the resume runs in a finally, so a device that drops between the
         // IsConnected check and the resume send must not turn a listing that already succeeded
-        // into a failure the caller never asked about.
+        // into a failure the caller never asked about. And DaqifiStreamingDevice.StartStreaming
+        // sets IsStreaming = true before it sends, so a failed resume must not leave that flag
+        // true for a stream that never actually came back — the fake reproduces that ordering.
         var host = new FakeHost { IsStreaming = true, ThrowOnStartStreaming = true };
         host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
         var ops = new SdCardOperations(host);
@@ -1564,6 +1566,11 @@ public class SdCardOperationsCollaboratorTests
 
             if (ThrowOnStartStreaming)
             {
+                // Mirrors DaqifiStreamingDevice.StartStreaming, which sets IsStreaming = true
+                // BEFORE sending the SCPI command — so a Send failure there leaves the flag true
+                // for a stream that never actually resumed, exactly what a caller of this fake
+                // needs to be able to reproduce.
+                IsStreaming = true;
                 throw new InvalidOperationException("Simulated StartStreaming failure.");
             }
 

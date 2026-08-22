@@ -401,6 +401,14 @@ namespace Daqifi.Core.Device.SdCard
                 // failure here escape would replace whatever the SD operation itself threw — or
                 // turn a clean success into a failure — over a device that may simply have dropped
                 // between the IsConnected check above and this call.
+                //
+                // DaqifiStreamingDevice.StartStreaming sets IsStreaming = true BEFORE it sends the
+                // SCPI command, so a Send failure here can leave the flag true for a stream that
+                // never actually resumed. Left alone, that is exactly the "flag says streaming, the
+                // device isn't" staleness #533 exists to fix — just relocated to this catch instead
+                // of fixed by it. Correcting it here is safe: this catch is the only code that knows
+                // the resume attempt failed.
+                _host.IsStreaming = false;
             }
         }
 
