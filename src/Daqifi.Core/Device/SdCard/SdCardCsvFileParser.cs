@@ -133,7 +133,7 @@ public sealed class SdCardCsvFileParser
                 EmptySamples());
         }
 
-        var config = MergeConfiguration(header.Config, options.ConfigurationOverride);
+        var config = SdCardConfigurationMerge.Merge(header.Config, options.ConfigurationOverride);
 
         var (timestampFrequency, timestampSource) = SdCardTimestampFrequencyResolver.Resolve(
             header.Config.TimestampFrequency,
@@ -508,32 +508,6 @@ public sealed class SdCardCsvFileParser
         {
             return null;
         }
-    }
-
-    /// <summary>
-    /// Merges an override configuration into a parsed configuration.
-    /// File-parsed values are primary; the override fills in gaps (zero or null fields).
-    /// </summary>
-    private static SdCardDeviceConfiguration MergeConfiguration(
-        SdCardDeviceConfiguration parsed,
-        SdCardDeviceConfiguration? overrideConfig)
-    {
-        if (overrideConfig == null)
-        {
-            return parsed;
-        }
-
-        return new SdCardDeviceConfiguration(
-            AnalogPortCount: parsed.AnalogPortCount > 0 ? parsed.AnalogPortCount : overrideConfig.AnalogPortCount,
-            DigitalPortCount: parsed.DigitalPortCount > 0 ? parsed.DigitalPortCount : overrideConfig.DigitalPortCount,
-            TimestampFrequency: parsed.TimestampFrequency > 0 ? parsed.TimestampFrequency : overrideConfig.TimestampFrequency,
-            DeviceSerialNumber: parsed.DeviceSerialNumber ?? overrideConfig.DeviceSerialNumber,
-            DevicePartNumber: parsed.DevicePartNumber ?? overrideConfig.DevicePartNumber,
-            FirmwareRevision: parsed.FirmwareRevision ?? overrideConfig.FirmwareRevision,
-            CalibrationValues: parsed.CalibrationValues ?? overrideConfig.CalibrationValues,
-            Resolution: parsed.Resolution > 0 ? parsed.Resolution : overrideConfig.Resolution,
-            PortRange: parsed.PortRange ?? overrideConfig.PortRange,
-            InternalScaleM: parsed.InternalScaleM ?? overrideConfig.InternalScaleM);
     }
 
 #pragma warning disable CS1998 // Async iterator: yield break requires async; no real awaits.
