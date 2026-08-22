@@ -621,6 +621,15 @@ public class ChannelControlOperationsTests
         private readonly List<string> _calls = new();
         private readonly List<IChannel> _channels;
         private readonly Queue<IReadOnlyList<string>> _responses = new();
+        private readonly object _channelsLockObj = new();
+
+        /// <summary>
+        /// True while a <see cref="WithChannelsLock"/> callback is on the stack. Lets
+        /// <see cref="Send{T}"/> catch the exact regression <see cref="IDeviceOperationHost.WithChannelsLock"/>
+        /// forbids — blocking I/O issued from inside the critical section — instead of silently
+        /// passing it.
+        /// </summary>
+        private bool _inChannelsLock;
 
         public FakeHost(params IChannel[] channels)
         {
@@ -645,11 +654,35 @@ public class ChannelControlOperationsTests
             lock (_calls) { _calls.Add(call); }
         }
 
-        public void Send<T>(IOutboundMessage<T> message) => Record("send:" + message.Data);
+        public void Send<T>(IOutboundMessage<T> message)
+        {
+            if (_inChannelsLock)
+            {
+                throw new InvalidOperationException(
+                    "Send was called from inside WithChannelsLock — blocking I/O must stay outside " +
+                    "the channels lock (see IDeviceOperationHost.WithChannelsLock).");
+            }
+
+            Record("send:" + message.Data);
+        }
 
         public IReadOnlyList<IChannel> SnapshotChannels() => _channels.ToArray();
 
-        public void WithChannelsLock(Action action) => action();
+        public void WithChannelsLock(Action action)
+        {
+            lock (_channelsLockObj)
+            {
+                _inChannelsLock = true;
+                try
+                {
+                    action();
+                }
+                finally
+                {
+                    _inChannelsLock = false;
+                }
+            }
+        }
 
         public Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
