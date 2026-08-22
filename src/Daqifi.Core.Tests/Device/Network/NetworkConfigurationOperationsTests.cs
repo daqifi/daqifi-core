@@ -54,6 +54,28 @@ public class NetworkConfigurationOperationsTests
     private const string LoadLan = "SYSTem:COMMunicate:LAN:LOAD";
     private const string FactoryResetLan = "SYSTem:COMMunicate:LAN:FACRESET";
 
+    /// <summary>
+    /// Cancels <paramref name="cts"/> the instant LAN:APPLY is sent, so a test's call to
+    /// <c>UpdateNetworkConfigurationAsync</c> skips the real
+    /// <see cref="System.Threading.Tasks.Task.Delay">2-second module-restart wait</see> instead of
+    /// paying it. The collaborator already treats a token that goes canceled during that wait as
+    /// "the device already committed" and completes normally rather than throwing (see
+    /// <see cref="UpdateNetworkConfigurationAsync_CanceledDuringTheRestartWait_CompletesAndUpdatesLocalState"/>),
+    /// so this changes nothing about what a test using it observes — only how long it takes.
+    /// </summary>
+    private static void SkipRestartDelay(FakeHost host, CancellationTokenSource cts)
+    {
+        var previousHook = host.SendHook;
+        host.SendHook = call =>
+        {
+            previousHook?.Invoke(call);
+            if (call == "send:" + ApplyLan)
+            {
+                cts.Cancel();
+            }
+        };
+    }
+
     #region Construction
 
     [Fact]
@@ -116,10 +138,12 @@ public class NetworkConfigurationOperationsTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WhileStreaming_StopsViaTheHostMethodBeforeAnySend()
     {
+        using var cts = new CancellationTokenSource();
         var host = new FakeHost { IsStreaming = true };
+        SkipRestartDelay(host, cts);
         var ops = new NetworkConfigurationOperations(host);
 
-        await ops.UpdateNetworkConfigurationAsync(ValidConfig());
+        await ops.UpdateNetworkConfigurationAsync(ValidConfig(), cts.Token);
 
         Assert.Equal("stopstreaming", host.Calls.First());
         Assert.Equal(1, host.Calls.Count(c => c == "stopstreaming"));
@@ -129,10 +153,12 @@ public class NetworkConfigurationOperationsTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_NotStreaming_NeverCallsStopStreaming()
     {
+        using var cts = new CancellationTokenSource();
         var host = new FakeHost { IsStreaming = false };
+        SkipRestartDelay(host, cts);
         var ops = new NetworkConfigurationOperations(host);
 
-        await ops.UpdateNetworkConfigurationAsync(ValidConfig());
+        await ops.UpdateNetworkConfigurationAsync(ValidConfig(), cts.Token);
 
         Assert.DoesNotContain("stopstreaming", host.Calls);
     }
@@ -144,7 +170,9 @@ public class NetworkConfigurationOperationsTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_ExistingNetworkWithStaticIP_SendsTheFullSequenceInOrder()
     {
+        using var cts = new CancellationTokenSource();
         var host = new FakeHost();
+        SkipRestartDelay(host, cts);
         var ops = new NetworkConfigurationOperations(host);
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -155,7 +183,7 @@ public class NetworkConfigurationOperationsTests
             IPAddress.Parse("255.255.255.0"),
             IPAddress.Parse("10.0.0.1"));
 
-        await ops.UpdateNetworkConfigurationAsync(config);
+        await ops.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         Assert.Equal(
             new[]
@@ -178,11 +206,13 @@ public class NetworkConfigurationOperationsTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_SelfHostedOpenNetwork_SendsNoPassword()
     {
+        using var cts = new CancellationTokenSource();
         var host = new FakeHost();
+        SkipRestartDelay(host, cts);
         var ops = new NetworkConfigurationOperations(host);
         var config = new NetworkConfiguration(WifiMode.SelfHosted, WifiSecurityType.None, "DAQiFi_Device", "");
 
-        await ops.UpdateNetworkConfigurationAsync(config);
+        await ops.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         Assert.Equal(
             new[]
@@ -201,10 +231,12 @@ public class NetworkConfigurationOperationsTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithoutStaticIPFields_SkipsTheirSetters()
     {
+        using var cts = new CancellationTokenSource();
         var host = new FakeHost();
+        SkipRestartDelay(host, cts);
         var ops = new NetworkConfigurationOperations(host);
 
-        await ops.UpdateNetworkConfigurationAsync(ValidConfig());
+        await ops.UpdateNetworkConfigurationAsync(ValidConfig(), cts.Token);
 
         Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:SYSTem:COMMunicate:LAN:ADDRess", StringComparison.Ordinal));
         Assert.DoesNotContain(host.Calls, c => c.StartsWith("send:SYSTem:COMMunicate:LAN:MASK", StringComparison.Ordinal));
@@ -313,16 +345,22 @@ public class NetworkConfigurationOperationsTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_NullStaticFieldsOnASecondCall_PreserveThePreviouslyCachedValues()
     {
+        using var cts = new CancellationTokenSource();
         var host = new FakeHost();
+        SkipRestartDelay(host, cts);
         var ops = new NetworkConfigurationOperations(host);
         var staticIp = IPAddress.Parse("10.0.0.5");
         var subnet = IPAddress.Parse("255.255.255.0");
         var gateway = IPAddress.Parse("10.0.0.1");
         await ops.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
-            WifiMode.ExistingNetwork, WifiSecurityType.WpaPskPhrase, "Net", "Pass", staticIp, subnet, gateway));
+            WifiMode.ExistingNetwork, WifiSecurityType.WpaPskPhrase, "Net", "Pass", staticIp, subnet, gateway), cts.Token);
 
+        // A fresh token: the first call already canceled the one above, and cancellation checked at
+        // the top of the method must not reject this second, otherwise-independent call.
+        using var cts2 = new CancellationTokenSource();
+        SkipRestartDelay(host, cts2);
         await ops.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
-            WifiMode.ExistingNetwork, WifiSecurityType.WpaPskPhrase, "OtherNet", "OtherPass"));
+            WifiMode.ExistingNetwork, WifiSecurityType.WpaPskPhrase, "OtherNet", "OtherPass"), cts2.Token);
 
         Assert.Equal(staticIp, ops.NetworkConfiguration.StaticIP);
         Assert.Equal(subnet, ops.NetworkConfiguration.SubnetMask);
