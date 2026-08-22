@@ -18,16 +18,6 @@ public static class MemoryDiagnosticsParser
     /// <param name="lines">Response lines from the device.</param>
     /// <param name="result">The parsed diagnostics, or <see langword="null"/> if no field could be parsed.</param>
     /// <returns><see langword="true"/> if at least one field was parsed; otherwise <see langword="false"/>.</returns>
-    public static bool TryParse(IEnumerable<string> lines, [NotNullWhen(true)] out MemoryDiagnostics? result)
-    {
-        var values = KeyValueResponseParser.Parse(lines);
-        if (values.Count == 0)
-        {
-            result = null;
-            return false;
-        }
-
-        result = new MemoryDiagnostics { Values = values };
-        return true;
-    }
+    public static bool TryParse(IEnumerable<string> lines, [NotNullWhen(true)] out MemoryDiagnostics? result) =>
+        KeyValueResponseParser.TryParse(lines, values => new MemoryDiagnostics { Values = values }, out result);
 }

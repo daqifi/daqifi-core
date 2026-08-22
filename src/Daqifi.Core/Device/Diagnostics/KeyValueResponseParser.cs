@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 
 namespace Daqifi.Core.Device.Diagnostics;
@@ -68,5 +70,34 @@ internal static class KeyValueResponseParser
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Parses response lines and, if at least one field was recognized, builds the typed result
+    /// via <paramref name="factory"/>.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the <c>Key=Value</c> diagnostics wrappers (<see cref="MemoryDiagnosticsParser"/>,
+    /// <see cref="StreamStatsParser"/>) so each only needs to supply its own result type.
+    /// </remarks>
+    /// <param name="lines">The raw response lines from the device.</param>
+    /// <param name="factory">Builds the typed result from the parsed key/value pairs.</param>
+    /// <param name="result">The built result, or <see langword="null"/> if no field could be parsed.</param>
+    /// <returns><see langword="true"/> if at least one field was parsed; otherwise <see langword="false"/>.</returns>
+    public static bool TryParse<T>(
+        IEnumerable<string> lines,
+        Func<IReadOnlyDictionary<string, ulong>, T> factory,
+        [NotNullWhen(true)] out T? result)
+        where T : class
+    {
+        var values = Parse(lines);
+        if (values.Count == 0)
+        {
+            result = null;
+            return false;
+        }
+
+        result = factory(values);
+        return true;
     }
 }
