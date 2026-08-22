@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Daqifi.Core.Device.Discovery;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
@@ -6,18 +7,10 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 /// Covers <see cref="WindowsUsbPortDescriptorProvider.Resolve"/> — the lookup that
 /// <see cref="WindowsUsbPortDescriptorProvider.GetDescriptor"/> delegates to once past the Windows
 /// platform gate. <see cref="WindowsPnpPortMap"/> takes its rows from an injected query, so this is
-/// exercised against a fake map on any platform, without WMI.
+/// exercised against a fake map on any platform, without WMI. <c>Resolve</c> itself never touches
+/// <c>System.Management</c>, so it carries no platform attribute and needs no CA1416 suppression to
+/// call from here; only <see cref="GetDescriptor"/> does, once below.
 /// </summary>
-/// <remarks>
-/// <see cref="WindowsUsbPortDescriptorProvider"/> carries <c>[SupportedOSPlatform("windows")]</c>
-/// because its production path (<see cref="WindowsPnpPortMap.Shared"/>) ultimately reaches WMI, but
-/// <see cref="WindowsUsbPortDescriptorProvider.Resolve"/> itself never touches
-/// <c>System.Management</c> — it only reads from whatever <see cref="WindowsPnpPortMap"/> it is
-/// given, which is not itself platform-gated. CA1416 is suppressed the same way
-/// <see cref="UsbPortDescriptorProviderFactory"/> already suppresses it to construct this type: the
-/// call sites here never reach the Windows-only branch.
-/// </remarks>
-#pragma warning disable CA1416
 public class WindowsUsbPortDescriptorProviderTests
 {
     private static PnpPortEntity Usb(string port, string vidPid = "VID_04D8&PID_F794") =>
@@ -78,18 +71,46 @@ public class WindowsUsbPortDescriptorProviderTests
     }
 
     [Fact]
-    public void GetDescriptor_OffWindows_ReturnsNullWithoutTouchingTheMap()
+    public void Resolve_NullMap_ThrowsInsteadOfBeingSwallowed()
     {
+        // The catch below exists to turn a map-rebuild failure into "unclassified", not to hide a
+        // caller passing no map at all — that is a programmer error and must fail loudly rather
+        // than read as an indistinguishable "no USB entity".
+        Assert.Throws<ArgumentNullException>(() => WindowsUsbPortDescriptorProvider.Resolve("COM9", null!));
+    }
+
+    // ---- the platform gate ------------------------------------------------
+    // Written in the style of LinuxUsbPortDescriptorProviderTests.GetDescriptor_OffLinux: an
+    // unconditional call whose answer is the same either side of the gate, plus one guarded to the
+    // platform where the gate is actually exercised, so neither ever passes without asserting.
+
+    [Fact]
+    public void GetDescriptor_PortNoEntityClaims_ReturnsNull()
+    {
+        // On Windows this reaches WindowsPnpPortMap.Shared and finds nothing for a port name no
+        // real device uses. Off Windows the platform gate answers directly. Either way the port is
+        // unclassified.
         var provider = new WindowsUsbPortDescriptorProvider();
 
-        // This assembly's tests run on macOS/Linux CI as well as Windows; off Windows the platform
-        // gate must short-circuit before WindowsPnpPortMap.Shared (which would otherwise attempt a
-        // WMI query) is ever reached.
-        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                System.Runtime.InteropServices.OSPlatform.Windows))
+#pragma warning disable CA1416 // GetDescriptor is Windows-gated at runtime, not by this call site.
+        Assert.Null(provider.GetDescriptor("COM_DAQIFI_TEST_" + Guid.NewGuid().ToString("N")));
+#pragma warning restore CA1416
+    }
+
+    [Fact]
+    public void GetDescriptor_OffWindows_ReturnsNullWithoutTouchingTheMap()
+    {
+        // On Windows the same call is covered above; here the assertion only adds value where the
+        // gate itself is what has to produce the answer.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            Assert.Null(provider.GetDescriptor("COM9"));
+            return;
         }
+
+        var provider = new WindowsUsbPortDescriptorProvider();
+
+#pragma warning disable CA1416 // GetDescriptor is Windows-gated at runtime, not by this call site.
+        Assert.Null(provider.GetDescriptor("COM9"));
+#pragma warning restore CA1416
     }
 }
-#pragma warning restore CA1416

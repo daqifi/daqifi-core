@@ -8,9 +8,9 @@ namespace Daqifi.Core.Device.Discovery;
 /// built from a single WMI <c>Win32_PnPEntity</c> query per discovery pass. Returns null on
 /// non-Windows platforms so callers can fall back to a probe-everything strategy.
 /// </summary>
-[SupportedOSPlatform("windows")]
 internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvider
 {
+    [SupportedOSPlatform("windows")]
     public UsbPortDescriptor? GetDescriptor(string portName)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -27,10 +27,13 @@ internal sealed class WindowsUsbPortDescriptorProvider : IUsbPortDescriptorProvi
     /// <see cref="GetDescriptor"/> — which adds the Windows platform gate and supplies the real
     /// <see cref="WindowsPnpPortMap.Shared"/> — so the lookup can be unit tested against a fake map
     /// on any OS, for the same reason <see cref="LinuxUsbPortDescriptorProvider.Resolve"/> is
-    /// exposed.
+    /// exposed. Unlike <see cref="GetDescriptor"/>, this never touches WMI, so it carries no
+    /// platform attribute of its own.
     /// </summary>
     internal static UsbPortDescriptor? Resolve(string portName, WindowsPnpPortMap map)
     {
+        ArgumentNullException.ThrowIfNull(map);
+
         try
         {
             // A port the map doesn't list is left unclassified rather than refreshed: the caller
