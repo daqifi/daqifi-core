@@ -466,6 +466,37 @@ public class SdCardOperationsCollaboratorTests
         Assert.Equal(0, host.StartStreamingCallCount);
     }
 
+    [Fact]
+    public async Task GetSdCardFilesAsync_ResumeFailure_DoesNotMaskTheListingResult()
+    {
+        // Qodo review (#566): the resume runs in a finally, so a device that drops between the
+        // IsConnected check and the resume send must not turn a listing that already succeeded
+        // into a failure the caller never asked about.
+        var host = new FakeHost { IsStreaming = true, ThrowOnStartStreaming = true };
+        host.EnqueueResponse("Daqifi/a.bin 10", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        var files = await ops.GetSdCardFilesAsync();
+
+        Assert.Equal("a.bin", Assert.Single(files).FileName);
+        Assert.Equal(1, host.StartStreamingCallCount);
+        Assert.False(host.IsStreaming);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_ResumeFailure_DoesNotMaskTheOriginalException()
+    {
+        var host = new FakeHost { IsStreaming = true, ThrowOnStartStreaming = true };
+        host.EnqueueResponse("Daqifi/a.bin 10");
+        host.EnqueueResponse("Daqifi/a.bin 10");
+        var ops = new SdCardOperations(host);
+
+        var ex = await Assert.ThrowsAsync<SdCardListIncompleteException>(() => ops.GetSdCardFilesAsync());
+
+        Assert.Contains("Daqifi/a.bin 10", ex.RawDeviceResponse);
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
     #endregion
 
     #region GetSdCardStorageAsync
@@ -969,6 +1000,24 @@ public class SdCardOperationsCollaboratorTests
         Assert.Equal(0, host.StartStreamingCallCount);
     }
 
+    [Fact]
+    public async Task FormatSdCardAsync_WasStreaming_RestoresEvenWhenTheFormatCommandThrows()
+    {
+        // Qodo review (#566): the restore must not be reachable only from the success path — a
+        // device that drops between EnableStorageSd and FormatSdCard must not leave a live stream
+        // that was active before this call silenced for good.
+        var host = new FakeHost
+        {
+            IsStreaming = true,
+            ThrowOnSend = ("SYSTem:STORage:SD:FORmat", new DeviceNotConnectedException()),
+        };
+        var ops = new SdCardOperations(host);
+
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => ops.FormatSdCardAsync());
+
+        Assert.Equal(1, host.StartStreamingCallCount);
+    }
+
     #endregion
 
     #region DownloadSdCardFileAsync
@@ -1404,6 +1453,16 @@ public class SdCardOperationsCollaboratorTests
         /// <summary>Supplies the stream a raw capture reads from. Defaults to an immediately-closed stream.</summary>
         public Func<Stream>? RawCaptureStreamFactory { get; set; }
 
+        /// <summary>When set, <see cref="Send{T}"/> throws this the first time it is called with a
+        /// message whose data equals this value — simulating a command that fails outright rather
+        /// than one that gets a reply, e.g. a device that drops mid-command.</summary>
+        public (string Data, Exception Exception)? ThrowOnSend { get; set; }
+
+        /// <summary>When true, <see cref="StartStreaming"/> throws instead of recording a call —
+        /// simulating a resume attempt that fails, e.g. the device dropped after the
+        /// <see cref="IsConnected"/> check that gates it.</summary>
+        public bool ThrowOnStartStreaming { get; set; }
+
         public void EnqueueResponse(params string[] lines)
         {
             lock (_responses) { _responses.Enqueue(lines); }
@@ -1414,7 +1473,16 @@ public class SdCardOperationsCollaboratorTests
             lock (_calls) { _calls.Add(call); }
         }
 
-        public void Send<T>(IOutboundMessage<T> message) => Record("send:" + message.Data);
+        public void Send<T>(IOutboundMessage<T> message)
+        {
+            if (ThrowOnSend is { } throwOn && Equals(message.Data, throwOn.Data))
+            {
+                ThrowOnSend = null;
+                throw throwOn.Exception;
+            }
+
+            Record("send:" + message.Data);
+        }
 
         public void EnsureSupported(DeviceFeature feature)
         {
@@ -1493,6 +1561,12 @@ public class SdCardOperationsCollaboratorTests
         public void StartStreaming()
         {
             StartStreamingCallCount++;
+
+            if (ThrowOnStartStreaming)
+            {
+                throw new InvalidOperationException("Simulated StartStreaming failure.");
+            }
+
             Record("send:SYSTem:StartStreamData " + StreamingFrequency);
             IsStreaming = true;
         }

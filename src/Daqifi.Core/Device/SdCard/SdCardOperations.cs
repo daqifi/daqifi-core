@@ -385,9 +385,22 @@ namespace Daqifi.Core.Device.SdCard
         /// </remarks>
         private void RestoreStreamingIfNeeded(bool wasStreaming)
         {
-            if (wasStreaming && _host.IsConnected)
+            if (!wasStreaming || !_host.IsConnected)
+            {
+                return;
+            }
+
+            try
             {
                 _host.StartStreaming();
+            }
+            catch
+            {
+                // Best-effort, the same as the LAN restore this mirrors (RestoreLanInterfaceAsync,
+                // DownloadSdCardFileAsync's finally): called from a finally block, so letting a
+                // failure here escape would replace whatever the SD operation itself threw — or
+                // turn a clean success into a failure — over a device that may simply have dropped
+                // between the IsConnected check above and this call.
             }
         }
 
@@ -1023,10 +1036,19 @@ namespace Daqifi.Core.Device.SdCard
             _host.Send(ScpiMessageProducer.StopStreaming);
             _host.IsStreaming = false;
 
-            _host.Send(ScpiMessageProducer.EnableStorageSd);
-            _host.Send(ScpiMessageProducer.FormatSdCard);
-
-            RestoreStreamingIfNeeded(wasStreaming);
+            try
+            {
+                _host.Send(ScpiMessageProducer.EnableStorageSd);
+                _host.Send(ScpiMessageProducer.FormatSdCard);
+            }
+            finally
+            {
+                // In a finally, not only on the path where both sends succeed: a stream that was
+                // silenced by the stop above must come back even if EnableStorageSd or FormatSdCard
+                // itself throws (e.g. the device dropped mid-command), the same as every other SD
+                // operation in this file now guarantees.
+                RestoreStreamingIfNeeded(wasStreaming);
+            }
 
             return Task.CompletedTask;
         }
