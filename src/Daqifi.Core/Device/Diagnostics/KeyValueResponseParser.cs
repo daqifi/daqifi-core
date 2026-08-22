@@ -81,15 +81,22 @@ internal static class KeyValueResponseParser
     /// <see cref="StreamStatsParser"/>) so each only needs to supply its own result type.
     /// </remarks>
     /// <param name="lines">The raw response lines from the device.</param>
-    /// <param name="factory">Builds the typed result from the parsed key/value pairs.</param>
+    /// <param name="factory">
+    /// Builds the typed result from the parsed key/value pairs. Must not return
+    /// <see langword="null"/>; callers rely on <c>TryParse</c> returning a non-null
+    /// <paramref name="result"/> whenever it returns <see langword="true"/>.
+    /// </param>
     /// <param name="result">The built result, or <see langword="null"/> if no field could be parsed.</param>
     /// <returns><see langword="true"/> if at least one field was parsed; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="InvalidOperationException"><paramref name="factory"/> returned <see langword="null"/>.</exception>
     public static bool TryParse<T>(
         IEnumerable<string> lines,
         Func<IReadOnlyDictionary<string, ulong>, T> factory,
         [NotNullWhen(true)] out T? result)
         where T : class
     {
+        ArgumentNullException.ThrowIfNull(factory);
+
         var values = Parse(lines);
         if (values.Count == 0)
         {
@@ -97,7 +104,8 @@ internal static class KeyValueResponseParser
             return false;
         }
 
-        result = factory(values);
+        result = factory(values) ?? throw new InvalidOperationException(
+            $"{nameof(factory)} returned null; TryParse callers rely on a non-null result when returning true.");
         return true;
     }
 }
