@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.Network;
@@ -43,16 +44,18 @@ namespace Daqifi.Core.Tests.Device.Network;
 /// </remarks>
 public class NetworkConfigurationOperationsTests
 {
-    private const string NetTypeExisting = "SYSTem:COMMunicate:LAN:NETType 1";
-    private const string NetTypeSelfHosted = "SYSTem:COMMunicate:LAN:NETType 4";
-    private const string SecurityOpen = "SYSTem:COMMunicate:LAN:SECurity 0";
-    private const string SecurityWpa = "SYSTem:COMMunicate:LAN:SECurity 3";
-    private const string DisableSd = "SYSTem:STORage:SD:ENAble 0";
-    private const string EnableLan = "SYSTem:COMMunicate:LAN:ENAbled 1";
-    private const string SaveLan = "SYSTem:COMMunicate:LAN:SAVE";
-    private const string ApplyLan = "SYSTem:COMMunicate:LAN:APPLY";
-    private const string LoadLan = "SYSTem:COMMunicate:LAN:LOAD";
-    private const string FactoryResetLan = "SYSTem:COMMunicate:LAN:FACRESET";
+    // Derived from ScpiMessageProducer rather than hardcoded, so a wire-format change there fails
+    // this file's assertions instead of silently drifting out of sync with them.
+    private static readonly string NetTypeExisting = ScpiMessageProducer.SetNetworkWifiModeExisting.Data;
+    private static readonly string NetTypeSelfHosted = ScpiMessageProducer.SetNetworkWifiModeSelfHosted.Data;
+    private static readonly string SecurityOpen = ScpiMessageProducer.SetNetworkWifiSecurityOpen.Data;
+    private static readonly string SecurityWpa = ScpiMessageProducer.SetNetworkWifiSecurityWpa.Data;
+    private static readonly string DisableSd = ScpiMessageProducer.DisableStorageSd.Data;
+    private static readonly string EnableLan = ScpiMessageProducer.EnableNetworkLan.Data;
+    private static readonly string SaveLan = ScpiMessageProducer.SaveNetworkLan.Data;
+    private static readonly string ApplyLan = ScpiMessageProducer.ApplyNetworkLan.Data;
+    private static readonly string LoadLan = ScpiMessageProducer.LoadNetworkLan.Data;
+    private static readonly string FactoryResetLan = ScpiMessageProducer.FactoryResetNetworkLan.Data;
 
     /// <summary>
     /// Cancels <paramref name="cts"/> the instant LAN:APPLY is sent, so a test's call to
@@ -189,12 +192,12 @@ public class NetworkConfigurationOperationsTests
             new[]
             {
                 "send:" + NetTypeExisting,
-                "send:SYSTem:COMMunicate:LAN:SSID \"TestNetwork\"",
+                "send:" + ScpiMessageProducer.SetNetworkWifiSsid("TestNetwork").Data,
                 "send:" + SecurityWpa,
-                "send:SYSTem:COMMunicate:LAN:PASs \"TestPassword\"",
-                "send:SYSTem:COMMunicate:LAN:ADDRess \"10.0.0.5\"",
-                "send:SYSTem:COMMunicate:LAN:MASK \"255.255.255.0\"",
-                "send:SYSTem:COMMunicate:LAN:GATEway \"10.0.0.1\"",
+                "send:" + ScpiMessageProducer.SetNetworkWifiPassword("TestPassword").Data,
+                "send:" + ScpiMessageProducer.SetLanAddress(IPAddress.Parse("10.0.0.5")).Data,
+                "send:" + ScpiMessageProducer.SetLanMask(IPAddress.Parse("255.255.255.0")).Data,
+                "send:" + ScpiMessageProducer.SetLanGateway(IPAddress.Parse("10.0.0.1")).Data,
                 "send:" + DisableSd,
                 "send:" + EnableLan,
                 "send:" + SaveLan,
@@ -218,7 +221,7 @@ public class NetworkConfigurationOperationsTests
             new[]
             {
                 "send:" + NetTypeSelfHosted,
-                "send:SYSTem:COMMunicate:LAN:SSID \"DAQiFi_Device\"",
+                "send:" + ScpiMessageProducer.SetNetworkWifiSsid("DAQiFi_Device").Data,
                 "send:" + SecurityOpen,
                 "send:" + DisableSd,
                 "send:" + EnableLan,
@@ -280,7 +283,7 @@ public class NetworkConfigurationOperationsTests
             () => ops.UpdateNetworkConfigurationAsync(config));
 
         Assert.Equal(
-            new[] { "send:" + NetTypeSelfHosted, "send:SYSTem:COMMunicate:LAN:SSID \"Test\"" },
+            new[] { "send:" + NetTypeSelfHosted, "send:" + ScpiMessageProducer.SetNetworkWifiSsid("Test").Data },
             host.Calls);
     }
 
