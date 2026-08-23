@@ -52,6 +52,18 @@ public class WifiBridgeActivatorTests
         Assert.ThrowsAny<Exception>(() => WifiBridgeActivator.Deactivate("COM999"));
     }
 
+    // Activate and Deactivate share one private sequence method, so the null guard now fires
+    // one frame below the public parameter. Pin the reported parameter name for both directions
+    // so the shared guard keeps blaming the caller's argument rather than an internal one.
+    [Fact]
+    public void NullPortName_BothDirections_BlameThePortNameParameter()
+    {
+        Assert.Equal("portName", Assert.Throws<ArgumentNullException>(
+            () => WifiBridgeActivator.Activate(null!)).ParamName);
+        Assert.Equal("portName", Assert.Throws<ArgumentNullException>(
+            () => WifiBridgeActivator.Deactivate(null!)).ParamName);
+    }
+
     [Fact]
     public async Task ActivateAsync_NullPortName_ThrowsArgumentNullException()
     {

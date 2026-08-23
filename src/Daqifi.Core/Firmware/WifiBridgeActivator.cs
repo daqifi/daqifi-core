@@ -68,24 +68,8 @@ public static class WifiBridgeActivator
     /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
     public static void Activate(string portName, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(portName);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        using var transport = new SerialStreamTransport(portName);
-        transport.Connect();
-
-        // Allow firmware to recognise DTR before sending commands.
-        WaitOrCancel(DtrSettleDelay, cancellationToken);
-
         // Re-assert the FW-update-requested flag (idempotent with the earlier handshake).
-        WriteCommand(transport, ScpiMessageProducer.SetLanFirmwareUpdateMode, cancellationToken);
-        WaitOrCancel(InterCommandDelay, cancellationToken);
-
-        // Trigger the WiFi manager REINIT to bridge-mode state machine.
-        WriteCommand(transport, ScpiMessageProducer.ApplyNetworkLan, cancellationToken);
-
-        // Give firmware time to enqueue APPLY before the port closes.
-        WaitOrCancel(ApplySettleDelay, cancellationToken);
+        RunModeChangeSequence(portName, ScpiMessageProducer.SetLanFirmwareUpdateMode, cancellationToken);
     }
 
     /// <summary>
@@ -99,7 +83,36 @@ public static class WifiBridgeActivator
     /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
     public static void Deactivate(string portName, CancellationToken cancellationToken = default)
     {
+        // Turn off transparent mode so the port goes back to the SCPI console.
+        RunModeChangeSequence(portName, ScpiMessageProducer.SetUsbTransparencyMode(0), cancellationToken);
+    }
+
+    /// <summary>
+    /// The scripted port sequence both <see cref="Activate(string, CancellationToken)"/> and
+    /// <see cref="Deactivate(string, CancellationToken)"/> run: open the port, let firmware see
+    /// DTR, send <paramref name="modeCommand"/>, then trigger the WiFi manager's REINIT with
+    /// <c>LAN:APPLY</c> and hold the port open long enough for firmware to enqueue it.
+    /// </summary>
+    /// <remarks>
+    /// The two directions differ only in <paramref name="modeCommand"/>; every step around it —
+    /// and in particular the three delays — is a property of the firmware's mode-transition state
+    /// machine, not of the direction being driven, which is why entering and leaving bridge mode
+    /// are paced identically. Single-sourcing the sequence keeps it that way: a step added or
+    /// re-ordered for one direction can no longer silently miss the other. (Same reasoning as
+    /// <see cref="InterCommandDelay"/>, which is already shared with <c>WifiModuleUpdater</c>.)
+    /// </remarks>
+    /// <param name="portName">The serial port name.</param>
+    /// <param name="modeCommand">The direction-specific command sent before <c>LAN:APPLY</c>.</param>
+    /// <param name="cancellationToken">Cancellation token observed between port-open, each command write, and each inter-command delay.</param>
+    private static void RunModeChangeSequence(string portName, IOutboundMessage<string> modeCommand, CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(portName);
+
+        // Guarded even though both current callers pass a non-null literal: this method is meant to
+        // be the one place a future direction or step gets added, and a null here would otherwise
+        // surface as an NRE inside WriteCommand's GetBytes() with the port already open.
+        ArgumentNullException.ThrowIfNull(modeCommand);
+
         cancellationToken.ThrowIfCancellationRequested();
 
         using var transport = new SerialStreamTransport(portName);
@@ -108,11 +121,10 @@ public static class WifiBridgeActivator
         // Allow firmware to recognise DTR before sending commands.
         WaitOrCancel(DtrSettleDelay, cancellationToken);
 
-        // Turn off transparent mode so the port goes back to the SCPI console.
-        WriteCommand(transport, ScpiMessageProducer.SetUsbTransparencyMode(0), cancellationToken);
+        WriteCommand(transport, modeCommand, cancellationToken);
         WaitOrCancel(InterCommandDelay, cancellationToken);
 
-        // Trigger the WiFi manager REINIT out of bridge-mode state machine.
+        // Trigger the WiFi manager REINIT state machine.
         WriteCommand(transport, ScpiMessageProducer.ApplyNetworkLan, cancellationToken);
 
         // Give firmware time to enqueue APPLY before the port closes.
