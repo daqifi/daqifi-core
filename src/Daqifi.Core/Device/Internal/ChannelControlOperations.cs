@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Producers;
+using Daqifi.Core.Device;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -393,14 +394,13 @@ namespace Daqifi.Core.Device.Internal
                     $"The device rejected a readback of analog output {channelNumber}. It answered: {DescribeLines(lines)}");
             }
 
-            foreach (var line in lines)
+            if (LineParsing.TryParseFirst<double>(lines, static (string? line, out double volts) =>
+                    double.TryParse(line?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out volts)
+                    && double.IsFinite(volts),
+                out var readbackVolts))
             {
-                if (double.TryParse(line?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var volts)
-                    && double.IsFinite(volts))
-                {
-                    FindAnalogOutputChannel(channelNumber)?.SetOutputVoltage(volts, DateTime.Now);
-                    return volts;
-                }
+                FindAnalogOutputChannel(channelNumber)?.SetOutputVoltage(readbackVolts, DateTime.Now);
+                return readbackVolts;
             }
 
             throw new InvalidOperationException(
