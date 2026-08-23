@@ -448,7 +448,17 @@ public class LiveSampleStreamTests
         {
             var sample = new DataSample(DateTime.UtcNow, value);
             ActiveSample = sample;
-            _sampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));
+
+            // Snapshot the delegate under the same lock the add/remove accessors use, so this read
+            // can't race a concurrent subscribe/unsubscribe; invoke outside the lock to avoid holding
+            // it across a callback into the (single-threaded, non-reentrant) enumeration under test.
+            EventHandler<SampleReceivedEventArgs>? handler;
+            lock (_subscriptionLock)
+            {
+                handler = _sampleReceived;
+            }
+
+            handler?.Invoke(this, new SampleReceivedEventArgs(this, sample));
         }
 
         public int ChannelNumber { get; }
