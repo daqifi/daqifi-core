@@ -99,6 +99,15 @@ public class SerialDeviceFinderTests
     }
 
     [Fact]
+    public void SerialDeviceFinder_CustomBaudRateConstructor_DoesNotThrow()
+    {
+        // Keeps the public SerialDeviceFinder(int) overload exercised. The baud rate itself is a
+        // private field with no accessor, so "does not throw" is the whole of what a test can say
+        // here — the name says exactly that rather than implying the value is checked.
+        using var finder = new SerialDeviceFinder(9600);
+    }
+
+    [Fact]
     public void SerialDeviceFinder_CustomUsbLocationProvider_AcceptsProvider()
     {
         var fakeProvider = new RecordingUsbLocationProvider(_ => "Port_#0001.Hub_#0001");
