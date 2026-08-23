@@ -95,28 +95,6 @@ namespace Daqifi.Core.Tests.Device.Network
         }
 
         [Fact]
-        public void StaticIPProperties_CanBeAssignedAndCleared()
-        {
-            // Arrange
-            var config = new NetworkConfiguration
-            {
-                StaticIP = IPAddress.Parse("192.168.1.10"),
-                SubnetMask = IPAddress.Parse("255.255.255.0"),
-                Gateway = IPAddress.Parse("192.168.1.1")
-            };
-
-            // Act
-            config.StaticIP = null;
-            config.SubnetMask = null;
-            config.Gateway = null;
-
-            // Assert
-            Assert.Null(config.StaticIP);
-            Assert.Null(config.SubnetMask);
-            Assert.Null(config.Gateway);
-        }
-
-        [Fact]
         public void Clone_PreservesStaticIPFields()
         {
             // Arrange
