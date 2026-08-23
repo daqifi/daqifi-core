@@ -207,25 +207,28 @@ public class IntelHexParser
     private static ushort UpdateBaseAddress(byte[] hexRecord, ushort currentBaseAddress, string line)
     {
         var recordType = hexRecord[3];
-        if (recordType == 0x04)
+        if (recordType != 0x04)
         {
-            // A type-04 (extended linear address) record must carry exactly 2 data bytes — the
-            // upper 16 bits of the 32-bit address. Its byte-count field can equal its data length
-            // yet still be wrong (e.g. a zero-count type-04 record whose count "matches" its zero
-            // data bytes), so ValidateRecordLength alone doesn't cover this. Guard the slice
-            // explicitly so a short/corrupt type-04 record throws the documented InvalidDataException
-            // rather than a raw ArgumentException from BitConverter.ToUInt16 on an undersized array.
-            if (hexRecord.Length - 5 != 2)
-            {
-                throw new InvalidDataException(
-                    $"The hex record \"{line}\" is a type-04 extended-address record but does not carry exactly 2 data bytes");
-            }
-
-            var dataArray = hexRecord.Skip(4).Take(2).ToArray();
-            if (BitConverter.IsLittleEndian) Array.Reverse(dataArray);
-            return BitConverter.ToUInt16(dataArray, 0);
+            // Only a type-04 (extended linear address) record changes the base address; every
+            // other record type leaves it as it stands.
+            return currentBaseAddress;
         }
-        return currentBaseAddress;
+
+        // A type-04 (extended linear address) record must carry exactly 2 data bytes — the
+        // upper 16 bits of the 32-bit address. Its byte-count field can equal its data length
+        // yet still be wrong (e.g. a zero-count type-04 record whose count "matches" its zero
+        // data bytes), so ValidateRecordLength alone doesn't cover this. Guard the slice
+        // explicitly so a short/corrupt type-04 record throws the documented InvalidDataException
+        // rather than a raw ArgumentException from BitConverter.ToUInt16 on an undersized array.
+        if (hexRecord.Length - 5 != 2)
+        {
+            throw new InvalidDataException(
+                $"The hex record \"{line}\" is a type-04 extended-address record but does not carry exactly 2 data bytes");
+        }
+
+        var dataArray = hexRecord.Skip(4).Take(2).ToArray();
+        if (BitConverter.IsLittleEndian) Array.Reverse(dataArray);
+        return BitConverter.ToUInt16(dataArray, 0);
     }
 
     private bool IsProtectedHexRecord(byte[] hexRecord, ushort baseAddress)
