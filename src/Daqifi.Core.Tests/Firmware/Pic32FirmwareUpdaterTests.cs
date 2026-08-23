@@ -20,9 +20,7 @@ namespace Daqifi.Core.Tests.Firmware;
 /// </remarks>
 public class Pic32FirmwareUpdaterTests
 {
-    private const byte VersionRequest = 0x11;
     private const byte EraseRequest = 0x22;
-    private const byte ProgramRequest = 0x33;
     private const byte JumpRequest = 0x55;
 
     private static readonly byte[] VersionOk = [0x01, 0x10];
