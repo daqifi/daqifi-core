@@ -11,7 +11,12 @@ public class IntelHexParserTests
     [Fact]
     public void ParseHexRecords_WithNullLines_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => _parser.ParseHexRecords(null!));
+        var ex = Assert.Throws<ArgumentNullException>(() => _parser.ParseHexRecords(null!));
+
+        // The guard is eager and names the caller's own parameter. Both matter: if the walk
+        // were ever moved behind a lazy iterator that carried the null check with it, the
+        // throw would move to first enumeration instead of the call itself.
+        Assert.Equal("lines", ex.ParamName);
     }
 
     [Fact]
@@ -261,7 +266,79 @@ public class IntelHexParserTests
     [Fact]
     public void ParseRecords_WithNullLines_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => _parser.ParseRecords(null!));
+        var ex = Assert.Throws<ArgumentNullException>(() => _parser.ParseRecords(null!));
+
+        Assert.Equal("lines", ex.ParamName);
+    }
+
+    [Fact]
+    public void ParseRecords_WithBlankLines_SkipsThem()
+    {
+        var lines = new[] { "", "  ", "\t" };
+
+        var result = _parser.ParseRecords(lines);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void ParseRecords_InvalidChecksum_ThrowsInvalidDataException()
+    {
+        // Valid record is :020000041D00DD, corrupt the checksum.
+        var lines = new[] { ":020000041D00AA" };
+
+        var ex = Assert.Throws<InvalidDataException>(() => _parser.ParseRecords(lines));
+        Assert.Contains("invalid checksum", ex.Message);
+    }
+
+    [Fact]
+    public void ParseRecords_DataInProtectedRange_IsFilteredAndBaseAddressStillTracked()
+    {
+        var lines = new[]
+        {
+            ":020000041D1EBF",                                   // Extended address 0x1D1E
+            ":10000000AABBCCDDEEFF00112233445566778899F8",       // Data at 0x1D1E0000 - protected
+            ":020000041D00DD",                                   // Extended address 0x1D00
+            ":10010000AABBCCDDEEFF00112233445566778899F7",       // Data at 0x1D000100 - kept
+            ":00000001FF"                                        // EOF
+        };
+
+        var result = _parser.ParseRecords(lines);
+
+        // The protected data record is dropped, and dropping it must not disturb the running
+        // base address that the records after it are addressed against.
+        Assert.Equal(4, result.Count);
+        Assert.Equal((byte)0x04, result[0].RecordType);
+        Assert.Equal((byte)0x04, result[1].RecordType);
+        Assert.Equal((byte)0x00, result[2].RecordType);
+        Assert.Equal(0x1D000100u, result[2].Address);
+        Assert.Equal((byte)0x01, result[3].RecordType);
+    }
+
+    [Fact]
+    public void ParseRecords_AndParseHexRecords_SelectTheSameRecords()
+    {
+        // Both public entry points walk, validate and filter identically; they differ only in
+        // what they project. Pin that agreement so the two cannot drift apart.
+        var lines = new[]
+        {
+            "",
+            ":020000041D1EBF",                                   // Extended address 0x1D1E
+            ":10000000AABBCCDDEEFF00112233445566778899F8",       // Data at 0x1D1E0000 - protected
+            ":020000041D00DD",                                   // Extended address 0x1D00
+            "   ",
+            ":10010000AABBCCDDEEFF00112233445566778899F7",       // Data at 0x1D000100 - kept
+            ":00000001FF"                                        // EOF
+        };
+
+        var hexRecords = _parser.ParseHexRecords(lines);
+        var records = _parser.ParseRecords(lines);
+
+        Assert.Equal(hexRecords.Count, records.Count);
+        for (var i = 0; i < hexRecords.Count; i++)
+        {
+            Assert.Equal(hexRecords[i], records[i].Data);
+        }
     }
 
     [Fact]
