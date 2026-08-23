@@ -14,22 +14,8 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 [Collection("SerialDeviceFinder static port-claim state")]
 public class SerialDeviceFinderTests
 {
-    // Issue #283: Discovery.DeviceType lacked a Nyquist2 member, so
-    // ConvertDeviceType silently downgraded a correctly-detected Nyquist2 to
-    // Unknown.
-    [Theory]
-    [InlineData(Daqifi.Core.Device.DeviceType.Unknown, DeviceType.Unknown)]
-    [InlineData(Daqifi.Core.Device.DeviceType.Nyquist1, DeviceType.Nyquist1)]
-    [InlineData(Daqifi.Core.Device.DeviceType.Nyquist2, DeviceType.Nyquist2)]
-    [InlineData(Daqifi.Core.Device.DeviceType.Nyquist3, DeviceType.Nyquist3)]
-    public void ConvertDeviceType_MapsToMatchingDiscoveryType(
-        Daqifi.Core.Device.DeviceType deviceType, DeviceType expected)
-    {
-        var result = SerialDeviceFinder.ConvertDeviceType(deviceType);
-
-        Assert.Equal(expected, result);
-    }
-
+    // The part-number to DeviceType mapping this finder uses is covered by
+    // DiscoveryDeviceTypeMapperTests (issue #283).
     [Fact]
     public async Task DiscoverAsync_WithCancellationToken_ReturnsDevices()
     {

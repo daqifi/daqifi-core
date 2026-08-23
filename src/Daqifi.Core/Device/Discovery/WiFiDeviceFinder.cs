@@ -417,7 +417,7 @@ public class WiFiDeviceFinder : DeviceFinderBase
                 MacAddress = NetworkAddressHelper.GetMacAddressString(message),
                 Port = (int)message.DevicePort,
                 LocalInterfaceAddress = localInterfaceAddress,
-                Type = GetDeviceType(message.DevicePn),
+                Type = DiscoveryDeviceTypeMapper.FromPartNumber(message.DevicePn),
                 IsPowerOn = message.PwrStatus == 1,
                 ConnectionType = ConnectionType.WiFi
             };
@@ -429,23 +429,6 @@ public class WiFiDeviceFinder : DeviceFinderBase
             // Invalid protobuf message, return null
             return null;
         }
-    }
-
-    /// <summary>
-    /// Determines device type from part number.
-    /// </summary>
-    internal static DeviceType GetDeviceType(string? partNumber)
-    {
-        if (string.IsNullOrWhiteSpace(partNumber))
-            return DeviceType.Unknown;
-
-        return partNumber.ToLowerInvariant() switch
-        {
-            "nq1" => DeviceType.Nyquist1,
-            "nq2" => DeviceType.Nyquist2,
-            "nq3" => DeviceType.Nyquist3,
-            _ => DeviceType.Unknown
-        };
     }
 
     /// <summary>

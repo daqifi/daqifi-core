@@ -1096,22 +1096,6 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
     }
 
     /// <summary>
-    /// Converts from the Device.DeviceType enum to the Discovery.DeviceType enum.
-    /// </summary>
-    /// <param name="deviceType">The Device namespace DeviceType.</param>
-    /// <returns>The Discovery namespace DeviceType.</returns>
-    internal static DeviceType ConvertDeviceType(Device.DeviceType deviceType)
-    {
-        return deviceType switch
-        {
-            Device.DeviceType.Nyquist1 => DeviceType.Nyquist1,
-            Device.DeviceType.Nyquist2 => DeviceType.Nyquist2,
-            Device.DeviceType.Nyquist3 => DeviceType.Nyquist3,
-            _ => DeviceType.Unknown
-        };
-    }
-
-    /// <summary>
     /// Maps a device's status message to <see cref="DeviceInfo"/>. Pure mapping logic split out
     /// from <see cref="TryGetDeviceInfoAsync"/> (which owns the SerialPort probe and any
     /// IUsbLocationProvider error handling) so it can be unit tested directly with a
@@ -1131,7 +1115,7 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
             FirmwareVersion = statusMessage.DeviceFwRev ?? "Unknown",
             ConnectionType = ConnectionType.Serial,
             PortName = portName,
-            Type = ConvertDeviceType(DeviceTypeDetector.DetectFromPartNumber(statusMessage.DevicePn)),
+            Type = DiscoveryDeviceTypeMapper.FromPartNumber(statusMessage.DevicePn),
             IsPowerOn = true,
             LocationKey = locationKey
         };
