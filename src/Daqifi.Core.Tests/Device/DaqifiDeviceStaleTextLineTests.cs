@@ -216,6 +216,14 @@ public class DaqifiDeviceStaleTextLineTests
         Assert.Empty(lines);
 
         transport.ReleaseWrite();
+
+        // The command was queued the whole time, not lost: released, the writer sends both it and
+        // the earlier command it was stuck behind. Without this the test would also pass against a
+        // double that quietly swallowed everything queued.
+        Assert.True(
+            SpinWait.SpinUntil(() => transport.WriteCount >= 2, TimeSpan.FromSeconds(5)),
+            "The queued command never reached the wire once the writer was released.");
+
         device.Disconnect();
     }
 
@@ -986,8 +994,14 @@ public class DaqifiDeviceStaleTextLineTests
     /// while the producer thread sits in a write, everything a caller queues behind it stays
     /// queued, so a test can put a line on the wire at a moment when the device provably has not
     /// been asked anything. On real hardware that window is sub-millisecond and no delay-based
-    /// double can land in it. Writes pass straight through until <see cref="HoldWrites"/> is
-    /// called, so connecting the device is unaffected.
+    /// double can land in it.
+    /// <para>
+    /// Only the timing of the write call is modelled: until <see cref="HoldWrites"/> is called a
+    /// write returns immediately, and afterwards it parks. The bytes themselves are discarded
+    /// either way, as they are by every other stream double in this file — nothing here ever reads
+    /// back what the device wrote, and what these tests turn on is whether the writer thread is
+    /// moving, not what it said.
+    /// </para>
     /// </remarks>
     private sealed class QueuedWriteTransport : IStreamTransport
     {
@@ -1012,6 +1026,9 @@ public class DaqifiDeviceStaleTextLineTests
 
         /// <summary>Makes every subsequent write park until <see cref="ReleaseWrite"/>.</summary>
         public void HoldWrites() => _stream.HoldWrites();
+
+        /// <summary>How many writes the stream has been handed, held or not.</summary>
+        public int WriteCount => _stream.WriteCount;
 
         /// <summary>Waits for the producer thread to actually enter a held write.</summary>
         public bool WaitForWriteStarted(TimeSpan timeout) => _stream.WaitForWriteStarted(timeout);
@@ -1049,8 +1066,11 @@ public class DaqifiDeviceStaleTextLineTests
             _isConnected = false;
             _disposed = true;
 
-            // A test that failed before releasing must not leave the producer thread parked.
+            // A test that failed before releasing must not leave the producer thread parked, so
+            // the release comes first and the stream's own dispose — which frees its wait handles
+            // — only afterwards.
             _stream.ReleaseWrite();
+            _stream.Dispose();
         }
 
         private sealed class HoldableStream : Stream
@@ -1062,6 +1082,9 @@ public class DaqifiDeviceStaleTextLineTests
             private byte[]? _current;
             private int _position;
             private volatile bool _holdWrites;
+            private int _writeCount;
+
+            public int WriteCount => Volatile.Read(ref _writeCount);
 
             public void HoldWrites()
             {
@@ -1122,6 +1145,11 @@ public class DaqifiDeviceStaleTextLineTests
 
             public override void Write(byte[] buffer, int offset, int count)
             {
+                // Counted, not kept: nothing reads the device's outbound bytes back, but a test
+                // that wants to say "the command did reach the wire in the end" needs something
+                // to point at.
+                Interlocked.Increment(ref _writeCount);
+
                 if (!_holdWrites)
                 {
                     return;
@@ -1138,7 +1166,11 @@ public class DaqifiDeviceStaleTextLineTests
             {
                 if (disposing)
                 {
+                    // Released before the handles go away, so a writer parked in Write above is
+                    // woken rather than left to fault on a disposed event.
                     _writeRelease.Set();
+                    _writeStarted.Dispose();
+                    _writeRelease.Dispose();
                 }
 
                 base.Dispose(disposing);
