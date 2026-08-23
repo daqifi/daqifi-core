@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Daqifi.Core.Device;
 
 namespace Daqifi.Core.Device.Diagnostics;
 
@@ -62,19 +63,8 @@ public static partial class LogLevelParser
     /// <param name="lines">Response lines from the device.</param>
     /// <param name="result">The parsed setting, or <see langword="null"/> if no line could be parsed.</param>
     /// <returns><see langword="true"/> if any line was successfully parsed; otherwise <see langword="false"/>.</returns>
-    public static bool TryParseLines(IEnumerable<string> lines, [NotNullWhen(true)] out LogLevelSetting? result)
-    {
-        foreach (var line in lines)
-        {
-            if (TryParse(line, out result))
-            {
-                return true;
-            }
-        }
-
-        result = null;
-        return false;
-    }
+    public static bool TryParseLines(IEnumerable<string> lines, [NotNullWhen(true)] out LogLevelSetting? result) =>
+        LineParsing.TryParseFirst(lines, TryParse, out result);
 
     [GeneratedRegex(@"^(?<module>\S+):\s*(?<level>\d+)\s*\(ceiling\s*(?<ceiling>\d+)\)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
