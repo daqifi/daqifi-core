@@ -508,13 +508,55 @@ namespace Daqifi.Core.Device.Internal
 
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
 
+                    // Whether anything beyond staleLineCount would actually survive the projection
+                    // below as evidence this exchange got an answer -- i.e. not a blank that will be
+                    // dropped as a pre-send leftover (index < sentBoundaryLineCount, issue #553). A
+                    // raw count comparison against staleLineCount is NOT equivalent to this: a blank
+                    // that arrived in the capture-to-send window bumps the count but is discarded
+                    // later, and treating it as evidence would flip the wait loop into the short
+                    // completion-timeout phase before the real response has a chance to arrive.
+                    bool HasResponseEvidenceBeyondStaleBoundary()
+                    {
+                        lock (collectedLinesGate)
+                        {
+                            for (var i = staleLineCount; i < collectedLines.Count; i++)
+                            {
+                                if (collectedLines[i].Length > 0 || i >= sentBoundaryLineCount)
+                                {
+                                    return true;
+                                }
+                            }
+
+                            return false;
+                        }
+                    }
+
                     // Wait for responses using a two-phase inactivity-based timeout:
                     // Phase 1: Wait up to responseTimeoutMs for the first response.
                     // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
                     var lastMessageTime = DateTime.UtcNow;
                     var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
                     var startTime = DateTime.UtcNow;
-                    var hasReceivedAny = false;
+
+                    // A reply can land between sentBoundaryLineCount being captured just above and
+                    // this loop's first poll -- single-digit milliseconds on a real device, but
+                    // enough. Without this seed, hasReceivedAny only flips on a count *increase
+                    // observed inside the loop*, so a reply that already arrived by the time the
+                    // loop starts is invisible to it: the exchange then sits out the full
+                    // responseTimeoutMs instead of the short completionTimeoutMs -- an ~8x stall on
+                    // some diagnostics reads, though never a wrong answer, since maxWait still
+                    // bounds collection either way (issue #592).
+                    //
+                    // Seeded via HasResponseEvidenceBeyondStaleBoundary rather than a raw count
+                    // comparison against staleLineCount: a blank that arrived in the capture-to-send
+                    // window bumps the count but is dropped later as a pre-send leftover (#553), and
+                    // treating that bump as evidence would flip this into the short completion-
+                    // timeout phase before the real response arrives, discarding it early.
+                    var hasReceivedAny = HasResponseEvidenceBeyondStaleBoundary();
+                    if (hasReceivedAny)
+                    {
+                        Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response already present entering wait loop"));
+                    }
 
                     while (DateTime.UtcNow - startTime < maxWait)
                     {
