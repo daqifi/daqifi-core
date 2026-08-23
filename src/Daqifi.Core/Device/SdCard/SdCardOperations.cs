@@ -216,13 +216,7 @@ namespace Daqifi.Core.Device.SdCard
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Captured before the defensive stop below so the finally can tell "this operation
-            // silenced a live stream" apart from "nothing was streaming to begin with" (#533).
-            var wasStreaming = _host.IsStreaming;
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            _host.Send(ScpiMessageProducer.StopStreaming);
-            _host.IsStreaming = false;
+            var wasStreaming = PauseStreamingForSdOperation();
 
             try
             {
@@ -364,6 +358,35 @@ namespace Daqifi.Core.Device.SdCard
         }
 
         /// <summary>
+        /// Silences streaming ahead of an SD-card operation and reports whether a live stream was
+        /// actually running, so <see cref="RestoreStreamingIfNeeded"/> can put it back afterwards
+        /// (#533). The stop half is unconditional even when the flag says nothing is streaming,
+        /// because the flag can be stale (issue #118).
+        /// </summary>
+        /// <returns>
+        /// <see cref="IDeviceOperationHost.IsStreaming"/> as it stood immediately before the stop.
+        /// Pass it to <see cref="RestoreStreamingIfNeeded"/> from the operation's <c>finally</c>,
+        /// which uses it to tell "this operation silenced a live stream" apart from "nothing was
+        /// streaming to begin with".
+        /// </returns>
+        /// <remarks>
+        /// The capture has to come before the stop with nothing in between: read it afterwards and
+        /// it reports state this method has already cleared, so the stream is never resumed. Owning
+        /// both halves here is what holds that ordering at every call site, rather than each one
+        /// re-deriving it.
+        /// </remarks>
+        private bool PauseStreamingForSdOperation()
+        {
+            var wasStreaming = _host.IsStreaming;
+
+            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
+            _host.Send(ScpiMessageProducer.StopStreaming);
+            _host.IsStreaming = false;
+
+            return wasStreaming;
+        }
+
+        /// <summary>
         /// Resumes streaming after an SD-card operation's defensive stop, if a live stream was
         /// actually running when the operation started (#533). Every SD operation stops streaming
         /// unconditionally before it touches the card, whether or not anyone was consuming it; left
@@ -502,12 +525,7 @@ namespace Daqifi.Core.Device.SdCard
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Captured before the defensive stop below — see GetSdCardFilesAsync (#533).
-            var wasStreaming = _host.IsStreaming;
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            _host.Send(ScpiMessageProducer.StopStreaming);
-            _host.IsStreaming = false;
+            var wasStreaming = PauseStreamingForSdOperation();
 
             try
             {
@@ -797,12 +815,8 @@ namespace Daqifi.Core.Device.SdCard
 
             ValidateSdCardFileName(fileName);
 
-            // Captured before the defensive stop below — see GetSdCardFilesAsync (#533).
-            var wasStreaming = _host.IsStreaming;
+            var wasStreaming = PauseStreamingForSdOperation();
 
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            _host.Send(ScpiMessageProducer.StopStreaming);
-            _host.IsStreaming = false;
             try
             {
                 // Same prepare/finalize treatment as GetSdCardFilesAsync, for the same reasons — the
@@ -1037,12 +1051,7 @@ namespace Daqifi.Core.Device.SdCard
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Captured before the defensive stop below — see GetSdCardFilesAsync (#533).
-            var wasStreaming = _host.IsStreaming;
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            _host.Send(ScpiMessageProducer.StopStreaming);
-            _host.IsStreaming = false;
+            var wasStreaming = PauseStreamingForSdOperation();
 
             try
             {
@@ -1165,12 +1174,7 @@ namespace Daqifi.Core.Device.SdCard
                 throw new SdCardBusyException(Array.Empty<string>());
             }
 
-            // Captured before the defensive stop below — see GetSdCardFilesAsync (#533).
-            var wasStreaming = _host.IsStreaming;
-
-            // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
-            _host.Send(ScpiMessageProducer.StopStreaming);
-            _host.IsStreaming = false;
+            var wasStreaming = PauseStreamingForSdOperation();
 
             var stopwatch = Stopwatch.StartNew();
             long fileSize = 0;
