@@ -196,8 +196,8 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
             return null;
         }
 
-        var serialNumber = NormalizeHidString(GetStringProperty(deviceRef, NativeMethods.kIOHIDSerialNumberKey));
-        var productName = NormalizeHidString(GetStringProperty(deviceRef, NativeMethods.kIOHIDProductKey));
+        var serialNumber = HidStringNormalization.Normalize(GetStringProperty(deviceRef, NativeMethods.kIOHIDSerialNumberKey));
+        var productName = HidStringNormalization.Normalize(GetStringProperty(deviceRef, NativeMethods.kIOHIDProductKey));
 
         var maxInput = GetNumberProperty(deviceRef, NativeMethods.kIOHIDMaxInputReportSizeKey) ?? 0;
         var maxOutput = GetNumberProperty(deviceRef, NativeMethods.kIOHIDMaxOutputReportSizeKey) ?? 0;
@@ -632,16 +632,6 @@ internal sealed class MacOsHidTransportDevice : IHidTransportDevice, IDisposable
         {
             NativeMethods.CFRelease(cfKey);
         }
-    }
-
-    private static string? NormalizeHidString(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        return value.Trim().TrimEnd('\0');
     }
 
     [SupportedOSPlatform("macos")]

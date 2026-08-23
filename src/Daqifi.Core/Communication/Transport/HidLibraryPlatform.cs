@@ -268,7 +268,7 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
     {
         try
         {
-            return NormalizeHidString(device.GetSerialNumber());
+            return HidStringNormalization.Normalize(device.GetSerialNumber());
         }
         catch
         {
@@ -280,7 +280,7 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
     {
         try
         {
-            return NormalizeHidString(device.GetProductName());
+            return HidStringNormalization.Normalize(device.GetProductName());
         }
         catch
         {
@@ -296,16 +296,6 @@ internal sealed class HidLibraryTransportDevice : IHidTransportDevice
         }
 
         return _stream;
-    }
-
-    private static string? NormalizeHidString(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        return value.Trim().TrimEnd('\0');
     }
 
     private byte[] FormatOutputReport(byte[] payload)
