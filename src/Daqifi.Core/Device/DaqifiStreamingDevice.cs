@@ -1280,8 +1280,6 @@ namespace Daqifi.Core.Device
 
         bool IDeviceOperationHost.IsConnected => IsConnected;
 
-        bool IDeviceOperationHost.IsUsbConnection => IsUsbConnection;
-
         bool IDeviceOperationHost.IsStreaming
         {
             get => IsStreaming;
@@ -1335,6 +1333,8 @@ namespace Daqifi.Core.Device
 
         FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature)
             => CreateFeatureNotSupportedException(feature);
+
+        bool ISdCardOperationHost.IsUsbConnection => IsUsbConnection;
 
         TimeSpan ISdCardOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
 

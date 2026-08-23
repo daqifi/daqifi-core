@@ -132,7 +132,6 @@ public class ConnectionGuardTests
     {
         public bool IsConnected { get; set; }
 
-        public bool IsUsbConnection => throw new NotSupportedException();
         public bool IsStreaming { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();

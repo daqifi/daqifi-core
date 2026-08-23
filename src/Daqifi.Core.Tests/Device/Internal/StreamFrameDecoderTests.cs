@@ -890,7 +890,6 @@ public class StreamFrameDecoderTests
 
         // Not part of the decode path.
         public bool IsConnected => throw new NotSupportedException();
-        public bool IsUsbConnection => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();

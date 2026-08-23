@@ -598,7 +598,6 @@ public class DeviceAdministrationOperationsTests
         public void Disconnect() => Calls.Add("disconnect");
 
         // Outside this block's remit — reaching for any of these is a regression, not a refinement.
-        public bool IsUsbConnection => throw new NotSupportedException();
         public bool IsStreaming { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public int StreamingFrequency => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
