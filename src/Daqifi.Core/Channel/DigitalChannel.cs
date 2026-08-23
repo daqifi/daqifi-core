@@ -222,13 +222,7 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     /// <param name="sample">The sample to set as active.</param>
     public void SetActiveSample(IDataSample sample)
     {
-        ArgumentNullException.ThrowIfNull(sample);
-
-        lock (_lock)
-        {
-            _activeSample = sample;
-        }
-
+        Internal.ActiveSampleAssignment.StoreUnderLock(_lock, sample, ref _activeSample);
         SampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));
     }
 
