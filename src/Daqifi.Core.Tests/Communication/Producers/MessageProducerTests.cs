@@ -2,6 +2,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 
 namespace Daqifi.Core.Tests.Communication.Producers;
@@ -494,13 +495,15 @@ public class MessageProducerTests
 
         public bool WaitForWriteStarted(TimeSpan timeout)
         {
-            var deadline = DateTime.UtcNow + timeout;
+            // Monotonic on purpose: a wall-clock step (NTP, a VM resuming) must not be able to
+            // cut this wait short or stretch it, which is how a bounded test wait turns flaky.
+            var clock = Stopwatch.StartNew();
 
             lock (_gate)
             {
                 while (!_writeStarted)
                 {
-                    var remaining = deadline - DateTime.UtcNow;
+                    var remaining = timeout - clock.Elapsed;
                     if (remaining <= TimeSpan.Zero)
                     {
                         return false;
@@ -538,7 +541,8 @@ public class MessageProducerTests
 
         public override void Write(byte[] buffer, int offset, int count)
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            var limit = TimeSpan.FromSeconds(10);
+            var clock = Stopwatch.StartNew();
 
             lock (_gate)
             {
@@ -549,7 +553,7 @@ public class MessageProducerTests
                 // than wedge the producer thread for the rest of the run.
                 while (!_released)
                 {
-                    var remaining = deadline - DateTime.UtcNow;
+                    var remaining = limit - clock.Elapsed;
                     if (remaining <= TimeSpan.Zero)
                     {
                         return;

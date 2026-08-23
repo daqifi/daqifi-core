@@ -1102,13 +1102,15 @@ public class DaqifiDeviceStaleTextLineTests
 
             public bool WaitForWriteStarted(TimeSpan timeout)
             {
-                var deadline = DateTime.UtcNow + timeout;
+                // Monotonic on purpose: a wall-clock step (NTP, a VM resuming) must not be able to
+                // cut this wait short or stretch it, which is how a bounded test wait turns flaky.
+                var clock = Stopwatch.StartNew();
 
                 lock (_writeGate)
                 {
                     while (!_writeStarted)
                     {
-                        var remaining = deadline - DateTime.UtcNow;
+                        var remaining = timeout - clock.Elapsed;
                         if (remaining <= TimeSpan.Zero)
                         {
                             return false;
@@ -1181,7 +1183,8 @@ public class DaqifiDeviceStaleTextLineTests
                 // is held.
                 Interlocked.Increment(ref _writeCount);
 
-                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+                var limit = TimeSpan.FromSeconds(30);
+                var clock = Stopwatch.StartNew();
 
                 lock (_writeGate)
                 {
@@ -1197,7 +1200,7 @@ public class DaqifiDeviceStaleTextLineTests
                     // than wedging the producer thread for the rest of the run.
                     while (_holdWrites)
                     {
-                        var remaining = deadline - DateTime.UtcNow;
+                        var remaining = limit - clock.Elapsed;
                         if (remaining <= TimeSpan.Zero)
                         {
                             return;
