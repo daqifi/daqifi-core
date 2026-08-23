@@ -309,8 +309,7 @@ public sealed class SdCardFileParser
         SdCardDeviceConfiguration? config,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        uint? previousTimestamp = null;
-        var elapsedSeconds = 0.0;
+        var timestampReconstructor = new SdCardTimestampReconstructor(tickPeriod);
 
         var enumerator = openMessages(ct).GetAsyncEnumerator(ct);
         await using (enumerator.ConfigureAwait(false))
@@ -371,24 +370,10 @@ public sealed class SdCardFileParser
                 }
 
                 // Reconstruct timestamp
-                var timestamp = baseTime;
-                var hasDeviceTimestamp = msg.MsgTimeStamp != 0 && tickPeriod > 0;
-                if (hasDeviceTimestamp)
-                {
-                    if (previousTimestamp == null)
-                    {
-                        // First stream message — anchor to base time
-                        previousTimestamp = msg.MsgTimeStamp;
-                    }
-                    else
-                    {
-                        var delta = SdCardTickDelta.Compute(previousTimestamp.Value, msg.MsgTimeStamp);
-                        elapsedSeconds += delta * tickPeriod;
-                        previousTimestamp = msg.MsgTimeStamp;
-                    }
-
-                    timestamp = baseTime.AddSeconds(elapsedSeconds);
-                }
+                var hasDeviceTimestamp = msg.MsgTimeStamp != 0 && timestampReconstructor.HasDeviceClock;
+                var timestamp = hasDeviceTimestamp
+                    ? timestampReconstructor.Advance(msg.MsgTimeStamp, baseTime)
+                    : baseTime;
 
                 // Extract analog values (prefer float, fall back to scaled raw int)
                 IReadOnlyList<double> analogValues;

@@ -336,9 +336,8 @@ public sealed class SdCardCsvFileParser
     {
         var timestampFreq = config.TimestampFrequency;
         var tickPeriod = timestampFreq > 0 ? 1.0 / timestampFreq : 0.0;
+        var timestampReconstructor = new SdCardTimestampReconstructor(tickPeriod);
 
-        uint? previousTimestamp = null;
-        var elapsedSeconds = 0.0;
         var linesProcessed = 0;
         var bytesRead = 0L;
         var totalBytes = totalBytesProvider();
@@ -376,23 +375,10 @@ public sealed class SdCardCsvFileParser
             var analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(rawAnalogValues, config);
 
             // Reconstruct absolute timestamp using first channel timestamp
-            var absoluteTime = baseTime;
-            var hasDeviceTimestamp = tickPeriod > 0;
-            if (hasDeviceTimestamp)
-            {
-                if (previousTimestamp == null)
-                {
-                    previousTimestamp = rowTimestamp;
-                }
-                else
-                {
-                    var delta = SdCardTickDelta.Compute(previousTimestamp.Value, rowTimestamp);
-                    elapsedSeconds += delta * tickPeriod;
-                    previousTimestamp = rowTimestamp;
-                }
-
-                absoluteTime = baseTime.AddSeconds(elapsedSeconds);
-            }
+            var hasDeviceTimestamp = timestampReconstructor.HasDeviceClock;
+            var absoluteTime = hasDeviceTimestamp
+                ? timestampReconstructor.Advance(rowTimestamp, baseTime)
+                : baseTime;
 
             yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps)
             {

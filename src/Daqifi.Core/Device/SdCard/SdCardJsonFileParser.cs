@@ -149,9 +149,8 @@ public sealed class SdCardJsonFileParser
     {
         var timestampFreq = config.TimestampFrequency;
         var tickPeriod = timestampFreq > 0 ? 1.0 / timestampFreq : 0.0;
+        var timestampReconstructor = new SdCardTimestampReconstructor(tickPeriod);
 
-        uint? previousTimestamp = null;
-        var elapsedSeconds = 0.0;
         var linesProcessed = 0;
         var bytesRead = 0L;
         var totalBytes = totalBytesProvider();
@@ -177,23 +176,10 @@ public sealed class SdCardJsonFileParser
             var analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(rawAnalogValues, config);
 
             // Reconstruct absolute timestamp
-            var absoluteTime = baseTime;
-            var hasDeviceTimestamp = tickPeriod > 0;
-            if (hasDeviceTimestamp)
-            {
-                if (previousTimestamp == null)
-                {
-                    previousTimestamp = timestamp;
-                }
-                else
-                {
-                    var delta = SdCardTickDelta.Compute(previousTimestamp.Value, timestamp);
-                    elapsedSeconds += delta * tickPeriod;
-                    previousTimestamp = timestamp;
-                }
-
-                absoluteTime = baseTime.AddSeconds(elapsedSeconds);
-            }
+            var hasDeviceTimestamp = timestampReconstructor.HasDeviceClock;
+            var absoluteTime = hasDeviceTimestamp
+                ? timestampReconstructor.Advance(timestamp, baseTime)
+                : baseTime;
 
             yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, null)
             {
