@@ -7,16 +7,17 @@ namespace Daqifi.Core.Device.SdCard
 {
     /// <summary>
     /// The extra slice of a streaming device that <see cref="SdCardOperations"/> needs on top of
-    /// <see cref="IDeviceOperationHost"/>: the two SD transfer budgets and the low-space event.
+    /// <see cref="IDeviceOperationHost"/>: whether the link is USB, the two SD transfer budgets,
+    /// and the low-space event.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// These three members used to sit on <see cref="IDeviceOperationHost"/> itself, which made an
-    /// SD card — a peripheral only some devices have — part of the seam that <em>every</em>
-    /// operation collaborator works through. Channel control, device administration, network
-    /// configuration, diagnostics, the live-sample stream and the frame decoder all had to depend
-    /// on an interface that talked about SD downloads, and every test double for them had to stub
-    /// storage members it would never call.
+    /// These members used to sit on <see cref="IDeviceOperationHost"/> itself, which made an SD
+    /// card — a peripheral only some devices have — part of the seam that <em>every</em> operation
+    /// collaborator works through. Channel control, device administration, network configuration,
+    /// diagnostics, the live-sample stream and the frame decoder all had to depend on an interface
+    /// that talked about SD downloads and about which kind of cable the device was on, and every
+    /// test double for them had to stub members it would never call.
     /// </para>
     /// <para>
     /// Same arrangement as the seam it extends: every member forwards to a member
@@ -27,6 +28,16 @@ namespace Daqifi.Core.Device.SdCard
     /// </remarks>
     internal interface ISdCardOperationHost : IDeviceOperationHost
     {
+        /// <inheritdoc cref="DaqifiStreamingDevice.IsUsbConnection"/>
+        /// <remarks>
+        /// The SD operations are the only collaborator that acts on the transport's identity, which
+        /// is why it lives on this facet rather than on the shared seam. The card and the WiFi/LAN
+        /// module share one SPI bus, so whether the link is USB decides how each SD command prepares
+        /// that bus, what a silent transport means to a file transfer, and whether SD logging can be
+        /// started at all. Read through the device so a subclass's override of it still applies.
+        /// </remarks>
+        bool IsUsbConnection { get; }
+
         /// <summary>
         /// Overall wall-clock budget for one SD card download, read through the device so a
         /// subclass's override of it still applies.

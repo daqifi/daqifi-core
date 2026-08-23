@@ -12,8 +12,8 @@ namespace Daqifi.Core.Device.Internal
 {
     /// <summary>
     /// The slice of a streaming device that its operation collaborators work through: the
-    /// text-exchange and raw-capture primitives, the transport facts that change how a command must
-    /// be issued, and the few pieces of device state those operations own.
+    /// text-exchange and raw-capture primitives, and the few pieces of device state those
+    /// operations own.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -21,17 +21,18 @@ namespace Daqifi.Core.Device.Internal
     /// <c>virtual</c> on the device stay virtual through this seam. That matters more than it
     /// looks: subclasses — instrumented devices in the field, and the test doubles that stand in
     /// for hardware — override <see cref="ExecuteTextCommandAsync"/>,
-    /// <see cref="ExecuteRawCaptureAsync"/>, <see cref="Send"/> and <see cref="IsUsbConnection"/>
-    /// to intercept device I/O. Routing the collaborators through the device's own virtual members
+    /// <see cref="ExecuteRawCaptureAsync"/> and <see cref="Send"/> to intercept device I/O.
+    /// Routing the collaborators through the device's own virtual members
     /// keeps those overrides in the path; a collaborator that reached for the transport directly
     /// would silently step around every one of them.
     /// </para>
     /// <para>
     /// Kept to what <em>every</em> collaborator needs. A concern that belongs to one of them and to
-    /// a peripheral only some devices have — the SD card's transfer budgets and its low-space event
-    /// — lives on a facet that extends this seam
-    /// (<see cref="SdCard.ISdCardOperationHost"/>) instead, so channel control, administration,
-    /// network configuration and diagnostics never have to see it.
+    /// a peripheral only some devices have — the SD card's transfer budgets, its low-space event,
+    /// and the USB-versus-network transport fact that only its shared-SPI-bus handling turns on —
+    /// lives on a facet that extends this seam (<see cref="SdCard.ISdCardOperationHost"/>) instead,
+    /// so channel control, administration, network configuration and diagnostics never have to see
+    /// it.
     /// </para>
     /// <para>
     /// <see cref="DaqifiStreamingDevice"/> implements this explicitly, so none of it widens the
@@ -42,9 +43,6 @@ namespace Daqifi.Core.Device.Internal
     {
         /// <inheritdoc cref="DaqifiDevice.IsConnected"/>
         bool IsConnected { get; }
-
-        /// <inheritdoc cref="DaqifiStreamingDevice.IsUsbConnection"/>
-        bool IsUsbConnection { get; }
 
         /// <inheritdoc cref="DaqifiStreamingDevice.IsStreaming"/>
         /// <remarks>

@@ -484,7 +484,6 @@ public class NetworkConfigurationOperationsTests
         // Outside the network block's remit — reaching for any of these is a regression, not a
         // refinement.
         public void StartStreaming() => throw new NotSupportedException();
-        public bool IsUsbConnection => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();

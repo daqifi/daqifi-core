@@ -425,7 +425,6 @@ public class DeviceDiagnosticsOperationsTests
         }
 
         public bool IsConnected { get; set; } = true;
-        public bool IsUsbConnection { get; set; } = true;
         public bool IsStreaming { get; set; }
         public int StreamingFrequency { get; set; } = 100;
         public long ChannelStateVersion { get; set; }
