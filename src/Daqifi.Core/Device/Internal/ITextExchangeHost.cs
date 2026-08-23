@@ -139,5 +139,14 @@ namespace Daqifi.Core.Device.Internal
         /// down an exchange.
         /// </summary>
         ILogger Logger { get; }
+
+        /// <summary>
+        /// Called the instant the exchange has captured its stale-line boundary, before
+        /// <c>setupActionAsync</c> runs. A no-op on the real device; it exists so a test double can
+        /// release a line into the transport at precisely this point — the capture-to-send window
+        /// described in issue #553, which no delay-based or access-counted seam can reliably target
+        /// because it is normally sub-millisecond.
+        /// </summary>
+        void OnStaleLineBoundaryCaptured();
     }
 }

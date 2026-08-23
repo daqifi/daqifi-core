@@ -1989,6 +1989,17 @@ namespace Daqifi.Core.Device
         /// <inheritdoc />
         ILogger ITextExchangeHost.Logger => _logger;
 
+        /// <inheritdoc />
+        void ITextExchangeHost.OnStaleLineBoundaryCaptured() => OnStaleLineBoundaryCaptured();
+
+        /// <summary>
+        /// A no-op on the real device. Overridable for tests, mirroring <see cref="MaxDeferredSends"/> —
+        /// see <see cref="ITextExchangeHost.OnStaleLineBoundaryCaptured"/> for why this seam exists.
+        /// </summary>
+        internal virtual void OnStaleLineBoundaryCaptured()
+        {
+        }
+
         #endregion
 
         #region IOperationSerializationHost — the serializer's view of this device
