@@ -288,14 +288,7 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     /// <param name="sample">The sample to record.</param>
     public void SetActiveSample(IDataSample sample)
     {
-        ArgumentNullException.ThrowIfNull(sample);
-
-        lock (_lock)
-        {
-            _activeSample = sample;
-        }
-
-        SampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));
+        Internal.ActiveSampleAssignment.Apply(this, _lock, sample, s => _activeSample = s, SampleReceived);
     }
 
     /// <summary>Returns the channel name.</summary>
