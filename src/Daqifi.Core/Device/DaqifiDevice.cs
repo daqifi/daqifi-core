@@ -12,7 +12,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Threading;
@@ -2111,9 +2110,7 @@ namespace Daqifi.Core.Device
                 // error to capture. Parse the numeric prefix rather than
                 // substring-matching "No error" so a hypothetical error message
                 // containing that phrase can't be mistaken for the terminator.
-                var commaIndex = reply.IndexOf(',');
-                var codeSpan = commaIndex >= 0 ? reply.AsSpan(0, commaIndex).Trim() : reply.AsSpan().Trim();
-                if (int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out var code) && code == 0)
+                if (ScpiResponseClassifier.TryParseSystemErrorReplyCode(reply, out var code) && code == 0)
                 {
                     return popped;
                 }

@@ -109,6 +109,22 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Theory]
+        // The device reports the same error two ways: bare in a SYSTem:ERRor? reply, and prefixed
+        // with an ERROR token when it volunteers one alongside a command's output. Both readers now
+        // share one numeric-prefix parse, so this pins them to the same answer for the same code.
+        [InlineData("-200,\"Execution error\"", "**ERROR: -200,\"Execution error\"", -200)]
+        [InlineData("-113, \"Undefined header\"", "ERROR\t-113, \"Undefined header\"", -113)]
+        [InlineData("  0,\"No error\"  \r\n", "  ERROR: 0, \"No error\"  \r\n", 0)]
+        public void BothErrorFormsReadTheSameCode(string queueReply, string volunteeredLine, int expected)
+        {
+            Assert.True(ScpiResponseClassifier.TryParseSystemErrorReplyCode(queueReply, out var replyCode));
+            Assert.True(ScpiResponseClassifier.TryExtractErrorCode(volunteeredLine, out var volunteeredCode));
+
+            Assert.Equal(expected, replyCode);
+            Assert.Equal(expected, volunteeredCode);
+        }
+
+        [Theory]
         // The shape captured off the bench in #537: a partial protobuf frame welded onto the front
         // of the first reply line, with the real key and value still attached behind it.
         [InlineData("\u0008\uFFFD\\3\uFFFD\u0004\u0012\u0003\u0008\u0000TotalSamplesStreamed=203")]

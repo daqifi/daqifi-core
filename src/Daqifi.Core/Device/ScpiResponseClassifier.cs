@@ -226,7 +226,23 @@ namespace Daqifi.Core.Device
         /// <returns><c>true</c> if a numeric code was read; otherwise <c>false</c>.</returns>
         internal static bool TryParseSystemErrorReplyCode(string line, out int code)
         {
-            var trimmed = line.Trim();
+            return TryParseLeadingCode(line, out code);
+        }
+
+        /// <summary>
+        /// Reads the numeric code that prefixes a SCPI error payload: the text up to the first
+        /// comma (or the whole of it when there is no comma), trimmed, parsed as a culture-invariant
+        /// integer. Single-sourced here because both error forms the device produces end in this same
+        /// step — the bare <c>-200,"Execution error"</c> of a <c>SYSTem:ERRor?</c> reply and the
+        /// <c>**ERROR: -200,"Execution error"</c> the device volunteers — and they must agree on
+        /// what counts as a code.
+        /// </summary>
+        /// <param name="text">The error payload, with any leading <c>ERROR</c> token already stripped.</param>
+        /// <param name="code">The parsed code when the method returns <c>true</c>; otherwise 0.</param>
+        /// <returns><c>true</c> if a numeric code was read; otherwise <c>false</c>.</returns>
+        private static bool TryParseLeadingCode(ReadOnlySpan<char> text, out int code)
+        {
+            var trimmed = text.Trim();
             var commaIndex = trimmed.IndexOf(',');
             var codeSpan = (commaIndex >= 0 ? trimmed[..commaIndex] : trimmed).Trim();
             return int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
@@ -274,9 +290,7 @@ namespace Daqifi.Core.Device
 
             afterToken = afterToken.TrimStart(TokenDelimiters);
 
-            var commaIndex = afterToken.IndexOf(',');
-            var codeSpan = (commaIndex >= 0 ? afterToken[..commaIndex] : afterToken).Trim();
-            return int.TryParse(codeSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out code);
+            return TryParseLeadingCode(afterToken, out code);
         }
 
         /// <summary>
