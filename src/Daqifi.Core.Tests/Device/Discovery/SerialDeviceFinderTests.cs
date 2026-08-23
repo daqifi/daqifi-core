@@ -100,9 +100,9 @@ public class SerialDeviceFinderTests
     {
         var fakeProvider = new RecordingUsbLocationProvider(_ => "Port_#0001.Hub_#0001");
 
+        // As with the baud-rate overload above: the provider is a private field with no accessor,
+        // so "the constructor accepts it and does not throw" is the whole of what a test can say.
         using var finder = new SerialDeviceFinder(9600, usbPortDescriptorProvider: null, usbLocationProvider: fakeProvider);
-
-        Assert.NotNull(finder);
     }
 
     [Fact]

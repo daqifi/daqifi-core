@@ -259,8 +259,6 @@ public class LiveSampleCaptureTests
                     () => throw new DeviceNotConnectedException(),
                     CancellationToken.None)
                 .WaitAsync(Bound));
-
-        Assert.IsType<DeviceNotConnectedException>(ex);
     }
 
     // ------------------------------------------------------------------ helpers

@@ -826,7 +826,6 @@ namespace Daqifi.Core.Tests.Device.SdCard
             var ex = await Assert.ThrowsAsync<SdCardOperationException>(
                 () => device.DeleteSdCardFileAsync("locked.bin"));
 
-            Assert.IsNotType<SdCardListIncompleteException>(ex);
             Assert.Contains("-200", ex.Message);
             Assert.Empty(device.SdCardFiles);
         }
@@ -1096,8 +1095,6 @@ namespace Daqifi.Core.Tests.Device.SdCard
 
             var ex = await Assert.ThrowsAsync<SdCardFilesystemException>(
                 () => device.GetSdCardFilesAsync());
-
-            Assert.IsNotType<SdCardDirectoryNotFoundException>(ex);
         }
 
         [Fact]

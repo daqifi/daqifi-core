@@ -2004,7 +2004,6 @@ public class FirmwareUpdateServiceTests
 
             // The structural discriminator: the state itself, not the Operation progress string.
             Assert.Equal(FirmwareUpdateState.ReconnectingAfterFlash, exception.FailedState);
-            Assert.NotEqual(FirmwareUpdateState.Verifying, exception.FailedState);
             Assert.Contains(FirmwareUpdateState.ReconnectingAfterFlash, stateTransitions);
 
             // Guidance is keyed on the same discriminator, so a successful flash no longer tells
