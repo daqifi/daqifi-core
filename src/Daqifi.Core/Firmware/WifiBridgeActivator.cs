@@ -107,6 +107,12 @@ public static class WifiBridgeActivator
     private static void RunModeChangeSequence(string portName, IOutboundMessage<string> modeCommand, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(portName);
+
+        // Guarded even though both current callers pass a non-null literal: this method is meant to
+        // be the one place a future direction or step gets added, and a null here would otherwise
+        // surface as an NRE inside WriteCommand's GetBytes() with the port already open.
+        ArgumentNullException.ThrowIfNull(modeCommand);
+
         cancellationToken.ThrowIfCancellationRequested();
 
         using var transport = new SerialStreamTransport(portName);
