@@ -222,7 +222,6 @@ namespace Daqifi.Core.Tests.Device
             Assert.Equal(1, ai0.OutOfOrderSampleCount);
             Assert.Equal(TimeSpan.FromMilliseconds(1), ai0.MinSampleInterval);
             Assert.Equal(TimeSpan.FromMilliseconds(2), ai0.MaxSampleInterval);
-            Assert.True(ai0.MinSampleInterval >= TimeSpan.Zero, "a backwards step must not be reported as a gap");
         }
 
         [Fact]
@@ -691,8 +690,6 @@ namespace Daqifi.Core.Tests.Device
             // 1.0 V -> 2.0 PSI (the MAXIMUM); 2.0 V -> -1.0 PSI (the MINIMUM).
             Assert.Equal(-1.0, channelStats.MinValue);
             Assert.Equal(2.0, channelStats.MaxValue);
-            Assert.True(channelStats.MinValue < channelStats.MaxValue,
-                "an inverting scaling must not leave the extremes transposed");
         }
 
         [Fact]
