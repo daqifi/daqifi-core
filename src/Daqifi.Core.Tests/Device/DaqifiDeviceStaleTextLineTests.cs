@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using System.Diagnostics;
 using System.Text;
 
 namespace Daqifi.Core.Tests.Device;
@@ -99,6 +100,41 @@ public class DaqifiDeviceStaleTextLineTests
         var lines = await device.CallExecuteTextCommandAsync(() => Thread.Sleep(100));
 
         Assert.Contains(lines, l => l.Contains("No error"));
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_DoesNotStallWhenTheReplyArrivesBeforeTheWaitLoopStarts()
+    {
+        // Regression for #592: the wait loop's hasReceivedAny flag only flipped on a line-count
+        // increase OBSERVED INSIDE the loop, so a reply already sitting in collectedLines by the
+        // time the loop took its first sample was invisible to it -- the exchange then sat out
+        // the full responseTimeoutMs instead of the short completionTimeoutMs, even though
+        // nothing was actually missing. The content line is released at the stale-line boundary
+        // (before the setup action even runs), and the setup action then sleeps well past any
+        // reasonable read-thread latency, so the reply is guaranteed to already be in
+        // collectedLines by the time the wait loop takes its first sample -- deterministically
+        // reproducing the "reply beat the loop" case a fast device produces on real hardware.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleBoundaryHookTestableDevice(
+            "Already-Answered Device", transport, onStaleLineBoundaryCaptured: () => transport.Release());
+
+        device.Connect();
+
+        var sw = Stopwatch.StartNew();
+        var lines = await device.CallExecuteTextCommandAsync(
+            () => Thread.Sleep(100),
+            responseTimeoutMs: 3000,
+            completionTimeoutMs: 100);
+        sw.Stop();
+
+        Assert.Contains(lines, l => l.Contains("No error"));
+        // Well short of responseTimeoutMs (3000ms): without the fix this reliably took >=3000ms,
+        // because hasReceivedAny never flipped and phase 1's full timeout ran out.
+        Assert.True(
+            sw.ElapsedMilliseconds < 2000,
+            $"Expected the exchange to finish near completionTimeoutMs (100ms), took {sw.ElapsedMilliseconds}ms.");
 
         device.Disconnect();
     }
@@ -413,12 +449,15 @@ public class DaqifiDeviceStaleTextLineTests
         internal override void OnStaleLineBoundaryCaptured() => _onStaleLineBoundaryCaptured();
 
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
-            Action setupAction, bool keepBlankLines = false)
+            Action setupAction,
+            bool keepBlankLines = false,
+            int responseTimeoutMs = 500,
+            int completionTimeoutMs = 150)
         {
             return ExecuteTextCommandAsync(
                 setupAction,
-                responseTimeoutMs: 500,
-                completionTimeoutMs: 150,
+                responseTimeoutMs: responseTimeoutMs,
+                completionTimeoutMs: completionTimeoutMs,
                 keepBlankLines: keepBlankLines);
         }
     }

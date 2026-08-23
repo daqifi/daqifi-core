@@ -514,7 +514,22 @@ namespace Daqifi.Core.Device.Internal
                     var lastMessageTime = DateTime.UtcNow;
                     var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
                     var startTime = DateTime.UtcNow;
-                    var hasReceivedAny = false;
+
+                    // Seeded from staleLineCount, not sentBoundaryLineCount (issue #592): a reply
+                    // can land between sentBoundaryLineCount being captured just above and this
+                    // loop's first poll -- single-digit milliseconds on a real device, but enough.
+                    // Without this seed, hasReceivedAny only flips on a count *increase observed
+                    // inside the loop*, so a reply that already arrived by the time the loop starts
+                    // is invisible to it: the exchange then sits out the full responseTimeoutMs
+                    // instead of the short completionTimeoutMs -- an ~8x stall on some diagnostics
+                    // reads, though never a wrong answer, since maxWait still bounds collection
+                    // either way. sentBoundaryLineCount would not work here -- it is captured
+                    // immediately above, so comparing the count to itself always yields false.
+                    var hasReceivedAny = CollectedLineCount() > staleLineCount;
+                    if (hasReceivedAny)
+                    {
+                        Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response already present entering wait loop"));
+                    }
 
                     while (DateTime.UtcNow - startTime < maxWait)
                     {
