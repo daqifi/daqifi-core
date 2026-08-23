@@ -50,31 +50,11 @@ public sealed class SdCardCsvFileParser
 
         options ??= new SdCardParseOptions();
 
-        var source = SdCardParseSource.TryCreate(fileStream);
-        if (source != null)
-        {
-            return await BuildSessionAsync(
-                token => SdCardTextLineReader.ReadLinesAsync(source, token),
-                () => source.TotalBytes,
-                fileName,
-                options,
-                ct).ConfigureAwait(false);
-        }
-
-        // A forward-only stream can only be read once, so it has to be read up front.
-        // Callers that want the streaming parse hand the parser a seekable stream or a path.
-        var lines = new List<SdCardLogLine>();
-        await foreach (var line in SdCardTextLineReader.ReadLinesAsync(fileStream, ct).ConfigureAwait(false))
-        {
-            lines.Add(line);
-        }
-
-        return await BuildSessionAsync(
-            _ => SdCardTextLineReader.ToAsyncEnumerable(lines),
-            () => lines.Count > 0 ? lines[^1].BytesRead : 0,
-            fileName,
-            options,
-            ct).ConfigureAwait(false);
+        return await SdCardTextFileSource.ParseAsync(
+            fileStream,
+            ct,
+            (openLines, totalBytes, token) => BuildSessionAsync(openLines, totalBytes, fileName, options, token))
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -97,14 +77,12 @@ public sealed class SdCardCsvFileParser
 
         options ??= new SdCardParseOptions();
 
-        var source = SdCardParseSource.ForFile(filePath, options.BufferSize);
-
-        return await BuildSessionAsync(
-            token => SdCardTextLineReader.ReadLinesAsync(source, token),
-            () => source.TotalBytes,
-            Path.GetFileName(filePath),
-            options,
-            ct).ConfigureAwait(false);
+        return await SdCardTextFileSource.ParseFileAsync(
+            filePath,
+            options.BufferSize,
+            ct,
+            (openLines, totalBytes, token) => BuildSessionAsync(openLines, totalBytes, Path.GetFileName(filePath), options, token))
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -130,7 +108,7 @@ public sealed class SdCardCsvFileParser
                 fileName,
                 fileCreatedDate,
                 null,
-                EmptySamples());
+                SdCardTextFileSource.EmptySamples());
         }
 
         var config = SdCardConfigurationMerge.Merge(header.Config, options.ConfigurationOverride);
@@ -149,7 +127,7 @@ public sealed class SdCardCsvFileParser
                 fileName,
                 fileCreatedDate,
                 config,
-                EmptySamples())
+                SdCardTextFileSource.EmptySamples())
             {
                 TimestampFrequency = timestampFrequency,
                 TimestampFrequencySource = timestampSource
@@ -510,10 +488,4 @@ public sealed class SdCardCsvFileParser
         }
     }
 
-#pragma warning disable CS1998 // Async iterator: yield break requires async; no real awaits.
-    private static async IAsyncEnumerable<SdCardLogEntry> EmptySamples()
-    {
-        yield break;
-    }
-#pragma warning restore CS1998
 }
