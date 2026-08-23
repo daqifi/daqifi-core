@@ -117,7 +117,7 @@ namespace Daqifi.Core.Device.Internal
                 }
             }
 
-            var lastScpiError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
+            var lastScpiError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
             throw new ScpiInitializationErrorException(
                 "Device returned a SCPI error while setting stream interface to USB.",
                 lines,

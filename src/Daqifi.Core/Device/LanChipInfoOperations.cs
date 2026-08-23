@@ -44,10 +44,10 @@ namespace Daqifi.Core.Device
             // return this specific SCPI error instead of JSON. Surface it distinctly
             // so the caller's retry loop can react (kick LAN:APPLY) instead of just
             // waiting out a blind delay.
-            var errorLine = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine);
+            var errorLine = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
             if (errorLine != null && ScpiResponseClassifier.TryExtractErrorCode(errorLine, out var errorCode) && errorCode == -200)
             {
-                throw new LanNotInitializedException(errorLine.Trim());
+                throw new LanNotInitializedException(errorLine);
             }
 
             return null;

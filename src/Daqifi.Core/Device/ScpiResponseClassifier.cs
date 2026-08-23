@@ -64,6 +64,18 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Returns the last genuine SCPI-formatted error line in the response, trimmed, or
+        /// <c>null</c> if none is present. Several callers translate a device response into a
+        /// typed exception and need exactly this line — the most recent thing the device said
+        /// that is shaped like a real SCPI error, per <see cref="IsScpiErrorLine"/> — so this
+        /// centralizes the "get it, trimmed" step they all otherwise repeated identically.
+        /// </summary>
+        internal static string? GetLastScpiErrorLine(IReadOnlyList<string> lines)
+        {
+            return lines.LastOrDefault(IsScpiErrorLine)?.Trim();
+        }
+
+        /// <summary>
         /// Returns true when the response contains at least one non-empty line and every non-empty
         /// line is an error/status line per <see cref="IsErrorResponseLine"/> — i.e. the device
         /// answered, and had nothing but a complaint to say. A response with no lines at all is not
