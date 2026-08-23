@@ -106,27 +106,6 @@ public class WiFiDeviceFinderTests
         await Assert.ThrowsAsync<ObjectDisposedException>(() => finder.DiscoverAsync());
     }
 
-    [Fact]
-    public void WiFiDeviceFinder_DefaultConstructor_UsesPort30303()
-    {
-        // Arrange & Act
-        using var finder = new WiFiDeviceFinder();
-
-        // Assert
-        // Should not throw and should use default port 30303
-        Assert.NotNull(finder);
-    }
-
-    [Fact]
-    public void WiFiDeviceFinder_CustomPort_AcceptsCustomPort()
-    {
-        // Arrange & Act
-        using var finder = new WiFiDeviceFinder(12345);
-
-        // Assert
-        Assert.NotNull(finder);
-    }
-
     // Virtual / tunnel adapter filter — issue #179.
     // WSL2 mirrored networking, Hyper-V vEthernet, VPN/TAP adapters frequently share a /24
     // subnet with the real WiFi/Ethernet NIC and cause Windows routing to pick the wrong egress

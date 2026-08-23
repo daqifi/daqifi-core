@@ -99,26 +99,6 @@ public class SerialDeviceFinderTests
     }
 
     [Fact]
-    public void SerialDeviceFinder_DefaultConstructor_Uses9600Baud()
-    {
-        // Arrange & Act
-        using var finder = new SerialDeviceFinder();
-
-        // Assert
-        Assert.NotNull(finder);
-    }
-
-    [Fact]
-    public void SerialDeviceFinder_CustomBaudRate_AcceptsCustomBaudRate()
-    {
-        // Arrange & Act
-        using var finder = new SerialDeviceFinder(9600);
-
-        // Assert
-        Assert.NotNull(finder);
-    }
-
-    [Fact]
     public void SerialDeviceFinder_CustomUsbLocationProvider_AcceptsProvider()
     {
         var fakeProvider = new RecordingUsbLocationProvider(_ => "Port_#0001.Hub_#0001");

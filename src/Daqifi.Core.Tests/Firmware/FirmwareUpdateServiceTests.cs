@@ -3532,8 +3532,8 @@ public class FirmwareUpdateServiceTests
 
         var status = await service.CheckWifiFirmwareStatusAsync(device);
 
+        // Assert.False on a bool? already rejects null, so this alone pins "false, not unknown".
         Assert.False(status.MeetsMinimumSupportedVersion);
-        Assert.NotNull(status.MeetsMinimumSupportedVersion);
     }
 
     [Fact]
