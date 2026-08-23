@@ -525,7 +525,12 @@ public class ScpiMessageProducerTests
     [InlineData(double.NegativeInfinity)]
     public void SetAdcCalibrationSlope_WithNonFiniteValue_Throws(double calM)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationSlope(0, calM));
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationSlope(0, calM));
+
+        // The finite check is shared with the other double-valued setters, so pin the
+        // parameter name and wording this call site is responsible for supplying.
+        Assert.Equal("calM", ex.ParamName);
+        Assert.Contains("Calibration slope must be a finite number.", ex.Message);
     }
 
     [Fact]
@@ -564,7 +569,12 @@ public class ScpiMessageProducerTests
     [InlineData(double.NegativeInfinity)]
     public void SetAdcCalibrationOffset_WithNonFiniteValue_Throws(double calB)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationOffset(0, calB));
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationOffset(0, calB));
+
+        // The finite check is shared with the other double-valued setters, so pin the
+        // parameter name and wording this call site is responsible for supplying.
+        Assert.Equal("calB", ex.ParamName);
+        Assert.Contains("Calibration offset must be a finite number.", ex.Message);
     }
 
     [Fact]
@@ -846,7 +856,12 @@ public class ScpiMessageProducerTests
     [InlineData(double.NegativeInfinity)]
     public void SetAnalogOutputVoltage_WithNonFiniteVoltage_Throws(double voltage)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAnalogOutputVoltage(0, voltage));
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAnalogOutputVoltage(0, voltage));
+
+        // The finite check is shared with the other double-valued setters, so pin the
+        // parameter name and wording this call site is responsible for supplying.
+        Assert.Equal("voltage", ex.ParamName);
+        Assert.Contains("Voltage must be a finite number.", ex.Message);
     }
 
     [Fact]

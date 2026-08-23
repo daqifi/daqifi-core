@@ -663,11 +663,7 @@ public class ScpiMessageProducer
     {
         ValidateChannel(channel);
 
-        if (!double.IsFinite(voltage))
-        {
-            // NaN/Infinity would render as "NaN"/"Infinity" — tokens the firmware cannot parse.
-            throw new ArgumentOutOfRangeException(nameof(voltage), voltage, "Voltage must be a finite number.");
-        }
+        RequireFinite(voltage, nameof(voltage), "Voltage");
 
         return new ScpiMessage($"SOURce:VOLTage:LEVel {channel},{voltage.ToString(CultureInfo.InvariantCulture)}");
     }
@@ -753,11 +749,7 @@ public class ScpiMessageProducer
     {
         ValidateChannel(channel);
 
-        if (!double.IsFinite(calM))
-        {
-            // NaN/Infinity would render as "NaN"/"Infinity" — tokens the firmware cannot parse.
-            throw new ArgumentOutOfRangeException(nameof(calM), calM, "Calibration slope must be a finite number.");
-        }
+        RequireFinite(calM, nameof(calM), "Calibration slope");
 
         return new ScpiMessage($"CONFigure:ADC:chanCALM {channel},{calM.ToString(CultureInfo.InvariantCulture)}");
     }
@@ -779,11 +771,7 @@ public class ScpiMessageProducer
     {
         ValidateChannel(channel);
 
-        if (!double.IsFinite(calB))
-        {
-            // NaN/Infinity would render as "NaN"/"Infinity" — tokens the firmware cannot parse.
-            throw new ArgumentOutOfRangeException(nameof(calB), calB, "Calibration offset must be a finite number.");
-        }
+        RequireFinite(calB, nameof(calB), "Calibration offset");
 
         return new ScpiMessage($"CONFigure:ADC:chanCALB {channel},{calB.ToString(CultureInfo.InvariantCulture)}");
     }
@@ -831,6 +819,19 @@ public class ScpiMessageProducer
         if (channel < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
+        }
+    }
+
+    // The double-valued setters render their argument straight into the command text,
+    // so a non-finite value would reach the firmware as "NaN"/"Infinity" — tokens it
+    // cannot parse. Kept in one place so the rule (and its message) cannot drift
+    // between commands. The caller supplies paramName and description so the thrown
+    // exception still names that caller's own parameter, as before.
+    private static void RequireFinite(double value, string paramName, string description)
+    {
+        if (!double.IsFinite(value))
+        {
+            throw new ArgumentOutOfRangeException(paramName, value, $"{description} must be a finite number.");
         }
     }
 
