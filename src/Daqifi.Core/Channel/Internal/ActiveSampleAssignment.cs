@@ -1,43 +1,37 @@
 namespace Daqifi.Core.Channel.Internal;
 
 /// <summary>
-/// Shared implementation of the "set the active sample under a lock, then raise
-/// <see cref="IChannel.SampleReceived"/> outside it" sequence that
-/// <see cref="AnalogChannel"/>, <see cref="DigitalChannel"/>, and <see cref="AnalogOutputChannel"/>
-/// each implement identically for their <c>SetActiveSample(IDataSample)</c> overload.
+/// Shared implementation of the "validate the sample, then store it under the channel's own lock"
+/// half of the sequence that <see cref="AnalogChannel"/>, <see cref="DigitalChannel"/>, and
+/// <see cref="AnalogOutputChannel"/> each implement identically for their
+/// <c>SetActiveSample(IDataSample)</c> overload.
 /// </summary>
 /// <remarks>
-/// The event is raised outside the lock so a subscriber that reads back from the channel (e.g. the
-/// owning device's handler) cannot self-deadlock against a concurrent reader/writer of the same
-/// lock; the null-checked, already-built sample passed to the handler is what was stored, so a
-/// concurrent unsubscribe can't tear the notification.
+/// Deliberately does not also raise <c>SampleReceived</c>: that has to happen outside the lock (so a
+/// subscriber that reads back from the channel can't self-deadlock), and — just as importantly — the
+/// event field has to be read fresh at that point rather than snapshotted into a delegate parameter
+/// before the lock is even taken, so each channel raises it itself immediately after this returns.
+/// Taking the backing field by <c>ref</c> instead of via a store delegate also keeps this
+/// allocation-free, which matters on the streaming decode hot path that calls
+/// <c>SetActiveSample</c> once per enabled channel per frame.
 /// </remarks>
 internal static class ActiveSampleAssignment
 {
     /// <summary>
-    /// Validates <paramref name="sample"/>, stores it via <paramref name="store"/> under
-    /// <paramref name="syncLock"/>, then invokes <paramref name="handler"/> (if any) outside the lock.
+    /// Validates <paramref name="sample"/> and stores it into <paramref name="activeSample"/> under
+    /// <paramref name="syncLock"/>.
     /// </summary>
-    /// <param name="channel">The channel to report as the event's <see cref="SampleReceivedEventArgs.Channel"/>.</param>
     /// <param name="syncLock">The lock guarding the channel's active-sample field.</param>
     /// <param name="sample">The sample to store; must not be <see langword="null"/>.</param>
-    /// <param name="store">Stores <paramref name="sample"/> into the channel's backing field.</param>
-    /// <param name="handler">The channel's <c>SampleReceived</c> subscriber list, or <see langword="null"/>.</param>
+    /// <param name="activeSample">The channel's backing field.</param>
     /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
-    public static void Apply(
-        IChannel channel,
-        object syncLock,
-        IDataSample sample,
-        Action<IDataSample> store,
-        EventHandler<SampleReceivedEventArgs>? handler)
+    public static void StoreUnderLock(object syncLock, IDataSample sample, ref IDataSample? activeSample)
     {
         ArgumentNullException.ThrowIfNull(sample);
 
         lock (syncLock)
         {
-            store(sample);
+            activeSample = sample;
         }
-
-        handler?.Invoke(channel, new SampleReceivedEventArgs(channel, sample));
     }
 }
