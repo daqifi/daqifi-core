@@ -76,14 +76,12 @@ public sealed class TimestampResult
     /// Creates a result for the first message in a session.
     /// </summary>
     /// <param name="timestamp">The current system timestamp.</param>
-    /// <param name="deviceTimestamp">The device timestamp.</param>
     /// <param name="usedFallbackTickPeriod">
     /// Whether the fallback tick period was used because the device had no configured frequency.
     /// </param>
     /// <returns>A new <see cref="TimestampResult"/> for the first message.</returns>
     internal static TimestampResult CreateFirstMessage(
         DateTime timestamp,
-        uint deviceTimestamp,
         bool usedFallbackTickPeriod = false)
     {
         return new TimestampResult(

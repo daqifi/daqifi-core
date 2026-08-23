@@ -159,21 +159,6 @@ namespace Daqifi.Core.Tests.Channel
         }
 
         [Fact]
-        public void ClearPending_DropsTheStagedValueWithoutDrivingIt()
-        {
-            var channel = new AnalogOutputChannel(0);
-            var samples = Subscribe(channel);
-
-            channel.Stage(4.0);
-            channel.ClearPending();
-
-            Assert.Null(channel.PendingVoltage);
-            Assert.Null(channel.OutputVoltage);
-            Assert.False(channel.Latch(DateTime.Now));
-            Assert.Empty(samples);
-        }
-
-        [Fact]
         public void SetOutputVoltage_RecordsTheValueWithoutStaging()
         {
             var channel = new AnalogOutputChannel(0);

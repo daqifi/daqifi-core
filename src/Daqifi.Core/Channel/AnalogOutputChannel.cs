@@ -253,18 +253,6 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     }
 
     /// <summary>
-    /// Discards a staged voltage without driving it — used when the device rejects or never
-    /// receives the latch.
-    /// </summary>
-    internal void ClearPending()
-    {
-        lock (_lock)
-        {
-            _pendingVoltage = null;
-        }
-    }
-
-    /// <summary>
     /// Records a voltage as the value now driven on this channel, bypassing the staging step.
     /// Used by the device readback, which reports what the hardware currently holds.
     /// </summary>

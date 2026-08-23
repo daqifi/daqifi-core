@@ -151,7 +151,7 @@ public sealed class TimestampProcessor : ITimestampProcessor
                 state.PreviousDeviceTimestamp = deviceTimestamp;
                 state.HasPreviousTimestamp = true;
 
-                return TimestampResult.CreateFirstMessage(now, deviceTimestamp, usedFallbackTickPeriod);
+                return TimestampResult.CreateFirstMessage(now, usedFallbackTickPeriod);
             }
 
             // Calculate clock cycles between messages, handling rollover
