@@ -274,23 +274,33 @@ public class SdCardConfigurationMergeTests
     [Fact]
     public void Merge_WhenBothSidesAreBlank_ReportsTheGapAsNull()
     {
-        // Arrange — nothing to fall back on: the device snapshot is as silent as the file.
+        // Arrange — nothing to fall back on: the device snapshot is as silent as the file. Blank
+        // rather than null on the override side is the realistic shape, because DeviceMetadata
+        // initializes its strings to string.Empty, so a device that has not reported a firmware
+        // revision yet hands FromDevice an empty one.
         var parsed = Empty() with { DeviceSerialNumber = "", DevicePartNumber = "  " };
+        var overrideConfig = Empty() with
+        {
+            DeviceSerialNumber = "",
+            DevicePartNumber = "",
+            FirmwareRevision = ""
+        };
 
         // Act
-        var merged = SdCardConfigurationMerge.Merge(parsed, Empty());
+        var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
         // Assert — a blank left over from an empty header is normalized to the record's documented
         // "not present" value, so callers have one absence to test for instead of two.
         Assert.Null(merged.DeviceSerialNumber);
         Assert.Null(merged.DevicePartNumber);
+        Assert.Null(merged.FirmwareRevision);
     }
 
     [Fact]
     public void Merge_WhenOnlyTheOverrideIsBlank_KeepsTheFileValue()
     {
-        // Arrange — the reverse direction: a blank on the override side is not a value either,
-        // and it must not be mistaken for one now that blanks are meaningful.
+        // Arrange — the reverse direction: a blank on the override side is not a value either, and
+        // a device whose metadata has not been populated yet supplies exactly that.
         var parsed = Empty() with { DeviceSerialNumber = "SN-FILE", DevicePartNumber = "PN-FILE" };
         var overrideConfig = Empty() with { DeviceSerialNumber = "", DevicePartNumber = "   " };
 

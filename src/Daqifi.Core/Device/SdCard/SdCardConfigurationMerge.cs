@@ -21,6 +21,10 @@ internal static class SdCardConfigurationMerge
     /// <see cref="string.Empty"/>, not null — and an empty label carries no more information than
     /// an absent one, so it must not shadow the real serial a connected device reported. The
     /// binary parser's own merge already treats an empty part number or firmware revision this way.
+    /// The same test applies to the override side, where blanks are if anything more common:
+    /// <see cref="DeviceMetadata"/> initializes its metadata strings to <see cref="string.Empty"/>,
+    /// so a device that has not reported a firmware revision yet carries one. The merged result
+    /// then reports a field nobody stated as null, the value the record documents for absent.
     /// <para>
     /// The list fields keep the plain null test. Both text parsers hand those in as literal null,
     /// so an empty-but-non-null list cannot reach here, and whether an explicitly empty channel
@@ -40,9 +44,9 @@ internal static class SdCardConfigurationMerge
             AnalogPortCount: parsed.AnalogPortCount > 0 ? parsed.AnalogPortCount : overrideConfig.AnalogPortCount,
             DigitalPortCount: parsed.DigitalPortCount > 0 ? parsed.DigitalPortCount : overrideConfig.DigitalPortCount,
             TimestampFrequency: parsed.TimestampFrequency > 0 ? parsed.TimestampFrequency : overrideConfig.TimestampFrequency,
-            DeviceSerialNumber: Stated(parsed.DeviceSerialNumber) ?? overrideConfig.DeviceSerialNumber,
-            DevicePartNumber: Stated(parsed.DevicePartNumber) ?? overrideConfig.DevicePartNumber,
-            FirmwareRevision: Stated(parsed.FirmwareRevision) ?? overrideConfig.FirmwareRevision,
+            DeviceSerialNumber: Stated(parsed.DeviceSerialNumber) ?? Stated(overrideConfig.DeviceSerialNumber),
+            DevicePartNumber: Stated(parsed.DevicePartNumber) ?? Stated(overrideConfig.DevicePartNumber),
+            FirmwareRevision: Stated(parsed.FirmwareRevision) ?? Stated(overrideConfig.FirmwareRevision),
             CalibrationValues: parsed.CalibrationValues ?? overrideConfig.CalibrationValues,
             Resolution: parsed.Resolution > 0 ? parsed.Resolution : overrideConfig.Resolution,
             PortRange: parsed.PortRange ?? overrideConfig.PortRange,
