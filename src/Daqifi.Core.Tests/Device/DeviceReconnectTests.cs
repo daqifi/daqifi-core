@@ -1624,7 +1624,7 @@ public class DeviceReconnectTests
             EnterLifecycle();
             try
             {
-                ConnectCore(retryOptions);
+                ConnectCore();
             }
             finally
             {
@@ -1634,7 +1634,7 @@ public class DeviceReconnectTests
             return Task.CompletedTask;
         }
 
-        private void ConnectCore(ConnectionRetryOptions? retryOptions)
+        private void ConnectCore()
         {
             // Outside the lock: a test holding the gate must still be able to inspect the
             // transport and drive the device while the connect is parked here.
