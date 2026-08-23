@@ -54,26 +54,14 @@ public static class Pic32BootloaderMessageConsumer
     /// </summary>
     /// <param name="data">The raw response bytes.</param>
     /// <returns>True if the response is a valid program flash acknowledgment.</returns>
-    public static bool DecodeProgramFlashResponse(byte[] data)
-    {
-        if (data.Length < 2) return false;
-        if (data[0] != StartOfHeader) return false;
-
-        return data[1] == ProgramFlashCommand;
-    }
+    public static bool DecodeProgramFlashResponse(byte[] data) => IsAckFor(data, ProgramFlashCommand);
 
     /// <summary>
     /// Decodes an erase flash acknowledgment response.
     /// </summary>
     /// <param name="data">The raw response bytes.</param>
     /// <returns>True if the response is a valid erase flash acknowledgment.</returns>
-    public static bool DecodeEraseFlashResponse(byte[] data)
-    {
-        if (data.Length < 2) return false;
-        if (data[0] != StartOfHeader) return false;
-
-        return data[1] == EraseFlashCommand;
-    }
+    public static bool DecodeEraseFlashResponse(byte[] data) => IsAckFor(data, EraseFlashCommand);
 
     /// <summary>
     /// Decodes a <c>READ_CRC</c> response and returns the flash CRC-16 the
@@ -156,5 +144,27 @@ public static class Pic32BootloaderMessageConsumer
         }
 
         return flashCrc;
+    }
+
+    /// <summary>
+    /// Matches a bare acknowledgment frame &#8212; <c>SOH &lt;opcode&gt;</c>, with no payload to
+    /// unescape. ERASE_FLASH and PROGRAM_FLASH are both acknowledged this way, so the only thing
+    /// that tells the two acks apart is which opcode the bootloader echoed back.
+    /// </summary>
+    /// <param name="data">The raw, framed response bytes.</param>
+    /// <param name="command">The opcode the acknowledgment is expected to echo.</param>
+    /// <returns>True if <paramref name="data"/> acknowledges <paramref name="command"/>.</returns>
+    /// <remarks>
+    /// Deliberately not null-guarded. Both callers are public methods that have always thrown
+    /// <see cref="System.NullReferenceException"/> on a null <paramref name="data"/>, and adding a
+    /// guard here would change that observable behavior. The null-handling asymmetry between the
+    /// decoders on this type is tracked separately, not settled by this extraction.
+    /// </remarks>
+    private static bool IsAckFor(byte[] data, byte command)
+    {
+        if (data.Length < 2) return false;
+        if (data[0] != StartOfHeader) return false;
+
+        return data[1] == command;
     }
 }

@@ -180,6 +180,26 @@ public class Pic32BootloaderMessageConsumerTests
 
     #endregion
 
+    #region Shared acknowledgment framing
+
+    // The two ack decoders read one framing rule and differ only in which opcode they accept.
+    // Nothing above pins the shared half: each decoder's rejection cases were asserted on their
+    // own, so the two rules could have drifted apart without a test noticing. This asserts the
+    // frames one decoder rejects are rejected by the other as well.
+    [Theory]
+    [InlineData(new byte[] { })]              // empty
+    [InlineData(new byte[] { SOH })]          // SOH only, one byte short of an ack
+    [InlineData(new byte[] { 0x00, 0x02 })]   // erase opcode, but not SOH-framed
+    [InlineData(new byte[] { 0x00, 0x03 })]   // program opcode, but not SOH-framed
+    [InlineData(new byte[] { SOH, 0xFF })]    // well framed, but not an opcode either one answers
+    public void BadlyFramedAcknowledgment_IsRejectedByBothAckDecoders(byte[] response)
+    {
+        Assert.False(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(response));
+        Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(response));
+    }
+
+    #endregion
+
     #region DecodeReadCrcResponse
 
     // Mirrors the firmware's response framing: content = [0x04, crcLo, crcHi];
