@@ -140,6 +140,41 @@ public class DaqifiDeviceStaleTextLineTests
     }
 
     [Fact]
+    public async Task ExecuteTextCommand_DoesNotExitEarlyWhenOnlyAStaleBlankPrecedesTheRealResponse()
+    {
+        // Regression: hasReceivedAny must not be seeded true by a blank that arrived in the
+        // capture-to-send window (issue #553) and will be discarded as stale by the projection
+        // below (index < sentBoundaryLineCount). A raw line-count comparison against
+        // staleLineCount cannot tell that blank apart from real evidence, and would flip the wait
+        // loop into phase 2's short completionTimeoutMs immediately -- ending collection before
+        // the real response (released deliberately late here) has a chance to arrive, and
+        // returning empty for a device that did, in fact, answer.
+        using var transport = new TwoStageReleaseTransport(staleLine: "\r\n", contentLine: "0,\"No error\"\r\n");
+        using var device = new StaleBoundaryHookTestableDevice(
+            "Stale-Then-Real Device", transport, onStaleLineBoundaryCaptured: () => transport.ReleaseStale());
+
+        device.Connect();
+
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                // Give the reader thread time to actually collect the stale blank released by the
+                // boundary hook above before the command is considered sent, then release the real
+                // response after this setup action has already returned -- squarely inside the
+                // wait loop's window, and after phase 2's short timeout would have already fired
+                // on the bug's seed.
+                Thread.Sleep(50);
+                _ = Task.Delay(150).ContinueWith(_ => transport.ReleaseContent());
+            },
+            responseTimeoutMs: 1000,
+            completionTimeoutMs: 100);
+
+        Assert.Contains(lines, l => l.Contains("No error"));
+
+        device.Disconnect();
+    }
+
+    [Fact]
     public async Task ExecuteTextCommandWithPrepare_RunsPrepareBeforeTheSetupAction()
     {
         using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
@@ -663,6 +698,146 @@ public class DaqifiDeviceStaleTextLineTests
                         var toCopy = Math.Min(count, _line.Length - _position);
                         Array.Copy(_line, _position, buffer, offset, toCopy);
                         _position += toCopy;
+                        return toCopy;
+                    }
+                }
+
+                // Idle link: nothing to hand over, and no busy-spin in the reader thread.
+                Thread.Sleep(10);
+                return 0;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) { }
+        }
+    }
+
+    /// <summary>
+    /// Transport whose stream withholds two canned lines, released independently -- a "stale"
+    /// line and a "content" line -- so a test can put one in flight before the other without
+    /// either racing the reader thread against the other's release.
+    /// </summary>
+    private sealed class TwoStageReleaseTransport : IStreamTransport
+    {
+        private readonly TwoStageStream _stream;
+        private bool _isConnected;
+        private bool _disposed;
+
+        public TwoStageReleaseTransport(string staleLine, string contentLine)
+        {
+            _stream = new TwoStageStream(staleLine, contentLine);
+        }
+
+        public Stream Stream
+        {
+            get
+            {
+                if (_disposed) throw new ObjectDisposedException(nameof(TwoStageReleaseTransport));
+                return _stream;
+            }
+        }
+
+        public bool IsConnected => _isConnected && !_disposed;
+
+        public string ConnectionInfo => _isConnected ? "TwoStage: Connected" : "TwoStage: Disconnected";
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        /// <summary>Releases the stale line into the stream immediately.</summary>
+        public void ReleaseStale() => _stream.ReleaseStale();
+
+        /// <summary>Releases the content line into the stream immediately.</summary>
+        public void ReleaseContent() => _stream.ReleaseContent();
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(TwoStageReleaseTransport));
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public void Connect() => ConnectAsync().Wait();
+
+        public void Disconnect() => DisconnectAsync().Wait();
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _isConnected = false;
+            _disposed = true;
+        }
+
+        private sealed class TwoStageStream : Stream
+        {
+            private readonly byte[] _stale;
+            private readonly byte[] _content;
+            private readonly object _gate = new();
+            private bool _staleReleased;
+            private bool _contentReleased;
+            private int _stalePosition;
+            private int _contentPosition;
+
+            public TwoStageStream(string staleLine, string contentLine)
+            {
+                _stale = Encoding.ASCII.GetBytes(staleLine);
+                _content = Encoding.ASCII.GetBytes(contentLine);
+            }
+
+            public void ReleaseStale()
+            {
+                lock (_gate)
+                {
+                    _staleReleased = true;
+                }
+            }
+
+            public void ReleaseContent()
+            {
+                lock (_gate)
+                {
+                    _contentReleased = true;
+                }
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+            public override void Flush() { }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                lock (_gate)
+                {
+                    // The stale line always drains first -- it is the one released earliest on
+                    // real hardware too (a leftover from an earlier exchange, arriving before this
+                    // exchange has sent anything).
+                    if (_staleReleased && _stalePosition < _stale.Length)
+                    {
+                        var toCopy = Math.Min(count, _stale.Length - _stalePosition);
+                        Array.Copy(_stale, _stalePosition, buffer, offset, toCopy);
+                        _stalePosition += toCopy;
+                        return toCopy;
+                    }
+
+                    if (_contentReleased && _contentPosition < _content.Length)
+                    {
+                        var toCopy = Math.Min(count, _content.Length - _contentPosition);
+                        Array.Copy(_content, _contentPosition, buffer, offset, toCopy);
+                        _contentPosition += toCopy;
                         return toCopy;
                     }
                 }
