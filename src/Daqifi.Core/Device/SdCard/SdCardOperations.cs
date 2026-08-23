@@ -554,7 +554,7 @@ namespace Daqifi.Core.Device.SdCard
                 }
 
                 // Parser failed — translate the firmware response into a typed exception.
-                var lastScpiError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
+                var lastScpiError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
 
                 if (ContainsNoSdCardMarker(lines))
                 {
@@ -881,7 +881,7 @@ namespace Daqifi.Core.Device.SdCard
                 // as "the delete operation failed" for a delete that had already
                 // succeeded and was never re-sent.
                 var deleteExchangeError = ScpiResponseClassifier.ContainsScpiError(lines)
-                    ? lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim()
+                    ? ScpiResponseClassifier.GetLastScpiErrorLine(lines)
                     : null;
 
                 // Prove the EXCHANGE finished before judging what it contained. A
@@ -1631,7 +1631,7 @@ namespace Daqifi.Core.Device.SdCard
             // LastScpiError must only carry a real SCPI-formatted error so callers
             // can rely on its shape. Firmware status text ("Error !! ...") is
             // surfaced via the exception's Message and RawDeviceResponse instead.
-            var lastScpiError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
+            var lastScpiError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
 
             // Specific firmware-emitted error markers take precedence over generic
             // content/error checks. They're plain text (not SCPI-shaped), so a

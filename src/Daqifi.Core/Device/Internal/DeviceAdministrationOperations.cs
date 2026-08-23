@@ -286,7 +286,7 @@ namespace Daqifi.Core.Device.Internal
             // it rather than claim the device was silent.
             string? codeZeroLine = null;
 
-            var volunteeredError = lines.LastOrDefault(ScpiResponseClassifier.IsScpiErrorLine)?.Trim();
+            var volunteeredError = ScpiResponseClassifier.GetLastScpiErrorLine(lines);
             if (volunteeredError != null)
             {
                 if (!ScpiResponseClassifier.TryExtractErrorCode(volunteeredError, out var volunteeredCode))
