@@ -480,20 +480,30 @@ namespace Daqifi.Core.Device.Internal
                     // command actually went out (issue #553). A blank cannot be a terminator for a
                     // command the device has not yet received, so any blank at or before this point
                     // is necessarily a leftover from an earlier exchange. Content lines are left on
-                    // the wider boundary above — narrowing it risks discarding a genuinely fast
-                    // reply, a real device having answered before setupActionAsync returns being a
-                    // bench question rather than one this fix can settle.
+                    // the wider boundary above — narrowing it would risk discarding a genuinely fast
+                    // reply, and nothing needs it narrowed. On a bench Nq1 the real terminator lands
+                    // safely after this point, 10/10 runs, so the blank rule costs nothing either.
                     //
-                    // Deliberately captured right here, not after also draining the outbound queue
-                    // to wait for the write to physically land (setupActionAsync only guarantees the
-                    // command was enqueued to MessageProducer, not written yet). That stricter
-                    // boundary was tried and reverted: on a real Nq1 it turned every text exchange
-                    // ~2-2.5x slower — the drain call itself measured under 15ms, but the device's
-                    // reply was then reliably delayed by roughly two seconds, 9/9 runs, for a cause
-                    // that did not resolve within the scope of this fix. Trading a measured
-                    // regression on every exchange for a theoretical, low-severity race is the wrong
-                    // trade, so this boundary keeps the same "setup action returned" definition the
-                    // rest of the engine already used before this fix.
+                    // Captured right here, and it must never be moved later — in particular not
+                    // after also draining the outbound queue to wait for the write to physically
+                    // land (setupActionAsync only guarantees the command was enqueued to
+                    // MessageProducer, not written yet). That stricter boundary looks like a
+                    // tightening of the rule below and is in fact an inversion of it: measured on a
+                    // real Nq1, the device answers roughly 6ms after the write, faster than the
+                    // drain's own 10ms poll tick, so draining first lands the device's genuine
+                    // terminator on the far side of this boundary and the filter below discards it
+                    // as stale. SYSTem:LOG? then reports "the device did not answer" for a device
+                    // that answered on time, 10/10 runs. What makes this boundary safe is not
+                    // precision about when the write landed — it is being strictly earlier than any
+                    // reply can physically exist. See #593, which records the residual window this
+                    // leaves and why it cannot be closed this way.
+                    //
+                    // The ~2-2.5x slowdown a drain also shows on the bench is the engine, not the
+                    // device: the wait loop below infers "the device answered" from a count increase
+                    // observed inside the loop, so a line that landed before its first poll is
+                    // invisible to it and the exchange sits out the full responseTimeoutMs. That is
+                    // #592, and with it fixed a drain costs nothing (1058ms vs 1056ms) — it is still
+                    // wrong, for the reason above, just not slow.
                     sentBoundaryLineCount = CollectedLineCount();
 
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
