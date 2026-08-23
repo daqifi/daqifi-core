@@ -29,11 +29,40 @@ public class StreamMessageConsumerStallingReaderTests
         Assert.True(stream.WaitForReadEntered(TimeSpan.FromSeconds(2)));
         Assert.False(consumer.StopSafely(timeoutMs: 200));
 
-        using (var releaser = new Timer(_ => stream.Release(), null, 200, Timeout.Infinite))
+        // A dedicated thread, not a System.Threading.Timer callback, releases the stale reader
+        // while Start() is parked in its grace-period join below. A Timer callback is queued onto
+        // the shared ThreadPool, which under CI load (many test classes running in parallel) can
+        // be starved well past its 200ms due time — long enough to blow the join's 1000ms grace
+        // and turn this into a flaky ConsumerThreadNotExitedException. A dedicated background
+        // thread's Sleep is not subject to that queuing delay.
+        var releaser = new Thread(() =>
+        {
+            Thread.Sleep(200);
+            stream.Release();
+        })
+        {
+            IsBackground = true,
+            Name = "TestReleaser"
+        };
+        releaser.Start();
+
+        // Join in `finally` — including when consumer.Start() itself throws — before the test's
+        // `using` disposals run: a still-alive releaser calling stream.Release() after the stream
+        // is disposed would throw ObjectDisposedException on a background thread, which is
+        // process-terminating rather than a clean test failure. The join result is checked
+        // afterward (rather than asserted inside `finally`) so it never masks a genuine exception
+        // from consumer.Start().
+        bool releaserJoined;
+        try
         {
             consumer.Start();
         }
+        finally
+        {
+            releaserJoined = releaser.Join(TimeSpan.FromSeconds(2));
+        }
 
+        Assert.True(releaserJoined, "releaser thread did not finish in time");
         Assert.True(consumer.IsRunning);
         Assert.True(consumer.StopSafely(timeoutMs: 2000));
     }
