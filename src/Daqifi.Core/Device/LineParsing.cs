@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 
@@ -34,13 +35,24 @@ internal static class LineParsing
     /// <param name="tryParse">The single-line parse function to apply to each line.</param>
     /// <param name="result">The first successfully parsed value, or <see langword="null"/> if none parsed.</param>
     /// <returns><see langword="true"/> if any line was successfully parsed; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="lines"/> or <paramref name="tryParse"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="tryParse"/> returned <see langword="true"/> with a <see langword="null"/> result.</exception>
     public static bool TryParseFirst<T>(IEnumerable<string> lines, TryParseLine<T> tryParse, [NotNullWhen(true)] out T? result)
         where T : class
     {
+        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(tryParse);
+
         foreach (var line in lines)
         {
             if (tryParse(line, out result))
             {
+                if (result is null)
+                {
+                    throw new InvalidOperationException(
+                        $"{nameof(tryParse)} returned true with a null result; TryParseFirst callers rely on a non-null result when returning true.");
+                }
+
                 return true;
             }
         }
