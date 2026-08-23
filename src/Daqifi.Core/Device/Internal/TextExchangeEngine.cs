@@ -483,6 +483,17 @@ namespace Daqifi.Core.Device.Internal
                     // the wider boundary above — narrowing it risks discarding a genuinely fast
                     // reply, a real device having answered before setupActionAsync returns being a
                     // bench question rather than one this fix can settle.
+                    //
+                    // Deliberately captured right here, not after also draining the outbound queue
+                    // to wait for the write to physically land (setupActionAsync only guarantees the
+                    // command was enqueued to MessageProducer, not written yet). That stricter
+                    // boundary was tried and reverted: on a real Nq1 it turned every text exchange
+                    // ~2-2.5x slower — the drain call itself measured under 15ms, but the device's
+                    // reply was then reliably delayed by roughly two seconds, 9/9 runs, for a cause
+                    // that did not resolve within the scope of this fix. Trading a measured
+                    // regression on every exchange for a theoretical, low-severity race is the wrong
+                    // trade, so this boundary keeps the same "setup action returned" definition the
+                    // rest of the engine already used before this fix.
                     sentBoundaryLineCount = CollectedLineCount();
 
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
