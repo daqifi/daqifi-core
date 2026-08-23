@@ -481,9 +481,6 @@ public class DeviceDiagnosticsOperationsTests
         public void EnsureSupported(DeviceFeature feature) => throw new NotSupportedException();
         public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
             => throw new NotSupportedException();
-        public TimeSpan SdCardDownloadTimeout => throw new NotSupportedException();
-        public TimeSpan SdCardTransferIdleTimeout => throw new NotSupportedException();
-        public void RaiseLowSdSpaceWarning(Daqifi.Core.Device.SdCard.LowSdSpaceWarningEventArgs e) => throw new NotSupportedException();
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();
         public void RaiseGapDetected(TimestampGapEventArgs e) => throw new NotSupportedException();
         public void RaiseRawStreamFrame(DaqifiOutMessage message) => throw new NotSupportedException();

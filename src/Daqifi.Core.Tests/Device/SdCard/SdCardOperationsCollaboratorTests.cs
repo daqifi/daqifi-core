@@ -1397,7 +1397,7 @@ public class SdCardOperationsCollaboratorTests
     }
 
     /// <summary>
-    /// An <see cref="IDeviceOperationHost"/> that records, in order, everything the SD block is
+    /// An <see cref="ISdCardOperationHost"/> that records, in order, everything the SD block is
     /// allowed to do to a device: send a command, open a text exchange, run a raw capture, consult
     /// the firmware feature gate, and raise the low-space warning. Everything else throws, so a
     /// change that reaches further fails loudly.
@@ -1410,7 +1410,7 @@ public class SdCardOperationsCollaboratorTests
     /// still reading them; the exchange bookkeeping needs no guard, since a text exchange only ever
     /// runs on the test's own flow.
     /// </remarks>
-    private sealed class FakeHost : IDeviceOperationHost
+    private sealed class FakeHost : ISdCardOperationHost
     {
         private readonly List<string> _calls = new();
         private readonly Queue<IReadOnlyList<string>> _responses = new();

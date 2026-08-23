@@ -25,7 +25,7 @@ namespace Daqifi.Core.Device.SdCard
     /// Holds the SD-scoped device state — whether a logging session is running, the most recent
     /// directory listing, and the single-download gate — so that state lives next to the only code
     /// that reads it. Everything that touches the wire goes through
-    /// <see cref="IDeviceOperationHost"/>, which keeps the device's virtual members (and therefore
+    /// <see cref="ISdCardOperationHost"/>, which keeps the device's virtual members (and therefore
     /// any subclass override of them) in the path.
     /// </remarks>
     internal sealed class SdCardOperations
@@ -64,7 +64,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </summary>
         private const int ScpiErrorCodeUndefinedHeader = -113;
 
-        private readonly IDeviceOperationHost _host;
+        private readonly ISdCardOperationHost _host;
 
         private bool _isLoggingToSdCard;
         private IReadOnlyList<SdCardFileInfo> _sdCardFiles = Array.Empty<SdCardFileInfo>();
@@ -86,7 +86,7 @@ namespace Daqifi.Core.Device.SdCard
         /// </remarks>
         private readonly SemaphoreSlim _sdDownloadGate = new(1, 1);
 
-        internal SdCardOperations(IDeviceOperationHost host)
+        internal SdCardOperations(ISdCardOperationHost host)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
         }
