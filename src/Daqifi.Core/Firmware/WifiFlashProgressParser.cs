@@ -90,26 +90,28 @@ internal sealed class WifiFlashProgressParser
 
         // Block-address lines advance the current phase. Ignored before the device flash
         // starts (PreFlash) so the image-build phase never moves the bar.
-        if (_phase != Phase.PreFlash)
+        if (_phase == Phase.PreFlash)
         {
-            var highestAddress = HighestBlockAddress(line);
-            if (highestAddress.HasValue)
-            {
-                // Block addresses are absolute; measure coverage from the range base so a
-                // non-zero start doesn't make the fraction saturate to 1 immediately.
-                var covered = highestAddress.Value - _rangeStart + BlockSize;
-                if (covered > _totalRange)
-                {
-                    _totalRange = covered;
-                }
-
-                var fraction = Math.Clamp(covered / (double)_totalRange, 0, 1);
-                var (start, end) = BandFor(_phase);
-                return Advance(_phase, start + (fraction * (end - start)));
-            }
+            return null;
         }
 
-        return null;
+        var highestAddress = HighestBlockAddress(line);
+        if (!highestAddress.HasValue)
+        {
+            return null;
+        }
+
+        // Block addresses are absolute; measure coverage from the range base so a
+        // non-zero start doesn't make the fraction saturate to 1 immediately.
+        var covered = highestAddress.Value - _rangeStart + BlockSize;
+        if (covered > _totalRange)
+        {
+            _totalRange = covered;
+        }
+
+        var fraction = Math.Clamp(covered / (double)_totalRange, 0, 1);
+        var (start, end) = BandFor(_phase);
+        return Advance(_phase, start + (fraction * (end - start)));
     }
 
     private double? Advance(Phase phase, double candidatePercent)
@@ -136,16 +138,18 @@ internal sealed class WifiFlashProgressParser
         long? highest = null;
         foreach (Match match in BlockAddressRegex.Matches(line))
         {
-            if (long.TryParse(
+            if (!long.TryParse(
                     match.Groups["addr"].Value,
                     NumberStyles.HexNumber,
                     CultureInfo.InvariantCulture,
                     out var address))
             {
-                if (highest is null || address > highest.Value)
-                {
-                    highest = address;
-                }
+                continue;
+            }
+
+            if (highest is null || address > highest.Value)
+            {
+                highest = address;
             }
         }
 
