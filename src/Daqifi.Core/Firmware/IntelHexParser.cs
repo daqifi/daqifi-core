@@ -50,31 +50,14 @@ public class IntelHexParser
     /// <exception cref="InvalidDataException">Thrown when a line is malformed or has an invalid checksum.</exception>
     public List<byte[]> ParseHexRecords(string[] lines)
     {
+        // Validate eagerly, before touching the iterator, so a null array throws here at the
+        // call rather than on first enumeration.
         ArgumentNullException.ThrowIfNull(lines);
 
-        ushort baseAddress = 0;
         var hexRecords = new List<byte[]>();
 
-        foreach (var line in lines)
+        foreach (var (hexLine, _) in EnumerateUnprotectedRecords(lines))
         {
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            ValidateLine(line);
-
-            var hexLine = ConvertLineToBytes(line);
-            ValidateRecordLength(hexLine, line);
-            ValidateChecksum(hexLine, line);
-
-            baseAddress = UpdateBaseAddress(hexLine, baseAddress, line);
-
-            if (IsProtectedHexRecord(hexLine, baseAddress))
-            {
-                continue;
-            }
-
             hexRecords.Add(hexLine);
         }
 
@@ -91,10 +74,42 @@ public class IntelHexParser
     /// <exception cref="InvalidDataException">Thrown when a line is malformed or has an invalid checksum.</exception>
     public List<HexFileRecord> ParseRecords(string[] lines)
     {
+        // Validate eagerly, before touching the iterator, so a null array throws here at the
+        // call rather than on first enumeration.
         ArgumentNullException.ThrowIfNull(lines);
 
-        ushort baseAddress = 0;
         var records = new List<HexFileRecord>();
+
+        foreach (var (hexLine, baseAddress) in EnumerateUnprotectedRecords(lines))
+        {
+            var offsetAddressArray = hexLine.Skip(1).Take(2).ToArray();
+            if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
+            var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
+            var fullAddress = ((uint)baseAddress << 16) | offsetAddress;
+
+            records.Add(new HexFileRecord(fullAddress, hexLine, hexLine[3]));
+        }
+
+        return records;
+    }
+
+    /// <summary>
+    /// Walks the HEX lines once: skips blank lines, validates and decodes each record, tracks
+    /// the running extended-linear base address, and yields only the records that fall outside
+    /// the protected memory range. This is the sequencing shared by both public parse methods;
+    /// they differ only in what they project from each yielded record.
+    /// </summary>
+    /// <remarks>
+    /// This is a lazy iterator and deliberately performs no argument validation of its own.
+    /// A <c>ThrowIfNull</c> placed here would not run until first enumeration, which would move
+    /// where the public methods' documented <see cref="ArgumentNullException"/> surfaces; each
+    /// public method therefore keeps its own eager guard. The <see cref="InvalidDataException"/>s
+    /// raised while walking are unaffected: both callers enumerate to completion inside their own
+    /// body, so those still surface from the public call exactly as before.
+    /// </remarks>
+    private IEnumerable<(byte[] HexLine, ushort BaseAddress)> EnumerateUnprotectedRecords(string[] lines)
+    {
+        ushort baseAddress = 0;
 
         foreach (var line in lines)
         {
@@ -108,7 +123,6 @@ public class IntelHexParser
             var hexLine = ConvertLineToBytes(line);
             ValidateRecordLength(hexLine, line);
             ValidateChecksum(hexLine, line);
-            var recordType = hexLine[3];
 
             baseAddress = UpdateBaseAddress(hexLine, baseAddress, line);
 
@@ -117,15 +131,8 @@ public class IntelHexParser
                 continue;
             }
 
-            var offsetAddressArray = hexLine.Skip(1).Take(2).ToArray();
-            if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
-            var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
-            var fullAddress = ((uint)baseAddress << 16) | offsetAddress;
-
-            records.Add(new HexFileRecord(fullAddress, hexLine, recordType));
+            yield return (hexLine, baseAddress);
         }
-
-        return records;
     }
 
     private static void ValidateLine(string line)
