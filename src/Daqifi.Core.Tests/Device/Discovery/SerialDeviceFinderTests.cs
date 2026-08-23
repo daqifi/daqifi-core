@@ -507,13 +507,23 @@ public class SerialDeviceFinderTests
         {
             var hungForever = new TaskCompletionSource<IDeviceInfo?>();
             var probeStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reProbeStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var hungProbeCalls = 0;
             using var finder = CreateFinderWithProbes(
                 new[] { "COM_HUNG_TTL" },
                 (_, _) =>
                 {
-                    Interlocked.Increment(ref hungProbeCalls);
-                    probeStarted.TrySetResult(true);
+                    // Signalled separately per sweep: the test has to wait for each sweep's probe
+                    // delegate to actually RUN, not merely to have been queued.
+                    if (Interlocked.Increment(ref hungProbeCalls) == 1)
+                    {
+                        probeStarted.TrySetResult(true);
+                    }
+                    else
+                    {
+                        reProbeStarted.TrySetResult(true);
+                    }
+
                     return hungForever.Task;
                 },
                 hardTimeoutMs: 100);
@@ -524,7 +534,20 @@ public class SerialDeviceFinderTests
 
             await finder.DiscoverAsync(CancellationToken.None);
 
-            Assert.True(Volatile.Read(ref hungProbeCalls) >= 2,
+            // The re-probe is dispatched with Task.Run and then races
+            // Task.Delay(PortProbeHardTimeoutMs) — the same hazard documented on
+            // CreateFinderWithProbes, and here the ceiling is only 100ms. So this sweep can
+            // return with the TTL retry correctly won and the probe task queued, but the pool
+            // not yet having run the delegate that increments the counter. Reading the counter
+            // the instant the sweep returned therefore failed on CI (run 32307072541: net9.0
+            // red, net10.0 green on the very same commit). Wait for the re-probe to actually
+            // start, bounded, so it is a real quarantine regression that fails this — not a
+            // thread-pool scheduling gap.
+            var reProbed = (await Task.WhenAny(
+                reProbeStarted.Task,
+                Task.Delay(TimeSpan.FromSeconds(5)))) == reProbeStarted.Task;
+
+            Assert.True(reProbed && Volatile.Read(ref hungProbeCalls) >= 2,
                 "TTL elapsed but the quarantined port was never re-probed — recovery requires app restart.");
         }
         finally
