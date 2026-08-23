@@ -55,6 +55,54 @@ public class DaqifiDeviceStaleTextLineTests
         device.Disconnect();
     }
 
+    // ── The capture-to-send window (#553) — the gap between the stale-line boundary capture
+    // and the setup action actually finishing, which the access-counted mock above cannot
+    // target: both existing Stream accesses land before the boundary is even captured. These
+    // use a dedicated hook fired at the boundary itself, and a setup action slow enough that a
+    // line released there is guaranteed to have arrived before the boundary closes. ───────────
+
+    [Fact]
+    public async Task ExecuteTextCommand_DropsABlankThatArrivesWhileTheCommandIsStillBeingSent()
+    {
+        // The blank is released the instant the boundary is captured — squarely inside the
+        // window a stale reply to an earlier command can land in, and before this exchange has
+        // actually gotten its command onto the wire. Without the fix this leaks through as
+        // "the device answered and its response was empty", which is the exact SYSTem:LOG?
+        // misattribution the issue describes.
+        using var transport = new ReleaseOnStreamAccessMockTransport("\r\n");
+        using var device = new StaleBoundaryHookTestableDevice(
+            "Slow-Sending Device", transport, onStaleLineBoundaryCaptured: () => transport.Release());
+
+        device.Connect();
+
+        var lines = await device.CallExecuteTextCommandAsync(
+            () => Thread.Sleep(100),
+            keepBlankLines: true);
+
+        Assert.Empty(lines);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_KeepsAContentLineThatArrivesWhileTheCommandIsStillBeingSent()
+    {
+        // The complement, and the reason the fix only narrows the boundary for blanks: a content
+        // line released in the same window is left alone, matching the deliberate decision
+        // recorded in #553 not to risk discarding a genuinely fast reply.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleBoundaryHookTestableDevice(
+            "Fast-Replying Device", transport, onStaleLineBoundaryCaptured: () => transport.Release());
+
+        device.Connect();
+
+        var lines = await device.CallExecuteTextCommandAsync(() => Thread.Sleep(100));
+
+        Assert.Contains(lines, l => l.Contains("No error"));
+
+        device.Disconnect();
+    }
+
     [Fact]
     public async Task ExecuteTextCommandWithPrepare_RunsPrepareBeforeTheSetupAction()
     {
@@ -344,6 +392,35 @@ public class DaqifiDeviceStaleTextLineTests
                 () => { finalized = true; return Task.CompletedTask; }));
 
         Assert.False(finalized, "The finalize phase ran for an exchange that never started.");
+    }
+
+    /// <summary>
+    /// Exposes <see cref="DaqifiDevice.OnStaleLineBoundaryCaptured"/> so a test can release a line
+    /// into the transport at the exact instant the exchange's stale-line boundary is captured —
+    /// the capture-to-send window from issue #553.
+    /// </summary>
+    private sealed class StaleBoundaryHookTestableDevice : DaqifiDevice
+    {
+        private readonly Action _onStaleLineBoundaryCaptured;
+
+        public StaleBoundaryHookTestableDevice(
+            string name, IStreamTransport transport, Action onStaleLineBoundaryCaptured)
+            : base(name, transport)
+        {
+            _onStaleLineBoundaryCaptured = onStaleLineBoundaryCaptured;
+        }
+
+        internal override void OnStaleLineBoundaryCaptured() => _onStaleLineBoundaryCaptured();
+
+        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
+            Action setupAction, bool keepBlankLines = false)
+        {
+            return ExecuteTextCommandAsync(
+                setupAction,
+                responseTimeoutMs: 500,
+                completionTimeoutMs: 150,
+                keepBlankLines: keepBlankLines);
+        }
     }
 
     /// <summary>

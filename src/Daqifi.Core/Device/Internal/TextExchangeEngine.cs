@@ -365,6 +365,10 @@ namespace Daqifi.Core.Device.Internal
                 // note at the point it is captured, below.
                 var staleLineCount = 0;
 
+                // Number of lines collected by the time the setup action finished sending — see the
+                // note at the point it is captured, below (issue #553).
+                var sentBoundaryLineCount = 0;
+
                 try
                 {
                     if (stream.CanTimeout)
@@ -461,9 +465,25 @@ namespace Daqifi.Core.Device.Internal
                             staleLineCount));
                     }
 
+                    // Test-only seam (issue #553): a no-op on the real device, so this changes
+                    // nothing here. It exists so a test double can release a line into the transport
+                    // in the capture-to-send window below — normally sub-millisecond, and otherwise
+                    // unreachable by any delay-based or access-counted test double.
+                    _host.OnStaleLineBoundaryCaptured();
+
                     // Execute the setup action (sends SCPI commands). ConfigureAwait(false)
                     // matches the surrounding lock-protected awaits.
                     await setupActionAsync(cancellationToken).ConfigureAwait(false);
+
+                    // A second boundary, captured only to catch a blank line that arrived in the
+                    // window above: after the stale-line boundary was captured, but before the
+                    // command actually went out (issue #553). A blank cannot be a terminator for a
+                    // command the device has not yet received, so any blank at or before this point
+                    // is necessarily a leftover from an earlier exchange. Content lines are left on
+                    // the wider boundary above — narrowing it risks discarding a genuinely fast
+                    // reply, a real device having answered before setupActionAsync returns being a
+                    // bench question rather than one this fix can settle.
+                    sentBoundaryLineCount = CollectedLineCount();
 
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
 
@@ -547,7 +567,16 @@ namespace Daqifi.Core.Device.Internal
                 List<string> result;
                 lock (collectedLinesGate)
                 {
-                    var afterStale = collectedLines.Skip(staleLineCount);
+                    var afterStale = collectedLines
+                        .Select((line, index) => (line, index))
+                        .Skip(staleLineCount)
+                        // A blank line captured at or before sentBoundaryLineCount arrived no later
+                        // than the moment the setup action finished sending, so it cannot be this
+                        // exchange's terminator (issue #553) — drop it here, before the
+                        // keepBlankLines projection below ever sees it. Content lines are untouched:
+                        // only the wider staleLineCount boundary above applies to them.
+                        .Where(t => t.line.Length > 0 || t.index >= sentBoundaryLineCount)
+                        .Select(t => t.line);
                     // keepBlankLines is how a caller asks to see the firmware's
                     // end-of-dump blank line. SYSTem:LOG? terminates its dump with
                     // one unconditionally, so its presence is the difference between
