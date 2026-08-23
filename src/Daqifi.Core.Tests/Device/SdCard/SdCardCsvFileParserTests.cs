@@ -511,6 +511,43 @@ public sealed class SdCardCsvFileParserTests
         Assert.Equal(1, session.DeviceConfig.DigitalPortCount);
     }
 
+    [Fact]
+    public async Task ParseAsync_ConfigurationOverride_FillsHeaderLabelsThatStateNoValue()
+    {
+        // Arrange — a truncated header writes the labels but no values:
+        //   "# Device:"  /  "# Serial Number:"
+        // Those parse to empty strings, not null. The connected device knows both, so the
+        // session must report the device's metadata rather than a pair of blanks.
+        await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
+            deviceName: "", serialNumber: "", 50_000_000u,
+            (1000u, new[] { 1.0, 2.0 })
+        );
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 2,
+            DigitalPortCount: 0,
+            TimestampFrequency: 50_000_000u,
+            DeviceSerialNumber: "7E2815916200E898",
+            DevicePartNumber: "Nyquist 1",
+            FirmwareRevision: "3.7.2",
+            CalibrationValues: null
+        );
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            ConfigurationOverride = overrideConfig
+        };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "test.csv", options);
+
+        // Assert
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal("7E2815916200E898", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
+    }
+
     // -------------------------------------------------------------------------
     // Progress reporting & cancellation
     // -------------------------------------------------------------------------

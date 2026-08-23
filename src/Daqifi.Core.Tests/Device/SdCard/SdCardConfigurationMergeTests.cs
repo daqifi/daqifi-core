@@ -238,4 +238,67 @@ public class SdCardConfigurationMergeTests
         Assert.Null(merged.PortRange);
         Assert.Null(merged.InternalScaleM);
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    public void Merge_WhenFileStatesBlankMetadataStrings_OverrideFillsThem(string blank)
+    {
+        // Arrange — a truncated or label-only header line ("# Serial Number:" with nothing after
+        // it) parses to an empty string rather than null, so the file appears to state a value
+        // while carrying no information. It must not shadow the connected device's real metadata,
+        // exactly as a zero port count does not shadow the device's real channel layout.
+        var parsed = Empty() with
+        {
+            DeviceSerialNumber = blank,
+            DevicePartNumber = blank,
+            FirmwareRevision = blank
+        };
+        var overrideConfig = Empty() with
+        {
+            DeviceSerialNumber = "SN-DEVICE",
+            DevicePartNumber = "PN-DEVICE",
+            FirmwareRevision = "1.2.3"
+        };
+
+        // Act
+        var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
+
+        // Assert
+        Assert.Equal("SN-DEVICE", merged.DeviceSerialNumber);
+        Assert.Equal("PN-DEVICE", merged.DevicePartNumber);
+        Assert.Equal("1.2.3", merged.FirmwareRevision);
+    }
+
+    [Fact]
+    public void Merge_WhenBothSidesAreBlank_ReportsTheGapAsNull()
+    {
+        // Arrange — nothing to fall back on: the device snapshot is as silent as the file.
+        var parsed = Empty() with { DeviceSerialNumber = "", DevicePartNumber = "  " };
+
+        // Act
+        var merged = SdCardConfigurationMerge.Merge(parsed, Empty());
+
+        // Assert — a blank left over from an empty header is normalized to the record's documented
+        // "not present" value, so callers have one absence to test for instead of two.
+        Assert.Null(merged.DeviceSerialNumber);
+        Assert.Null(merged.DevicePartNumber);
+    }
+
+    [Fact]
+    public void Merge_WhenOnlyTheOverrideIsBlank_KeepsTheFileValue()
+    {
+        // Arrange — the reverse direction: a blank on the override side is not a value either,
+        // and it must not be mistaken for one now that blanks are meaningful.
+        var parsed = Empty() with { DeviceSerialNumber = "SN-FILE", DevicePartNumber = "PN-FILE" };
+        var overrideConfig = Empty() with { DeviceSerialNumber = "", DevicePartNumber = "   " };
+
+        // Act
+        var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
+
+        // Assert
+        Assert.Equal("SN-FILE", merged.DeviceSerialNumber);
+        Assert.Equal("PN-FILE", merged.DevicePartNumber);
+    }
 }
