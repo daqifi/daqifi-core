@@ -74,6 +74,34 @@ public interface IMessageProducer<T> : IDisposable
     bool IsIdle => QueuedMessageCount == 0;
 
     /// <summary>
+    /// How many writes this producer has <b>begun</b>, or <c>null</c> from a producer that does not
+    /// keep count.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Counts writes <i>started</i>, not writes finished: it is incremented immediately before the
+    /// bytes are handed to the stream. That is deliberate, and it is what makes the number usable as
+    /// a happens-before marker by a reader on another thread. A device cannot answer a command whose
+    /// write had not started, so anything read off the wire while this still reads <c>n</c> is
+    /// necessarily not an answer to the (n+1)th message — a fact the device's text exchange uses to
+    /// recognise a leftover reply from an earlier command (issue #593). Counting completions instead
+    /// would make the marker depend on the producer thread being scheduled promptly after its write,
+    /// and a marker that lands late can misclassify a fast device's genuine reply as a leftover.
+    /// </para>
+    /// <para>
+    /// Monotonic for the life of the instance, and incremented whether or not the write then
+    /// succeeds — a write that failed part-way may still have put bytes on the wire, so treating it
+    /// as "never started" would be the unsafe direction.
+    /// </para>
+    /// <para>
+    /// The default is <c>null</c> — "this producer does not say" — so existing implementations keep
+    /// compiling and every consumer of the number has to have an answer for not having one.
+    /// <see cref="MessageProducer{T}"/> overrides it.
+    /// </para>
+    /// </remarks>
+    long? StartedWriteCount => null;
+
+    /// <summary>
     /// Gets a value indicating whether the producer is currently running.
     /// </summary>
     bool IsRunning { get; }

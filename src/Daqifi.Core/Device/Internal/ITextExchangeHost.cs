@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Consumers;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Protocol;
 using Microsoft.Extensions.Logging;
@@ -121,6 +122,26 @@ namespace Daqifi.Core.Device.Internal
 
         /// <inheritdoc cref="OperationSerializer.DrainOutboundQueueAsync"/>
         Task DrainOutboundQueueAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Takes an instantaneous reading of the device's outbound writer.
+        /// </summary>
+        /// <remarks>
+        /// <b>Read, never waited on.</b> The exchange samples this to tell a leftover reply from its
+        /// own (issue #593); waiting for the writer to catch up — which is what draining the
+        /// outbound queue amounts to — is the fix that must not be made, because it puts a fast
+        /// device's genuine reply on the wrong side of the exchange's stale-line boundary. The whole
+        /// point of a sample is that it costs nothing and delays nothing.
+        /// <para>
+        /// Called on the text consumer's reader thread as well as the exchange's own, so it must
+        /// stay cheap and must not take any lock the exchange holds.
+        /// </para>
+        /// <para>
+        /// <c>null</c> on a device with no queued producer, and on one whose producer does not count
+        /// its writes. The engine treats that as "cannot tell" and falls back to what it did before.
+        /// </para>
+        /// </remarks>
+        OutboundWriterSample? SampleOutboundWriter();
 
         /// <summary>
         /// Forwards the temporary text consumer's failures to the device's

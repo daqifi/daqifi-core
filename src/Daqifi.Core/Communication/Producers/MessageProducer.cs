@@ -42,6 +42,11 @@ public class MessageProducer<T> : IMessageProducer<T>
     private long _wakeCount;
 
     /// <summary>
+    /// Number of writes the background loop has started. See <see cref="StartedWriteCount"/>.
+    /// </summary>
+    private long _startedWriteCount;
+
+    /// <summary>
     /// Initializes a new instance of the MessageProducer class.
     /// </summary>
     /// <param name="stream">The stream to write messages to.</param>
@@ -104,6 +109,16 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// statement about the value not changing, which a cumulative count states just as well.
     /// </remarks>
     internal long WakeCount => Interlocked.Read(ref _wakeCount);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Incremented on the background thread immediately before the write, and read here with an
+    /// interlocked read so a reader on another thread — the text exchange's line collector — cannot
+    /// see a torn or stale value. The pairing is what makes the count a happens-before marker: the
+    /// increment precedes the bytes leaving, so a reader that still sees the old value knows the
+    /// bytes had not left when it looked.
+    /// </remarks>
+    public long? StartedWriteCount => Interlocked.Read(ref _startedWriteCount);
 
     /// <inheritdoc />
     public event EventHandler<MessageSendFailedEventArgs<T>>? SendFailed;
@@ -249,6 +264,14 @@ public class MessageProducer<T> : IMessageProducer<T>
                         {
                             try
                             {
+                                // Claimed BEFORE the write, and counted even if the write then
+                                // throws. Readers on other threads use this as the marker for
+                                // "nothing this producer was given can have been answered yet"
+                                // (issue #593), so it has to rise no later than the bytes leave —
+                                // a marker that rises afterwards can land, on a preempted thread,
+                                // after a fast device has already replied.
+                                Interlocked.Increment(ref _startedWriteCount);
+
                                 WriteMessageToStream(message);
 
                                 // A successful write clears any run of failures the transport has

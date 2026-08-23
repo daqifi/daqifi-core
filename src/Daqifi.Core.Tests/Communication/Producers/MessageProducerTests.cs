@@ -2,6 +2,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 
 namespace Daqifi.Core.Tests.Communication.Producers;
@@ -361,6 +362,52 @@ public class MessageProducerTests
         Assert.Equal(0, producer.QueuedMessageCount);
     }
 
+    [Fact]
+    public void MessageProducer_StartedWriteCount_CountsAWriteAsSoonAsItBegins()
+    {
+        // The number has to rise BEFORE the bytes go out, not after they are done, because a
+        // reader on another thread uses it to conclude "nothing had been asked yet" (issue #593).
+        // A count of completions would still read zero while a command was physically on the wire,
+        // and a device that answered in the meantime would have its reply written off as a
+        // leftover. The write is held open here so the difference is observable at all.
+        using var stream = new BlockingWriteStream();
+        using var producer = new MessageProducer<string>(stream);
+
+        Assert.Equal(0L, producer.StartedWriteCount);
+
+        producer.Start();
+        producer.Send(new ScpiMessage("TEST:COMMAND"));
+
+        Assert.True(stream.WaitForWriteStarted(TimeSpan.FromSeconds(5)), "The producer never started the write.");
+
+        // Still inside the blocking write, so this write has begun and has not finished.
+        Assert.Equal(1L, producer.StartedWriteCount);
+
+        stream.ReleaseWrite();
+        Assert.False(
+            stream.HoldExpired,
+            "The write hold expired on its own bound, so the write was no longer in flight when the count was read.");
+
+        Assert.True(producer.StopSafely(2000));
+        Assert.Equal(1L, producer.StartedWriteCount);
+    }
+
+    [Fact]
+    public void MessageProducer_StartedWriteCount_CountsAWriteThatFailed()
+    {
+        // A write that threw part-way may still have put bytes on the wire, so "it never started"
+        // is the answer that could get a genuine reply discarded. Counting it is the safe way to
+        // be wrong: at worst a leftover reply is kept, which is what happened before #593 anyway.
+        using var stream = new ThrowOnWriteStream();
+        using var producer = new MessageProducer<string>(stream);
+        producer.Start();
+
+        producer.Send(new ScpiMessage("TEST:COMMAND"));
+        Assert.True(producer.StopSafely(2000));
+
+        Assert.Equal(1L, producer.StartedWriteCount);
+    }
+
     /// <summary>
     /// Captures log entries in-memory so tests can assert that the producer logs as expected.
     /// </summary>
@@ -433,5 +480,126 @@ public class MessageProducerTests
         public override void SetLength(long value) => throw new NotSupportedException();
 
         public override void Write(byte[] buffer, int offset, int count) => throw _exceptionToThrow;
+    }
+
+    /// <summary>
+    /// A write-only stream that parks inside <see cref="Write"/> until released, so a test can
+    /// observe the producer's state while a write is genuinely in flight.
+    /// </summary>
+    private sealed class BlockingWriteStream : Stream
+    {
+        /// <summary>
+        /// A plain monitor rather than a pair of events, so there is nothing here that has to be
+        /// disposed: disposable wait handles would need the parked writer to have left them before
+        /// teardown could free them, which is a race a test double should not have.
+        /// </summary>
+        private readonly object _gate = new();
+        private bool _writeStarted;
+        private bool _released;
+        private bool _holdExpired;
+
+        /// <summary>
+        /// True if the held write gave up on its bound instead of being released by the test.
+        /// The bound only exists so a test that never releases fails on its own assertion rather
+        /// than wedging the producer thread for the rest of the run; if it ever does expire, the
+        /// write was no longer in flight and anything read about it afterwards is meaningless.
+        /// Recorded rather than thrown: this runs on the producer's thread, where an exception
+        /// would be swallowed into SendFailed and the failure-run counter instead of reaching the
+        /// test.
+        /// </summary>
+        public bool HoldExpired
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _holdExpired;
+                }
+            }
+        }
+
+        public bool WaitForWriteStarted(TimeSpan timeout)
+        {
+            // Monotonic on purpose: a wall-clock step (NTP, a VM resuming) must not be able to
+            // cut this wait short or stretch it, which is how a bounded test wait turns flaky.
+            var clock = Stopwatch.StartNew();
+
+            lock (_gate)
+            {
+                while (!_writeStarted)
+                {
+                    var remaining = timeout - clock.Elapsed;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        return false;
+                    }
+
+                    Monitor.Wait(_gate, remaining);
+                }
+
+                return true;
+            }
+        }
+
+        public void ReleaseWrite()
+        {
+            lock (_gate)
+            {
+                _released = true;
+                Monitor.PulseAll(_gate);
+            }
+        }
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            var limit = TimeSpan.FromSeconds(10);
+            var clock = Stopwatch.StartNew();
+
+            lock (_gate)
+            {
+                _writeStarted = true;
+                Monitor.PulseAll(_gate);
+
+                // Bounded: a test that forgets to release must fail on its own assertion rather
+                // than wedge the producer thread for the rest of the run. Expiry is recorded so it
+                // cannot pass for a release: see HoldExpired.
+                while (!_released)
+                {
+                    var remaining = limit - clock.Elapsed;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        _holdExpired = true;
+                        return;
+                    }
+
+                    Monitor.Wait(_gate, remaining);
+                }
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Frees a writer that a failed test left parked; nothing here needs disposing.
+                ReleaseWrite();
+            }
+
+            base.Dispose(disposing);
+        }
     }
 }

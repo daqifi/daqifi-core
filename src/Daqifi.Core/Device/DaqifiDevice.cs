@@ -1983,6 +1983,27 @@ namespace Daqifi.Core.Device
             _operations.DrainOutboundQueueAsync(cancellationToken);
 
         /// <inheritdoc />
+        /// <remarks>
+        /// The producer is snapshotted once, like every other read of this field off the lock:
+        /// teardown nulls it from another thread, so null-checking the field and then dereferencing
+        /// it would read it twice. A null answer is the honest one on a device with no producer —
+        /// nothing it sends goes through one — and the engine has a branch for it.
+        /// </remarks>
+        OutboundWriterSample? ITextExchangeHost.SampleOutboundWriter()
+        {
+            var producer = _messageProducer;
+
+            // Read first, so a write that begins between the two reads is reported as "not started
+            // yet, work outstanding" rather than the reverse. That direction is the safe one: it
+            // describes the instant the sample was asked for.
+            var startedWrites = producer?.StartedWriteCount;
+
+            return startedWrites.HasValue
+                ? new OutboundWriterSample(startedWrites.Value, !producer!.IsIdle)
+                : null;
+        }
+
+        /// <inheritdoc />
         IDisposable ITextExchangeHost.SubscribeConsumerErrors(IMessageConsumer<string> consumer) =>
             new ConsumerErrorSubscription(this, consumer);
 

@@ -1,3 +1,4 @@
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using System.Diagnostics;
@@ -170,6 +171,140 @@ public class DaqifiDeviceStaleTextLineTests
             completionTimeoutMs: 100);
 
         Assert.Contains(lines, l => l.Contains("No error"));
+
+        device.Disconnect();
+    }
+
+    // ── The queue-to-write window (#593) — what is left of #553 once #591 has run. The setup
+    // action returns when the command has been handed to the producer, not when the producer has
+    // written it, so a blank can still arrive after the exchange believes it has sent and before
+    // the device has been asked anything. The boundary #591 captures cannot be moved later to
+    // cover it (that is the drain, and it breaks SYSTem:LOG? outright); each line carries the
+    // producer's started-write count instead. The producer is parked inside a blocking write here
+    // to hold the window open, which on real hardware is sub-millisecond. ─────────────────────
+
+    [Fact]
+    public async Task ExecuteTextCommand_DropsABlankThatArrivesAfterTheCommandIsQueuedButBeforeItIsWritten()
+    {
+        // An earlier command holds the producer thread, so the command this exchange queues
+        // cannot reach the wire at all while the blank arrives. Nothing has been asked of the
+        // device, so a blank — which only ever terminates a dump — cannot be answering: without
+        // the fix it is returned as "the device answered, and its log is empty".
+        using var transport = new QueuedWriteTransport();
+        using var device = new StaleLineTestableDevice("Queued-Command Device", transport);
+
+        device.Connect();
+
+        transport.HoldWrites();
+        device.Send(new ScpiMessage("EARLIER:COMMAND"));
+        Assert.True(
+            transport.WaitForWriteStarted(TimeSpan.FromSeconds(10)),
+            "The producer never picked up the earlier command.");
+
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                device.Send(new ScpiMessage("SYSTem:LOG?"));
+
+                // Released only after this setup action has returned, so the line-count boundary
+                // from #591 cannot be what drops it: by then the exchange believes it has sent,
+                // and only the write count knows the command is still sitting in the queue.
+                _ = Task.Delay(75).ContinueWith(_ => transport.ReleaseLine("\r\n"));
+            },
+            keepBlankLines: true);
+
+        Assert.Empty(lines);
+
+        transport.ReleaseWrite();
+        Assert.False(
+            transport.HoldExpired,
+            "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
+
+        // The command was queued the whole time, not lost: released, the writer sends both it and
+        // the earlier command it was stuck behind. Without this the test would also pass against a
+        // double that quietly swallowed everything queued.
+        Assert.True(
+            SpinWait.SpinUntil(() => transport.WriteCount >= 2, TimeSpan.FromSeconds(5)),
+            "The queued command never reached the wire once the writer was released.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_KeepsABlankThatArrivesOnceTheCommandIsBeingWritten()
+    {
+        // The guard #593 asks for by name. SYSTem:LOG? terminates its dump with a blank line, and
+        // on a bench Nq1 that blank comes back about 6ms after the write starts — while the write
+        // may well still be in progress. Anything that writes such a blank off as a leftover
+        // reports a healthy device as silent, which is exactly what draining before the boundary
+        // did, 10/10 runs. The write is deliberately still open when the blank lands here, so a
+        // marker keyed off the write FINISHING rather than starting would fail this test.
+        using var transport = new QueuedWriteTransport();
+        using var device = new StaleLineTestableDevice("Answering Log Device", transport);
+
+        device.Connect();
+
+        transport.HoldWrites();
+
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                device.Send(new ScpiMessage("SYSTem:LOG?"));
+                Assert.True(
+                    transport.WaitForWriteStarted(TimeSpan.FromSeconds(10)),
+                    "The producer never started the command's write.");
+
+                _ = Task.Delay(75).ContinueWith(_ => transport.ReleaseLine("\r\n"));
+            },
+            keepBlankLines: true);
+
+        Assert.NotEmpty(lines);
+        Assert.All(lines, line => Assert.Equal(string.Empty, line));
+
+        transport.ReleaseWrite();
+        Assert.False(
+            transport.HoldExpired,
+            "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_DoesNotExitEarlyWhenAQueuedCommandsBlankPrecedesTheRealResponse()
+    {
+        // The wait loop has to agree with the projection about what counts as an answer. A blank
+        // that arrives while the command is still queued is discarded later, so treating it as
+        // "the device has started replying" flips the loop into its short completion timeout and
+        // ends collection before the real response arrives — returning empty for a device that
+        // did answer, which is the failure this whole boundary exists to prevent.
+        using var transport = new QueuedWriteTransport();
+        using var device = new StaleLineTestableDevice("Late-Answering Device", transport);
+
+        device.Connect();
+
+        transport.HoldWrites();
+        device.Send(new ScpiMessage("EARLIER:COMMAND"));
+        Assert.True(
+            transport.WaitForWriteStarted(TimeSpan.FromSeconds(10)),
+            "The producer never picked up the earlier command.");
+
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                device.Send(new ScpiMessage("SYSTem:ERRor?"));
+                _ = Task.Delay(75).ContinueWith(_ => transport.ReleaseLine("\r\n"));
+                _ = Task.Delay(500).ContinueWith(_ => transport.ReleaseLine("0,\"No error\"\r\n"));
+            },
+            responseTimeoutMs: 3000,
+            completionTimeoutMs: 150);
+
+        // Without the fix the loop breaks around 225ms — well before the real reply at 500ms.
+        Assert.Contains(lines, l => l.Contains("No error"));
+
+        transport.ReleaseWrite();
+        Assert.False(
+            transport.HoldExpired,
+            "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
 
         device.Disconnect();
     }
@@ -551,9 +686,17 @@ public class DaqifiDeviceStaleTextLineTests
         {
         }
 
-        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(Action setupAction)
+        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
+            Action setupAction,
+            bool keepBlankLines = false,
+            int responseTimeoutMs = 500,
+            int completionTimeoutMs = 150)
         {
-            return ExecuteTextCommandAsync(setupAction, responseTimeoutMs: 500, completionTimeoutMs: 150);
+            return ExecuteTextCommandAsync(
+                setupAction,
+                responseTimeoutMs: responseTimeoutMs,
+                completionTimeoutMs: completionTimeoutMs,
+                keepBlankLines: keepBlankLines);
         }
 
         public Task<IReadOnlyList<string>> CallWithPrepareAsync(
@@ -850,6 +993,260 @@ public class DaqifiDeviceStaleTextLineTests
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
             public override void SetLength(long value) => throw new NotSupportedException();
             public override void Write(byte[] buffer, int offset, int count) { }
+        }
+    }
+
+    /// <summary>
+    /// Transport whose stream can be told to park inside <see cref="Stream.Write"/>, and which
+    /// hands canned lines to the reader on demand.
+    /// </summary>
+    /// <remarks>
+    /// Holding the write open is what makes the queue-to-write window of issue #593 targetable:
+    /// while the producer thread sits in a write, everything a caller queues behind it stays
+    /// queued, so a test can put a line on the wire at a moment when the device provably has not
+    /// been asked anything. On real hardware that window is sub-millisecond and no delay-based
+    /// double can land in it.
+    /// <para>
+    /// Only the timing of the write call is modelled: until <see cref="HoldWrites"/> is called a
+    /// write returns immediately, and afterwards it parks. The bytes themselves are discarded
+    /// either way, as they are by every other stream double in this file — nothing here ever reads
+    /// back what the device wrote, and what these tests turn on is whether the writer thread is
+    /// moving, not what it said.
+    /// </para>
+    /// </remarks>
+    private sealed class QueuedWriteTransport : IStreamTransport
+    {
+        private readonly HoldableStream _stream = new();
+        private bool _isConnected;
+        private bool _disposed;
+
+        public Stream Stream
+        {
+            get
+            {
+                if (_disposed) throw new ObjectDisposedException(nameof(QueuedWriteTransport));
+                return _stream;
+            }
+        }
+
+        public bool IsConnected => _isConnected && !_disposed;
+
+        public string ConnectionInfo => _isConnected ? "Queued: Connected" : "Queued: Disconnected";
+
+        public event EventHandler<TransportStatusEventArgs>? StatusChanged;
+
+        /// <summary>Makes every subsequent write park until <see cref="ReleaseWrite"/>.</summary>
+        public void HoldWrites() => _stream.HoldWrites();
+
+        /// <summary>How many writes the stream has been handed, held or not.</summary>
+        public int WriteCount => _stream.WriteCount;
+
+        /// <summary>Waits for the producer thread to actually enter a held write.</summary>
+        public bool WaitForWriteStarted(TimeSpan timeout) => _stream.WaitForWriteStarted(timeout);
+
+        /// <summary>See <see cref="HoldableStream.HoldExpired"/>.</summary>
+        public bool HoldExpired => _stream.HoldExpired;
+
+        /// <summary>Lets the held write — and every write after it — through.</summary>
+        public void ReleaseWrite() => _stream.ReleaseWrite();
+
+        /// <summary>Puts a line on the wire for the reader to pick up.</summary>
+        public void ReleaseLine(string line) => _stream.ReleaseLine(line);
+
+        public Task ConnectAsync() => ConnectAsync(null);
+
+        public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(QueuedWriteTransport));
+            _isConnected = true;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(true, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            _isConnected = false;
+            StatusChanged?.Invoke(this, new TransportStatusEventArgs(false, ConnectionInfo));
+            return Task.CompletedTask;
+        }
+
+        public void Connect() => ConnectAsync().Wait();
+
+        public void Disconnect() => DisconnectAsync().Wait();
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _isConnected = false;
+            _disposed = true;
+
+            // A test that failed before releasing must not leave the producer thread parked.
+            _stream.ReleaseWrite();
+        }
+
+        private sealed class HoldableStream : Stream
+        {
+            private readonly object _gate = new();
+            private readonly Queue<byte[]> _pending = new();
+
+            /// <summary>
+            /// Guards the write hold. A plain monitor rather than a pair of events, so there is
+            /// nothing here that has to be disposed: the writer parks on it, and a test that fails
+            /// before releasing simply leaves a background thread waiting on an object that gets
+            /// collected. Disposable wait handles would need the writer to have left them before
+            /// teardown could free them, which is a race nobody needs in a test double.
+            /// </summary>
+            private readonly object _writeGate = new();
+            private byte[]? _current;
+            private int _position;
+            private bool _holdWrites;
+            private bool _writeStarted;
+            private bool _holdExpired;
+            private int _writeCount;
+
+            public int WriteCount => Volatile.Read(ref _writeCount);
+
+            /// <summary>
+            /// True if a held write gave up on its bound instead of being released by the test.
+            /// The bound only exists so a test that never releases fails on its own assertion
+            /// rather than wedging the producer thread for the rest of the run; if it ever does
+            /// expire, the window the test was holding open closed underneath it and any result
+            /// gathered after that is meaningless. Recorded rather than thrown: this runs on the
+            /// producer's thread, where an exception would be swallowed into SendFailed and the
+            /// failure-run counter instead of reaching the test.
+            /// </summary>
+            public bool HoldExpired
+            {
+                get
+                {
+                    lock (_writeGate)
+                    {
+                        return _holdExpired;
+                    }
+                }
+            }
+
+            public void HoldWrites()
+            {
+                lock (_writeGate)
+                {
+                    _holdWrites = true;
+                    _writeStarted = false;
+                }
+            }
+
+            public bool WaitForWriteStarted(TimeSpan timeout)
+            {
+                // Monotonic on purpose: a wall-clock step (NTP, a VM resuming) must not be able to
+                // cut this wait short or stretch it, which is how a bounded test wait turns flaky.
+                var clock = Stopwatch.StartNew();
+
+                lock (_writeGate)
+                {
+                    while (!_writeStarted)
+                    {
+                        var remaining = timeout - clock.Elapsed;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            return false;
+                        }
+
+                        Monitor.Wait(_writeGate, remaining);
+                    }
+
+                    return true;
+                }
+            }
+
+            public void ReleaseWrite()
+            {
+                lock (_writeGate)
+                {
+                    _holdWrites = false;
+                    Monitor.PulseAll(_writeGate);
+                }
+            }
+
+            public void ReleaseLine(string line)
+            {
+                lock (_gate)
+                {
+                    _pending.Enqueue(Encoding.ASCII.GetBytes(line));
+                }
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+            public override void Flush() { }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                lock (_gate)
+                {
+                    if (_current == null || _position >= _current.Length)
+                    {
+                        _current = _pending.Count > 0 ? _pending.Dequeue() : null;
+                        _position = 0;
+                    }
+
+                    if (_current != null)
+                    {
+                        var toCopy = Math.Min(count, _current.Length - _position);
+                        Array.Copy(_current, _position, buffer, offset, toCopy);
+                        _position += toCopy;
+                        return toCopy;
+                    }
+                }
+
+                // Idle link: nothing to hand over, and no busy-spin in the reader thread.
+                Thread.Sleep(10);
+                return 0;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                // Counted, not kept: nothing reads the device's outbound bytes back, but a test
+                // that wants to say "the command did reach the wire in the end" needs something
+                // to point at. Counted outside the gate so the count stays readable while a write
+                // is held.
+                Interlocked.Increment(ref _writeCount);
+
+                var limit = TimeSpan.FromSeconds(30);
+                var clock = Stopwatch.StartNew();
+
+                lock (_writeGate)
+                {
+                    if (!_holdWrites)
+                    {
+                        return;
+                    }
+
+                    _writeStarted = true;
+                    Monitor.PulseAll(_writeGate);
+
+                    // Bounded, so a test that never releases fails on its own assertion rather
+                    // than wedging the producer thread for the rest of the run. Expiry is recorded
+                    // so it cannot pass for a release: see HoldExpired.
+                    while (_holdWrites)
+                    {
+                        var remaining = limit - clock.Elapsed;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            _holdExpired = true;
+                            return;
+                        }
+
+                        Monitor.Wait(_writeGate, remaining);
+                    }
+                }
+            }
         }
     }
 }
