@@ -85,23 +85,14 @@ public class SerialDeviceFinderTests
     }
 
     [Fact]
-    public void SerialDeviceFinder_DefaultConstructor_Uses9600Baud()
+    public void SerialDeviceFinder_CustomBaudRateConstructor_DoesNotThrow()
     {
-        // Arrange & Act
-        using var finder = new SerialDeviceFinder();
-
-        // Assert
-        Assert.NotNull(finder);
-    }
-
-    [Fact]
-    public void SerialDeviceFinder_CustomBaudRate_AcceptsCustomBaudRate()
-    {
-        // Arrange & Act
-        using var finder = new SerialDeviceFinder(9600);
-
-        // Assert
-        Assert.NotNull(finder);
+        // Keeps the public SerialDeviceFinder(int) overload exercised. 115200 rather than 9600 so
+        // this is a genuinely non-default rate — 9600 is DefaultBaudRate, which the parameterless
+        // constructor already covers. The baud rate itself is a private field with no accessor, so
+        // "does not throw" is the whole of what a test can say here, and the name says exactly that
+        // rather than implying the value is checked.
+        using var finder = new SerialDeviceFinder(115200);
     }
 
     [Fact]

@@ -15,7 +15,6 @@ public class UdpTransportTests
         using var transport = new UdpTransport();
 
         // Assert
-        Assert.NotNull(transport);
         Assert.False(transport.IsOpen);
     }
 
@@ -26,7 +25,6 @@ public class UdpTransportTests
         using var transport = new UdpTransport(30303);
 
         // Assert
-        Assert.NotNull(transport);
         Assert.False(transport.IsOpen);
     }
 

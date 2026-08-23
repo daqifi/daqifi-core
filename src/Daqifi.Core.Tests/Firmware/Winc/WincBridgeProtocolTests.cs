@@ -187,6 +187,5 @@ public class WincBridgeProtocolTests
         // The device's read loop never terminates at or above its 2048-byte buffer, so 2047 is a
         // hard ceiling rather than a tuning choice.
         Assert.Equal(2047, WincBridgeProtocol.MaxReadBlockSize);
-        Assert.True(WincBridgeProtocol.MaxReadBlockSize < 2048);
     }
 }

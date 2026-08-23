@@ -422,7 +422,6 @@ namespace Daqifi.Core.Tests.Device
             // and not the falsely-Ready state the old override could leave behind.
             await Assert.ThrowsAsync<OperationCanceledException>(() => device.InitializeAsync());
             Assert.Equal(DeviceState.Connected, device.State);
-            Assert.NotEqual(DeviceState.Ready, device.State);
         }
 
         [Theory]
