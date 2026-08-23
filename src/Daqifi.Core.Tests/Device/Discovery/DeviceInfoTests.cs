@@ -87,42 +87,6 @@ public class DeviceInfoTests
     }
 
     [Fact]
-    public void DeviceInfo_LocationKey_CanBeSetAndRetrieved()
-    {
-        // Arrange
-        var deviceInfo = new DeviceInfo
-        {
-            Name = "DAQiFi",
-            SerialNumber = "67890",
-            PortName = "COM3",
-            ConnectionType = ConnectionType.Serial,
-            LocationKey = "Port_#0001.Hub_#0001"
-        };
-
-        // Act & Assert
-        Assert.Equal("Port_#0001.Hub_#0001", deviceInfo.LocationKey);
-    }
-
-    [Fact]
-    public void DeviceInfo_LocalInterfaceAddress_CanBeSetAndRetrieved()
-    {
-        // Arrange
-        var localAddress = IPAddress.Parse("192.168.1.50");
-        var deviceInfo = new DeviceInfo
-        {
-            Name = "NYQUIST",
-            SerialNumber = "12345",
-            IPAddress = IPAddress.Parse("192.168.1.100"),
-            Port = 9760,
-            LocalInterfaceAddress = localAddress,
-            ConnectionType = ConnectionType.WiFi
-        };
-
-        // Act & Assert
-        Assert.Equal(localAddress, deviceInfo.LocalInterfaceAddress);
-    }
-
-    [Fact]
     public void DeviceInfo_WiFiDevice_WithLocalInterfaceAddress_StoresCorrectly()
     {
         // Arrange - Simulates a device discovered via WiFi on a multi-NIC system
