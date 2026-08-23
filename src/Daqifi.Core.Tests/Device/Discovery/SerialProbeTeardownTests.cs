@@ -66,7 +66,7 @@ public class SerialProbeTeardownTests
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
-        await stream.WaitForFirstReadAsync();
+        stream.WaitForFirstRead();
         stream.RespondWithStatus();
         await observed;
 
@@ -93,7 +93,7 @@ public class SerialProbeTeardownTests
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
-        await stream.WaitForFirstReadAsync();
+        stream.WaitForFirstRead();
         stream.RespondWithStatus();
 
         await observed;
@@ -130,7 +130,7 @@ public class SerialProbeTeardownTests
         using var cts = new CancellationTokenSource();
 
         var exchange = SerialDeviceFinder.RequestDeviceStatusAsync(stream, cts.Token);
-        await stream.WaitForFirstReadAsync();
+        stream.WaitForFirstRead();
         await cts.CancelAsync();
 
         // Cancellation ends the wait but is reported as "no device on this port" rather than as an
@@ -324,10 +324,28 @@ public class SerialProbeTeardownTests
             get { lock (_gate) { return _firstReaderThread; } }
         }
 
-        public async Task WaitForFirstReadAsync()
+        /// <summary>
+        /// Blocks the calling thread until the consumer has entered its first read, so a test can
+        /// answer the probe while the reader is genuinely parked in <see cref="Read(byte[], int, int)"/>.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately synchronous. The exchange this gates is bounded by a fixed 1s wall-clock
+        /// response window that is already running by the time a test gets here, and the previous
+        /// async form -- <c>await Task.Run(() =&gt; _firstRead.Wait(token))</c> -- spent two
+        /// thread-pool queue hops inside that window: one to dispatch the <c>Task.Run</c> body and
+        /// one to resume the awaiting test method. On a CI runner with both target frameworks'
+        /// test processes running xunit collections in parallel, a saturated pool injects new
+        /// worker threads only about twice a second, so those two hops were observed to push the
+        /// "device answers" call past the response window: the probe then returned <c>null</c> and
+        /// the test failed on an assertion about teardown that never got to run. The consumer's
+        /// reader is a dedicated <see cref="Thread"/> rather than a pool work item, so it reaches
+        /// its first read regardless of pool pressure and this wait returns promptly.
+        /// </remarks>
+        public void WaitForFirstRead()
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await Task.Run(() => _firstRead.Wait(cts.Token), cts.Token);
+            Assert.True(
+                _firstRead.Wait(TimeSpan.FromSeconds(5)),
+                "the consumer never entered its first read");
         }
 
         public void RespondWithStatus()
