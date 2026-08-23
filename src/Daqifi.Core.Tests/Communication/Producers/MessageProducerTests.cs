@@ -483,12 +483,44 @@ public class MessageProducerTests
     /// </summary>
     private sealed class BlockingWriteStream : Stream
     {
-        private readonly ManualResetEventSlim _writeStarted = new(false);
-        private readonly ManualResetEventSlim _writeRelease = new(false);
+        /// <summary>
+        /// A plain monitor rather than a pair of events, so there is nothing here that has to be
+        /// disposed: disposable wait handles would need the parked writer to have left them before
+        /// teardown could free them, which is a race a test double should not have.
+        /// </summary>
+        private readonly object _gate = new();
+        private bool _writeStarted;
+        private bool _released;
 
-        public bool WaitForWriteStarted(TimeSpan timeout) => _writeStarted.Wait(timeout);
+        public bool WaitForWriteStarted(TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
 
-        public void ReleaseWrite() => _writeRelease.Set();
+            lock (_gate)
+            {
+                while (!_writeStarted)
+                {
+                    var remaining = deadline - DateTime.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        return false;
+                    }
+
+                    Monitor.Wait(_gate, remaining);
+                }
+
+                return true;
+            }
+        }
+
+        public void ReleaseWrite()
+        {
+            lock (_gate)
+            {
+                _released = true;
+                Monitor.PulseAll(_gate);
+            }
+        }
 
         public override bool CanRead => false;
         public override bool CanSeek => false;
@@ -506,20 +538,34 @@ public class MessageProducerTests
 
         public override void Write(byte[] buffer, int offset, int count)
         {
-            _writeStarted.Set();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
 
-            // Bounded: a test that forgets to release must fail on its own assertion rather than
-            // wedge the producer thread for the rest of the run.
-            _writeRelease.Wait(TimeSpan.FromSeconds(10));
+            lock (_gate)
+            {
+                _writeStarted = true;
+                Monitor.PulseAll(_gate);
+
+                // Bounded: a test that forgets to release must fail on its own assertion rather
+                // than wedge the producer thread for the rest of the run.
+                while (!_released)
+                {
+                    var remaining = deadline - DateTime.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        return;
+                    }
+
+                    Monitor.Wait(_gate, remaining);
+                }
+            }
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
-                _writeRelease.Set();
-                _writeStarted.Dispose();
-                _writeRelease.Dispose();
+                // Frees a writer that a failed test left parked; nothing here needs disposing.
+                ReleaseWrite();
             }
 
             base.Dispose(disposing);

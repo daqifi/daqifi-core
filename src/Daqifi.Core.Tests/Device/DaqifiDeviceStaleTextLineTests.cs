@@ -1066,38 +1066,68 @@ public class DaqifiDeviceStaleTextLineTests
             _isConnected = false;
             _disposed = true;
 
-            // A test that failed before releasing must not leave the producer thread parked, so
-            // the release comes first and the stream's own dispose — which frees its wait handles
-            // — only afterwards.
+            // A test that failed before releasing must not leave the producer thread parked.
             _stream.ReleaseWrite();
-            _stream.Dispose();
         }
 
         private sealed class HoldableStream : Stream
         {
             private readonly object _gate = new();
             private readonly Queue<byte[]> _pending = new();
-            private readonly ManualResetEventSlim _writeStarted = new(false);
-            private readonly ManualResetEventSlim _writeRelease = new(true);
+
+            /// <summary>
+            /// Guards the write hold. A plain monitor rather than a pair of events, so there is
+            /// nothing here that has to be disposed: the writer parks on it, and a test that fails
+            /// before releasing simply leaves a background thread waiting on an object that gets
+            /// collected. Disposable wait handles would need the writer to have left them before
+            /// teardown could free them, which is a race nobody needs in a test double.
+            /// </summary>
+            private readonly object _writeGate = new();
             private byte[]? _current;
             private int _position;
-            private volatile bool _holdWrites;
+            private bool _holdWrites;
+            private bool _writeStarted;
             private int _writeCount;
 
             public int WriteCount => Volatile.Read(ref _writeCount);
 
             public void HoldWrites()
             {
-                _writeRelease.Reset();
-                _holdWrites = true;
+                lock (_writeGate)
+                {
+                    _holdWrites = true;
+                    _writeStarted = false;
+                }
             }
 
-            public bool WaitForWriteStarted(TimeSpan timeout) => _writeStarted.Wait(timeout);
+            public bool WaitForWriteStarted(TimeSpan timeout)
+            {
+                var deadline = DateTime.UtcNow + timeout;
+
+                lock (_writeGate)
+                {
+                    while (!_writeStarted)
+                    {
+                        var remaining = deadline - DateTime.UtcNow;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            return false;
+                        }
+
+                        Monitor.Wait(_writeGate, remaining);
+                    }
+
+                    return true;
+                }
+            }
 
             public void ReleaseWrite()
             {
-                _holdWrites = false;
-                _writeRelease.Set();
+                lock (_writeGate)
+                {
+                    _holdWrites = false;
+                    Monitor.PulseAll(_writeGate);
+                }
             }
 
             public void ReleaseLine(string line)
@@ -1147,33 +1177,35 @@ public class DaqifiDeviceStaleTextLineTests
             {
                 // Counted, not kept: nothing reads the device's outbound bytes back, but a test
                 // that wants to say "the command did reach the wire in the end" needs something
-                // to point at.
+                // to point at. Counted outside the gate so the count stays readable while a write
+                // is held.
                 Interlocked.Increment(ref _writeCount);
 
-                if (!_holdWrites)
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+
+                lock (_writeGate)
                 {
-                    return;
+                    if (!_holdWrites)
+                    {
+                        return;
+                    }
+
+                    _writeStarted = true;
+                    Monitor.PulseAll(_writeGate);
+
+                    // Bounded, so a test that never releases fails on its own assertion rather
+                    // than wedging the producer thread for the rest of the run.
+                    while (_holdWrites)
+                    {
+                        var remaining = deadline - DateTime.UtcNow;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            return;
+                        }
+
+                        Monitor.Wait(_writeGate, remaining);
+                    }
                 }
-
-                _writeStarted.Set();
-
-                // Bounded, so a test that never releases fails on its own assertion rather than
-                // wedging the producer thread for the rest of the run.
-                _writeRelease.Wait(TimeSpan.FromSeconds(30));
-            }
-
-            protected override void Dispose(bool disposing)
-            {
-                if (disposing)
-                {
-                    // Released before the handles go away, so a writer parked in Write above is
-                    // woken rather than left to fault on a disposed event.
-                    _writeRelease.Set();
-                    _writeStarted.Dispose();
-                    _writeRelease.Dispose();
-                }
-
-                base.Dispose(disposing);
             }
         }
     }
