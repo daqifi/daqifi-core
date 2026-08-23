@@ -416,7 +416,16 @@ public class LiveSampleStreamTests
 
     private sealed class FakeChannel : IChannel
     {
+        // LiveSampleStream deliberately ends concurrent enumerations' buffers with
+        // AllowSynchronousContinuations = false, so two enumerations can unsubscribe from this same
+        // event on two different thread-pool threads at once (see
+        // LiveSampleStreamTests.ConcurrentEnumerations_AllEndOnTheSameDrop). A plain `+=`/`-=` and a
+        // plain `SubscriberCount++`/`--` are not atomic, so that race could lose an update and leave
+        // this fake reporting a stale subscriber count. A lock keeps both in sync regardless of which
+        // thread reaches them first.
+        private readonly object _subscriptionLock = new();
         private EventHandler<SampleReceivedEventArgs>? _sampleReceived;
+        private int _subscriberCount;
 
         public FakeChannel(int channelNumber)
         {
@@ -424,19 +433,32 @@ public class LiveSampleStreamTests
             Name = "ch" + channelNumber;
         }
 
-        public int SubscriberCount { get; private set; }
+        public int SubscriberCount
+        {
+            get { lock (_subscriptionLock) { return _subscriberCount; } }
+        }
 
         public event EventHandler<SampleReceivedEventArgs>? SampleReceived
         {
-            add { _sampleReceived += value; SubscriberCount++; }
-            remove { _sampleReceived -= value; SubscriberCount--; }
+            add { lock (_subscriptionLock) { _sampleReceived += value; _subscriberCount++; } }
+            remove { lock (_subscriptionLock) { _sampleReceived -= value; _subscriberCount--; } }
         }
 
         public void RaiseSample(double value)
         {
             var sample = new DataSample(DateTime.UtcNow, value);
             ActiveSample = sample;
-            _sampleReceived?.Invoke(this, new SampleReceivedEventArgs(this, sample));
+
+            // Snapshot the delegate under the same lock the add/remove accessors use, so this read
+            // can't race a concurrent subscribe/unsubscribe; invoke outside the lock to avoid holding
+            // it across a callback into the (single-threaded, non-reentrant) enumeration under test.
+            EventHandler<SampleReceivedEventArgs>? handler;
+            lock (_subscriptionLock)
+            {
+                handler = _sampleReceived;
+            }
+
+            handler?.Invoke(this, new SampleReceivedEventArgs(this, sample));
         }
 
         public int ChannelNumber { get; }
