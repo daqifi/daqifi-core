@@ -206,26 +206,18 @@ namespace Daqifi.Core.Device.SdCard
                     continue;
                 }
 
-                if (word.Equals("OK", StringComparison.OrdinalIgnoreCase))
+                // A marker with a status word this version does not know is
+                // still a terminated listing, but its contents cannot be
+                // trusted as complete -- treat it the way an explicitly
+                // partial one is treated rather than as success (the default
+                // arm below).
+                status = word.ToUpperInvariant() switch
                 {
-                    status = SdCardListingStatus.Complete;
-                }
-                else if (word.Equals("INCOMPLETE", StringComparison.OrdinalIgnoreCase))
-                {
-                    status = SdCardListingStatus.Incomplete;
-                }
-                else if (word.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
-                {
-                    status = SdCardListingStatus.Failed;
-                }
-                else
-                {
-                    // A marker with a status word this version does not know is
-                    // still a terminated listing, but its contents cannot be
-                    // trusted as complete -- treat it the way an explicitly
-                    // partial one is treated rather than as success.
-                    status = SdCardListingStatus.Incomplete;
-                }
+                    "OK" => SdCardListingStatus.Complete,
+                    "INCOMPLETE" => SdCardListingStatus.Incomplete,
+                    "FAILED" => SdCardListingStatus.Failed,
+                    _ => SdCardListingStatus.Incomplete,
+                };
             }
 
             return status;
