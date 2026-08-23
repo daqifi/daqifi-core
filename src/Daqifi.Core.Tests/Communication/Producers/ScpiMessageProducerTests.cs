@@ -1033,6 +1033,42 @@ public class ScpiMessageProducerTests
         Assert.False(ScpiMessageProducer.IsFriendlyNameValid(name));
     }
 
+    // Each channel-addressed producer already has its own test proving it throws on a
+    // negative channel. None of them pinned what callers can actually observe about that
+    // throw, so nothing stopped the nine copies of the rule from drifting apart. They now
+    // share one ValidateChannel helper; this pins the contract it is there to hold.
+    [Fact]
+    public void EveryChannelAddressedProducer_RejectsNegativeChannelIdentically()
+    {
+        var producers = new (string Name, Action Act)[]
+        {
+            (nameof(ScpiMessageProducer.SetPwmChannelEnabled), () => ScpiMessageProducer.SetPwmChannelEnabled(-1, true)),
+            (nameof(ScpiMessageProducer.SetPwmChannelFrequency), () => ScpiMessageProducer.SetPwmChannelFrequency(-1, 100)),
+            (nameof(ScpiMessageProducer.SetPwmChannelDutyCycle), () => ScpiMessageProducer.SetPwmChannelDutyCycle(-1, 50)),
+            (nameof(ScpiMessageProducer.SetAnalogOutputVoltage), () => ScpiMessageProducer.SetAnalogOutputVoltage(-1, 1.0)),
+            (nameof(ScpiMessageProducer.GetAnalogOutputVoltage), () => ScpiMessageProducer.GetAnalogOutputVoltage(-1)),
+            (nameof(ScpiMessageProducer.SetAdcCalibrationSlope), () => ScpiMessageProducer.SetAdcCalibrationSlope(-1, 1.0)),
+            (nameof(ScpiMessageProducer.SetAdcCalibrationOffset), () => ScpiMessageProducer.SetAdcCalibrationOffset(-1, 1.0)),
+            (nameof(ScpiMessageProducer.GetAdcCalibrationSlope), () => ScpiMessageProducer.GetAdcCalibrationSlope(-1)),
+            (nameof(ScpiMessageProducer.GetAdcCalibrationOffset), () => ScpiMessageProducer.GetAdcCalibrationOffset(-1)),
+        };
+
+        var observed = new List<(string Producer, string? ParamName, object? ActualValue, string Message)>();
+        foreach (var (name, act) in producers)
+        {
+            var ex = Assert.Throws<ArgumentOutOfRangeException>(act);
+            observed.Add((name, ex.ParamName, ex.ActualValue, ex.Message));
+        }
+
+        Assert.Equal(9, observed.Count);
+        Assert.All(observed, o =>
+        {
+            Assert.Equal("channel", o.ParamName);
+            Assert.Equal(-1, o.ActualValue);
+            Assert.StartsWith("Channel number cannot be negative.", o.Message, StringComparison.Ordinal);
+        });
+    }
+
     private static void AssertMessageFormat(IOutboundMessage<string> message)
     {
         var bytes = message.GetBytes();

@@ -597,10 +597,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetPwmChannelEnabled(int channel, bool enabled)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         return new ScpiMessage($"PWM:CHannel:ENable {channel},{(enabled ? 1 : 0)}");
     }
@@ -618,10 +615,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetPwmChannelFrequency(int channel, int frequencyHz)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         if (frequencyHz <= 0)
         {
@@ -642,10 +636,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetPwmChannelDutyCycle(int channel, int dutyCyclePercent)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         if (dutyCyclePercent is < 0 or > 100)
         {
@@ -670,10 +661,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetAnalogOutputVoltage(int channel, double voltage)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         if (!double.IsFinite(voltage))
         {
@@ -710,10 +698,7 @@ public class ScpiMessageProducer
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is negative.</exception>
     public static IOutboundMessage<string> GetAnalogOutputVoltage(int channel)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         return new ScpiMessage($"SOURce:VOLTage:LEVel? {channel}");
     }
@@ -766,10 +751,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetAdcCalibrationSlope(int channel, double calM)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         if (!double.IsFinite(calM))
         {
@@ -795,10 +777,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> SetAdcCalibrationOffset(int channel, double calB)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         if (!double.IsFinite(calB))
         {
@@ -821,10 +800,7 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> GetAdcCalibrationSlope(int channel)
     {
-        if (channel < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
-        }
+        ValidateChannel(channel);
 
         return new ScpiMessage($"CONFigure:ADC:chanCALM? {channel}");
     }
@@ -841,12 +817,21 @@ public class ScpiMessageProducer
     /// </remarks>
     public static IOutboundMessage<string> GetAdcCalibrationOffset(int channel)
     {
+        ValidateChannel(channel);
+
+        return new ScpiMessage($"CONFigure:ADC:chanCALB? {channel}");
+    }
+
+    // Every channel-addressed SCPI command rejects a negative channel with the same
+    // ArgumentOutOfRangeException. Kept in one place so the rule (and its message)
+    // cannot drift between commands. The parameter is named `channel` so the thrown
+    // exception's ParamName matches each caller's own parameter, as before.
+    private static void ValidateChannel(int channel)
+    {
         if (channel < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(channel), channel, "Channel number cannot be negative.");
         }
-
-        return new ScpiMessage($"CONFigure:ADC:chanCALB? {channel}");
     }
 
     /// <summary>
