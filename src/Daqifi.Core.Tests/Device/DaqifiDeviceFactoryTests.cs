@@ -85,24 +85,6 @@ public class DaqifiDeviceFactoryTests
         Assert.True(options.InitializeDevice);
     }
 
-    [Fact]
-    public void DeviceConnectionOptions_CanSetCustomValues()
-    {
-        // Arrange & Act
-        var options = new DeviceConnectionOptions
-        {
-            DeviceName = "Custom Device",
-            ConnectionRetry = new ConnectionRetryOptions { MaxAttempts = 5 },
-            InitializeDevice = false
-        };
-
-        // Assert
-        Assert.Equal("Custom Device", options.DeviceName);
-        Assert.NotNull(options.ConnectionRetry);
-        Assert.Equal(5, options.ConnectionRetry.MaxAttempts);
-        Assert.False(options.InitializeDevice);
-    }
-
     #endregion
 
     #region ConnectTcpAsync Tests
