@@ -348,13 +348,12 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
             {
                 if (!asset.TryGetProperty("name", out var nameProp)) continue;
                 var name = nameProp.GetString();
-                if (name != null && name.EndsWith(assetExtension, StringComparison.OrdinalIgnoreCase))
-                {
-                    downloadUrl = asset.TryGetProperty("browser_download_url", out var urlProp) ? urlProp.GetString() : null;
-                    assetFileName = name;
-                    assetSize = asset.TryGetProperty("size", out var sizeProp) ? sizeProp.GetInt64() : null;
-                    break;
-                }
+                if (name == null || !name.EndsWith(assetExtension, StringComparison.OrdinalIgnoreCase)) continue;
+
+                downloadUrl = asset.TryGetProperty("browser_download_url", out var urlProp) ? urlProp.GetString() : null;
+                assetFileName = name;
+                assetSize = asset.TryGetProperty("size", out var sizeProp) ? sizeProp.GetInt64() : null;
+                break;
             }
         }
 
