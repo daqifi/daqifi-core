@@ -216,6 +216,9 @@ public class DaqifiDeviceStaleTextLineTests
         Assert.Empty(lines);
 
         transport.ReleaseWrite();
+        Assert.False(
+            transport.HoldExpired,
+            "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
 
         // The command was queued the whole time, not lost: released, the writer sends both it and
         // the earlier command it was stuck behind. Without this the test would also pass against a
@@ -259,6 +262,10 @@ public class DaqifiDeviceStaleTextLineTests
         Assert.All(lines, line => Assert.Equal(string.Empty, line));
 
         transport.ReleaseWrite();
+        Assert.False(
+            transport.HoldExpired,
+            "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
+
         device.Disconnect();
     }
 
@@ -295,6 +302,10 @@ public class DaqifiDeviceStaleTextLineTests
         Assert.Contains(lines, l => l.Contains("No error"));
 
         transport.ReleaseWrite();
+        Assert.False(
+            transport.HoldExpired,
+            "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
+
         device.Disconnect();
     }
 
@@ -1033,6 +1044,9 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>Waits for the producer thread to actually enter a held write.</summary>
         public bool WaitForWriteStarted(TimeSpan timeout) => _stream.WaitForWriteStarted(timeout);
 
+        /// <summary>See <see cref="HoldableStream.HoldExpired"/>.</summary>
+        public bool HoldExpired => _stream.HoldExpired;
+
         /// <summary>Lets the held write — and every write after it — through.</summary>
         public void ReleaseWrite() => _stream.ReleaseWrite();
 
@@ -1087,9 +1101,30 @@ public class DaqifiDeviceStaleTextLineTests
             private int _position;
             private bool _holdWrites;
             private bool _writeStarted;
+            private bool _holdExpired;
             private int _writeCount;
 
             public int WriteCount => Volatile.Read(ref _writeCount);
+
+            /// <summary>
+            /// True if a held write gave up on its bound instead of being released by the test.
+            /// The bound only exists so a test that never releases fails on its own assertion
+            /// rather than wedging the producer thread for the rest of the run; if it ever does
+            /// expire, the window the test was holding open closed underneath it and any result
+            /// gathered after that is meaningless. Recorded rather than thrown: this runs on the
+            /// producer's thread, where an exception would be swallowed into SendFailed and the
+            /// failure-run counter instead of reaching the test.
+            /// </summary>
+            public bool HoldExpired
+            {
+                get
+                {
+                    lock (_writeGate)
+                    {
+                        return _holdExpired;
+                    }
+                }
+            }
 
             public void HoldWrites()
             {
@@ -1197,12 +1232,14 @@ public class DaqifiDeviceStaleTextLineTests
                     Monitor.PulseAll(_writeGate);
 
                     // Bounded, so a test that never releases fails on its own assertion rather
-                    // than wedging the producer thread for the rest of the run.
+                    // than wedging the producer thread for the rest of the run. Expiry is recorded
+                    // so it cannot pass for a release: see HoldExpired.
                     while (_holdWrites)
                     {
                         var remaining = limit - clock.Elapsed;
                         if (remaining <= TimeSpan.Zero)
                         {
+                            _holdExpired = true;
                             return;
                         }
 

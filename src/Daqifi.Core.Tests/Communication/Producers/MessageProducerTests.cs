@@ -384,6 +384,10 @@ public class MessageProducerTests
         Assert.Equal(1L, producer.StartedWriteCount);
 
         stream.ReleaseWrite();
+        Assert.False(
+            stream.HoldExpired,
+            "The write hold expired on its own bound, so the write was no longer in flight when the count was read.");
+
         Assert.True(producer.StopSafely(2000));
         Assert.Equal(1L, producer.StartedWriteCount);
     }
@@ -492,6 +496,27 @@ public class MessageProducerTests
         private readonly object _gate = new();
         private bool _writeStarted;
         private bool _released;
+        private bool _holdExpired;
+
+        /// <summary>
+        /// True if the held write gave up on its bound instead of being released by the test.
+        /// The bound only exists so a test that never releases fails on its own assertion rather
+        /// than wedging the producer thread for the rest of the run; if it ever does expire, the
+        /// write was no longer in flight and anything read about it afterwards is meaningless.
+        /// Recorded rather than thrown: this runs on the producer's thread, where an exception
+        /// would be swallowed into SendFailed and the failure-run counter instead of reaching the
+        /// test.
+        /// </summary>
+        public bool HoldExpired
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _holdExpired;
+                }
+            }
+        }
 
         public bool WaitForWriteStarted(TimeSpan timeout)
         {
@@ -550,12 +575,14 @@ public class MessageProducerTests
                 Monitor.PulseAll(_gate);
 
                 // Bounded: a test that forgets to release must fail on its own assertion rather
-                // than wedge the producer thread for the rest of the run.
+                // than wedge the producer thread for the rest of the run. Expiry is recorded so it
+                // cannot pass for a release: see HoldExpired.
                 while (!_released)
                 {
                     var remaining = limit - clock.Elapsed;
                     if (remaining <= TimeSpan.Zero)
                     {
+                        _holdExpired = true;
                         return;
                     }
 
