@@ -4,7 +4,6 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.Network;
-using Daqifi.Core.Device.SdCard;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -509,9 +508,6 @@ public class NetworkConfigurationOperationsTests
         public void EnsureSupported(DeviceFeature feature) => throw new NotSupportedException();
         public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
             => throw new NotSupportedException();
-        public TimeSpan SdCardDownloadTimeout => throw new NotSupportedException();
-        public TimeSpan SdCardTransferIdleTimeout => throw new NotSupportedException();
-        public void RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => throw new NotSupportedException();
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();
         public void RaiseGapDetected(TimestampGapEventArgs e) => throw new NotSupportedException();
         public void RaiseRawStreamFrame(DaqifiOutMessage message) => throw new NotSupportedException();

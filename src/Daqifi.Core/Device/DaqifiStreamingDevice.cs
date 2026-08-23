@@ -27,7 +27,7 @@ namespace Daqifi.Core.Device
     /// Represents a DAQiFi device that supports data streaming functionality.
     /// Extends the base DaqifiDevice with streaming-specific operations.
     /// </summary>
-    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost
+    public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost
     {
         /// <summary>
         /// Response window allowed for the USB stream-interface command sent during
@@ -1271,7 +1271,7 @@ namespace Daqifi.Core.Device
 
         #endregion
 
-        #region IDeviceOperationHost
+        #region IDeviceOperationHost / ISdCardOperationHost
 
         // Explicit implementation: this is how the collaborators reach the device, and none of it
         // belongs on the public surface. Every member forwards to the member it names, so the
@@ -1336,11 +1336,11 @@ namespace Daqifi.Core.Device
         FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature)
             => CreateFeatureNotSupportedException(feature);
 
-        TimeSpan IDeviceOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
+        TimeSpan ISdCardOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
 
-        TimeSpan IDeviceOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
+        TimeSpan ISdCardOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
 
-        void IDeviceOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
+        void ISdCardOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
 
         void IDeviceOperationHost.RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
             => RaiseStreamFrameDiscarded(e);

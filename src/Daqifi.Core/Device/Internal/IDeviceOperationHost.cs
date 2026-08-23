@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
-using Daqifi.Core.Device.SdCard;
 
 #nullable enable
 
@@ -26,6 +25,13 @@ namespace Daqifi.Core.Device.Internal
     /// to intercept device I/O. Routing the collaborators through the device's own virtual members
     /// keeps those overrides in the path; a collaborator that reached for the transport directly
     /// would silently step around every one of them.
+    /// </para>
+    /// <para>
+    /// Kept to what <em>every</em> collaborator needs. A concern that belongs to one of them and to
+    /// a peripheral only some devices have — the SD card's transfer budgets and its low-space event
+    /// — lives on a facet that extends this seam
+    /// (<see cref="SdCard.ISdCardOperationHost"/>) instead, so channel control, administration,
+    /// network configuration and diagnostics never have to see it.
     /// </para>
     /// <para>
     /// <see cref="DaqifiStreamingDevice"/> implements this explicitly, so none of it widens the
@@ -128,35 +134,14 @@ namespace Daqifi.Core.Device.Internal
         FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature);
 
         /// <summary>
-        /// Overall wall-clock budget for one SD card download, read through the device so a
-        /// subclass's override of it still applies.
-        /// </summary>
-        TimeSpan SdCardDownloadTimeout { get; }
-
-        /// <summary>
-        /// Inactivity window for an SD card transfer, read through the device so a subclass's
-        /// override of it still applies.
-        /// </summary>
-        TimeSpan SdCardTransferIdleTimeout { get; }
-
-        /// <summary>
-        /// Raises the device's <see cref="DaqifiStreamingDevice.LowSdSpaceWarning"/> event.
-        /// </summary>
-        /// <remarks>
-        /// Deliberately a call back into the device rather than an event the collaborator owns.
-        /// The event is part of <see cref="ISdCardOperations"/>, so its <c>sender</c> has to remain
-        /// the device a subscriber attached to — a collaborator raising it in its own name would be
-        /// a silent, compile-clean behavior change.
-        /// </remarks>
-        void RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e);
-
-        /// <summary>
         /// Raises the device's <see cref="DaqifiStreamingDevice.StreamFrameDiscarded"/> event,
         /// isolating a throwing subscriber.
         /// </summary>
         /// <remarks>
-        /// Same reasoning as <see cref="RaiseLowSdSpaceWarning"/>: the event is part of the device's
-        /// public surface, so its <c>sender</c> must stay the device.
+        /// Deliberately a call back into the device rather than an event the collaborator owns: the
+        /// event is part of the device's public surface, so its <c>sender</c> must stay the device a
+        /// subscriber attached to — a collaborator raising it in its own name would be a silent,
+        /// compile-clean behavior change.
         /// </remarks>
         void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e);
 
