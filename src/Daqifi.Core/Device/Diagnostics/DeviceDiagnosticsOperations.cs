@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device.Internal;
+using Daqifi.Core.Device;
 
 #nullable enable
 
@@ -196,17 +197,18 @@ namespace Daqifi.Core.Device.Diagnostics
 
             ThrowIfCorruptedByStreamData(lines, "the error-count query");
 
-            foreach (var line in lines)
+            if (LineParsing.TryParseFirst<int>(lines, static (string? line, out int count) =>
             {
                 if (string.IsNullOrWhiteSpace(line))
                 {
-                    continue;
+                    count = 0;
+                    return false;
                 }
 
-                if (int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
-                {
-                    return count;
-                }
+                return int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out count);
+            }, out var errorCount))
+            {
+                return errorCount;
             }
 
             throw new DeviceDiagnosticsException(

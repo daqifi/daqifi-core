@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
+using Daqifi.Core.Device;
 
 namespace Daqifi.Core.Device.Capabilities;
 
@@ -143,27 +144,16 @@ public static class CapabilityDocumentParser
     {
         ArgumentNullException.ThrowIfNull(lines);
 
-        apiVersion = 0;
-
-        foreach (var line in lines)
+        return LineParsing.TryParseFirst<int>(lines, static (string? line, out int value) =>
         {
             if (string.IsNullOrWhiteSpace(line) || ScpiResponseClassifier.IsErrorResponseLine(line))
             {
-                continue;
+                value = 0;
+                return false;
             }
 
-            if (int.TryParse(
-                    line.Trim(),
-                    NumberStyles.Integer,
-                    CultureInfo.InvariantCulture,
-                    out var value))
-            {
-                apiVersion = value;
-                return true;
-            }
-        }
-
-        return false;
+            return int.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+        }, out apiVersion);
     }
 
     private static CapabilityIdentity? ReadIdentity(JsonElement root)
