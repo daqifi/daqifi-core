@@ -339,7 +339,7 @@ namespace Daqifi.Core.Device.Internal
                 // subscribing the inbound handler a second time and dispatching every frame twice.
                 await _host.DrainOutboundQueueAsync(cancellationToken).ConfigureAwait(false);
 
-                var collectedLines = new List<string>();
+                var collectedLines = new List<CollectedLine>();
 
                 // The list is appended to from the text consumer's reader thread and read from
                 // this one, so every touch of it goes through this gate. Stopping the consumer is
@@ -368,6 +368,47 @@ namespace Daqifi.Core.Device.Internal
                 // Number of lines collected by the time the setup action finished sending — see the
                 // note at the point it is captured, below (issue #553).
                 var sentBoundaryLineCount = 0;
+
+                // What the outbound writer looked like when this exchange opened, or null on a
+                // device that cannot say — see the note at the point it is captured, below
+                // (issue #593).
+                OutboundWriterSample? writerBoundary = null;
+
+                // A blank this exchange can prove is not its own answer: one that was already
+                // collected when the setup action finished queueing the command (issue #553), or
+                // one that arrived while a command was queued behind a writer that had not written
+                // anything for this exchange yet (issue #593). Either way the device had not been
+                // asked yet, and a blank only ever means "end of dump" — there is nothing for it to
+                // terminate.
+                //
+                // The two rules are complementary rather than nested: the line count catches a
+                // blank that beat the setup action's return, the writer sample catches one that
+                // beat the queued command onto the wire. Neither is a wait, and neither moves the
+                // boundary the exchange's safety rests on.
+                //
+                // Both halves of the writer sample are load-bearing. A write count that has not
+                // moved is not on its own evidence that nothing was asked: a setup action that
+                // sends by another route, or sends nothing at all and expects the device to be
+                // mid-dump already, leaves it exactly as still. Requiring work to be outstanding as
+                // well narrows the rule to the case actually in question — something handed to the
+                // writer and not yet written.
+                //
+                // Content lines are deliberately subject to neither rule: the wider staleLineCount
+                // boundary is all that applies to them, so a genuinely fast reply is never at risk
+                // (the decision recorded in #553). A device whose writer cannot be sampled falls
+                // back to the line-count rule alone, which is what it had before.
+                //
+                // Declared out here rather than beside its first use because both the wait loop
+                // and the projection ask it, and they sit on opposite sides of the consumer swap's
+                // try/finally.
+                bool IsPreSendBlank(int index, CollectedLine collected) =>
+                    collected.Text.Length == 0
+                    && (index < sentBoundaryLineCount
+                        || (writerBoundary.HasValue
+                            && collected.WriterAtArrival.HasValue
+                            && collected.WriterAtArrival.Value.HasWorkOutstanding
+                            && collected.WriterAtArrival.Value.StartedWrites
+                                <= writerBoundary.Value.StartedWrites));
 
                 try
                 {
@@ -421,9 +462,18 @@ namespace Daqifi.Core.Device.Internal
                     // nothing would read (issue #490).
                     textConsumer.MessageParsed += parsed =>
                     {
+                        // Each line is stamped with what the outbound writer looked like when it
+                        // was parsed. Read here rather than at projection time because it is a
+                        // fact about the line's arrival that is gone a moment later, and it is
+                        // what lets the projection recognise a line that reached the wire before
+                        // this exchange's command did (issue #593). Sampling, on the reader's own
+                        // thread, costs nothing and delays nothing — deliberately unlike the drain
+                        // that #593 rules out.
+                        var writer = _host.SampleOutboundWriter();
+
                         lock (collectedLinesGate)
                         {
-                            collectedLines.Add(parsed.Data);
+                            collectedLines.Add(new CollectedLine(parsed.Data, writer));
                         }
                     };
 
@@ -458,6 +508,14 @@ namespace Daqifi.Core.Device.Internal
                     // a stale line as proof that the device answered a query it never even received,
                     // and report a complete listing for a device that has gone silent.
                     staleLineCount = CollectedLineCount();
+
+                    // Captured with the line boundary above, and for the same reason: it marks
+                    // "before this exchange". A line stamped with no more started writes than this
+                    // was parsed before any command of this exchange had begun going out, so it
+                    // cannot be an answer to one — which is the half of the boundary a line count
+                    // cannot express, because the setup action returns when the command is
+                    // *queued*, not when it is written (issue #593).
+                    writerBoundary = _host.SampleOutboundWriter();
                     if (staleLineCount > 0)
                     {
                         Log(logger => logger.LogDebug(
@@ -495,8 +553,13 @@ namespace Daqifi.Core.Device.Internal
                     // as stale. SYSTem:LOG? then reports "the device did not answer" for a device
                     // that answered on time, 10/10 runs. What makes this boundary safe is not
                     // precision about when the write landed — it is being strictly earlier than any
-                    // reply can physically exist. See #593, which records the residual window this
-                    // leaves and why it cannot be closed this way.
+                    // reply can physically exist. See #593, which records that argument in full.
+                    //
+                    // The window that leaves — queued but not yet written — is closed without moving
+                    // this boundary at all, by the writer sample each collected line carries (see
+                    // the MessageParsed handler above and the projection below). Asking a line what
+                    // the writer was doing when it arrived answers the same question a later
+                    // boundary was meant to answer, without making any reply wait for the answer.
                     //
                     // The ~2-2.5x slowdown a drain also shows on the bench is the engine, not the
                     // device: the wait loop below infers "the device answered" from a count increase
@@ -510,9 +573,8 @@ namespace Daqifi.Core.Device.Internal
 
                     // Whether anything beyond staleLineCount would actually survive the projection
                     // below as evidence this exchange got an answer -- i.e. not a blank that will be
-                    // dropped as a pre-send leftover (index < sentBoundaryLineCount, issue #553). A
-                    // raw count comparison against staleLineCount is NOT equivalent to this: a blank
-                    // that arrived in the capture-to-send window bumps the count but is discarded
+                    // dropped as a pre-send leftover. A raw count comparison against staleLineCount
+                    // is NOT equivalent to this: such a blank bumps the count but is discarded
                     // later, and treating it as evidence would flip the wait loop into the short
                     // completion-timeout phase before the real response has a chance to arrive.
                     bool HasResponseEvidenceBeyondStaleBoundary()
@@ -521,7 +583,7 @@ namespace Daqifi.Core.Device.Internal
                         {
                             for (var i = staleLineCount; i < collectedLines.Count; i++)
                             {
-                                if (collectedLines[i].Length > 0 || i >= sentBoundaryLineCount)
+                                if (!IsPreSendBlank(i, collectedLines[i]))
                                 {
                                     return true;
                                 }
@@ -548,9 +610,9 @@ namespace Daqifi.Core.Device.Internal
                     // bounds collection either way (issue #592).
                     //
                     // Seeded via HasResponseEvidenceBeyondStaleBoundary rather than a raw count
-                    // comparison against staleLineCount: a blank that arrived in the capture-to-send
-                    // window bumps the count but is dropped later as a pre-send leftover (#553), and
-                    // treating that bump as evidence would flip this into the short completion-
+                    // comparison against staleLineCount: a blank that arrived before the command
+                    // did bumps the count but is dropped later as a pre-send leftover (#553, #593),
+                    // and treating that bump as evidence would flip this into the short completion-
                     // timeout phase before the real response arrives, discarding it early.
                     var hasReceivedAny = HasResponseEvidenceBeyondStaleBoundary();
                     if (hasReceivedAny)
@@ -565,7 +627,13 @@ namespace Daqifi.Core.Device.Internal
                         if (CollectedLineCount() > previousCount)
                         {
                             lastMessageTime = DateTime.UtcNow;
-                            if (!hasReceivedAny)
+
+                            // A count increase is not the same thing as an answer: the new line can
+                            // be a leftover blank that the projection below will discard. Asking
+                            // the same question the projection asks keeps the two from disagreeing
+                            // — otherwise the loop stops early on a line that then vanishes, and
+                            // the exchange reports silence for a device that was still answering.
+                            if (!hasReceivedAny && HasResponseEvidenceBeyondStaleBoundary())
                             {
                                 hasReceivedAny = true;
                                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", sw.ElapsedMilliseconds));
@@ -631,15 +699,15 @@ namespace Daqifi.Core.Device.Internal
                 lock (collectedLinesGate)
                 {
                     var afterStale = collectedLines
-                        .Select((line, index) => (line, index))
+                        .Select((collected, index) => (collected, index))
                         .Skip(staleLineCount)
-                        // A blank line captured at or before sentBoundaryLineCount arrived no later
-                        // than the moment the setup action finished sending, so it cannot be this
-                        // exchange's terminator (issue #553) — drop it here, before the
-                        // keepBlankLines projection below ever sees it. Content lines are untouched:
-                        // only the wider staleLineCount boundary above applies to them.
-                        .Where(t => t.line.Length > 0 || t.index >= sentBoundaryLineCount)
-                        .Select(t => t.line);
+                        // Blank lines that arrived before this exchange's command did are dropped
+                        // here, before the keepBlankLines projection below ever sees them — a blank
+                        // is only ever an end-of-dump terminator, and there is nothing for it to
+                        // terminate yet. Content lines are untouched: only the wider staleLineCount
+                        // boundary above applies to them (issues #553 and #593).
+                        .Where(t => !IsPreSendBlank(t.index, t.collected))
+                        .Select(t => t.collected.Text);
                     // keepBlankLines is how a caller asks to see the firmware's
                     // end-of-dump blank line. SYSTem:LOG? terminates its dump with
                     // one unconditionally, so its presence is the difference between
@@ -811,5 +879,18 @@ namespace Daqifi.Core.Device.Internal
                 // A logger that throws is not permitted to take down device operation.
             }
         }
+
+        /// <summary>
+        /// One line the text consumer produced, together with what the outbound writer had already
+        /// started when the line was parsed.
+        /// </summary>
+        /// <param name="Text">The parsed line, exactly as the caller will see it.</param>
+        /// <param name="WriterAtArrival">
+        /// <see cref="ITextExchangeHost.SampleOutboundWriter"/> taken as the line arrived, or
+        /// <c>null</c> when the device could not say. It is a fact about the line's arrival and
+        /// nothing else can recover it afterwards, which is why it is taken here rather than
+        /// re-read at projection time.
+        /// </param>
+        private readonly record struct CollectedLine(string Text, OutboundWriterSample? WriterAtArrival);
     }
 }

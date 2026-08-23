@@ -190,6 +190,7 @@ public class ConnectionGuardTests
         public void EnterOperationLockOwnership() => throw new NotSupportedException();
         public void ExitOperationLockOwnership() => throw new NotSupportedException();
         public Task DrainOutboundQueueAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public OutboundWriterSample? SampleOutboundWriter() => throw new NotSupportedException();
         public IDisposable SubscribeConsumerErrors(IMessageConsumer<string> consumer) => throw new NotSupportedException();
         public void OnStaleLineBoundaryCaptured() => throw new NotSupportedException();
     }
