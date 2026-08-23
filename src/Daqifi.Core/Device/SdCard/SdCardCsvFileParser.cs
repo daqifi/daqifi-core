@@ -334,9 +334,8 @@ public sealed class SdCardCsvFileParser
         IProgress<SdCardParseProgress>? progress,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var timestampFreq = config.TimestampFrequency;
-        var tickPeriod = timestampFreq > 0 ? 1.0 / timestampFreq : 0.0;
-        var timestampReconstructor = new SdCardTimestampReconstructor(tickPeriod);
+        var timestampReconstructor =
+            SdCardTimestampReconstructor.ForTimestampFrequency(config.TimestampFrequency);
 
         var linesProcessed = 0;
         var bytesRead = 0L;

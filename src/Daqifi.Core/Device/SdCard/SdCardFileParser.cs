@@ -186,17 +186,13 @@ public sealed class SdCardFileParser
             options.ConfigurationOverride?.TimestampFrequency ?? 0u,
             options.FallbackTimestampFrequency);
 
-        var tickPeriod = timestampFrequency > 0
-            ? 1.0 / timestampFrequency
-            : 0.0;
-
         var samples = ProduceSamples(
             token => openMessages(options.Progress, token),
             // Anchored once, here, rather than inside the iterator: a session whose samples can
             // be enumerated more than once must not shift its timestamps between reads when the
             // file name carries no date.
             fileCreatedDate ?? DateTime.UtcNow,
-            tickPeriod,
+            timestampFrequency,
             config,
             ct);
 
@@ -305,11 +301,12 @@ public sealed class SdCardFileParser
     private static async IAsyncEnumerable<SdCardLogEntry> ProduceSamples(
         Func<CancellationToken, IAsyncEnumerable<DaqifiOutMessage>> openMessages,
         DateTime baseTime,
-        double tickPeriod,
+        uint timestampFrequency,
         SdCardDeviceConfiguration? config,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var timestampReconstructor = new SdCardTimestampReconstructor(tickPeriod);
+        var timestampReconstructor =
+            SdCardTimestampReconstructor.ForTimestampFrequency(timestampFrequency);
 
         var enumerator = openMessages(ct).GetAsyncEnumerator(ct);
         await using (enumerator.ConfigureAwait(false))

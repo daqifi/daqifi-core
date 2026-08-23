@@ -21,6 +21,20 @@ internal sealed class SdCardTimestampReconstructor(double tickPeriod)
     private double _elapsedSeconds;
 
     /// <summary>
+    /// Creates a reconstructor for a device clock ticking at <paramref name="timestampFrequencyHz"/>.
+    /// </summary>
+    /// <param name="timestampFrequencyHz">
+    /// The log's device clock frequency in Hz, or <c>0</c> when it could not be determined.
+    /// </param>
+    /// <remarks>
+    /// All three SD card log formats turn a timestamp frequency into a tick period the same
+    /// way, so the rule — including "an unknown frequency means an unknown tick period" rather
+    /// than a division by zero — lives here instead of being re-derived per format.
+    /// </remarks>
+    public static SdCardTimestampReconstructor ForTimestampFrequency(uint timestampFrequencyHz) =>
+        new(timestampFrequencyHz > 0 ? 1.0 / timestampFrequencyHz : 0.0);
+
+    /// <summary>
     /// Whether the device clock's tick period is known. Callers should only call
     /// <see cref="Advance"/> when this is <see langword="true"/> — with an unknown tick period
     /// every sample would report the same elapsed time, which is not a reconstruction so much
