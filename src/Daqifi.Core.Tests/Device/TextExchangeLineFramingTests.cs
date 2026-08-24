@@ -55,12 +55,10 @@ public class TextExchangeLineFramingTests
 
         device.Connect();
 
-        var stopwatch = Stopwatch.StartNew();
         var lines = await device.CallAsync(() => transport.Release());
-        stopwatch.Stop();
 
         Assert.Equal(new[] { "Added test log messages" }, lines);
-        AssertAnsweredPromptly(stopwatch);
+        AssertRecognisedTheReply(device);
 
         device.Disconnect();
     }
@@ -77,11 +75,9 @@ public class TextExchangeLineFramingTests
 
         device.Connect();
 
-        var stopwatch = Stopwatch.StartNew();
         var lines = await device.CallAsync(() => transport.Release());
-        stopwatch.Stop();
 
-        AssertAnsweredPromptly(stopwatch);
+        AssertRecognisedTheReply(device);
 
         // ...and the blank line stays out of the caller's result. It is evidence for the wait
         // loop, not content: every caller of this seam parses lines, and none of them ever saw a
@@ -107,6 +103,15 @@ public class TextExchangeLineFramingTests
         stopwatch.Stop();
 
         Assert.Empty(lines);
+
+        // The mirror of AssertRecognisedTheReply, and the half of this control that no longer
+        // depends on the clock: silence must leave the exchange with nothing it would keep as an
+        // answer. If counting blank lines ever started counting a device that sent none, this
+        // flips to true here while the elapsed-time check below stays happily green.
+        Assert.False(
+            device.RecognisedTheReply,
+            "A silent device left the exchange believing it had been answered.");
+
         Assert.True(
             stopwatch.ElapsedMilliseconds >= ResponseTimeoutMs - 500,
             $"A silent device should have used the whole {ResponseTimeoutMs}ms response window, "
@@ -153,15 +158,30 @@ public class TextExchangeLineFramingTests
         device.Disconnect();
     }
 
-    private static void AssertAnsweredPromptly(Stopwatch stopwatch)
+    private static void AssertRecognisedTheReply(LineFramingTestableDevice device)
     {
-        // Generously bounded: a recognised reply finishes in about the completion timeout, and an
-        // unrecognised one takes at least ResponseTimeoutMs. Anything below this bound can only be
-        // the former, with room to spare for a slow build agent.
+        // The exchange reports which branch its reply wait loop left by, so this asks it rather
+        // than inferring the answer from a stopwatch.
+        //
+        // The bound this replaces was `elapsed < ResponseTimeoutMs - 1000`, i.e. "it finished well
+        // inside the response timeout, so it must have recognised the reply". That inference
+        // measures the runner as much as the exchange: the wait loop polls with
+        // `await Task.Delay(50)`, and on a thread-pool-starved CI agent each of those continuations
+        // can take a second to be scheduled — so an exchange that recognised the reply on its very
+        // first poll still returns seconds later, and the stopwatch calls a fast path a timed-out
+        // one. That is issue #634: 2129ms observed against a 2000ms bound, on a run where the
+        // reply was recognised correctly the whole time, and green again on a re-run of the same
+        // SHA. Reproduced here 10/10 under a starved pool, at 2.1-2.7s.
+        //
+        // Nothing is weakened by asking instead. The failure this guards against — a reply shape
+        // the line framing cannot see, which is the whole of #538 — leaves the loop in its
+        // first-response phase, so it still lands here as false. So does the #592 regression of a
+        // reply that arrived before the loop's first poll going unnoticed. What the stopwatch
+        // added on top of that was the machine's load, and that is all this drops.
         Assert.True(
-            stopwatch.ElapsedMilliseconds < ResponseTimeoutMs - 1000,
-            $"The exchange took {stopwatch.ElapsedMilliseconds}ms, which means it waited out its "
-            + $"{ResponseTimeoutMs}ms response timeout instead of recognising the reply.");
+            device.RecognisedTheReply,
+            "The exchange never saw the reply as an answer, so it waited out its "
+            + $"{ResponseTimeoutMs}ms first-response timeout instead of recognising it.");
     }
 
     /// <summary>Exposes the protected text-exchange entry point with the timeouts these tests need.</summary>
@@ -171,6 +191,21 @@ public class TextExchangeLineFramingTests
             : base(name, transport)
         {
         }
+
+        /// <summary>
+        /// What the last exchange's reply wait loop concluded: <c>true</c> if it found evidence the
+        /// device answered, <c>false</c> if it sat out its whole first-response timeout, and
+        /// <c>null</c> if no exchange has finished waiting yet — which is itself a failure for
+        /// every caller of it here, and reads as one.
+        /// </summary>
+        public bool? RecognisedTheReply { get; private set; }
+
+        /// <summary>
+        /// Records <see cref="DaqifiDevice.OnReplyWaitCompleted"/> so a test can assert on the
+        /// branch the exchange took rather than on how long it took to get there. Written on the
+        /// exchange's own task and read only after awaiting it, so the await orders the two.
+        /// </summary>
+        internal override void OnReplyWaitCompleted(bool sawResponse) => RecognisedTheReply = sawResponse;
 
         public Task<IReadOnlyList<string>> CallAsync(Action setupAction)
         {

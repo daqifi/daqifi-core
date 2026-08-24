@@ -2032,6 +2032,18 @@ namespace Daqifi.Core.Device
         {
         }
 
+        /// <inheritdoc />
+        void ITextExchangeHost.OnReplyWaitCompleted(bool sawResponse) => OnReplyWaitCompleted(sawResponse);
+
+        /// <summary>
+        /// A no-op on the real device. Overridable for tests, mirroring
+        /// <see cref="OnSendBoundaryCaptured"/> — see
+        /// <see cref="ITextExchangeHost.OnReplyWaitCompleted"/> for why this seam exists.
+        /// </summary>
+        internal virtual void OnReplyWaitCompleted(bool sawResponse)
+        {
+        }
+
         #endregion
 
         #region IOperationSerializationHost — the serializer's view of this device
