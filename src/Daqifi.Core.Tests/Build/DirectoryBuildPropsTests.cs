@@ -34,13 +34,17 @@ public class DirectoryBuildPropsTests
     /// Property names declared in the root <c>Directory.Build.props</c>, read from the file itself
     /// so that adding a property there automatically extends the coverage below.
     /// </summary>
-    private static IReadOnlyList<string> CentralizedPropertyNames() =>
+    /// <remarks>
+    /// Compared case-insensitively because MSBuild property names are: <c>&lt;Nullable&gt;</c> and
+    /// <c>&lt;nullable&gt;</c> set the same property, so a redeclaration that differs only in casing
+    /// still overrides the centralized value and still has to be caught.
+    /// </remarks>
+    private static HashSet<string> CentralizedPropertyNames() =>
         XDocument.Load(DirectoryBuildPropsPath)
             .Descendants("PropertyGroup")
             .Elements()
             .Select(e => e.Name.LocalName)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static IReadOnlyList<string> ProjectFiles() =>
         Directory.GetFiles(Path.Combine(RepositoryRoot, "src"), "*.csproj", SearchOption.AllDirectories)
@@ -62,6 +66,18 @@ public class DirectoryBuildPropsTests
         Assert.Contains("ImplicitUsings", centralized);
         Assert.Contains("Nullable", centralized);
         Assert.Contains("TreatWarningsAsErrors", centralized);
+    }
+
+    [Fact]
+    public void CentralizedPropertyNames_AreMatchedCaseInsensitively()
+    {
+        // MSBuild property names are case-insensitive, so <treatwarningsaserrors> overrides the
+        // centralized value just as <TreatWarningsAsErrors> does. An ordinal comparison here
+        // would let that redeclaration through.
+        var centralized = CentralizedPropertyNames();
+
+        Assert.Contains("treatwarningsaserrors", centralized);
+        Assert.Contains("IMPLICITUSINGS", centralized);
     }
 
     [Fact]
