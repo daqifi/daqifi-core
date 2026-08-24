@@ -125,12 +125,15 @@ def main(argv):
     reports = [Report(framework_label(p), p) for p in sorted(paths)]
     markdown = render(reports)
 
+    # Always echo to stdout: GitHub's job summary is not readable through the API,
+    # so the step log is the only place the rendered numbers can be checked after
+    # the fact (and it is where you are already looking when a run goes wrong).
+    sys.stdout.write(markdown)
+
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as handle:
             handle.write(markdown)
-    else:
-        sys.stdout.write(markdown)
     return 0
 
 
