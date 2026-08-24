@@ -9,8 +9,11 @@ collapsed list of the files with the most uncovered lines. Written against the
 Python standard library only, so CI needs no third-party action, tool install,
 or secret to display coverage.
 
-Exits non-zero only when it cannot read a report -- it never judges the numbers,
-because this repo deliberately has no build-failing coverage threshold (#641).
+This is reporting only, so it must never be what turns a build red: an
+unreadable or malformed report is reported as a warning in the summary and the
+script still exits 0. It also never judges the numbers, because this repo
+deliberately has no build-failing coverage threshold (#641). The one non-zero
+exit is a usage error, which only a hand-run with no arguments can produce.
 """
 
 import os
@@ -77,8 +80,28 @@ def framework_label(path):
     return name
 
 
-def render(reports):
+def warning_block(failures):
+    """Markdown for any report that could not be read. Empty when all were fine."""
+    if not failures:
+        return []
+    out = ["> [!WARNING]", "> Some coverage reports could not be read:", ">"]
+    for path, error in failures:
+        out.append(f"> - `{path}`: {type(error).__name__}: {error}")
+    out.append("")
+    return out
+
+
+def render(reports, failures=()):
     out = ["## Code coverage", ""]
+
+    if not reports:
+        out.append("No readable coverage report was produced by this run.")
+        out.append("")
+        out.extend(warning_block(failures))
+        out.append("_No coverage threshold is enforced; this is reporting only._")
+        out.append("")
+        return "\n".join(out)
+
     out.append("| Target framework | Line | Branch | Method |")
     out.append("| --- | ---: | ---: | ---: |")
     for r in reports:
@@ -111,6 +134,7 @@ def render(reports):
         out.append("</details>")
         out.append("")
 
+    out.extend(warning_block(failures))
     out.append("_No coverage threshold is enforced; this is reporting only._")
     out.append("")
     return "\n".join(out)
@@ -122,8 +146,17 @@ def main(argv):
         print("usage: coverage-summary.py <report.xml> [<report.xml> ...]", file=sys.stderr)
         return 2
 
-    reports = [Report(framework_label(p), p) for p in sorted(paths)]
-    markdown = render(reports)
+    reports = []
+    failures = []
+    for path in sorted(paths):
+        # A malformed or truncated report is a reporting problem, not a build
+        # problem, so it becomes a warning in the summary rather than a red job.
+        try:
+            reports.append(Report(framework_label(path), path))
+        except Exception as error:  # noqa: BLE001 - nothing here may fail the build
+            failures.append((path, error))
+
+    markdown = render(reports, failures)
 
     # Always echo to stdout: GitHub's job summary is not readable through the API,
     # so the step log is the only place the rendered numbers can be checked after
@@ -132,8 +165,11 @@ def main(argv):
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
-        with open(summary_path, "a", encoding="utf-8") as handle:
-            handle.write(markdown)
+        try:
+            with open(summary_path, "a", encoding="utf-8") as handle:
+                handle.write(markdown)
+        except OSError as error:
+            print(f"could not write the job summary: {error}", file=sys.stderr)
     return 0
 
 
