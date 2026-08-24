@@ -169,5 +169,21 @@ namespace Daqifi.Core.Device.Internal
         /// because it is normally sub-millisecond.
         /// </summary>
         void OnStaleLineBoundaryCaptured();
+
+        /// <summary>
+        /// Called the instant the exchange has captured its send boundary — after
+        /// <c>setupActionAsync</c> has returned, and before the reply wait loop starts. A no-op on
+        /// the real device; the counterpart to <see cref="OnStaleLineBoundaryCaptured"/>, and it
+        /// exists for the same reason.
+        /// </summary>
+        /// <remarks>
+        /// A test that needs a line to land <em>after</em> the send boundary — i.e. one the pre-send
+        /// blank rule must NOT discard (issues #553 and #593) — otherwise has to guess, because the
+        /// boundary is captured within microseconds of the setup action returning and nothing about
+        /// that moment is observable from the transport. Guessing means a wall-clock delay racing
+        /// the exchange's own response timeout, which is a flake (issue #632). This seam replaces
+        /// the guess with an ordering the runtime guarantees.
+        /// </remarks>
+        void OnSendBoundaryCaptured();
     }
 }

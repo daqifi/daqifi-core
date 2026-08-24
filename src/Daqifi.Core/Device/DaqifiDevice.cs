@@ -2020,6 +2020,18 @@ namespace Daqifi.Core.Device
         {
         }
 
+        /// <inheritdoc />
+        void ITextExchangeHost.OnSendBoundaryCaptured() => OnSendBoundaryCaptured();
+
+        /// <summary>
+        /// A no-op on the real device. Overridable for tests, mirroring
+        /// <see cref="OnStaleLineBoundaryCaptured"/> — see
+        /// <see cref="ITextExchangeHost.OnSendBoundaryCaptured"/> for why this seam exists.
+        /// </summary>
+        internal virtual void OnSendBoundaryCaptured()
+        {
+        }
+
         #endregion
 
         #region IOperationSerializationHost — the serializer's view of this device

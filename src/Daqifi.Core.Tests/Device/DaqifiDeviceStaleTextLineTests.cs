@@ -191,7 +191,21 @@ public class DaqifiDeviceStaleTextLineTests
         // device, so a blank — which only ever terminates a dump — cannot be answering: without
         // the fix it is returned as "the device answered, and its log is empty".
         using var transport = new QueuedWriteTransport();
-        using var device = new StaleLineTestableDevice("Queued-Command Device", transport);
+
+        // Released at the send boundary, so it is released strictly after this exchange's setup
+        // action has returned and the line-count boundary from #591 provably cannot be what drops
+        // it: by then the exchange believes it has sent, and only the write count knows the command
+        // is still sitting in the queue. A delay used to stand in for "after the setup action" and
+        // could only guess at it — see the sibling test below and issue #632.
+        var blankReleased = false;
+        using var device = new StaleLineTestableDevice(
+            "Queued-Command Device",
+            transport,
+            onSendBoundaryCaptured: () =>
+            {
+                blankReleased = true;
+                transport.ReleaseLine("\r\n");
+            });
 
         device.Connect();
 
@@ -202,17 +216,14 @@ public class DaqifiDeviceStaleTextLineTests
             "The producer never picked up the earlier command.");
 
         var lines = await device.CallExecuteTextCommandAsync(
-            () =>
-            {
-                device.Send(new ScpiMessage("SYSTem:LOG?"));
-
-                // Released only after this setup action has returned, so the line-count boundary
-                // from #591 cannot be what drops it: by then the exchange believes it has sent,
-                // and only the write count knows the command is still sitting in the queue.
-                _ = Task.Delay(75).ContinueWith(_ => transport.ReleaseLine("\r\n"));
-            },
+            () => device.Send(new ScpiMessage("SYSTem:LOG?")),
             keepBlankLines: true);
 
+        // Without this the empty result below would also be satisfied by a blank that was never
+        // put on the wire at all, which is what a delay-based release can silently degrade into.
+        Assert.True(
+            blankReleased,
+            "The exchange never reached its send boundary, so the blank was never put on the wire.");
         Assert.Empty(lines);
 
         transport.ReleaseWrite();
@@ -240,7 +251,24 @@ public class DaqifiDeviceStaleTextLineTests
         // did, 10/10 runs. The write is deliberately still open when the blank lands here, so a
         // marker keyed off the write FINISHING rather than starting would fail this test.
         using var transport = new QueuedWriteTransport();
-        using var device = new StaleLineTestableDevice("Answering Log Device", transport);
+
+        // The blank is released at the send boundary itself, not after a delay. It has to land
+        // strictly after that boundary — a blank at or before it is a pre-send leftover by both
+        // rules — and the exchange captures it microseconds after the setup action returns, which
+        // no wall-clock delay can aim at. A delay only guesses, and on a loaded runner the guess
+        // races the exchange's own responseTimeoutMs and loses, which is issue #632. Releasing on
+        // the boundary makes the ordering the runtime's rather than the scheduler's. Nothing about
+        // the window under test moves: the write is held from before the exchange until after it,
+        // so the blank still lands with the command's write in progress — which is the whole point.
+        var blankReleased = false;
+        using var device = new StaleLineTestableDevice(
+            "Answering Log Device",
+            transport,
+            onSendBoundaryCaptured: () =>
+            {
+                blankReleased = true;
+                transport.ReleaseLine("\r\n");
+            });
 
         device.Connect();
 
@@ -253,11 +281,15 @@ public class DaqifiDeviceStaleTextLineTests
                 Assert.True(
                     transport.WaitForWriteStarted(TimeSpan.FromSeconds(10)),
                     "The producer never started the command's write.");
-
-                _ = Task.Delay(75).ContinueWith(_ => transport.ReleaseLine("\r\n"));
             },
             keepBlankLines: true);
 
+        // Checked before the result, so a failure says which side lost: without it, an exchange
+        // that never reached its send boundary and an exchange that dropped the blank both surface
+        // as the same bare empty-result assertion.
+        Assert.True(
+            blankReleased,
+            "The exchange never reached its send boundary, so the blank was never put on the wire.");
         Assert.NotEmpty(lines);
         Assert.All(lines, line => Assert.Equal(string.Empty, line));
 
@@ -681,10 +713,21 @@ public class DaqifiDeviceStaleTextLineTests
     /// <summary>Exposes the protected text-exchange entry points.</summary>
     private class StaleLineTestableDevice : DaqifiDevice
     {
-        public StaleLineTestableDevice(string name, IStreamTransport transport)
+        private readonly Action? _onSendBoundaryCaptured;
+
+        public StaleLineTestableDevice(
+            string name, IStreamTransport transport, Action? onSendBoundaryCaptured = null)
             : base(name, transport)
         {
+            _onSendBoundaryCaptured = onSendBoundaryCaptured;
         }
+
+        /// <summary>
+        /// Exposes <see cref="DaqifiDevice.OnSendBoundaryCaptured"/> so a test can release a line
+        /// into the transport at the exact instant the exchange captures its send boundary — the
+        /// first point at which a blank is provably past the pre-send rules of #553 and #593.
+        /// </summary>
+        internal override void OnSendBoundaryCaptured() => _onSendBoundaryCaptured?.Invoke();
 
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
             Action setupAction,
