@@ -11,20 +11,22 @@ public class ProtobufMessageParserTests
     [Fact]
     public void ProtobufMessageParser_ParseMessages_WithValidProtobuf_ShouldReturnMessage()
     {
-        // Arrange
+        // Arrange - a real length-delimited frame. This test used to pass an EMPTY buffer
+        // (duplicating WithEmptyData_ShouldReturnEmpty) and hid its only type assertion
+        // behind `if (messages.Any())`, which was never true, so it asserted nothing.
         var parser = new ProtobufMessageParser();
-        // Create minimal valid protobuf data (empty message)
-        var data = new byte[] { }; // Empty protobuf message
-        
+        using var stream = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 42 }.WriteDelimitedTo(stream);
+        var data = stream.ToArray();
+
         // Act
-        var messages = parser.ParseMessages(data, out var consumedBytes);
-        
-        // Assert - Empty message should parse successfully
-        if (messages.Any())
-        {
-            Assert.IsType<ProtobufMessage>(messages.First());
-        }
-        Assert.True(consumedBytes >= 0);
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert - one decoded message, and the length prefix is consumed along with the
+        // body so the caller trims the whole frame off its buffer.
+        var message = Assert.IsType<ProtobufMessage>(Assert.Single(messages));
+        Assert.Equal(42u, message.Data.MsgTimeStamp);
+        Assert.Equal(data.Length, consumedBytes);
     }
 
     [Fact]
@@ -58,18 +60,25 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
-    public void ProtobufMessageParser_ParseMessages_WithNullBytes_ShouldHandleCorrectly()
+    public void ProtobufMessageParser_ParseMessages_WithNullBytes_ResyncsAndPreservesTrailingPrefix()
     {
-        // Arrange - This simulates the actual issue with binary protobuf containing null bytes
+        // Arrange - null bytes that would break LineBasedMessageParser. None of these five
+        // bytes begins a valid frame, so what matters is exactly how far the parser
+        // resyncs. The old assertion was `consumedBytes >= 0`, which any behaviour
+        // satisfies, including silently eating the whole buffer.
         var parser = new ProtobufMessageParser();
-        // Create data with null bytes that would break LineBasedMessageParser
         var dataWithNulls = new byte[] { 0x00, 0x01, 0x02, 0x00, 0x03 };
-        
-        // Act - Parser should handle the null bytes gracefully
+
+        // Act
         var messages = parser.ParseMessages(dataWithNulls, out var consumedBytes);
-        
-        // Assert - Should not throw exceptions, even if parsing fails
-        Assert.True(consumedBytes >= 0);
+
+        // Assert - nothing parses, and the parser advances one byte at a time over the
+        // four unusable leading bytes. It stops at the trailing 0x03: that byte is a
+        // varint prefix declaring a 3-byte body that has not arrived yet, and consuming a
+        // possible frame start would destroy it for the caller, which trims consumedBytes
+        // from its buffer. So consumedBytes is 4, not 5 and not 0.
+        Assert.Empty(messages);
+        Assert.Equal(4, consumedBytes);
     }
 
     [Fact]
@@ -90,20 +99,27 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
-    public void ProtobufMessageParser_ParseMessages_WithMultipleMessages_ShouldParseFirst()
+    public void ProtobufMessageParser_ParseMessages_WithMultipleMessages_ShouldParseAll()
     {
-        // Arrange
+        // Arrange - two real length-delimited frames back to back, the shape a streaming
+        // device produces when several samples land in one read. The old version of this
+        // test used hand-written "mock protobuf" bytes that are not valid delimited frames
+        // at all, so it parsed nothing; its `consumedBytes >= 0` assertion hid that, and
+        // the name's claim about parsing the first message was never checked.
         var parser = new ProtobufMessageParser();
-        // Create combined mock protobuf data
-        var data1 = new byte[] { 0x08, 0x01 }; // Mock protobuf message 1
-        var data2 = new byte[] { 0x08, 0x02 }; // Mock protobuf message 2
-        var combinedData = data1.Concat(data2).ToArray();
-        
+        using var stream = new MemoryStream();
+        new DaqifiOutMessage { MsgTimeStamp = 7 }.WriteDelimitedTo(stream);
+        new DaqifiOutMessage { MsgTimeStamp = 9 }.WriteDelimitedTo(stream);
+        var combinedData = stream.ToArray();
+
         // Act
-        var messages = parser.ParseMessages(combinedData, out var consumedBytes);
-        
-        // Assert - Should attempt to parse and consume some data
-        Assert.True(consumedBytes >= 0);
+        var messages = parser.ParseMessages(combinedData, out var consumedBytes).ToList();
+
+        // Assert - both frames come out, in wire order, and the whole buffer is consumed.
+        Assert.Equal(2, messages.Count);
+        Assert.Equal(new uint[] { 7, 9 }, messages.Select(m => m.Data.MsgTimeStamp));
+        Assert.All(messages, m => Assert.IsType<ProtobufMessage>(m));
+        Assert.Equal(combinedData.Length, consumedBytes);
     }
 
     [Fact]
@@ -556,20 +572,27 @@ public class ProtobufMessageParserTests
     [Fact]
     public void ProtobufMessageParser_ParseMessages_ReturnsCorrectMessageType()
     {
-        // Arrange
+        // Arrange - a streaming-shaped frame with a repeated payload field, so this checks
+        // that the wrapper hands back the fully decoded generated message and not just
+        // something that happens to be a DaqifiOutMessage. Like the two tests above, this
+        // one previously ran on an EMPTY buffer and guarded its assertions behind
+        // `if (messages.Any())`, so neither assertion ever executed.
         var parser = new ProtobufMessageParser();
-        var data = new byte[] { }; // Empty protobuf
-        
+        using var stream = new MemoryStream();
+        var original = new DaqifiOutMessage { MsgTimeStamp = 100 };
+        original.AnalogInData.Add(11);
+        original.AnalogInData.Add(22);
+        original.WriteDelimitedTo(stream);
+        var data = stream.ToArray();
+
         // Act
-        var messages = parser.ParseMessages(data, out var consumedBytes);
-        
-        // Assert - If parsing succeeds, should return correct types
-        if (messages.Any())
-        {
-            var message = messages.First();
-            Assert.IsType<ProtobufMessage>(message);
-            Assert.IsType<DaqifiOutMessage>(message.Data);
-        }
-        Assert.True(consumedBytes >= 0);
+        var messages = parser.ParseMessages(data, out var consumedBytes).ToList();
+
+        // Assert
+        var message = Assert.IsType<ProtobufMessage>(Assert.Single(messages));
+        var decoded = Assert.IsType<DaqifiOutMessage>(message.Data);
+        Assert.Equal(100u, decoded.MsgTimeStamp);
+        Assert.Equal(new[] { 11, 22 }, decoded.AnalogInData);
+        Assert.Equal(data.Length, consumedBytes);
     }
 }
