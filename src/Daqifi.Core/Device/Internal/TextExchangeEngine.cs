@@ -569,6 +569,13 @@ namespace Daqifi.Core.Device.Internal
                     // wrong, for the reason above, just not slow.
                     sentBoundaryLineCount = CollectedLineCount();
 
+                    // Test-only seam (issue #632), the counterpart of the one above: a no-op on the
+                    // real device, so this changes nothing here. It exists so a test double can
+                    // release a line into the transport at a point the pre-send rules provably do
+                    // not cover, instead of guessing at that point with a wall-clock delay racing
+                    // this exchange's own response timeout.
+                    _host.OnSendBoundaryCaptured();
+
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
 
                     // Whether anything beyond staleLineCount would actually survive the projection

@@ -188,5 +188,6 @@ public class ConnectionGuardTests
         public OutboundWriterSample? SampleOutboundWriter() => throw new NotSupportedException();
         public IDisposable SubscribeConsumerErrors(IMessageConsumer<string> consumer) => throw new NotSupportedException();
         public void OnStaleLineBoundaryCaptured() => throw new NotSupportedException();
+        public void OnSendBoundaryCaptured() => throw new NotSupportedException();
     }
 }
