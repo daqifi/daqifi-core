@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -385,8 +386,10 @@ public class LiveCsvRecordingTests
         // The recording subscribes from inside the exporter, so there is no synchronous point for a
         // test to hook. Wait for the subscription itself rather than for a guessed interval — a
         // fixed delay is a race that loses the leading frames on a loaded machine.
-        var deadline = DateTime.UtcNow + Timeout;
-        while (device.LiveSubscriptionCount == 0 && DateTime.UtcNow < deadline)
+        // Monotonic clock, not DateTime.UtcNow: a wall-clock deadline can jump under an NTP step and
+        // either cut the wait short or stretch it. Same reason PR #602 replaced its UtcNow deadline.
+        var elapsed = Stopwatch.StartNew();
+        while (device.LiveSubscriptionCount == 0 && elapsed.Elapsed < Timeout)
         {
             await Task.Delay(5);
         }
