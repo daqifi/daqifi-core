@@ -131,3 +131,6 @@ artifacts/
 *.scc
 # Agent scratch journal — local-only, never committed
 SESSION_LOG.md
+
+# Python bytecode from .github/scripts
+__pycache__/
