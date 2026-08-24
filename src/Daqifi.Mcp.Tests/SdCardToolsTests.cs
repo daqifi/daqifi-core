@@ -177,7 +177,7 @@ public class SdCardReportDtoTests
 /// <summary>
 /// Tests for the adapter that feeds a parsed SD log to Core's CSV exporter.
 /// </summary>
-public class SdCardSampleSourceTests
+public class SdCardLogSampleSourceTests
 {
     private static SdCardLogEntry Entry(long ticks, uint digital, params double[] analog) =>
         new(new DateTime(ticks, DateTimeKind.Utc), analog, digital, null);
@@ -194,7 +194,7 @@ public class SdCardSampleSourceTests
     [Fact]
     public void Channels_AreOnePerAnalogPortPlusTheDigitalPort()
     {
-        var source = new SdCardSampleSource(Entries(), "SN123", analogPortCount: 3);
+        var source = new SdCardLogSampleSource(Entries(), "SN123", analogChannelCount: 3);
         var channels = source.GetChannels();
 
         Assert.Equal(4, channels.Count);
@@ -208,19 +208,19 @@ public class SdCardSampleSourceTests
         // CsvExporter returns without writing anything when a source has no channels, so an
         // analog-less device has to keep at least one column or the export silently produces
         // an empty file.
-        Assert.Single(new SdCardSampleSource(Entries(), "SN123", analogPortCount: 0).GetChannels());
+        Assert.Single(new SdCardLogSampleSource(Entries(), "SN123", analogChannelCount: 0).GetChannels());
     }
 
     [Fact]
     public async Task RowCount_CountsTimestamps_WhileSampleCountCountsEntries()
     {
-        var source = new SdCardSampleSource(
+        var source = new SdCardLogSampleSource(
             Entries(
                 Entry(1000, 0b01, 1.0, 2.0),
                 Entry(1000, 0b10, 3.0, 4.0),   // same timestamp — merges into the first row
                 Entry(2000, 0b11, 5.0, 6.0)),
             "SN123",
-            analogPortCount: 2);
+            analogChannelCount: 2);
 
         var rows = new List<SampleRow>();
         await foreach (var row in source.StreamSamples())
@@ -237,10 +237,10 @@ public class SdCardSampleSourceTests
     [Fact]
     public async Task MoreAnalogValuesThanChannels_IsTruncatedAndReported()
     {
-        var source = new SdCardSampleSource(
+        var source = new SdCardLogSampleSource(
             Entries(Entry(1000, 0, 1.0, 2.0, 3.0)),
             "SN123",
-            analogPortCount: 1);
+            analogChannelCount: 1);
 
         var rows = new List<SampleRow>();
         await foreach (var row in source.StreamSamples())
@@ -255,10 +255,10 @@ public class SdCardSampleSourceTests
     [Fact]
     public async Task FewerAnalogValuesThanChannels_LeavesTheRemainingColumnsEmpty()
     {
-        var source = new SdCardSampleSource(
+        var source = new SdCardLogSampleSource(
             Entries(Entry(1000, 0, 1.0)),
             "SN123",
-            analogPortCount: 3);
+            analogChannelCount: 3);
 
         var rows = new List<SampleRow>();
         await foreach (var row in source.StreamSamples())
@@ -276,14 +276,14 @@ public class SdCardSampleSourceTests
     [Fact]
     public async Task RowCount_MatchesTheLinesTheRealExporterWrites()
     {
-        var source = new SdCardSampleSource(
+        var source = new SdCardLogSampleSource(
             Entries(
                 Entry(1000, 0b01, 1.0, 2.0),
                 Entry(1000, 0b10, 3.0, 4.0),
                 Entry(2000, 0b11, 5.0, 6.0),
                 Entry(3000, 0b00, 7.0, 8.0)),
             "SN123",
-            analogPortCount: 2);
+            analogChannelCount: 2);
 
         var writer = new StringWriter();
         await new CsvExporter().ExportAsync(source, writer, new CsvExportOptions { UseRelativeTime = false });
