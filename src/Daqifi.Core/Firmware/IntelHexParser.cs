@@ -157,10 +157,12 @@ public class IntelHexParser
         // where N is the value of the byte-count field (record[0]). ValidateLine already guarantees at
         // least 5 decoded bytes, so record[0] is safely accessible. A declared count that disagrees with
         // the actual data length means the record is truncated, padded, or corrupt. Rejecting it here as
-        // the documented InvalidDataException prevents the downstream ReadBigEndianUInt16 reads (from
-        // UpdateBaseAddress and ComputeFullAddress) from taking a wrong-sized slice and throwing a raw
-        // ArgumentException — e.g. a type-04 record with a zero byte count would otherwise hand
-        // BitConverter.ToUInt16 a zero-length array and crash the whole parse.
+        // the documented InvalidDataException, rather than being parsed as if it were intact.
+        //
+        // This check is NOT what keeps the ReadBigEndianUInt16 reads in range. ComputeFullAddress reads
+        // bytes 1-2, which ValidateLine's 11-character minimum already guarantees; and a zero-count
+        // type-04 record passes right through here, because its declared count does equal its (zero)
+        // data length — that case is caught by UpdateBaseAddress's own explicit type-04 guard below.
         int declaredDataLength = record[0];
         int actualDataLength = record.Length - 5;
         if (actualDataLength != declaredDataLength)
