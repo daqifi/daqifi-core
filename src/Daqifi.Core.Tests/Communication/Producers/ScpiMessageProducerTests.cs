@@ -181,11 +181,53 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
+    public void SetDioPortDirection_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetDioPortDirection(-1, 1));
+    }
+
+    // Channel 0 is a real channel on every DAQiFi board, so the guard's boundary matters:
+    // rejecting only negatives must leave the lowest valid channel untouched.
+    [Fact]
+    public void SetDioPortDirection_WithChannelZero_StillReturnsCommand()
+    {
+        var message = ScpiMessageProducer.SetDioPortDirection(0, 0);
+        Assert.Equal("DIO:PORt:DIRection 0,0", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
     public void SetDioPortState_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.SetDioPortState(1, 1);
         Assert.Equal("DIO:PORt:STATe 1,1", message.Data);
         AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetDioPortState_WithNegativeChannel_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetDioPortState(-1, 1));
+    }
+
+    [Fact]
+    public void SetDioPortState_WithChannelZero_StillReturnsCommand()
+    {
+        var message = ScpiMessageProducer.SetDioPortState(0, 1);
+        Assert.Equal("DIO:PORt:STATe 0,1", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetDioPortState_WithNegativeChannel_ThrowsBeforeCheckingTheValue()
+    {
+        // Both arguments are invalid here. The channel guard runs first, so the caller is
+        // told about `channel` rather than about `value`, matching the sibling setters that
+        // validate the channel before the value.
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.SetDioPortState(-1, double.NaN));
+
+        Assert.Equal("channel", ex.ParamName);
     }
 
     [Theory]
@@ -1121,8 +1163,12 @@ public class ScpiMessageProducerTests
 
     // Each channel-addressed producer already has its own test proving it throws on a
     // negative channel. None of them pinned what callers can actually observe about that
-    // throw, so nothing stopped the nine copies of the rule from drifting apart. They now
+    // throw, so nothing stopped the copies of the rule from drifting apart. They now
     // share one ValidateChannel helper; this pins the contract it is there to hold.
+    //
+    // The list is the whole of ScpiMessageProducer's channel-addressed surface: the two
+    // DIO producers were the odd ones out until they were brought in, so a producer added
+    // here without the guard fails this test rather than quietly shipping an unguarded one.
     [Fact]
     public void EveryChannelAddressedProducer_RejectsNegativeChannelIdentically()
     {
@@ -1137,6 +1183,8 @@ public class ScpiMessageProducerTests
             (nameof(ScpiMessageProducer.SetAdcCalibrationOffset), () => ScpiMessageProducer.SetAdcCalibrationOffset(-1, 1.0)),
             (nameof(ScpiMessageProducer.GetAdcCalibrationSlope), () => ScpiMessageProducer.GetAdcCalibrationSlope(-1)),
             (nameof(ScpiMessageProducer.GetAdcCalibrationOffset), () => ScpiMessageProducer.GetAdcCalibrationOffset(-1)),
+            (nameof(ScpiMessageProducer.SetDioPortDirection), () => ScpiMessageProducer.SetDioPortDirection(-1, 1)),
+            (nameof(ScpiMessageProducer.SetDioPortState), () => ScpiMessageProducer.SetDioPortState(-1, 1)),
         };
 
         var observed = new List<(string Producer, string? ParamName, object? ActualValue, string Message)>();
@@ -1146,7 +1194,7 @@ public class ScpiMessageProducerTests
             observed.Add((name, ex.ParamName, ex.ActualValue, ex.Message));
         }
 
-        Assert.Equal(9, observed.Count);
+        Assert.Equal(11, observed.Count);
         Assert.All(observed, o =>
         {
             Assert.Equal("channel", o.ParamName);
