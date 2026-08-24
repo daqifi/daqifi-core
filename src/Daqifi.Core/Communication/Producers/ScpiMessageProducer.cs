@@ -550,13 +550,17 @@ public class ScpiMessageProducer
     /// </summary>
     /// <param name="channel">The channel number.</param>
     /// <param name="value">The state value (0 = low, 1 = high).</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="value"/> is not a finite number.</exception>
     /// <remarks>
+    /// The value is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: DIO:PORt:STATe channel,value
     /// Example: messageProducer.Send(ScpiMessageProducer.SetDioPortState(1, 1)); // Set channel 1 to high
     /// </remarks>
     public static IOutboundMessage<string> SetDioPortState(int channel, double value)
     {
-        return new ScpiMessage($"DIO:PORt:STATe {channel},{value}");
+        RequireFinite(value, nameof(value), "State value");
+
+        return new ScpiMessage($"DIO:PORt:STATe {channel},{value.ToString(CultureInfo.InvariantCulture)}");
     }
 
     /// <summary>
