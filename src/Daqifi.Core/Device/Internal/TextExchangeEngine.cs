@@ -667,6 +667,13 @@ namespace Daqifi.Core.Device.Internal
                         }
                     }
 
+                    // Test-only seam (issue #634), the third of these and a no-op on the real
+                    // device. It publishes which branch the loop above just left by: a test that
+                    // cares whether the exchange recognised the reply can then ask, instead of
+                    // inferring it from how long the whole call took on a machine whose scheduler
+                    // it does not control.
+                    _host.OnReplyWaitCompleted(hasReceivedAny);
+
                     var collectedLineCount = CollectedLineCount();
                     Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", sw.ElapsedMilliseconds, collectedLineCount));
 

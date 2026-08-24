@@ -189,5 +189,6 @@ public class ConnectionGuardTests
         public IDisposable SubscribeConsumerErrors(IMessageConsumer<string> consumer) => throw new NotSupportedException();
         public void OnStaleLineBoundaryCaptured() => throw new NotSupportedException();
         public void OnSendBoundaryCaptured() => throw new NotSupportedException();
+        public void OnReplyWaitCompleted(bool sawResponse) => throw new NotSupportedException();
     }
 }

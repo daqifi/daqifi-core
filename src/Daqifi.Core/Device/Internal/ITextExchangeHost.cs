@@ -185,5 +185,27 @@ namespace Daqifi.Core.Device.Internal
         /// the guess with an ordering the runtime guarantees.
         /// </remarks>
         void OnSendBoundaryCaptured();
+
+        /// <summary>
+        /// Called once the reply wait loop has finished, reporting whether the exchange ever found
+        /// evidence that the device answered — <c>true</c> when it left the loop on the short
+        /// completion timeout, <c>false</c> when it sat out the whole first-response timeout in
+        /// silence. A no-op on the real device, like the two seams above.
+        /// </summary>
+        /// <remarks>
+        /// This is the fact the #538 timing tests were really asserting. They inferred it from a
+        /// stopwatch — "finished well inside the response timeout, so it must have recognised the
+        /// reply" — and that inference is only as good as the machine's scheduling: the wait loop
+        /// polls with <c>await Task.Delay(50)</c>, so on a thread-pool-starved runner an exchange
+        /// that recognised the reply on its first poll can still take seconds of wall clock to
+        /// return, and the stopwatch then reports a fast path as a timed-out one (issue #634).
+        /// Reporting the branch the loop actually took removes the inference, and with it the
+        /// machine's load as an input to the assertion.
+        /// </remarks>
+        /// <param name="sawResponse">
+        /// Whether anything the exchange would keep as an answer arrived before the first-response
+        /// timeout expired.
+        /// </param>
+        void OnReplyWaitCompleted(bool sawResponse);
     }
 }
