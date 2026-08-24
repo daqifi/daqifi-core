@@ -68,6 +68,13 @@ namespace Daqifi.Core.Device.Internal
         /// </summary>
         private long _droppedSampleCount;
 
+        /// <summary>
+        /// Enumerations that have finished attaching their sample handlers and so are capturing.
+        /// Distinct from <see cref="_enumerations"/>, which counts an enumeration from registration
+        /// — before it can capture anything.
+        /// </summary>
+        private int _liveSubscriptionCount;
+
         internal LiveSampleStream(IDeviceOperationHost host)
         {
             _host = host ?? throw new ArgumentNullException(nameof(host));
@@ -75,6 +82,12 @@ namespace Daqifi.Core.Device.Internal
 
         /// <inheritdoc cref="DaqifiStreamingDevice.DroppedLiveSampleCount"/>
         internal long DroppedSampleCount => Interlocked.Read(ref _droppedSampleCount);
+
+        /// <summary>
+        /// Enumerations currently subscribed to the channels' sample events. Exists so a test can
+        /// wait for a recording to actually be listening instead of sleeping for a guessed interval.
+        /// </summary>
+        internal int LiveSubscriptionCount => Volatile.Read(ref _liveSubscriptionCount);
 
         /// <summary>
         /// Ends every enumeration in flight when the device stops being connected.
@@ -167,6 +180,7 @@ namespace Daqifi.Core.Device.Internal
                 buffer.Writer.TryWrite(new LiveSample(e.Channel, e.Sample));
 
             IReadOnlyList<IChannel> channels = Array.Empty<IChannel>();
+            var subscribed = false;
             try
             {
                 channels = _host.SnapshotChannels();
@@ -174,6 +188,12 @@ namespace Daqifi.Core.Device.Internal
                 {
                     channel.SampleReceived += OnSample;
                 }
+
+                // Published only after every handler is attached, so a test that waits on this is
+                // waiting for the exact moment the enumeration can start capturing samples — not
+                // for a guessed interval.
+                Interlocked.Increment(ref _liveSubscriptionCount);
+                subscribed = true;
 
                 await foreach (var sample in buffer.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
                 {
@@ -186,6 +206,12 @@ namespace Daqifi.Core.Device.Internal
                 {
                     channel.SampleReceived -= OnSample;
                 }
+
+                if (subscribed)
+                {
+                    Interlocked.Decrement(ref _liveSubscriptionCount);
+                }
+
                 buffer.Writer.TryComplete();
 
                 lock (_enumerationsLock)
