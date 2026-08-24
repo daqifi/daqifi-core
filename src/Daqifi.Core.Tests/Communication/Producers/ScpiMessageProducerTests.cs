@@ -1245,12 +1245,18 @@ public class ScpiMessageProducerTests
     }
 
     // The companion to EveryChannelAddressedProducer_RejectsNegativeChannelIdentically, for
-    // the other axis: the producers whose *second* argument has a documented range. Each
-    // guard is written out at its own call site (the ranges differ, so there is no shared
-    // helper to hold the rule), which is exactly why the observable shape needs pinning in
-    // one place — SetDioPortDirection was the one that had drifted, emitting a frame for
-    // any int at all. Anything the caller can see about the throw is compared across all
-    // three rather than against a literal copied out of the source.
+    // the other axis: every producer in this class whose *value* argument has a documented
+    // range. Each guard is written out at its own call site (the ranges differ, so there is
+    // no shared helper to hold the rule), which is exactly why the observable shape needs
+    // pinning in one place — SetDioPortDirection was the one that had drifted, emitting a
+    // frame for any int at all. Anything the caller can see about the throw is compared
+    // across all of them rather than against a literal copied out of the source.
+    //
+    // This list is the COMPLETE set of inline value-range guards in ScpiMessageProducer, not
+    // a sample: it is the whole population of `throw new ArgumentOutOfRangeException` sites
+    // outside the shared ValidateChannel/RequireFinite helpers. A producer that gains a
+    // ranged value argument must be added here — the count assertion below is the reminder,
+    // since nothing else structurally forces it.
     [Fact]
     public void EveryValueRangedProducer_RejectsOutOfRangeArgumentIdentically()
     {
@@ -1262,9 +1268,19 @@ public class ScpiMessageProducerTests
                 () => ScpiMessageProducer.SetPwmChannelDutyCycle(0, 101)),
             (nameof(ScpiMessageProducer.SetDioPortDirection), "direction", 2, "Direction must be 0 (input) or 1 (output).",
                 () => ScpiMessageProducer.SetDioPortDirection(0, 2)),
+            (nameof(ScpiMessageProducer.UseAdcCalibration), "bank", 2, "Calibration bank must be 0 (factory) or 1 (user).",
+                () => ScpiMessageProducer.UseAdcCalibration(2)),
+            (nameof(ScpiMessageProducer.SetLogLevel), "level", 4, "Log level must be between 0 (None) and 3 (Debug).",
+                () => ScpiMessageProducer.SetLogLevel("ADC", 4)),
+            (nameof(ScpiMessageProducer.SetSdMaxFileSize), "bytes", -1L, "Max file size cannot be negative.",
+                () => ScpiMessageProducer.SetSdMaxFileSize(-1)),
+            (nameof(ScpiMessageProducer.SetSdMinFreeSpace), "bytes", -1L, "Minimum free space cannot be negative.",
+                () => ScpiMessageProducer.SetSdMinFreeSpace(-1)),
+            (nameof(ScpiMessageProducer.RunSdBenchmark), "size", 0L, "Benchmark size must be positive.",
+                () => ScpiMessageProducer.RunSdBenchmark(0)),
         };
 
-        Assert.Equal(3, producers.Length);
+        Assert.Equal(8, producers.Length);
         foreach (var (name, paramName, actualValue, messagePrefix, act) in producers)
         {
             var ex = Assert.Throws<ArgumentOutOfRangeException>(act);
