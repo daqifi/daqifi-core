@@ -196,6 +196,47 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    // `direction` is documented as a two-value enumeration (0 = input, 1 = output) and the
+    // firmware understands nothing else, so anything outside that is caller error rather
+    // than a frame to put on the wire.
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(2)]
+    [InlineData(7)]
+    [InlineData(int.MaxValue)]
+    public void SetDioPortDirection_WithOutOfRangeDirection_Throws(int direction)
+    {
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.SetDioPortDirection(0, direction));
+
+        Assert.Equal("direction", ex.ParamName);
+        Assert.Equal(direction, ex.ActualValue);
+        Assert.StartsWith("Direction must be 0 (input) or 1 (output).", ex.Message, StringComparison.Ordinal);
+    }
+
+    // Both documented values must survive the guard unchanged, byte for byte.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void SetDioPortDirection_WithDocumentedDirection_StillReturnsCommand(int direction)
+    {
+        var message = ScpiMessageProducer.SetDioPortDirection(3, direction);
+        Assert.Equal($"DIO:PORt:DIRection 3,{direction}", message.Data);
+        AssertMessageFormat(message);
+    }
+
+    [Fact]
+    public void SetDioPortDirection_WithNegativeChannel_ThrowsBeforeCheckingTheDirection()
+    {
+        // Both arguments are invalid here. The channel guard runs first, so the caller is
+        // told about `channel` rather than about `direction`, matching SetDioPortState and
+        // the PWM setters, which all validate the channel before the value.
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => ScpiMessageProducer.SetDioPortDirection(-1, 7));
+
+        Assert.Equal("channel", ex.ParamName);
+    }
+
     [Fact]
     public void SetDioPortState_ReturnsCorrectCommand()
     {
@@ -1201,6 +1242,37 @@ public class ScpiMessageProducerTests
             Assert.Equal(-1, o.ActualValue);
             Assert.StartsWith("Channel number cannot be negative.", o.Message, StringComparison.Ordinal);
         });
+    }
+
+    // The companion to EveryChannelAddressedProducer_RejectsNegativeChannelIdentically, for
+    // the other axis: the producers whose *second* argument has a documented range. Each
+    // guard is written out at its own call site (the ranges differ, so there is no shared
+    // helper to hold the rule), which is exactly why the observable shape needs pinning in
+    // one place — SetDioPortDirection was the one that had drifted, emitting a frame for
+    // any int at all. Anything the caller can see about the throw is compared across all
+    // three rather than against a literal copied out of the source.
+    [Fact]
+    public void EveryValueRangedProducer_RejectsOutOfRangeArgumentIdentically()
+    {
+        var producers = new (string Name, string ParamName, object ActualValue, string MessagePrefix, Action Act)[]
+        {
+            (nameof(ScpiMessageProducer.SetPwmChannelFrequency), "frequencyHz", 0, "Frequency must be positive.",
+                () => ScpiMessageProducer.SetPwmChannelFrequency(0, 0)),
+            (nameof(ScpiMessageProducer.SetPwmChannelDutyCycle), "dutyCyclePercent", 101, "Duty cycle must be 0-100 percent.",
+                () => ScpiMessageProducer.SetPwmChannelDutyCycle(0, 101)),
+            (nameof(ScpiMessageProducer.SetDioPortDirection), "direction", 2, "Direction must be 0 (input) or 1 (output).",
+                () => ScpiMessageProducer.SetDioPortDirection(0, 2)),
+        };
+
+        Assert.Equal(3, producers.Length);
+        foreach (var (name, paramName, actualValue, messagePrefix, act) in producers)
+        {
+            var ex = Assert.Throws<ArgumentOutOfRangeException>(act);
+
+            // Compared as one tuple so a failure names the producer that drifted.
+            Assert.Equal((name, paramName, (object?)actualValue), (name, ex.ParamName, ex.ActualValue));
+            Assert.StartsWith(messagePrefix, ex.Message, StringComparison.Ordinal);
+        }
     }
 
     private static void AssertMessageFormat(IOutboundMessage<string> message)
