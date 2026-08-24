@@ -1254,9 +1254,11 @@ public class ScpiMessageProducerTests
     //
     // This list is the COMPLETE set of inline value-range guards in ScpiMessageProducer, not
     // a sample: it is the whole population of `throw new ArgumentOutOfRangeException` sites
-    // outside the shared ValidateChannel/RequireFinite helpers. A producer that gains a
-    // ranged value argument must be added here — the count assertion below is the reminder,
-    // since nothing else structurally forces it.
+    // outside the shared ValidateChannel/RequireFinite helpers — verified by grepping that
+    // throw against this table. A producer that gains a ranged value argument must be added
+    // here. The count assertion below is a deliberate tripwire, not a proof of completeness:
+    // it fails the moment someone edits the table without reading this note, which is the
+    // same mechanism EveryChannelAddressedProducer_RejectsNegativeChannelIdentically uses.
     [Fact]
     public void EveryValueRangedProducer_RejectsOutOfRangeArgumentIdentically()
     {
@@ -1278,9 +1280,13 @@ public class ScpiMessageProducerTests
                 () => ScpiMessageProducer.SetSdMinFreeSpace(-1)),
             (nameof(ScpiMessageProducer.RunSdBenchmark), "size", 0L, "Benchmark size must be positive.",
                 () => ScpiMessageProducer.RunSdBenchmark(0)),
+            // An undefined enum value is the same rule expressed over an enum's range, and it
+            // throws the same exception in the same shape, so it belongs in the census too.
+            (nameof(ScpiMessageProducer.SetStreamInterface), "streamInterface", (StreamInterface)999, "Unknown stream interface.",
+                () => ScpiMessageProducer.SetStreamInterface((StreamInterface)999)),
         };
 
-        Assert.Equal(8, producers.Length);
+        Assert.Equal(9, producers.Length);
         foreach (var (name, paramName, actualValue, messagePrefix, act) in producers)
         {
             var ex = Assert.Throws<ArgumentOutOfRangeException>(act);
