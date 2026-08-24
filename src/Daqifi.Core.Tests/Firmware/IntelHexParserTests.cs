@@ -358,6 +358,31 @@ public class IntelHexParserTests
     }
 
     [Fact]
+    public void ParseRecords_ProtectionIsDecidedOnTheSameAddressThatIsReported()
+    {
+        // Whether a record is filtered and what address it is reported under are the same
+        // 32-bit value, computed in two different places from the same two inputs. Pin that
+        // they agree, using a protected range whose boundaries fall on the record's OFFSET
+        // half: every existing boundary test varies only the extended-address half, so all of
+        // them would still pass if the two offset decodes disagreed on byte order.
+        var parser = new IntelHexParser(0x00010200, 0x00010300);
+        var lines = new[]
+        {
+            ":020000040001F9",                                   // Extended address 0x0001
+            ":10010000AABBCCDDEEFF00112233445566778899F7",       // 0x00010100 - below the range
+            ":10020000AABBCCDDEEFF00112233445566778899F6",       // 0x00010200 - range start
+            ":10030000AABBCCDDEEFF00112233445566778899F5",       // 0x00010300 - range end (inclusive)
+            ":10040000AABBCCDDEEFF00112233445566778899F4",       // 0x00010400 - above the range
+            ":00000001FF"                                        // EOF
+        };
+
+        var result = parser.ParseRecords(lines);
+
+        var dataAddresses = result.Where(r => r.RecordType == 0x00).Select(r => r.Address).ToArray();
+        Assert.Equal([0x00010100u, 0x00010400u], dataAddresses);
+    }
+
+    [Fact]
     public void ParseRecords_ReturnsCorrectRecordTypes()
     {
         var lines = new[]
