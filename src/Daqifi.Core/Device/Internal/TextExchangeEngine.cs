@@ -717,9 +717,16 @@ namespace Daqifi.Core.Device.Internal
 
                         try
                         {
+                            // Awaited with collectedLinesGate released — deliberately, and the
+                            // registration above is what makes that safe: the waiter was taken
+                            // under the gate, so a line arriving in this window completes the task
+                            // already in hand rather than being missed. Nothing may await while
+                            // holding that gate; the reader thread has to be able to take it.
+                            //
                             // ConfigureAwait(false) for the same reason as every other await here:
-                            // the lock is held, so resuming on a captured sync context would
-                            // deadlock if that thread calls Disconnect().
+                            // this exchange holds the device's operation lock across it, so
+                            // resuming on a captured sync context would deadlock if that thread
+                            // calls Disconnect().
                             await lineArrived.WaitAsync(waitFor, cancellationToken).ConfigureAwait(false);
                         }
                         catch (TimeoutException)
