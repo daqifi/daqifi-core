@@ -68,8 +68,12 @@ jobs:
     - name: Build
       run: dotnet build --no-restore Daqifi.Core.sln
 
+    # --no-build because the step above already built it. Without that flag every
+    # leg compiled the solution a second time, which the matrix would have tripled.
+    # Verified locally that coverlet still writes both cobertura reports under
+    # --no-build: it instruments through its own no-build target.
     - name: Test
-      run: dotnet test Daqifi.Core.sln
+      run: dotnet test --no-build --no-restore Daqifi.Core.sln
 
     # Daqifi.Core.Tests.csproj collects coverage on every run, so the cobertura
     # report already exists by this point; the next two steps are only about not
