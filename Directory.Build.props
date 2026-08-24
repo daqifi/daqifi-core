@@ -1,0 +1,30 @@
+<Project>
+
+  <!--
+    Repo-wide build properties. MSBuild imports this file into every project
+    under the repository root, so a setting here is declared once instead of
+    being copy-pasted into each .csproj (issue #638).
+
+    Only settings that every project in the repo should share belong here.
+    Anything a project legitimately decides for itself - PackageId, OutputType,
+    PackAsTool, IsPackable, coverlet output, package metadata - stays in that
+    project's .csproj.
+
+    TargetFramework(s) is deliberately NOT centralized: the projects genuinely
+    differ (Daqifi.Core and Daqifi.Core.Tests multi-target net9.0;net10.0, while
+    Daqifi.Mcp and Daqifi.Mcp.Tests are net9.0 only), and a shared default here
+    would hide that difference rather than resolve it. See issue #643 for the
+    Daqifi.Mcp target-framework decision.
+  -->
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!--
+      Warnings are errors everywhere, including Daqifi.Mcp, which was the one
+      project that never opted in. It is warning-clean in Debug and Release, so
+      turning it on here needed no code changes.
+    -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

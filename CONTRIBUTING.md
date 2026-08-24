@@ -23,7 +23,7 @@ All code changes go through a pull request:
 `DaqifiDeviceFactory.ConnectTcp`/`ConnectSerial`, `IStreamTransport.Connect`/`Disconnect`)
 that block on their own async work. An `await` that resumes on the caller's
 `SynchronizationContext` therefore deadlocks a WPF/WinForms app calling from the UI
-thread. CA2007 is enabled for the library project (see `src/Daqifi.Core/.editorconfig`)
+thread. CA2007 is enabled for the library project (see the `[src/Daqifi.Core/**.cs]` section of the root `.editorconfig`)
 and warnings are errors, so a naked `await` fails the build. Test projects are exempt.
 
 ## Security: how we do and don't accept code

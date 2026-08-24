@@ -1,4 +1,11 @@
-# Analyzer configuration for the Daqifi.Core library only.
+# Repo-wide analyzer and editor configuration.
+#
+# This file lives at the repository root so that a rule meant for the whole repo
+# has somewhere to go (issue #638). Rules that are deliberately scoped to one
+# project stay scoped, via a path-qualified section below.
+root = true
+
+# CA2007 (ConfigureAwait) applies to the Daqifi.Core library only.
 #
 # Daqifi.Core ships synchronous facades that block on their own async work
 # (DaqifiDevice.Connect(), DaqifiDeviceFactory.ConnectTcp/ConnectSerial,
@@ -10,6 +17,8 @@
 #
 # CA2007 makes that a build error rather than a code-review habit. Library code
 # has no business resuming on the caller's context, so the rule applies to every
-# await in this project, not just the connect path.
-[*.cs]
+# await in this project, not just the connect path. Test projects are exempt
+# (CONTRIBUTING.md), which is why this section is path-qualified instead of
+# applying to every [*.cs] in the repo.
+[src/Daqifi.Core/**.cs]
 dotnet_diagnostic.CA2007.severity = warning
