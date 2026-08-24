@@ -16,7 +16,8 @@ public static class SdCardLogSessionExtensions
     /// <para>
     /// The log's own <see cref="SdCardLogSession.DeviceConfig"/> wins, field by field;
     /// <paramref name="fallbackConfiguration"/> fills in only where the log carries no
-    /// configuration at all, or carries one whose serial number is absent. That ordering matters
+    /// configuration at all, or carries one whose serial number is absent — null <i>or</i> blank,
+    /// since a blank serial is a gap rather than an answer (#627). That ordering matters
     /// because the fallback is normally the live device the log was downloaded from, which may not
     /// be the device that recorded it — a log that identifies itself is the better witness. A log
     /// that states zero analog ports is taken at its word rather than widened from the fallback,
@@ -57,7 +58,11 @@ public static class SdCardLogSessionExtensions
 
         var config = session.DeviceConfig;
 
-        var serial = config?.DeviceSerialNumber ?? fallbackConfiguration?.DeviceSerialNumber;
+        // A blank serial in the log is a gap, not an answer — the same rule the SD-card
+        // configuration merge applies (#627). Coalescing on null alone would let a log that
+        // carries an empty serial field shadow the connected device's real one, and the caller
+        // would get "unknown" in every channel key with a perfectly good serial in hand.
+        var serial = Stated(config?.DeviceSerialNumber) ?? Stated(fallbackConfiguration?.DeviceSerialNumber);
         var analogCount = config?.AnalogPortCount ?? fallbackConfiguration?.AnalogPortCount ?? 0;
 
         return new SdCardLogSampleSource(
@@ -65,5 +70,7 @@ public static class SdCardLogSessionExtensions
             serial,
             Math.Max(0, analogCount),
             deviceName);
+
+        static string? Stated(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
     }
 }

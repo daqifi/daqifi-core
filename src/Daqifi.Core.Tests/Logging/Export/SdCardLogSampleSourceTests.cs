@@ -343,6 +343,28 @@ public class SdCardLogSampleSourceTests
         Assert.Equal("Daqifi:LIVE-SN:AI0", source.GetChannels()[0].Key);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AsSampleSource_ABlankSerialInTheLog_IsAGapAndDoesNotShadowTheFallback(string blank)
+    {
+        // #627's rule: a blank file-derived string is a gap, not an answer. Coalescing on null
+        // alone would key every column "unknown" with a real serial in hand.
+        var session = Session(Config(analogPorts: 1, serial: blank));
+
+        var source = session.AsSampleSource(Config(analogPorts: 8, serial: "LIVE-SN"));
+
+        Assert.Equal("Daqifi:LIVE-SN:AI0", source.GetChannels()[0].Key);
+    }
+
+    [Fact]
+    public void AsSampleSource_BlankOnBothSides_StillEndsUpAsUnknown()
+    {
+        var source = Session(Config(analogPorts: 1, serial: "  ")).AsSampleSource(Config(analogPorts: 1, serial: ""));
+
+        Assert.Equal("Daqifi:unknown:AI0", source.GetChannels()[0].Key);
+    }
+
     [Fact]
     public void AsSampleSource_ALogStatingZeroAnalogPorts_IsTakenAtItsWord()
     {
