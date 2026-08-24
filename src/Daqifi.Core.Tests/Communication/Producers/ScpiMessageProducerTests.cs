@@ -188,6 +188,77 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void SetDioPortState_FormatsDocumentedStatesIdenticallyUnderCommaDecimalCulture(double value)
+    {
+        // The documented contract is 0 = low, 1 = high. Those render the same under every
+        // culture, so changing how `value` is formatted must leave them byte-for-byte alone.
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            var message = ScpiMessageProducer.SetDioPortState(1, value);
+            Assert.Equal($"DIO:PORt:STATe 1,{(int)value}", message.Data);
+            AssertMessageFormat(message);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public void SetDioPortState_FormatsFractionalValueWithInvariantDecimalPoint()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            // A culture whose decimal separator is a comma must not corrupt the SCPI argument:
+            // a comma here would read as a third argument rather than a fractional state.
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            var message = ScpiMessageProducer.SetDioPortState(1, 1.5);
+            Assert.Equal("DIO:PORt:STATe 1,1.5", message.Data);
+            AssertMessageFormat(message);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void SetDioPortState_WithNonFiniteValue_Throws(double value)
+    {
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetDioPortState(1, value));
+
+        // The finite check is shared with the other double-valued setters, so pin the
+        // parameter name and wording this call site is responsible for supplying.
+        Assert.Equal("value", ex.ParamName);
+        Assert.Contains("State value must be a finite number.", ex.Message);
+    }
+
+    [Fact]
+    public void SetDioPortState_WithNonFiniteValue_ThrowsBeforeBuildingAMessage()
+    {
+        // The guard must reject the value rather than let a culture-dependent
+        // infinity symbol reach the command text.
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetDioPortState(1, double.PositiveInfinity));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
     [Fact]
     public void EnableDioPorts_ReturnsCorrectCommand()
     {
