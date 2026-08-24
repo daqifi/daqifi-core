@@ -350,6 +350,25 @@ namespace Daqifi.Core.Device.Internal
                 // "collection was modified" out of an exchange that had otherwise succeeded.
                 var collectedLinesGate = new object();
 
+                // How the exchange learns that a line arrived, instead of asking every 50ms.
+                // Guarded by the gate above, which is what makes the handshake lossless: a line is
+                // added to the list and the waiter is taken under the same lock the wait loop
+                // registers under, so a line that lands between the loop's last look and its next
+                // wait completes that wait rather than being missed by it.
+                //
+                // Deliberately a TaskCompletionSource rather than a SemaphoreSlim: the signal is
+                // raised on the text consumer's reader thread, which can outlive this exchange (its
+                // stop and dispose are both time-bounded, as the remarks on
+                // RestartMessageConsumerAfterSwap say). A semaphore would have to be disposed while
+                // that thread might still signal it; a TCS never needs disposing and TrySetResult
+                // on a stale one is a no-op.
+                //
+                // RunContinuationsAsynchronously matters as much: without it the reader thread
+                // would run this exchange's continuation itself, i.e. resume the exchange —
+                // including the consumer stop that joins that very thread — on the thread being
+                // joined.
+                TaskCompletionSource<bool>? lineWaiter = null;
+
                 int CollectedLineCount()
                 {
                     lock (collectedLinesGate)
@@ -471,10 +490,21 @@ namespace Daqifi.Core.Device.Internal
                         // that #593 rules out.
                         var writer = _host.SampleOutboundWriter();
 
+                        TaskCompletionSource<bool>? waiter;
                         lock (collectedLinesGate)
                         {
                             collectedLines.Add(new CollectedLine(parsed.Data, writer));
+
+                            // Taken and cleared under the same lock as the append, so the wait loop
+                            // either sees the new line or is woken for it — never neither.
+                            waiter = lineWaiter;
+                            lineWaiter = null;
                         }
+
+                        // Completed outside the lock: the continuation is queued rather than run
+                        // here, but keeping the gate while releasing it would still let the wait
+                        // loop's own gated reads contend with this reader thread for no reason.
+                        waiter?.TrySetResult(true);
                     };
 
                     // The protobuf consumer is stopped for the duration of this exchange, so
@@ -603,9 +633,21 @@ namespace Daqifi.Core.Device.Internal
                     // Wait for responses using a two-phase inactivity-based timeout:
                     // Phase 1: Wait up to responseTimeoutMs for the first response.
                     // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
-                    var lastMessageTime = DateTime.UtcNow;
+                    //
+                    // The two phases and their budgets are exactly what they have always been. What
+                    // changed (issue #485) is how the loop waits: it used to tick every 50ms and
+                    // compare line counts, which meant a device that had finished answering was
+                    // still held for up to a tick past its completion window, and the first reply
+                    // was noticed up to a tick late. Waiting on the arrival signal instead ends the
+                    // exchange the moment the inactivity window actually expires. No timeout is
+                    // shortened here and no wait is skipped — only the quantisation is gone.
+                    //
+                    // Timed off the Stopwatch rather than DateTime.UtcNow: these are elapsed-time
+                    // deadlines, and a wall clock that steps (NTP, a DST-less clock correction)
+                    // would move them under a request already in flight.
+                    var waitStart = sw.Elapsed;
+                    var lastMessageAt = waitStart;
                     var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
-                    var startTime = DateTime.UtcNow;
 
                     // A reply can land between sentBoundaryLineCount being captured just above and
                     // this loop's first poll -- single-digit milliseconds on a real device, but
@@ -627,13 +669,71 @@ namespace Daqifi.Core.Device.Internal
                         Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response already present entering wait loop"));
                     }
 
-                    while (DateTime.UtcNow - startTime < maxWait)
+                    // Lines already collected at this point are the seed above, not news. The old
+                    // loop expressed the same thing by taking its "previous count" from here.
+                    var observedLineCount = CollectedLineCount();
+
+                    while (true)
                     {
-                        var previousCount = CollectedLineCount();
-                        await Task.Delay(50, cancellationToken).ConfigureAwait(false);
-                        if (CollectedLineCount() > previousCount)
+                        var now = sw.Elapsed;
+
+                        // The overall ceiling, unchanged: collection never runs longer than this
+                        // however busy the device is, so a device that talks forever cannot hold
+                        // the operation lock forever.
+                        var remainingOverall = maxWait - (now - waitStart);
+                        if (remainingOverall <= TimeSpan.Zero)
                         {
-                            lastMessageTime = DateTime.UtcNow;
+                            break;
+                        }
+
+                        // The inactivity window currently in force — the full first-response
+                        // timeout until something arrives, the short completion timeout after.
+                        var inactivityBudget =
+                            TimeSpan.FromMilliseconds(hasReceivedAny ? completionTimeoutMs : responseTimeoutMs)
+                            - (now - lastMessageAt);
+                        if (inactivityBudget <= TimeSpan.Zero)
+                        {
+                            break;
+                        }
+
+                        var waitFor = inactivityBudget < remainingOverall ? inactivityBudget : remainingOverall;
+
+                        Task lineArrived;
+                        lock (collectedLinesGate)
+                        {
+                            // Registered under the gate the handler appends under, so there is no
+                            // window in which a line can arrive unnoticed AND unsignalled. A line
+                            // already waiting is handled without waiting at all.
+                            if (collectedLines.Count > observedLineCount)
+                            {
+                                lineArrived = Task.CompletedTask;
+                            }
+                            else
+                            {
+                                lineWaiter ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                                lineArrived = lineWaiter.Task;
+                            }
+                        }
+
+                        try
+                        {
+                            // ConfigureAwait(false) for the same reason as every other await here:
+                            // the lock is held, so resuming on a captured sync context would
+                            // deadlock if that thread calls Disconnect().
+                            await lineArrived.WaitAsync(waitFor, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (TimeoutException)
+                        {
+                            // The window expired with nothing new. Not an error — it is how both
+                            // phases end. Fall through: the loop re-reads the clock and the line
+                            // count, so a line that landed in the same instant is still counted.
+                        }
+
+                        var currentCount = CollectedLineCount();
+                        if (currentCount > observedLineCount)
+                        {
+                            observedLineCount = currentCount;
+                            lastMessageAt = sw.Elapsed;
 
                             // A count increase is not the same thing as an answer: the new line can
                             // be a leftover blank that the projection below will discard. Asking
@@ -644,25 +744,6 @@ namespace Daqifi.Core.Device.Internal
                             {
                                 hasReceivedAny = true;
                                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", sw.ElapsedMilliseconds));
-                            }
-                        }
-
-                        var elapsed = DateTime.UtcNow - lastMessageTime;
-
-                        if (hasReceivedAny)
-                        {
-                            // Phase 2: short completion timeout after first data
-                            if (elapsed >= TimeSpan.FromMilliseconds(completionTimeoutMs))
-                            {
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            // Phase 1: full initial timeout waiting for first data
-                            if (elapsed >= TimeSpan.FromMilliseconds(responseTimeoutMs))
-                            {
-                                break;
                             }
                         }
                     }
