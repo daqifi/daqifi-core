@@ -12,10 +12,13 @@
     <!-- Distribution: `dotnet tool install -g Daqifi.Mcp` exposes the `daqifi-mcp` command. -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>daqifi-mcp</ToolCommandName>
+
+    <!-- Package Metadata. Authors, license, URLs and the symbol/SourceLink
+         settings are repo-wide and come from the root Directory.Build.targets. -->
     <PackageId>Daqifi.Mcp</PackageId>
-    <Authors>DAQiFi</Authors>
     <Description>Model Context Protocol (MCP) server for DAQiFi Nyquist data-acquisition devices. Lets an AI agent discover, connect, configure channels, read live measurements, and run on-device SD-card logging.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>daqifi;daq;data-acquisition;mcp;model-context-protocol;ai;dotnet-tool</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
