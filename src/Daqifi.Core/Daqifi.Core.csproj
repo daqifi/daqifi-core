@@ -5,24 +5,15 @@
 
     <!-- ImplicitUsings, Nullable and TreatWarningsAsErrors come from the repo-root Directory.Build.props. -->
 
-    <!-- Package Metadata -->
+    <!-- Package Metadata. Authors, license, URLs and the symbol/SourceLink
+         settings are repo-wide and come from the root Directory.Build.targets. -->
     <PackageId>Daqifi.Core</PackageId>
-    <Authors>DAQiFi</Authors>
     <Description>Core library for interacting with DAQiFi devices</Description>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/daqifi/daqifi-core</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>daqifi;daq;data-acquisition;measurement;instrumentation</PackageTags>
-    <RepositoryUrl>https://github.com/daqifi/daqifi-core</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
 
     <!-- Build Configuration -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <EmbedUntrackedSources>true</EmbedUntrackedSources>
-    <PublishRepositoryUrl>true</PublishRepositoryUrl>
-    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
   <ItemGroup>
