@@ -200,6 +200,82 @@ public class Pic32BootloaderMessageConsumerTests
 
     #endregion
 
+    #region Null input
+
+    // DecodeReadCrcResponse has always answered a null frame with a named ArgumentNullException,
+    // but nothing pinned that. It is the reference the other three decoders are aligned to, so
+    // pin it first: the exact exception type (not the InvalidDataException this method throws for
+    // every other malformed frame), the parameter it blames, and the message a caller sees.
+    [Fact]
+    public void DecodeReadCrcResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
+    {
+        var ex = Assert.Throws<ArgumentNullException>(
+            () => Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(null!));
+
+        Assert.Equal("data", ex.ParamName);
+        Assert.Equal(new ArgumentNullException("data").Message, ex.Message);
+    }
+
+    [Fact]
+    public void DecodeVersionResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
+    {
+        // Not "Error": a null frame is the caller's bug, not a bootloader response this decoder
+        // can classify, so the guard has to win over the "Error" string every other bad frame gets.
+        var ex = Assert.Throws<ArgumentNullException>(
+            () => Pic32BootloaderMessageConsumer.DecodeVersionResponse(null!));
+
+        Assert.Equal("data", ex.ParamName);
+    }
+
+    [Fact]
+    public void DecodeProgramFlashResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
+    {
+        // Not false: same reasoning as the version decoder, and the guard sits in the shared
+        // IsAckFor helper, so this also pins that a caller is blamed for its own "data" parameter
+        // rather than for a private one a frame below.
+        var ex = Assert.Throws<ArgumentNullException>(
+            () => Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(null!));
+
+        Assert.Equal("data", ex.ParamName);
+    }
+
+    [Fact]
+    public void DecodeEraseFlashResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
+    {
+        var ex = Assert.Throws<ArgumentNullException>(
+            () => Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(null!));
+
+        Assert.Equal("data", ex.ParamName);
+    }
+
+    // The point of the change: one catch covers all four decoders, and a caller that learns one
+    // decoder's null behavior has learned all of them. Comparing against the exception
+    // DecodeReadCrcResponse throws — the one that was always guarded — keeps the three converted
+    // decoders pinned to it rather than to a copy of the expected text.
+    [Fact]
+    public void AllFourDecoders_WithNullData_ThrowTheSameArgumentNullException()
+    {
+        var reference = Assert.Throws<ArgumentNullException>(
+            () => Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(null!));
+
+        Action[] others =
+        [
+            () => Pic32BootloaderMessageConsumer.DecodeVersionResponse(null!),
+            () => Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(null!),
+            () => Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(null!)
+        ];
+
+        foreach (var decode in others)
+        {
+            var ex = Assert.Throws<ArgumentNullException>(decode);
+
+            Assert.Equal(reference.ParamName, ex.ParamName);
+            Assert.Equal(reference.Message, ex.Message);
+        }
+    }
+
+    #endregion
+
     #region DecodeReadCrcResponse
 
     // Mirrors the firmware's response framing: content = [0x04, crcLo, crcHi];

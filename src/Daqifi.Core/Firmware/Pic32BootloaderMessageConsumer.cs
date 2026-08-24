@@ -18,8 +18,11 @@ public static class Pic32BootloaderMessageConsumer
     /// </summary>
     /// <param name="data">The raw response bytes.</param>
     /// <returns>A version string in "Major.Minor" format, or "Error" if the response is invalid.</returns>
+    /// <exception cref="System.ArgumentNullException">Thrown when <paramref name="data"/> is null.</exception>
     public static string DecodeVersionResponse(byte[] data)
     {
+        ArgumentNullException.ThrowIfNull(data);
+
         var majorVersion = 0;
         var minorVersion = 0;
 
@@ -54,6 +57,7 @@ public static class Pic32BootloaderMessageConsumer
     /// </summary>
     /// <param name="data">The raw response bytes.</param>
     /// <returns>True if the response is a valid program flash acknowledgment.</returns>
+    /// <exception cref="System.ArgumentNullException">Thrown when <paramref name="data"/> is null.</exception>
     public static bool DecodeProgramFlashResponse(byte[] data) => IsAckFor(data, ProgramFlashCommand);
 
     /// <summary>
@@ -61,6 +65,7 @@ public static class Pic32BootloaderMessageConsumer
     /// </summary>
     /// <param name="data">The raw response bytes.</param>
     /// <returns>True if the response is a valid erase flash acknowledgment.</returns>
+    /// <exception cref="System.ArgumentNullException">Thrown when <paramref name="data"/> is null.</exception>
     public static bool DecodeEraseFlashResponse(byte[] data) => IsAckFor(data, EraseFlashCommand);
 
     /// <summary>
@@ -154,14 +159,17 @@ public static class Pic32BootloaderMessageConsumer
     /// <param name="data">The raw, framed response bytes.</param>
     /// <param name="command">The opcode the acknowledgment is expected to echo.</param>
     /// <returns>True if <paramref name="data"/> acknowledges <paramref name="command"/>.</returns>
+    /// <exception cref="System.ArgumentNullException">Thrown when <paramref name="data"/> is null.</exception>
     /// <remarks>
-    /// Deliberately not null-guarded. Both callers are public methods that have always thrown
-    /// <see cref="System.NullReferenceException"/> on a null <paramref name="data"/>, and adding a
-    /// guard here would change that observable behavior. The null-handling asymmetry between the
-    /// decoders on this type is tracked separately, not settled by this extraction.
+    /// The guard lives here rather than in the two public callers so that all four decoders on
+    /// this type report a null frame identically. The parameter is named <c>data</c> here too, so
+    /// the <see cref="System.ArgumentException.ParamName"/> a caller sees is the name of the
+    /// public parameter it actually passed.
     /// </remarks>
     private static bool IsAckFor(byte[] data, byte command)
     {
+        ArgumentNullException.ThrowIfNull(data);
+
         if (data.Length < 2) return false;
         if (data[0] != StartOfHeader) return false;
 
