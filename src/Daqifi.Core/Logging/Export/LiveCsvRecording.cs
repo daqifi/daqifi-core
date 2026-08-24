@@ -24,6 +24,13 @@ namespace Daqifi.Core.Logging.Export;
 /// the incoming rate — <see cref="ILiveSampleSource.DroppedLiveSampleCount"/> measured across the
 /// recording rather than since the device connected. Non-zero means the CSV has gaps; a larger
 /// <c>bufferCapacity</c>, a slower stream rate, or a faster writer are the fixes.
+/// <para>
+/// The underlying counter is device-wide, so if another live consumer is enumerating the same
+/// device while the recording runs, its drops are included here too. Nothing stops several
+/// enumerations at once and the device reports drops as one health signal, so this is a delta over
+/// a shared number rather than a per-recording one. With a single consumer — the normal case — it
+/// is exactly this recording's losses.
+/// </para>
 /// </param>
 /// <param name="UnmappedSampleCount">
 /// Samples that arrived for a channel the recording had no column for — one enabled by another
@@ -167,10 +174,16 @@ public static class LiveCsvRecordingExtensions
 
         await writer.FlushAsync().ConfigureAwait(false);
 
+        // With no columns the exporter returns without ever enumerating, so nothing was recorded and
+        // nothing could have been dropped from it. The device counter still moves if another live
+        // consumer is running, and attributing that to this call would contradict the documented
+        // all-zeros result for a recording with no enabled channels.
+        var dropped = channels.Count == 0 ? 0 : live.DroppedLiveSampleCount - droppedBefore;
+
         return new LiveCsvRecordingResult(
             source.SampleCount,
             source.RowCount,
-            live.DroppedLiveSampleCount - droppedBefore,
+            dropped,
             source.UnmappedSampleCount,
             source.NonMonotonicSampleCount);
     }

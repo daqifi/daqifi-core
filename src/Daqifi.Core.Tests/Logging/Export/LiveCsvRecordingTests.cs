@@ -127,6 +127,22 @@ public class LiveCsvRecordingTests
     }
 
     [Fact]
+    public async Task RecordLiveSamplesToCsvAsync_NoEnabledChannels_DoesNotChargeAnotherConsumersDrops()
+    {
+        // The drop counter is device-wide, so it keeps moving while another live consumer runs. A
+        // recording that never enumerated cannot have lost anything, and reporting someone else's
+        // losses as its own would contradict the documented all-zeros result.
+        using var device = CreateScripted(analogCount: 2);
+        device.DropBetweenReads = 9;
+        var writer = new StringWriter();
+
+        var result = await device.RecordLiveSamplesToCsvAsync(writer).WaitAsync(Timeout);
+
+        Assert.Equal(0L, result.DroppedSampleCount);
+        Assert.Equal(default(LiveCsvRecordingResult), result);
+    }
+
+    [Fact]
     public async Task RecordLiveSamplesToCsvAsync_GivesColumnsToEnabledChannelsOnly()
     {
         using var device = CreateScripted(analogCount: 3);
@@ -367,9 +383,15 @@ public class LiveCsvRecordingTests
         var recording = device.RecordLiveSamplesToCsvAsync(writer, duration: TimeSpan.FromSeconds(2));
 
         // The recording subscribes from inside the exporter, so there is no synchronous point for a
-        // test to hook. Give it time to get there before injecting, or the leading frames decode
-        // while nothing is listening.
-        await Task.Delay(400);
+        // test to hook. Wait for the subscription itself rather than for a guessed interval — a
+        // fixed delay is a race that loses the leading frames on a loaded machine.
+        var deadline = DateTime.UtcNow + Timeout;
+        while (device.LiveSubscriptionCount == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5);
+        }
+
+        Assert.Equal(1, device.LiveSubscriptionCount);
         for (uint i = 0; i < 20; i++)
         {
             device.InvokeStreamMessage(AnalogFrame(1000 + i * 500000, i, i + 100));
@@ -480,7 +502,22 @@ public class LiveCsvRecordingTests
 
         public override void Send<T>(IOutboundMessage<T> message) { /* no transport in tests */ }
 
-        long ILiveSampleSource.DroppedLiveSampleCount => Dropped;
+        /// <summary>
+        /// Simulates another live consumer dropping samples between the recording's two reads of
+        /// the device-wide counter: the first read still sees the old value, the second sees it
+        /// grown by this much.
+        /// </summary>
+        public long DropBetweenReads { get; set; }
+
+        long ILiveSampleSource.DroppedLiveSampleCount
+        {
+            get
+            {
+                var current = Dropped;
+                Dropped += DropBetweenReads;
+                return current;
+            }
+        }
 
         IAsyncEnumerable<LiveSample> ILiveSampleSource.StreamSamplesAsync(
             CancellationToken cancellationToken, int? bufferCapacity)

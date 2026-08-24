@@ -567,6 +567,13 @@ namespace Daqifi.Core.Device
         public long DroppedLiveSampleCount => _liveSampleStream.DroppedSampleCount;
 
         /// <summary>
+        /// Enumerations currently subscribed to this device's channels. Internal test seam: it lets
+        /// a test wait for a live consumer to actually be listening rather than sleep for a guessed
+        /// interval, which is a race on a loaded machine.
+        /// </summary>
+        internal int LiveSubscriptionCount => _liveSampleStream.LiveSubscriptionCount;
+
+        /// <summary>
         /// Exposes decoded live samples as an <see cref="IAsyncEnumerable{T}"/> for pull-based
         /// <c>await foreach</c> consumption with cancellation and backpressure — bringing the live path
         /// up to the same async-stream idiom the SD-card and export paths already use. Additive: the
