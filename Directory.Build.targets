@@ -43,6 +43,11 @@
          evaluate EnableSourceLink=true without one. -->
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- EmbedUntrackedSources is already the SDK default (a bare `dotnet new
+         classlib` evaluates it as true), so this changes nothing for any project
+         here - every project in this repo, packable or not, evaluated it as true
+         before this file existed. It is restated only so a future change to that
+         SDK default cannot quietly alter what ships in the symbol packages. -->
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
