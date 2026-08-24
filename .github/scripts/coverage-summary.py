@@ -64,6 +64,14 @@ class Report:
             self.by_file[filename] = (covered, valid)
 
 
+def warn(message):
+    """Best-effort diagnostic. Even complaining must not be able to fail a build."""
+    try:
+        print(message, file=sys.stderr)
+    except Exception:  # noqa: BLE001 - nothing here may fail the build
+        pass
+
+
 # Control characters are stripped from anything the report supplies: this text is
 # echoed to the step log, where a bare newline could forge a `::` workflow command,
 # and a pipe would silently split a Markdown table cell.
@@ -170,22 +178,29 @@ def main(argv):
 
     markdown = render(reports, failures)
 
+    # Prefer mangling an exotic character to losing the whole report, on the rare
+    # runner whose stdout encoding cannot represent it.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:  # noqa: BLE001 - nothing here may fail the build
+        pass
+
     # Always echo to stdout: GitHub's job summary is not readable through the API,
     # so the step log is the only place the rendered numbers can be checked after
     # the fact (and it is where you are already looking when a run goes wrong).
     try:
         sys.stdout.write(markdown)
         sys.stdout.flush()
-    except OSError as error:
-        print(f"could not echo the coverage summary: {error}", file=sys.stderr)
+    except Exception as error:  # noqa: BLE001 - nothing here may fail the build
+        warn(f"could not echo the coverage summary: {error}")
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         try:
-            with open(summary_path, "a", encoding="utf-8") as handle:
+            with open(summary_path, "a", encoding="utf-8", errors="replace") as handle:
                 handle.write(markdown)
-        except OSError as error:
-            print(f"could not write the job summary: {error}", file=sys.stderr)
+        except Exception as error:  # noqa: BLE001 - nothing here may fail the build
+            warn(f"could not write the job summary: {error}")
     return 0
 
 
