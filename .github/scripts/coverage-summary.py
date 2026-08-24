@@ -64,6 +64,18 @@ class Report:
             self.by_file[filename] = (covered, valid)
 
 
+# Control characters are stripped from anything the report supplies: this text is
+# echoed to the step log, where a bare newline could forge a `::` workflow command,
+# and a pipe would silently split a Markdown table cell.
+_UNSAFE = {c: " " for c in range(0x20)}
+_UNSAFE[0x7F] = " "
+
+
+def cell(text):
+    """Make a report-derived string safe to drop into a log line or table cell."""
+    return str(text).translate(_UNSAFE).replace("|", "\\|").strip()
+
+
 def percent(covered, valid):
     """Format a coverage ratio, tolerating the zero-denominator case."""
     if valid == 0:
@@ -86,7 +98,7 @@ def warning_block(failures):
         return []
     out = ["> [!WARNING]", "> Some coverage reports could not be read:", ">"]
     for path, error in failures:
-        out.append(f"> - `{path}`: {type(error).__name__}: {error}")
+        out.append(f"> - `{cell(path)}`: {cell(type(error).__name__)}: {cell(error)}")
     out.append("")
     return out
 
@@ -106,7 +118,7 @@ def render(reports, failures=()):
     out.append("| --- | ---: | ---: | ---: |")
     for r in reports:
         out.append(
-            f"| {r.label} "
+            f"| {cell(r.label)} "
             f"| {percent(r.lines_covered, r.lines_valid)} "
             f"({r.lines_covered}/{r.lines_valid}) "
             f"| {percent(r.branches_covered, r.branches_valid)} "
@@ -124,12 +136,12 @@ def render(reports, failures=()):
     )[:WORST_FILE_COUNT]
 
     if worst:
-        out.append(f"<details><summary>Files with the most uncovered lines ({reports[0].label})</summary>")
+        out.append(f"<details><summary>Files with the most uncovered lines ({cell(reports[0].label)})</summary>")
         out.append("")
         out.append("| File | Line coverage | Uncovered lines |")
         out.append("| --- | ---: | ---: |")
         for name, covered, valid in worst:
-            out.append(f"| `{name}` | {percent(covered, valid)} | {valid - covered} |")
+            out.append(f"| `{cell(name)}` | {percent(covered, valid)} | {valid - covered} |")
         out.append("")
         out.append("</details>")
         out.append("")
@@ -161,7 +173,11 @@ def main(argv):
     # Always echo to stdout: GitHub's job summary is not readable through the API,
     # so the step log is the only place the rendered numbers can be checked after
     # the fact (and it is where you are already looking when a run goes wrong).
-    sys.stdout.write(markdown)
+    try:
+        sys.stdout.write(markdown)
+        sys.stdout.flush()
+    except OSError as error:
+        print(f"could not echo the coverage summary: {error}", file=sys.stderr)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
