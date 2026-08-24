@@ -64,9 +64,10 @@ public class ExportGuardCensusTests
     /// </summary>
     private static GuardSite[] Census()
     {
-        var export = typeof(CsvExporter).GetMethod(nameof(CsvExporter.ExportAsync))!;
-        var record = typeof(LiveCsvRecordingExtensions)
-            .GetMethod(nameof(LiveCsvRecordingExtensions.RecordLiveSamplesToCsvAsync))!;
+        var export = SoleMethod(typeof(CsvExporter), nameof(CsvExporter.ExportAsync));
+        var record = SoleMethod(
+            typeof(LiveCsvRecordingExtensions),
+            nameof(LiveCsvRecordingExtensions.RecordLiveSamplesToCsvAsync));
 
         return
         [
@@ -218,6 +219,25 @@ public class ExportGuardCensusTests
         Assert.NotEmpty(ThrowSitesInExportSource());
     }
 
+    /// <summary>
+    /// The one public method with this name. Resolved by enumeration rather than
+    /// <c>Type.GetMethod(name)</c>, which throws <see cref="System.Reflection.AmbiguousMatchException"/>
+    /// the day an overload is added — a failure that says nothing about what to do. This one says
+    /// it: an overloaded method needs the census to name which overload it is censusing.
+    /// </summary>
+    private static MethodInfo SoleMethod(Type type, string name)
+    {
+        var overloads = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
+            .Where(m => m.Name == name)
+            .ToList();
+
+        Assert.True(overloads.Count == 1,
+            $"Expected exactly one public {type.Name}.{name}; found {overloads.Count}. " +
+            "If an overload was added, the census must resolve the specific signature its guard lives in.");
+
+        return overloads[0];
+    }
+
     private static string RepositoryRoot =>
         Path.GetFullPath(
             typeof(ExportGuardCensusTests).Assembly
@@ -229,11 +249,17 @@ public class ExportGuardCensusTests
         Path.Combine(RepositoryRoot, "src", "Daqifi.Core", "Logging", "Export");
 
     /// <summary>
-    /// Every line in the export source that mentions <see cref="ArgumentOutOfRangeException"/>
-    /// outside a doc comment — the <c>throw new</c> form and the
+    /// Every line in the export source that actually raises an
+    /// <see cref="ArgumentOutOfRangeException"/> — the <c>throw new</c> form and the
     /// <c>ArgumentOutOfRangeException.ThrowIf*</c> helpers alike, so switching to a helper does not
     /// slip a guard past the census.
     /// </summary>
+    /// <remarks>
+    /// Matched narrowly on purpose. A mere mention of the type — <c>catch</c>, <c>typeof</c>, an
+    /// XML-doc <c>&lt;exception&gt;</c> tag — is not a guard, and counting one would fail the census
+    /// for a change that added no guard at all. A drift test that cries wolf is a drift test people
+    /// switch off. Line and block comments are skipped for the same reason.
+    /// </remarks>
     private static IReadOnlyList<(string File, int Line)> ThrowSitesInExportSource()
     {
         var sites = new List<(string File, int Line)>();
@@ -241,16 +267,14 @@ public class ExportGuardCensusTests
         foreach (var path in Directory.GetFiles(ExportSourceDirectory, "*.cs").OrderBy(p => p, StringComparer.Ordinal))
         {
             var lines = File.ReadAllLines(path);
+            var inBlockComment = false;
+
             for (var i = 0; i < lines.Length; i++)
             {
-                var trimmed = lines[i].TrimStart();
-                if (trimmed.StartsWith("//", StringComparison.Ordinal)
-                    || trimmed.StartsWith('*'))
-                {
-                    continue;
-                }
+                var code = StripComments(lines[i], ref inBlockComment);
 
-                if (trimmed.Contains(nameof(ArgumentOutOfRangeException), StringComparison.Ordinal))
+                if (code.Contains($"throw new {nameof(ArgumentOutOfRangeException)}", StringComparison.Ordinal)
+                    || code.Contains($"{nameof(ArgumentOutOfRangeException)}.ThrowIf", StringComparison.Ordinal))
                 {
                     sites.Add((Path.GetFileName(path), i + 1));
                 }
@@ -258,6 +282,48 @@ public class ExportGuardCensusTests
         }
 
         return sites;
+    }
+
+    /// <summary>
+    /// Returns the code on <paramref name="line"/> with its comments removed, carrying
+    /// <paramref name="inBlockComment"/> across lines. Deliberately naive — it does not understand
+    /// string literals containing comment markers — which is safe here because the only thing done
+    /// with the result is looking for a <c>throw</c>, and a literal spelling one out would be a
+    /// stranger thing than this missing it.
+    /// </summary>
+    private static string StripComments(string line, ref bool inBlockComment)
+    {
+        var code = new System.Text.StringBuilder();
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (inBlockComment)
+            {
+                if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
+            {
+                break;
+            }
+
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+
+            code.Append(line[i]);
+        }
+
+        return code.ToString();
     }
 
     /// <summary>
