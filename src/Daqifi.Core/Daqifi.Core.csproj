@@ -2,9 +2,8 @@
 
   <PropertyGroup>
     <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- ImplicitUsings, Nullable and TreatWarningsAsErrors come from the repo-root Directory.Build.props. -->
 
     <!-- Package Metadata -->
     <PackageId>Daqifi.Core</PackageId>
