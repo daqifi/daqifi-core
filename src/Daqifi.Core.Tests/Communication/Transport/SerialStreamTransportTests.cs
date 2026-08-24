@@ -70,7 +70,6 @@ public class SerialStreamTransportTests
 
         Assert.Equal(500, port.ReadTimeout);
         Assert.Equal(2000, port.WriteTimeout);
-        Assert.NotEqual(SerialPort.InfiniteTimeout, port.WriteTimeout);
     }
 
     [Fact]
