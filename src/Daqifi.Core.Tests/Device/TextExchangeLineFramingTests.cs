@@ -27,6 +27,13 @@ public class TextExchangeLineFramingTests
 
     private const int CompletionTimeoutMs = 150;
 
+    /// <summary>
+    /// Completion timeout for the fragmented-reply test. Comfortably wider than the gap that
+    /// test paces its fragments by, so only a wait loop that failed to restart its inactivity
+    /// window on each line can cut the reply short.
+    /// </summary>
+    private const int StagedCompletionTimeoutMs = 300;
+
     [Fact]
     public async Task ExecuteTextCommand_WhenTheDeviceAnswersWithABareLineFeed_ReturnsTheLine()
     {
@@ -158,6 +165,62 @@ public class TextExchangeLineFramingTests
         device.Disconnect();
     }
 
+    [Fact]
+    public async Task ExecuteTextCommand_WhenTheDeviceAnswersInFragmentsSpacedApart_ReturnsEveryLine()
+    {
+        // The property the inactivity tail exists for, and the one an event-driven wait loop is
+        // most likely to get wrong: every line must restart the completion window, so a device
+        // that dribbles its answer out over more than one completion timeout in total is never cut
+        // off part-way. A loop that instead measured its deadline from when it started waiting
+        // would return the first few lines here and drop the rest.
+        //
+        // The fragments are paced by the reader thread's OWN idle reads rather than by a delay on
+        // the test thread, so the gap between them is real time on a dedicated thread — a starved
+        // thread pool cannot stretch it into a false completion.
+        using var transport = new ScriptedReplyTransport(
+            idleReadsBetweenStages: 10,
+            "one\r\n",
+            "two\r\n",
+            "three\r\n",
+            "four\r\n",
+            "five\r\n");
+        using var device = new LineFramingTestableDevice("Fragmented Device", transport);
+
+        device.Connect();
+
+        var lines = await device.CallAsync(
+            () => transport.Release(),
+            completionTimeoutMs: StagedCompletionTimeoutMs);
+
+        Assert.Equal(new[] { "one", "two", "three", "four", "five" }, lines);
+        AssertRecognisedTheReply(device);
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_WhenTheCallerCancelsWhileWaitingForAReply_ThrowsOperationCanceled()
+    {
+        // The wait for the device's reply is cancellable, and must stay cancellable however it is
+        // implemented. A silent device would otherwise hold the operation lock for the whole
+        // first-response window with nothing the caller could do about it.
+        using var transport = new ScriptedReplyTransport("\r\n");
+        using var device = new LineFramingTestableDevice("Cancelled Device", transport);
+
+        device.Connect();
+
+        using var cancellation = new CancellationTokenSource();
+
+        // Armed from inside the setup action so it fires while the exchange is waiting for a reply
+        // that is never released, rather than racing the validation that runs before it.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => device.CallAsync(
+                () => cancellation.CancelAfter(50),
+                cancellationToken: cancellation.Token));
+
+        device.Disconnect();
+    }
+
     private static void AssertRecognisedTheReply(LineFramingTestableDevice device)
     {
         // The exchange reports which branch its reply wait loop left by, so this asks it rather
@@ -207,12 +270,16 @@ public class TextExchangeLineFramingTests
         /// </summary>
         internal override void OnReplyWaitCompleted(bool sawResponse) => RecognisedTheReply = sawResponse;
 
-        public Task<IReadOnlyList<string>> CallAsync(Action setupAction)
+        public Task<IReadOnlyList<string>> CallAsync(
+            Action setupAction,
+            int? completionTimeoutMs = null,
+            CancellationToken cancellationToken = default)
         {
             return ExecuteTextCommandAsync(
                 setupAction,
                 responseTimeoutMs: ResponseTimeoutMs,
-                completionTimeoutMs: CompletionTimeoutMs);
+                completionTimeoutMs: completionTimeoutMs ?? CompletionTimeoutMs,
+                cancellationToken: cancellationToken);
         }
     }
 
@@ -227,8 +294,18 @@ public class TextExchangeLineFramingTests
         private bool _disposed;
 
         public ScriptedReplyTransport(string reply)
+            : this(idleReadsBetweenStages: int.MaxValue, reply)
         {
-            _stream = new ScriptedReplyStream(reply);
+        }
+
+        /// <summary>
+        /// A reply the device sends in fragments: each stage is handed over only after the reader
+        /// thread has come back for more <paramref name="idleReadsBetweenStages"/> times, so the
+        /// gap between fragments is paced by that thread rather than by the test's own clock.
+        /// </summary>
+        public ScriptedReplyTransport(int idleReadsBetweenStages, params string[] stages)
+        {
+            _stream = new ScriptedReplyStream(stages, idleReadsBetweenStages);
         }
 
         public Stream Stream => _disposed
@@ -274,12 +351,24 @@ public class TextExchangeLineFramingTests
 
         private sealed class ScriptedReplyStream : Stream
         {
-            private readonly byte[] _reply;
+            private readonly byte[][] _stages;
+            private readonly int _idleReadsBetweenStages;
             private readonly object _gate = new();
             private bool _released;
+            private int _stage;
             private int _position;
+            private int _idleReads;
 
-            public ScriptedReplyStream(string reply) => _reply = Encoding.ASCII.GetBytes(reply);
+            public ScriptedReplyStream(string[] stages, int idleReadsBetweenStages)
+            {
+                _stages = new byte[stages.Length][];
+                for (var i = 0; i < stages.Length; i++)
+                {
+                    _stages[i] = Encoding.ASCII.GetBytes(stages[i]);
+                }
+
+                _idleReadsBetweenStages = idleReadsBetweenStages;
+            }
 
             public void Release()
             {
@@ -301,12 +390,26 @@ public class TextExchangeLineFramingTests
             {
                 lock (_gate)
                 {
-                    if (_released && _position < _reply.Length)
+                    if (_released && _stage < _stages.Length)
                     {
-                        var toCopy = Math.Min(count, _reply.Length - _position);
-                        Array.Copy(_reply, _position, buffer, offset, toCopy);
-                        _position += toCopy;
-                        return toCopy;
+                        var current = _stages[_stage];
+                        if (_position < current.Length)
+                        {
+                            var toCopy = Math.Min(count, current.Length - _position);
+                            Array.Copy(current, _position, buffer, offset, toCopy);
+                            _position += toCopy;
+                            return toCopy;
+                        }
+
+                        // This stage is drained. Count this thread's own idle reads until the next
+                        // one is due: the pacing is then real time on the reader thread, which is
+                        // what makes the gap independent of how loaded the thread pool is.
+                        if (++_idleReads >= _idleReadsBetweenStages)
+                        {
+                            _idleReads = 0;
+                            _stage++;
+                            _position = 0;
+                        }
                     }
                 }
 
