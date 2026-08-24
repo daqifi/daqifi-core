@@ -40,3 +40,32 @@ jobs:
       
     - name: Test
       run: dotnet test Daqifi.Core.sln
+
+    # Daqifi.Core.Tests.csproj collects coverage on every run, so the cobertura
+    # report already exists by this point; the next two steps are only about not
+    # throwing it away when the job ends. Reporting only — deliberately no
+    # threshold that can fail the build (#641). `always()` so a red test run still
+    # publishes whatever coverage was written before the failure.
+    - name: Coverage summary
+      if: always()
+      shell: bash
+      run: |
+        shopt -s nullglob
+        reports=(src/coverage/*.cobertura.xml)
+        if [ ${#reports[@]} -eq 0 ]; then
+          echo "No coverage reports were produced by this run." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        python_bin=python3
+        command -v python3 >/dev/null 2>&1 || python_bin=python
+        "$python_bin" .github/scripts/coverage-summary.py "${reports[@]}"
+
+    # Keyed by runner.os so the artifact names stay unique if the job ever becomes
+    # a multi-OS matrix (#635).
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: coverage-${{ runner.os }}
+        path: src/coverage/*.cobertura.xml
+        if-no-files-found: warn
