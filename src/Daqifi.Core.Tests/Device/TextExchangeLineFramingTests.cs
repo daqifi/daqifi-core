@@ -28,52 +28,55 @@ public class TextExchangeLineFramingTests
     private const int CompletionTimeoutMs = 150;
 
     /// <summary>
-    /// Completion timeout for the fragmented-reply test, and the three constants below it are
-    /// sized against it. Two things have to be true at once there, and they pull in opposite
-    /// directions:
+    /// Completion timeout for the fragmented-reply test, and the two constants below it are sized
+    /// against it. Two things have to be true at once there, and they pull in opposite directions:
     /// </summary>
     /// <remarks>
     /// <para>
     /// One fragment gap must stay well inside this window, or a wait loop that DOES restart its
-    /// window still looks like one that cut the reply short. That is the side this test was
-    /// originally sized too tightly for: a 100 ms gap in a 300 ms window left barely 3x, and CI
-    /// spent it. On the macOS and Windows runners the exchange came back with the first line
-    /// alone, meaning the FIRST gap by itself outran the window -- the gap that also pays for
-    /// JIT-ing the read and parse path and for the freshly started consumer thread's first
-    /// scheduling, on a machine already running the rest of the suite in parallel. Measured on an
-    /// unloaded 12-core M-series Mac the pacing is accurate to about 10% and does not degrade at
-    /// 4x CPU oversubscription, so a local run reproduces none of this; the margin is what has to
-    /// carry it, not the nominal number.
+    /// window still looks like one that cut the reply short. That is the side this test kept
+    /// failing on. The gap used to be counted in the reader thread's own idle reads —
+    /// five <see cref="IdleReadSleepMs"/> sleeps — which made the gap the SUM of five scheduling
+    /// delays rather than one. On the macOS runner each 10 ms sleep came back at roughly 100 ms
+    /// under the load of the rest of the suite, so the nominal 50 ms gap arrived at ~500 ms, ate
+    /// the whole window, and the exchange returned six of the twelve lines. Widening the window
+    /// (300 ms -> 500 ms) did not fix it, because the stretch scales with the window.
     /// </para>
     /// <para>
-    /// The gap is now <see cref="StagedFragmentIdleReads"/> x <see cref="IdleReadSleepMs"/> =
-    /// 50 ms nominal (55 ms measured) in a 500 ms window, so roughly 450 ms of cold-start and
-    /// scheduling delay has to land inside one gap before the test lies about the exchange.
+    /// The gap is now measured on the stream's own clock — the next fragment is handed over on the
+    /// first read that finds <see cref="StageGapMs"/> elapsed since the previous one drained — so a
+    /// stretched sleep no longer accumulates. The gap is <see cref="StageGapMs"/> plus at most ONE
+    /// late read, which means a single scheduling stall of 450 ms has to land inside one gap before
+    /// the test lies about the exchange, instead of five stalls of 90 ms.
     /// </para>
     /// <para>
-    /// The fragments must ALSO take longer than this window in total, or the test passes for a
-    /// loop that never restarts anything. That needs
-    /// (<see cref="StagedFragmentCount"/> - 1) x gap &gt; the window: 11 x 50 ms = 550 ms nominal,
-    /// and more on a slow machine, since delay can only lengthen a gap. Both sides therefore hold
-    /// in the direction a loaded runner pushes them -- but the elapsed time is asserted in the
-    /// test rather than left to this arithmetic, so pacing that collapses fails instead of going
-    /// vacuous.
+    /// The fragments must ALSO span longer than this window in total, or the test passes for a loop
+    /// that never restarts anything. That needs
+    /// (<see cref="StagedFragmentCount"/> - 1) x <see cref="StageGapMs"/> &gt; the window:
+    /// 15 x 50 ms = 750 ms nominal, and more on a slow machine, since delay can only lengthen a
+    /// gap. Both sides therefore hold in the direction a loaded runner pushes them — but the span
+    /// is asserted from the stream's record of it rather than left to this arithmetic, so pacing
+    /// that collapses fails instead of going vacuous.
     /// </para>
     /// </remarks>
     private const int StagedCompletionTimeoutMs = 500;
 
-    /// <summary>Idle reads between fragments; see <see cref="StagedCompletionTimeoutMs"/>.</summary>
-    private const int StagedFragmentIdleReads = 5;
+    /// <summary>
+    /// Nominal gap between fragments, measured on the stream's clock rather than counted in idle
+    /// reads; see <see cref="StagedCompletionTimeoutMs"/>.
+    /// </summary>
+    private const int StageGapMs = 50;
 
     /// <summary>
     /// How many fragments the staged reply is dribbled out in. Enough that the fragments outlast
     /// one completion window even though each gap is a small fraction of it.
     /// </summary>
-    private const int StagedFragmentCount = 12;
+    private const int StagedFragmentCount = 16;
 
     /// <summary>
-    /// How long an idle read parks the consumer thread for. A floor rather than an exact wait,
-    /// which is why the margins above are stated in multiples of it rather than trusted to it.
+    /// How long an idle read parks the consumer thread for. Only the polling interval now: it sets
+    /// how soon after <see cref="StageGapMs"/> elapses the next fragment is noticed, and no longer
+    /// multiplies into the gap itself.
     /// </summary>
     private const int IdleReadSleepMs = 10;
 
@@ -217,26 +220,25 @@ public class TextExchangeLineFramingTests
         // off part-way. A loop that instead measured its deadline from when it started waiting
         // would return the first few lines here and drop the rest.
         //
-        // The fragments are paced by the reader thread's OWN idle reads rather than by a delay on
-        // the test thread, so the gap between them is real time on a dedicated thread rather than
-        // time the thread pool has to schedule. That is not enough on its own, though: a sleep is
-        // a floor, not a promise, and a loaded runner stretches one. The margin between a gap and
-        // the completion window is what actually keeps this honest, and it is sized in the note on
-        // StagedCompletionTimeoutMs.
+        // The fragments are paced on the stream's own clock — the next one is handed over on the
+        // first read that finds StageGapMs elapsed since the previous one drained — rather than by
+        // a delay on the test thread or by counting the reader thread's sleeps. A sleep is a floor,
+        // not a promise, and a loaded runner stretches one; timing the gap instead of counting
+        // sleeps keeps one stretched sleep from being multiplied into the whole gap. The margin
+        // between a gap and the completion window is what keeps this honest, and it is sized in the
+        // note on StagedCompletionTimeoutMs.
         var expected = Enumerable.Range(1, StagedFragmentCount).Select(i => $"line{i}").ToArray();
 
         using var transport = new ScriptedReplyTransport(
-            idleReadsBetweenStages: StagedFragmentIdleReads,
+            stageGapMs: StageGapMs,
             expected.Select(line => $"{line}\r\n").ToArray());
         using var device = new LineFramingTestableDevice("Fragmented Device", transport);
 
         device.Connect();
 
-        var stopwatch = Stopwatch.StartNew();
         var lines = await device.CallAsync(
             () => transport.Release(),
             completionTimeoutMs: StagedCompletionTimeoutMs);
-        stopwatch.Stop();
 
         Assert.Equal(expected, lines);
         AssertRecognisedTheReply(device);
@@ -245,8 +247,15 @@ public class TextExchangeLineFramingTests
         // line would arrive inside a single completion window and a wait loop that never restarted
         // its window would look correct. Asserting the reply really did outlast one window is what
         // makes the collection assertion above evidence for the property in the comment.
-        Assert.True(stopwatch.ElapsedMilliseconds > StagedCompletionTimeoutMs,
-            $"The staged reply completed in {stopwatch.ElapsedMilliseconds} ms, which is inside one " +
+        //
+        // Asked of the stream rather than of a stopwatch around the call: the call cannot return
+        // until a whole completion window has passed with no new line, so its own elapsed time is
+        // greater than the window whatever the pacing did, and asserting on it proves nothing. The
+        // span between the first and last fragment reaching the reader is the quantity that has to
+        // outlast the window, and only the stream can measure it.
+        var stagedSpanMs = transport.StagedSpan.TotalMilliseconds;
+        Assert.True(stagedSpanMs > StagedCompletionTimeoutMs,
+            $"The staged reply was handed over across {stagedSpanMs:F0} ms, which is inside one " +
             $"{StagedCompletionTimeoutMs} ms completion window: the fragments were not spaced apart, " +
             "so this test no longer exercises the window restarting on each line.");
 
@@ -349,19 +358,28 @@ public class TextExchangeLineFramingTests
         private bool _disposed;
 
         public ScriptedReplyTransport(string reply)
-            : this(idleReadsBetweenStages: int.MaxValue, reply)
+            : this(stageGapMs: int.MaxValue, reply)
         {
         }
 
         /// <summary>
-        /// A reply the device sends in fragments: each stage is handed over only after the reader
-        /// thread has come back for more <paramref name="idleReadsBetweenStages"/> times, so the
-        /// gap between fragments is paced by that thread rather than by the test's own clock.
+        /// A reply the device sends in fragments: each stage is handed over on the first read that
+        /// finds <paramref name="stageGapMs"/> elapsed since the previous stage drained, so the gap
+        /// between fragments is measured on the stream's clock rather than counted in the reader
+        /// thread's sleeps — one late read can lengthen a gap, but it cannot be multiplied into it.
         /// </summary>
-        public ScriptedReplyTransport(int idleReadsBetweenStages, params string[] stages)
+        public ScriptedReplyTransport(int stageGapMs, params string[] stages)
         {
-            _stream = new ScriptedReplyStream(stages, idleReadsBetweenStages);
+            _stream = new ScriptedReplyStream(stages, stageGapMs);
         }
+
+        /// <summary>
+        /// How long the stream took to hand over every stage: the elapsed time from the first
+        /// fragment draining to the last one draining, or <see cref="TimeSpan.Zero"/> if fewer than
+        /// two fragments were ever handed over. This is what the fragmented-reply test asserts is
+        /// longer than one completion window.
+        /// </summary>
+        public TimeSpan StagedSpan => _stream.StagedSpan;
 
         public Stream Stream => _disposed
             ? throw new ObjectDisposedException(nameof(ScriptedReplyTransport))
@@ -407,14 +425,18 @@ public class TextExchangeLineFramingTests
         private sealed class ScriptedReplyStream : Stream
         {
             private readonly byte[][] _stages;
-            private readonly int _idleReadsBetweenStages;
+            private readonly TimeSpan _stageGap;
+            private readonly Stopwatch _clock = Stopwatch.StartNew();
             private readonly object _gate = new();
             private bool _released;
             private int _stage;
             private int _position;
-            private int _idleReads;
+            private TimeSpan _stageDrainedAt;
+            private TimeSpan _firstStageDrainedAt;
+            private TimeSpan _lastStageDrainedAt;
+            private bool _anyStageDrained;
 
-            public ScriptedReplyStream(string[] stages, int idleReadsBetweenStages)
+            public ScriptedReplyStream(string[] stages, int stageGapMs)
             {
                 _stages = new byte[stages.Length][];
                 for (var i = 0; i < stages.Length; i++)
@@ -422,7 +444,19 @@ public class TextExchangeLineFramingTests
                     _stages[i] = Encoding.ASCII.GetBytes(stages[i]);
                 }
 
-                _idleReadsBetweenStages = idleReadsBetweenStages;
+                _stageGap = TimeSpan.FromMilliseconds(stageGapMs);
+            }
+
+            /// <summary>See <see cref="ScriptedReplyTransport.StagedSpan"/>.</summary>
+            public TimeSpan StagedSpan
+            {
+                get
+                {
+                    lock (_gate)
+                    {
+                        return _lastStageDrainedAt - _firstStageDrainedAt;
+                    }
+                }
             }
 
             public void Release()
@@ -453,15 +487,31 @@ public class TextExchangeLineFramingTests
                             var toCopy = Math.Min(count, current.Length - _position);
                             Array.Copy(current, _position, buffer, offset, toCopy);
                             _position += toCopy;
+
+                            if (_position == current.Length)
+                            {
+                                // Handed over in full, so the gap to the next one starts here. The
+                                // same instant is the one the reader turns into a line, which is
+                                // what makes this the right clock to pace against.
+                                _stageDrainedAt = _clock.Elapsed;
+                                if (!_anyStageDrained)
+                                {
+                                    _anyStageDrained = true;
+                                    _firstStageDrainedAt = _stageDrainedAt;
+                                }
+
+                                _lastStageDrainedAt = _stageDrainedAt;
+                            }
+
                             return toCopy;
                         }
 
-                        // This stage is drained. Count this thread's own idle reads until the next
-                        // one is due: the pacing is then real time on the reader thread, which is
-                        // what makes the gap independent of how loaded the thread pool is.
-                        if (++_idleReads >= _idleReadsBetweenStages)
+                        // This stage is drained. The next one is due once the gap has really
+                        // elapsed on this clock — not once some number of sleeps have returned, a
+                        // count that turns each stretched sleep on a loaded runner into a
+                        // proportionally stretched gap.
+                        if (_clock.Elapsed - _stageDrainedAt >= _stageGap)
                         {
-                            _idleReads = 0;
                             _stage++;
                             _position = 0;
                         }
