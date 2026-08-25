@@ -18,28 +18,62 @@ on:
   push:
     branches: [ main ]
 
+# Superseded pushes to a PR branch used to keep running to completion; with three
+# runners per run that waste is now tripled, so cancel them. Only pull_request runs
+# are cancelled: a merge_group run is the gate for a commit that is about to land,
+# and a push run on main is the backstop above — neither is ever redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    
+  # One leg per supported OS (#635). The library branches on the host OS in a dozen
+  # files — the macOS IOKit HID transport, the Windows PnP/WMI discovery providers —
+  # and until now the first machine to compile any of that was a user's.
+  # fail-fast is off so one platform's failure still leaves the other two's results
+  # readable, which is the whole point of having them.
+  test:
+    name: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
     steps:
     - uses: actions/checkout@v7
-        
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
           9.0.x
           10.0.x
-        
+
+    # setup-dotnet's own `cache: true` keys off packages.lock.json, which this repo
+    # does not use, so cache the package folder directly. Keyed by OS because the
+    # restored graph differs per platform, and by the project files because that is
+    # what decides which packages get pulled.
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+        restore-keys: |
+          nuget-${{ runner.os }}-
+
     - name: Restore dependencies
       run: dotnet restore Daqifi.Core.sln
-      
+
     - name: Build
       run: dotnet build --no-restore Daqifi.Core.sln
-      
+
+    # --no-build because the step above already built it. Without that flag every
+    # leg compiled the solution a second time, which the matrix would have tripled.
+    # Verified locally that coverlet still writes both cobertura reports under
+    # --no-build: it instruments through its own no-build target.
     - name: Test
-      run: dotnet test Daqifi.Core.sln
+      run: dotnet test --no-build --no-restore Daqifi.Core.sln
 
     # Daqifi.Core.Tests.csproj collects coverage on every run, so the cobertura
     # report already exists by this point; the next two steps are only about not
@@ -60,8 +94,9 @@ jobs:
         command -v python3 >/dev/null 2>&1 || python_bin=python
         "$python_bin" .github/scripts/coverage-summary.py "${reports[@]}"
 
-    # Keyed by runner.os so the artifact names stay unique if the job ever becomes
-    # a multi-OS matrix (#635).
+    # Keyed by runner.os so the three legs upload three artifacts instead of
+    # colliding on one name. Each leg's numbers differ: the OS-specific transports
+    # only execute on the platform they are written for.
     - name: Upload coverage report
       if: always()
       uses: actions/upload-artifact@v7
@@ -69,3 +104,22 @@ jobs:
         name: coverage-${{ runner.os }}
         path: src/coverage/*.cobertura.xml
         if-no-files-found: warn
+
+  # The matrix legs report as "test (ubuntu-latest)" and friends, so branch
+  # protection and the merge queue would lose the check they require. This job keeps
+  # the old "build" name and passes only when every leg passed, so the required
+  # check keeps reporting and automatically covers any OS added to the matrix later.
+  build:
+    name: build
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check matrix result
+      env:
+        RESULT: ${{ needs.test.result }}
+      run: |
+        echo "Matrix result: $RESULT"
+        # Anything other than success — a failed leg, a cancelled leg, or a leg
+        # skipped by a bad `if` — must not report green.
+        [ "$RESULT" = "success" ]

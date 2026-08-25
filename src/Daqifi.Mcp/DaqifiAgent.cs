@@ -1025,15 +1025,11 @@ public sealed class DaqifiAgent
                 .ParseWithFormatAsync(stream, Path.GetFileName(deviceFileName), format, parseOptions, cancellationToken)
                 .ConfigureAwait(false);
 
-            // The file's own status message wins; the live device fills in when the log carries
-            // none. Zero is the honest last resort — a device with no analog channels exports the
-            // digital column alone rather than inventing width.
-            var analogCount = session.DeviceConfig?.AnalogPortCount ?? liveConfig?.AnalogPortCount ?? 0;
-
-            var source = new SdCardSampleSource(
-                session.Samples,
-                session.DeviceConfig?.DeviceSerialNumber ?? liveConfig?.DeviceSerialNumber,
-                analogCount);
+            // Core's adapter, not a local one: the file's own status message wins and the live
+            // device fills in when the log carries none, which is what AsSampleSource does. Zero
+            // is the honest last resort — a device with no analog channels exports the digital
+            // column alone rather than inventing width.
+            var source = session.AsSampleSource(liveConfig);
 
             // Appended, not swapped: the firmware logs in CSV as well as protobuf and JSON, and
             // Core's temp file keeps the device-side extension — so Path.ChangeExtension(".csv")
@@ -1084,8 +1080,8 @@ public sealed class DaqifiAgent
             // data. Silence is the one unacceptable option — an agent analysing a CSV that quietly
             // lost channels has no way to notice.
             var warning = source.DroppedAnalogColumns > 0
-                ? $"The CSV is incomplete: samples in '{deviceFileName}' carry {analogCount + source.DroppedAnalogColumns} " +
-                  $"analog values but only {analogCount} analog channels are known, so {source.DroppedAnalogColumns} " +
+                ? $"The CSV is incomplete: samples in '{deviceFileName}' carry {source.AnalogChannelCount + source.DroppedAnalogColumns} " +
+                  $"analog values but only {source.AnalogChannelCount} analog channels are known, so {source.DroppedAnalogColumns} " +
                   "column(s) were dropped."
                 : null;
 
