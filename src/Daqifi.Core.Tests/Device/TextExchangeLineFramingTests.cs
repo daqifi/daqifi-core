@@ -28,11 +28,54 @@ public class TextExchangeLineFramingTests
     private const int CompletionTimeoutMs = 150;
 
     /// <summary>
-    /// Completion timeout for the fragmented-reply test. Comfortably wider than the gap that
-    /// test paces its fragments by, so only a wait loop that failed to restart its inactivity
-    /// window on each line can cut the reply short.
+    /// Completion timeout for the fragmented-reply test, and the three constants below it are
+    /// sized against it. Two things have to be true at once there, and they pull in opposite
+    /// directions:
     /// </summary>
-    private const int StagedCompletionTimeoutMs = 300;
+    /// <remarks>
+    /// <para>
+    /// One fragment gap must stay well inside this window, or a wait loop that DOES restart its
+    /// window still looks like one that cut the reply short. That is the side this test was
+    /// originally sized too tightly for: a 100 ms gap in a 300 ms window left barely 3x, and CI
+    /// spent it. On the macOS and Windows runners the exchange came back with the first line
+    /// alone, meaning the FIRST gap by itself outran the window -- the gap that also pays for
+    /// JIT-ing the read and parse path and for the freshly started consumer thread's first
+    /// scheduling, on a machine already running the rest of the suite in parallel. Measured on an
+    /// unloaded 12-core M-series Mac the pacing is accurate to about 10% and does not degrade at
+    /// 4x CPU oversubscription, so a local run reproduces none of this; the margin is what has to
+    /// carry it, not the nominal number.
+    /// </para>
+    /// <para>
+    /// The gap is now <see cref="StagedFragmentIdleReads"/> x <see cref="IdleReadSleepMs"/> =
+    /// 50 ms nominal (55 ms measured) in a 500 ms window, so roughly 450 ms of cold-start and
+    /// scheduling delay has to land inside one gap before the test lies about the exchange.
+    /// </para>
+    /// <para>
+    /// The fragments must ALSO take longer than this window in total, or the test passes for a
+    /// loop that never restarts anything. That needs
+    /// (<see cref="StagedFragmentCount"/> - 1) x gap &gt; the window: 11 x 50 ms = 550 ms nominal,
+    /// and more on a slow machine, since delay can only lengthen a gap. Both sides therefore hold
+    /// in the direction a loaded runner pushes them -- but the elapsed time is asserted in the
+    /// test rather than left to this arithmetic, so pacing that collapses fails instead of going
+    /// vacuous.
+    /// </para>
+    /// </remarks>
+    private const int StagedCompletionTimeoutMs = 500;
+
+    /// <summary>Idle reads between fragments; see <see cref="StagedCompletionTimeoutMs"/>.</summary>
+    private const int StagedFragmentIdleReads = 5;
+
+    /// <summary>
+    /// How many fragments the staged reply is dribbled out in. Enough that the fragments outlast
+    /// one completion window even though each gap is a small fraction of it.
+    /// </summary>
+    private const int StagedFragmentCount = 12;
+
+    /// <summary>
+    /// How long an idle read parks the consumer thread for. A floor rather than an exact wait,
+    /// which is why the margins above are stated in multiples of it rather than trusted to it.
+    /// </summary>
+    private const int IdleReadSleepMs = 10;
 
     [Fact]
     public async Task ExecuteTextCommand_WhenTheDeviceAnswersWithABareLineFeed_ReturnsTheLine()
@@ -175,25 +218,37 @@ public class TextExchangeLineFramingTests
         // would return the first few lines here and drop the rest.
         //
         // The fragments are paced by the reader thread's OWN idle reads rather than by a delay on
-        // the test thread, so the gap between them is real time on a dedicated thread — a starved
-        // thread pool cannot stretch it into a false completion.
+        // the test thread, so the gap between them is real time on a dedicated thread rather than
+        // time the thread pool has to schedule. That is not enough on its own, though: a sleep is
+        // a floor, not a promise, and a loaded runner stretches one. The margin between a gap and
+        // the completion window is what actually keeps this honest, and it is sized in the note on
+        // StagedCompletionTimeoutMs.
+        var expected = Enumerable.Range(1, StagedFragmentCount).Select(i => $"line{i}").ToArray();
+
         using var transport = new ScriptedReplyTransport(
-            idleReadsBetweenStages: 10,
-            "one\r\n",
-            "two\r\n",
-            "three\r\n",
-            "four\r\n",
-            "five\r\n");
+            idleReadsBetweenStages: StagedFragmentIdleReads,
+            expected.Select(line => $"{line}\r\n").ToArray());
         using var device = new LineFramingTestableDevice("Fragmented Device", transport);
 
         device.Connect();
 
+        var stopwatch = Stopwatch.StartNew();
         var lines = await device.CallAsync(
             () => transport.Release(),
             completionTimeoutMs: StagedCompletionTimeoutMs);
+        stopwatch.Stop();
 
-        Assert.Equal(new[] { "one", "two", "three", "four", "five" }, lines);
+        Assert.Equal(expected, lines);
         AssertRecognisedTheReply(device);
+
+        // Without this the test would still pass if the pacing ever collapsed to nothing — every
+        // line would arrive inside a single completion window and a wait loop that never restarted
+        // its window would look correct. Asserting the reply really did outlast one window is what
+        // makes the collection assertion above evidence for the property in the comment.
+        Assert.True(stopwatch.ElapsedMilliseconds > StagedCompletionTimeoutMs,
+            $"The staged reply completed in {stopwatch.ElapsedMilliseconds} ms, which is inside one " +
+            $"{StagedCompletionTimeoutMs} ms completion window: the fragments were not spaced apart, " +
+            "so this test no longer exercises the window restarting on each line.");
 
         device.Disconnect();
     }
@@ -414,7 +469,7 @@ public class TextExchangeLineFramingTests
                 }
 
                 // Idle link: nothing to hand over, and no busy-spin in the reader thread.
-                Thread.Sleep(10);
+                Thread.Sleep(IdleReadSleepMs);
                 return 0;
             }
 
