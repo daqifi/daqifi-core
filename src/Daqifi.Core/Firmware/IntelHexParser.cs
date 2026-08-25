@@ -82,12 +82,7 @@ public class IntelHexParser
 
         foreach (var (hexLine, baseAddress) in EnumerateUnprotectedRecords(lines))
         {
-            var offsetAddressArray = hexLine.Skip(1).Take(2).ToArray();
-            if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
-            var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
-            var fullAddress = ((uint)baseAddress << 16) | offsetAddress;
-
-            records.Add(new HexFileRecord(fullAddress, hexLine, hexLine[3]));
+            records.Add(new HexFileRecord(ComputeFullAddress(hexLine, baseAddress), hexLine, hexLine[3]));
         }
 
         return records;
@@ -162,10 +157,12 @@ public class IntelHexParser
         // where N is the value of the byte-count field (record[0]). ValidateLine already guarantees at
         // least 5 decoded bytes, so record[0] is safely accessible. A declared count that disagrees with
         // the actual data length means the record is truncated, padded, or corrupt. Rejecting it here as
-        // the documented InvalidDataException prevents the downstream BitConverter.ToUInt16 calls (in
-        // UpdateBaseAddress / IsProtectedHexRecord / ParseRecords) from reading a wrong-sized slice and
-        // throwing a raw ArgumentException — e.g. a type-04 record with a zero byte count would otherwise
-        // hand ToUInt16 a zero-length array and crash the whole parse.
+        // the documented InvalidDataException, rather than being parsed as if it were intact.
+        //
+        // This check is NOT what keeps the ReadBigEndianUInt16 reads in range. ComputeFullAddress reads
+        // bytes 1-2, which ValidateLine's 11-character minimum already guarantees; and a zero-count
+        // type-04 record passes right through here, because its declared count does equal its (zero)
+        // data length — that case is caught by UpdateBaseAddress's own explicit type-04 guard below.
         int declaredDataLength = record[0];
         int actualDataLength = record.Length - 5;
         if (actualDataLength != declaredDataLength)
@@ -233,9 +230,34 @@ public class IntelHexParser
                 $"The hex record \"{line}\" is a type-04 extended-address record but does not carry exactly 2 data bytes");
         }
 
-        var dataArray = hexRecord.Skip(4).Take(2).ToArray();
-        if (BitConverter.IsLittleEndian) Array.Reverse(dataArray);
-        return BitConverter.ToUInt16(dataArray, 0);
+        return ReadBigEndianUInt16(hexRecord, 4);
+    }
+
+    /// <summary>
+    /// Computes the record's full 32-bit address: the running extended-linear base address in
+    /// the high 16 bits, and the record's own offset address - bytes 1-2 of every Intel HEX
+    /// record - in the low 16 bits.
+    /// </summary>
+    /// <remarks>
+    /// Both the protected-range test and the address reported on a parsed
+    /// <see cref="HexFileRecord"/> are this same value, so they must be computed the same way:
+    /// if they disagreed, a record could be filtered on one address and reported under another.
+    /// </remarks>
+    private static uint ComputeFullAddress(byte[] hexRecord, ushort baseAddress)
+    {
+        return ((uint)baseAddress << 16) | ReadBigEndianUInt16(hexRecord, 1);
+    }
+
+    /// <summary>
+    /// Reads the two bytes at <paramref name="offset"/> as a big-endian <see cref="ushort"/>,
+    /// which is the byte order Intel HEX uses for both the offset address and the type-04
+    /// extended-address payload.
+    /// </summary>
+    private static ushort ReadBigEndianUInt16(byte[] record, int offset)
+    {
+        var bytes = record.Skip(offset).Take(2).ToArray();
+        if (BitConverter.IsLittleEndian) Array.Reverse(bytes);
+        return BitConverter.ToUInt16(bytes, 0);
     }
 
     private bool IsProtectedHexRecord(byte[] hexRecord, ushort baseAddress)
@@ -246,10 +268,7 @@ public class IntelHexParser
             return false;
         }
 
-        var offsetAddressArray = hexRecord.Skip(1).Take(2).ToArray();
-        if (BitConverter.IsLittleEndian) Array.Reverse(offsetAddressArray);
-        var offsetAddress = BitConverter.ToUInt16(offsetAddressArray, 0);
-        var hexRecordAddress = ((uint)baseAddress << 16) | offsetAddress;
+        var hexRecordAddress = ComputeFullAddress(hexRecord, baseAddress);
 
         return hexRecordAddress >= _beginProtectedAddress && hexRecordAddress <= _endProtectedAddress;
     }

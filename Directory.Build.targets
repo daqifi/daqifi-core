@@ -1,0 +1,56 @@
+<Project>
+
+  <!--
+    Package metadata that is a fact about this repository rather than about any
+    one package: the license it ships under, where it lives, and how its symbols
+    are published. Both published packages - Daqifi.Core and the Daqifi.Mcp
+    dotnet tool - want the same answers, and Daqifi.Mcp was shipping to nuget.org
+    with none of them (issue #644).
+
+    What identifies an individual package - PackageId, Description, PackageTags,
+    PackageReadmeFile - stays in that project's .csproj.
+
+    Why .targets and not Directory.Build.props: the guard below has to see
+    $(IsPackable), and the test projects set it in their own .csproj. MSBuild
+    imports Directory.Build.props *before* the project body and
+    Directory.Build.targets *after* it, so in Directory.Build.props the guard
+    would read an empty $(IsPackable) and apply to everything. Verified with
+    `dotnet msbuild <csproj> -getProperty:...`: the same condition in
+    Directory.Build.props matches Daqifi.Core.Tests, in Directory.Build.targets
+    it does not.
+
+    Keeping the test projects out is not cosmetic. ContinuousIntegrationBuild
+    turns on DeterministicSourcePaths, which rewrites source paths in the PDB and
+    would break the coverlet line-coverage mapping Daqifi.Core.Tests collects.
+  -->
+  <PropertyGroup Condition="'$(IsPackable)' != 'false'">
+    <Authors>DAQiFi</Authors>
+    <!-- The SDK defaults Company to $(Authors), but it resolves that default
+         before this file is imported, so an Authors set here alone would leave
+         AssemblyCompanyAttribute as the assembly name. Both assemblies already
+         carry Company=DAQiFi; stating it explicitly keeps
+         AssemblyCompanyAttribute exactly as it is today. Verified by diffing
+         the evaluated Company property before and after. -->
+    <Company>DAQiFi</Company>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/daqifi/daqifi-core</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/daqifi/daqifi-core</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- Symbols and SourceLink, so a consumer can step into either package.
+         SourceLink itself needs no PackageReference: the .NET SDK has bundled
+         Microsoft.SourceLink.GitHub since .NET 8, and both projects already
+         evaluate EnableSourceLink=true without one. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- EmbedUntrackedSources is already the SDK default (a bare `dotnet new
+         classlib` evaluates it as true), so this changes nothing for any project
+         here - every project in this repo, packable or not, evaluated it as true
+         before this file existed. It is restated only so a future change to that
+         SDK default cannot quietly alter what ships in the symbol packages. -->
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+</Project>

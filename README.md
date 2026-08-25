@@ -81,6 +81,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **One-line connect** | `DaqifiDeviceFactory.ConnectTcpAsync(...)` wraps transport setup and device init; retries are opt-in via `DeviceConnectionOptions` |
 | **Real-time streaming** | Per-channel `IChannel.SampleReceived` events with decoded, scaled values — or subscribe to the raw protobuf frame directly; no polling loops to write |
 | **Acquisition health** | Attach `AcquisitionStatistics` to a stream and read back the rate you are really getting, per-channel jitter, value range, and how far behind the device's clock the host is |
+| **Record to CSV** | `device.RecordLiveSamplesToCsvAsync(writer)` writes a live stream to CSV as it arrives — no buffering the session in memory — and reports what reached the file and what was dropped |
 | **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
 | **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
 | **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
@@ -200,6 +201,36 @@ samples went missing; the two disagreeing means the device's own clock is not ke
 it is `MeasuredSampleRateHz` that describes what your application actually received. `Reset()` starts
 a fresh window mid-session, and `stats.Record(sample)` feeds one by hand from `StreamSamplesAsync`
 instead of attaching.
+
+### Record a live stream to CSV
+
+Streaming and exporting used to be two halves with nothing between them. `RecordLiveSamplesToCsvAsync`
+joins them: it writes rows through `CsvExporter` as frames decode, so the recording's memory does not
+grow with its length, and it hands back what reached the file and what did not.
+
+```csharp
+using Daqifi.Core.Logging.Export;
+
+device.StreamingFrequency = 100;
+device.StartStreaming();
+
+await using var writer = new StreamWriter("run.csv");
+var result = await device.RecordLiveSamplesToCsvAsync(writer, duration: TimeSpan.FromSeconds(30));
+
+device.StopStreaming();
+
+Console.WriteLine($"{result.RowCount} rows from {result.SampleCount} samples");
+if (result.DroppedSampleCount > 0)
+{
+    Console.WriteLine($"{result.DroppedSampleCount} samples dropped — raise bufferCapacity or lower the rate");
+}
+```
+
+The columns are the channels that were enabled when the call started, in device order. `duration`
+elapsing is a clean finish — the last frame is written and the result comes back; cancelling the
+`CancellationToken` is an abort and throws, so a recording cut short is never mistaken for a complete
+one. Need the rows somewhere other than a `TextWriter`? Build a `LiveSampleSource` over
+`StreamSamplesAsync` and hand it to `CsvExporter` (or any other `ISampleSource` consumer) yourself.
 
 ### Digital output
 

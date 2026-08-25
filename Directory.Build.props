@@ -7,8 +7,10 @@
 
     Only settings that every project in the repo should share belong here.
     Anything a project legitimately decides for itself - PackageId, OutputType,
-    PackAsTool, IsPackable, coverlet output, package metadata - stays in that
-    project's .csproj.
+    PackAsTool, IsPackable, coverlet output, per-package metadata - stays in
+    that project's .csproj. Package metadata shared by the two published
+    packages lives in the repo-root Directory.Build.targets (issue #644), which
+    is imported late enough to see $(IsPackable) and skip the test projects.
 
     TargetFramework(s) is deliberately NOT centralized: the projects genuinely
     differ (Daqifi.Core and Daqifi.Core.Tests multi-target net9.0;net10.0, while

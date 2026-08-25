@@ -4,9 +4,9 @@ using System.Xml.Linq;
 namespace Daqifi.Core.Tests.Build;
 
 /// <summary>
-/// Guards the repo-wide build configuration added for issue #638: the properties that live in
-/// the root <c>Directory.Build.props</c> must not also be declared in an individual
-/// <c>.csproj</c>.
+/// Guards the repo-wide build configuration: the properties that live in the root
+/// <c>Directory.Build.props</c> (issue #638) or the root <c>Directory.Build.targets</c>
+/// (issue #644) must not also be declared in an individual <c>.csproj</c>.
 /// </summary>
 /// <remarks>
 /// The drift these tests exist to prevent is not hypothetical. Before #638 the same three
@@ -30,21 +30,33 @@ public class DirectoryBuildPropsTests
 
     private static string DirectoryBuildPropsPath => Path.Combine(RepositoryRoot, "Directory.Build.props");
 
+    private static string DirectoryBuildTargetsPath => Path.Combine(RepositoryRoot, "Directory.Build.targets");
+
     /// <summary>
-    /// Property names declared in the root <c>Directory.Build.props</c>, read from the file itself
-    /// so that adding a property there automatically extends the coverage below.
+    /// Property names declared in one of the repo-root build files, read from the file itself so
+    /// that adding a property there automatically extends the coverage below.
     /// </summary>
     /// <remarks>
     /// Compared case-insensitively because MSBuild property names are: <c>&lt;Nullable&gt;</c> and
     /// <c>&lt;nullable&gt;</c> set the same property, so a redeclaration that differs only in casing
     /// still overrides the centralized value and still has to be caught.
     /// </remarks>
-    private static HashSet<string> CentralizedPropertyNames() =>
-        XDocument.Load(DirectoryBuildPropsPath)
+    private static HashSet<string> PropertyNamesIn(string buildFile) =>
+        XDocument.Load(buildFile)
             .Descendants("PropertyGroup")
             .Elements()
             .Select(e => e.Name.LocalName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every property name centralized at the repo root, across both build files.
+    /// </summary>
+    private static HashSet<string> CentralizedPropertyNames()
+    {
+        var names = PropertyNamesIn(DirectoryBuildPropsPath);
+        names.UnionWith(PropertyNamesIn(DirectoryBuildTargetsPath));
+        return names;
+    }
 
     private static IReadOnlyList<string> ProjectFiles() =>
         Directory.GetFiles(Path.Combine(RepositoryRoot, "src"), "*.csproj", SearchOption.AllDirectories)
@@ -59,13 +71,65 @@ public class DirectoryBuildPropsTests
     }
 
     [Fact]
+    public void DirectoryBuildTargets_ExistsAtRepositoryRoot()
+    {
+        Assert.True(File.Exists(DirectoryBuildTargetsPath),
+            $"Expected a repo-wide Directory.Build.targets at {DirectoryBuildTargetsPath}.");
+    }
+
+    [Fact]
     public void DirectoryBuildProps_CentralizesTheSharedProperties()
     {
-        var centralized = CentralizedPropertyNames();
+        var centralized = PropertyNamesIn(DirectoryBuildPropsPath);
 
         Assert.Contains("ImplicitUsings", centralized);
         Assert.Contains("Nullable", centralized);
         Assert.Contains("TreatWarningsAsErrors", centralized);
+    }
+
+    [Fact]
+    public void DirectoryBuildTargets_CentralizesTheSharedPackageMetadata()
+    {
+        // Issue #644: Daqifi.Mcp shipped to nuget.org with no license, project URL, repository
+        // URL, tags or symbol package because these lived only in Daqifi.Core.csproj.
+        var centralized = PropertyNamesIn(DirectoryBuildTargetsPath);
+
+        Assert.Contains("Authors", centralized);
+        Assert.Contains("PackageLicenseExpression", centralized);
+        Assert.Contains("PackageProjectUrl", centralized);
+        Assert.Contains("RepositoryUrl", centralized);
+        Assert.Contains("RepositoryType", centralized);
+        Assert.Contains("IncludeSymbols", centralized);
+        Assert.Contains("PublishRepositoryUrl", centralized);
+    }
+
+    [Fact]
+    public void DirectoryBuildTargets_LeavesPerPackageIdentityToTheProjects()
+    {
+        // PackageId, Description and PackageTags say which package this is; centralizing them
+        // would give both packages the same identity.
+        var centralized = PropertyNamesIn(DirectoryBuildTargetsPath);
+
+        Assert.DoesNotContain("PackageId", centralized);
+        Assert.DoesNotContain("Description", centralized);
+        Assert.DoesNotContain("PackageTags", centralized);
+    }
+
+    [Fact]
+    public void BothPackableProjects_DeclareTheirOwnPackageTags()
+    {
+        // The per-package half of #644: the tags are what a nuget.org search matches on, and
+        // Daqifi.Mcp had none at all.
+        foreach (var project in new[] { "Daqifi.Core", "Daqifi.Mcp" })
+        {
+            var path = Path.Combine(RepositoryRoot, "src", project, $"{project}.csproj");
+            var tags = XDocument.Load(path)
+                .Descendants("PackageTags")
+                .Select(e => e.Value)
+                .SingleOrDefault();
+
+            Assert.False(string.IsNullOrWhiteSpace(tags), $"{project}.csproj declares no <PackageTags>.");
+        }
     }
 
     [Fact]
@@ -111,8 +175,9 @@ public class DirectoryBuildPropsTests
         }
 
         Assert.True(offenders.Count == 0,
-            "A property centralized in Directory.Build.props is redeclared per-project, which " +
-            "silently overrides the shared value: " + string.Join("; ", offenders));
+            "A property centralized in Directory.Build.props or Directory.Build.targets is " +
+            "redeclared per-project, which silently overrides the shared value (props) or is " +
+            "silently overridden by it (targets): " + string.Join("; ", offenders));
     }
 
     [Fact]

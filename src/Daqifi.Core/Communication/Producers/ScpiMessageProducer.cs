@@ -540,10 +540,15 @@ public class ScpiMessageProducer
     /// Command: DIO:PORt:DIRection channel,direction
     /// Example: messageProducer.Send(ScpiMessageProducer.SetDioPortDirection(1, 1)); // Set channel 1 as output
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is negative.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is negative, or <paramref name="direction"/> is not 0 or 1.</exception>
     public static IOutboundMessage<string> SetDioPortDirection(int channel, int direction)
     {
         ValidateChannel(channel);
+
+        if (direction is < 0 or > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(direction), direction, "Direction must be 0 (input) or 1 (output).");
+        }
 
         return new ScpiMessage($"DIO:PORt:DIRection {channel},{direction}");
     }
