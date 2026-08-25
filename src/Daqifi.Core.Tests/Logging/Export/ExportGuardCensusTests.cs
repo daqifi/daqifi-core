@@ -2,6 +2,7 @@ using System.Reflection;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Logging.Export;
 
 namespace Daqifi.Core.Tests.Logging.Export;
@@ -37,8 +38,9 @@ public class ExportGuardCensusTests
     /// against the source rather than against itself.
     /// </param>
     /// <param name="Method">
-    /// The method that throws. Its parameter list is what <paramref name="ParamName"/> is resolved
-    /// against, so a renamed parameter with a stale <c>nameof</c>-less guard string fails here.
+    /// The method or constructor that throws. Its parameter list is what
+    /// <paramref name="ParamName"/> is resolved against, so a renamed parameter with a stale
+    /// <c>nameof</c>-less guard string fails here.
     /// </param>
     /// <param name="ParamName">Expected <see cref="ArgumentException.ParamName"/>, exactly.</param>
     /// <param name="ActualValue">
@@ -50,7 +52,7 @@ public class ExportGuardCensusTests
     private sealed record GuardSite(
         string Site,
         string SourceFile,
-        MethodInfo Method,
+        MethodBase Method,
         string ParamName,
         object ActualValue,
         string MessagePrefix,
@@ -68,6 +70,7 @@ public class ExportGuardCensusTests
         var record = SoleMethod(
             typeof(LiveCsvRecordingExtensions),
             nameof(LiveCsvRecordingExtensions.RecordLiveSamplesToCsvAsync));
+        var sdCardSource = SoleConstructor(typeof(SdCardLogSampleSource));
 
         return
         [
@@ -115,6 +118,22 @@ public class ExportGuardCensusTests
                     using var device = new GuardOnlyLiveDevice();
                     await device.RecordLiveSamplesToCsvAsync(new StringWriter(), bufferCapacity: 0);
                 }),
+
+            // A constructor rather than a method, which is why the census resolves a MethodBase:
+            // the guard family is about what the caller sees, and that does not change with the
+            // kind of member the guard happens to live in.
+            new GuardSite(
+                $"{nameof(SdCardLogSampleSource)}(analogChannelCount)",
+                "SdCardLogSampleSource.cs",
+                sdCardSource,
+                "analogChannelCount",
+                -1,
+                "The analog channel count cannot be negative.",
+                () =>
+                {
+                    _ = new SdCardLogSampleSource(NoEntries(), "SN", analogChannelCount: -1);
+                    return Task.CompletedTask;
+                }),
         ];
     }
 
@@ -126,7 +145,7 @@ public class ExportGuardCensusTests
         // A tripwire, not a proof of completeness — that is the scan below. This fails the moment
         // someone edits the table without reading the note on it, the same mechanism the SCPI
         // census uses.
-        Assert.Equal(3, sites.Length);
+        Assert.Equal(4, sites.Length);
 
         foreach (var site in sites)
         {
@@ -215,6 +234,7 @@ public class ExportGuardCensusTests
         var files = Directory.GetFiles(ExportSourceDirectory, "*.cs").Select(Path.GetFileName).ToList();
         Assert.Contains("CsvExporter.cs", files);
         Assert.Contains("LiveCsvRecording.cs", files);
+        Assert.Contains("SdCardLogSampleSource.cs", files);
 
         Assert.NotEmpty(ThrowSitesInExportSource());
     }
@@ -236,6 +256,32 @@ public class ExportGuardCensusTests
             "If an overload was added, the census must resolve the specific signature its guard lives in.");
 
         return overloads[0];
+    }
+
+    /// <summary>
+    /// The one public constructor of <paramref name="type"/>. Same contract as
+    /// <see cref="SoleMethod"/>: an added overload must be named by the census rather than
+    /// silently picked for it.
+    /// </summary>
+    private static ConstructorInfo SoleConstructor(Type type)
+    {
+        var constructors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+
+        Assert.True(constructors.Length == 1,
+            $"Expected exactly one public {type.Name} constructor; found {constructors.Length}. " +
+            "If an overload was added, the census must resolve the specific signature its guard lives in.");
+
+        return constructors[0];
+    }
+
+    /// <summary>
+    /// An empty sample stream: enough to get past the null check so the range guard below it is
+    /// the thing the census reaches.
+    /// </summary>
+    private static async IAsyncEnumerable<SdCardLogEntry> NoEntries()
+    {
+        await Task.CompletedTask;
+        yield break;
     }
 
     private static string RepositoryRoot =>
