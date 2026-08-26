@@ -28,6 +28,15 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.400" PrivateAssets="All" />
     <PackageReference Include="System.IO.Ports" Version="10.0.11" />
+    <!-- Public API surface tracking (issue #636). ADR 0002 makes source
+         compatibility a promise; RS0016/RS0017 turn a change to the public
+         surface into a build error until PublicAPI.*.txt is updated in the same
+         PR, so the break is a reviewable diff rather than something a consumer
+         discovers on their next restore. PrivateAssets="all" keeps the analyzer
+         out of the published package's dependencies. See CONTRIBUTING.md. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" PrivateAssets="all" />
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
     <InternalsVisibleTo Include="Daqifi.Core.Tests" />
   </ItemGroup>
 

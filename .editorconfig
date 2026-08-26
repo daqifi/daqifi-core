@@ -22,3 +22,19 @@ root = true
 # applying to every [*.cs] in the repo.
 [src/Daqifi.Core/**.cs]
 dotnet_diagnostic.CA2007.severity = warning
+
+# RS0041 (public API should not use nullable-oblivious types) applies to the
+# hand-written surface only.
+#
+# Protos/DaqifiOutMessage.proto is compiled by protoc into a C# file with no
+# '#nullable enable', so every reference type on its generated public surface is
+# oblivious and RS0041 fires 166 times on code nobody hand-edits. The fix -
+# annotating the output - is not ours to make: protoc regenerates the file.
+#
+# The obliviousness is still recorded, not lost: those members appear in
+# PublicAPI.Shipped.txt with the analyzer's own '~' prefix, which is how an
+# oblivious signature is spelled there, so a change in their nullability still
+# shows up as an API diff. Scoped to the one generated file on purpose, so
+# RS0041 keeps guarding every public member Daqifi.Core actually writes.
+[src/Daqifi.Core/Communication/Messages/DaqifiOutMessage.cs]
+dotnet_diagnostic.RS0041.severity = none
