@@ -18,9 +18,14 @@ namespace Daqifi.Core.Tests.Build;
 /// a guard that stops guarding without anything going red - is what these tests exist for.
 /// </para>
 /// <para>
-/// The last two tests cross-check the files against the assembly by reflection rather than by
-/// reading the csproj, so they still fail if the analyzer is disabled some other way - a severity
-/// override, a NoWarn - and the files then go stale.
+/// The last two tests check the files against the assembly by reflection rather than by reading
+/// the csproj, so they still fail if the analyzer is disabled some other way - a severity
+/// override, a NoWarn. Their reach is deliberately shallow: <b>public type names only, and only
+/// in the direction "declared in the assembly but missing from the files"</b>. A changed
+/// signature, a changed nullability annotation, or a removed public member is invisible to them.
+/// Catching those is the analyzer's job, and reimplementing its entry format here would just be a
+/// second, worse copy of it. What these two do catch is the coarse failure - enforcement off and
+/// the files no longer tracking the assembly at all.
 /// </para>
 /// <para>
 /// Every test here was checked to fail on a <b>green</b> build. Two obvious candidates are
@@ -104,9 +109,14 @@ public class PublicApiTrackingTests
     [Fact]
     public void EveryPublicTypeInTheAssembly_IsDeclaredInAnApiFile()
     {
-        // An independent check on the analyzer rather than a restatement of it: it reads the
-        // compiled assembly, not the csproj, so it still fails if the analyzer is switched off
-        // some other way (a NoWarn, a severity override) and the files then drift.
+        // Reads the compiled assembly, not the csproj, so it still fails when the analyzer is
+        // switched off some other way (a NoWarn, a severity override) and a new public type then
+        // never reaches the files.
+        //
+        // Type names only, and only in this one direction. A removed type, a changed signature or
+        // a changed nullability annotation all leave this test green - the analyzer is what
+        // catches those, and spelling out entry formats here to catch them too would be a second
+        // copy of the analyzer that could disagree with the first.
         var declared = EntriesIn(ShippedFileName)
             .Concat(EntriesIn(UnshippedFileName))
             .ToHashSet(StringComparer.Ordinal);
