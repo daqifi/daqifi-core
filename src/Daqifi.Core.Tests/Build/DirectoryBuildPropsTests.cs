@@ -195,40 +195,77 @@ public class DirectoryBuildPropsTests
     }
 
     /// <summary>
-    /// The package ids referenced by a project, covering both the <c>Include</c> form and the
-    /// <c>Update</c> form (which sets metadata on a reference the SDK supplies implicitly).
+    /// Every build file that can put a <c>PackageReference</c> or a target framework into a
+    /// project here: the projects themselves, plus the two repo-root files MSBuild imports into
+    /// all of them.
     /// </summary>
-    private static IEnumerable<string> PackageReferenceIdsIn(string project) =>
-        XDocument.Load(project)
-            .Descendants("PackageReference")
-            .Select(e => (string?)e.Attribute("Include") ?? (string?)e.Attribute("Update"))
+    /// <remarks>
+    /// The imported files matter to the sweeps below even though neither declares a
+    /// <c>PackageReference</c> today. An item added to <c>Directory.Build.props</c> or
+    /// <c>Directory.Build.targets</c> reaches every evaluated project without appearing in any
+    /// <c>.csproj</c>, so a sweep that read only the projects would report clean while every
+    /// package in the repo carried the reference.
+    /// </remarks>
+    private static IReadOnlyList<string> BuildFilesThatCanDeclareThem()
+    {
+        var files = new List<string> { DirectoryBuildPropsPath, DirectoryBuildTargetsPath };
+        files.AddRange(ProjectFiles());
+        return files;
+    }
+
+    /// <summary>
+    /// Whether an MSBuild element or attribute name matches <paramref name="expected"/>. MSBuild
+    /// names are case-insensitive but <see cref="XDocument"/> lookups are not, so every raw-XML
+    /// comparison in this class has to say so explicitly.
+    /// </summary>
+    private static bool IsMsBuildName(string actual, string expected) =>
+        actual.Equals(expected, StringComparison.OrdinalIgnoreCase);
+
+    private static string? MsBuildAttribute(XElement element, string name) =>
+        element.Attributes().FirstOrDefault(a => IsMsBuildName(a.Name.LocalName, name))?.Value;
+
+    /// <summary>
+    /// The package ids a build file references, covering both the <c>Include</c> form and the
+    /// <c>Update</c> form (which sets metadata on a reference supplied from elsewhere).
+    /// </summary>
+    private static IEnumerable<string> PackageReferenceIdsIn(XDocument document) =>
+        document.Descendants()
+            .Where(e => IsMsBuildName(e.Name.LocalName, "PackageReference"))
+            .Select(e => MsBuildAttribute(e, "Include") ?? MsBuildAttribute(e, "Update"))
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Select(id => id!);
 
     /// <summary>
-    /// Every target framework moniker declared anywhere under <c>src</c>, paired with the project
-    /// that declares it. <c>TargetFrameworks</c> is semicolon-separated, so it contributes one
-    /// entry per moniker.
+    /// The target framework monikers a build file declares. <c>TargetFrameworks</c> is
+    /// semicolon-separated, so it contributes one entry per moniker.
     /// </summary>
-    private static IReadOnlyList<(string Project, string Moniker)> TargetFrameworkMonikers()
+    private static IEnumerable<string> TargetFrameworkMonikersIn(XDocument document) =>
+        document.Descendants("PropertyGroup")
+            .Elements()
+            .Where(e => IsMsBuildName(e.Name.LocalName, "TargetFramework")
+                        || IsMsBuildName(e.Name.LocalName, "TargetFrameworks"))
+            .SelectMany(e => e.Value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    /// <summary>
+    /// Applies <paramref name="reader"/> to every build file, tagging each result with the file
+    /// it came from so a failure message can name the offender.
+    /// </summary>
+    private static IReadOnlyList<(string File, string Value)> SweepBuildFiles(
+        Func<XDocument, IEnumerable<string>> reader)
     {
-        var monikers = new List<(string, string)>();
+        var found = new List<(string, string)>();
 
-        foreach (var project in ProjectFiles())
+        foreach (var file in BuildFilesThatCanDeclareThem())
         {
-            var declared = XDocument.Load(project)
-                .Descendants("PropertyGroup")
-                .Elements()
-                .Where(e => e.Name.LocalName is "TargetFramework" or "TargetFrameworks")
-                .SelectMany(e => e.Value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            var relativePath = Path.GetRelativePath(RepositoryRoot, file);
 
-            foreach (var moniker in declared)
+            foreach (var value in reader(XDocument.Load(file)))
             {
-                monikers.Add((Path.GetRelativePath(RepositoryRoot, project), moniker));
+                found.Add((relativePath, value));
             }
         }
 
-        return monikers;
+        return found;
     }
 
     /// <summary>
@@ -251,7 +288,7 @@ public class DirectoryBuildPropsTests
     }
 
     [Fact]
-    public void NoProjectPinsTheSourceLinkPackageTheSdkAlreadyBundles()
+    public void NoBuildFilePinsTheSourceLinkPackageTheSdkAlreadyBundles()
     {
         // Issue #661: the .NET SDK has bundled SourceLink since .NET 8, so on the monikers this
         // repo targets an explicit Microsoft.SourceLink.* PackageReference does nothing the SDK
@@ -259,10 +296,9 @@ public class DirectoryBuildPropsTests
         // sourcelink.json, which is what showed the pin on Daqifi.Core to be redundant. The cost
         // of leaving one in is a version to keep bumping plus the false implication that
         // SourceLink would stop working without it.
-        var offenders = ProjectFiles()
-            .SelectMany(project => PackageReferenceIdsIn(project)
-                .Where(id => id.StartsWith("Microsoft.SourceLink.", StringComparison.OrdinalIgnoreCase))
-                .Select(id => $"{Path.GetRelativePath(RepositoryRoot, project)} references {id}"))
+        var offenders = SweepBuildFiles(PackageReferenceIdsIn)
+            .Where(found => found.Value.StartsWith("Microsoft.SourceLink.", StringComparison.OrdinalIgnoreCase))
+            .Select(found => $"{found.File} references {found.Value}")
             .ToList();
 
         Assert.True(offenders.Count == 0,
@@ -277,24 +313,38 @@ public class DirectoryBuildPropsTests
         // only bundled from .NET 8 on, so a project that started targeting netstandard2.0 or
         // net472 would need the PackageReference back - and without this test that project would
         // silently ship without SourceLink while the guard above still passed.
-        var offenders = TargetFrameworkMonikers()
-            .Where(t => NetVersionOf(t.Moniker) is not { Major: >= 8 })
-            .Select(t => $"{t.Project} targets {t.Moniker}")
+        var offenders = SweepBuildFiles(TargetFrameworkMonikersIn)
+            .Where(found => NetVersionOf(found.Value) is not { Major: >= 8 })
+            .Select(found => $"{found.File} targets {found.Value}")
             .ToList();
 
         Assert.True(offenders.Count == 0,
             "A target framework older than net8.0 does not get SourceLink from the SDK, so " +
-            "NoProjectPinsTheSourceLinkPackageTheSdkAlreadyBundles no longer holds for: " +
+            "NoBuildFilePinsTheSourceLinkPackageTheSdkAlreadyBundles no longer holds for: " +
             string.Join("; ", offenders));
+    }
+
+    [Fact]
+    public void TheSweepCoversTheImportedBuildFilesAndEveryProject()
+    {
+        // Guards both checks above against a scope gap rather than a value gap: if the file list
+        // silently stopped including the imported build files, a PackageReference added to one of
+        // them would reach every project while the no-pin test still reported clean.
+        var swept = BuildFilesThatCanDeclareThem().Select(Path.GetFileName).ToList();
+
+        Assert.Contains("Directory.Build.props", swept);
+        Assert.Contains("Directory.Build.targets", swept);
+        Assert.Contains("Daqifi.Core.csproj", swept);
+        Assert.Contains("Daqifi.Mcp.csproj", swept);
     }
 
     [Fact]
     public void TheTargetFrameworkSweepSeesTheMonikersTheRepoActuallyTargets()
     {
-        // Guards the check above against going vacuous: if the sweep stopped finding monikers it
-        // would pass by looking at nothing rather than by the monikers being current.
-        var monikers = TargetFrameworkMonikers()
-            .Select(t => t.Moniker)
+        // Guards the framework check against going vacuous: if the sweep stopped finding monikers
+        // it would pass by looking at nothing rather than by the monikers being current.
+        var monikers = SweepBuildFiles(TargetFrameworkMonikersIn)
+            .Select(found => found.Value)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         Assert.Contains("net9.0", monikers);
@@ -305,11 +355,37 @@ public class DirectoryBuildPropsTests
     public void ThePackageReferenceSweepSeesTheReferencesTheProjectsActuallyDeclare()
     {
         // The same anti-vacuous guard for the PackageReference sweep.
-        var ids = ProjectFiles()
-            .SelectMany(PackageReferenceIdsIn)
+        var ids = SweepBuildFiles(PackageReferenceIdsIn)
+            .Select(found => found.Value)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         Assert.Contains("Google.Protobuf", ids);
         Assert.Contains("HidSharp", ids);
+    }
+
+    [Fact]
+    public void TheRawXmlSweeps_MatchMsBuildNamesCaseInsensitively()
+    {
+        // MSBuild element, item and attribute names are case-insensitive, so <targetframework>
+        // declares the same property as <TargetFramework> and <packagereference include="..."/>
+        // declares the same item as <PackageReference Include="..."/>. XDocument lookups are not
+        // case-insensitive, so an exact-name match would skip those declarations and let a
+        // pre-net8.0 target or a re-added SourceLink pin walk straight past the guards. Same
+        // reasoning as CentralizedPropertyNames_AreMatchedCaseInsensitively above, which is why
+        // the property sweep there already uses OrdinalIgnoreCase.
+        var document = XDocument.Parse(
+            """
+            <Project>
+              <PropertyGroup>
+                <targetframework>netstandard2.0</targetframework>
+              </PropertyGroup>
+              <ItemGroup>
+                <packagereference include="Microsoft.SourceLink.GitHub" Version="10.0.400" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        Assert.Equal(new[] { "netstandard2.0" }, TargetFrameworkMonikersIn(document).ToArray());
+        Assert.Equal(new[] { "Microsoft.SourceLink.GitHub" }, PackageReferenceIdsIn(document).ToArray());
     }
 }
