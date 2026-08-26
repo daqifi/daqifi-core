@@ -193,4 +193,123 @@ public class DirectoryBuildPropsTests
         Assert.Contains("Daqifi.Mcp.csproj", names);
         Assert.Contains("Daqifi.Mcp.Tests.csproj", names);
     }
+
+    /// <summary>
+    /// The package ids referenced by a project, covering both the <c>Include</c> form and the
+    /// <c>Update</c> form (which sets metadata on a reference the SDK supplies implicitly).
+    /// </summary>
+    private static IEnumerable<string> PackageReferenceIdsIn(string project) =>
+        XDocument.Load(project)
+            .Descendants("PackageReference")
+            .Select(e => (string?)e.Attribute("Include") ?? (string?)e.Attribute("Update"))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!);
+
+    /// <summary>
+    /// Every target framework moniker declared anywhere under <c>src</c>, paired with the project
+    /// that declares it. <c>TargetFrameworks</c> is semicolon-separated, so it contributes one
+    /// entry per moniker.
+    /// </summary>
+    private static IReadOnlyList<(string Project, string Moniker)> TargetFrameworkMonikers()
+    {
+        var monikers = new List<(string, string)>();
+
+        foreach (var project in ProjectFiles())
+        {
+            var declared = XDocument.Load(project)
+                .Descendants("PropertyGroup")
+                .Elements()
+                .Where(e => e.Name.LocalName is "TargetFramework" or "TargetFrameworks")
+                .SelectMany(e => e.Value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+            foreach (var moniker in declared)
+            {
+                monikers.Add((Path.GetRelativePath(RepositoryRoot, project), moniker));
+            }
+        }
+
+        return monikers;
+    }
+
+    /// <summary>
+    /// The .NET version a moniker names, or <see langword="null"/> if it does not name one at all.
+    /// <c>net9.0-windows</c> is 9.0; <c>netstandard2.0</c> and <c>net472</c> are neither .NET Core
+    /// nor .NET 5+, so they come back null and are treated as "older than 8" by the callers.
+    /// </summary>
+    private static Version? NetVersionOf(string moniker)
+    {
+        var withoutPlatform = moniker.Split('-')[0];
+
+        if (!withoutPlatform.StartsWith("net", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        // Version.TryParse needs at least major.minor, so "472" (net472) and "standard2.0"
+        // (netstandard2.0) both fail here rather than being mistaken for a .NET 5+ moniker.
+        return Version.TryParse(withoutPlatform[3..], out var version) ? version : null;
+    }
+
+    [Fact]
+    public void NoProjectPinsTheSourceLinkPackageTheSdkAlreadyBundles()
+    {
+        // Issue #661: the .NET SDK has bundled SourceLink since .NET 8, so on the monikers this
+        // repo targets an explicit Microsoft.SourceLink.* PackageReference does nothing the SDK
+        // is not already doing. Daqifi.Mcp has never carried one and still emits a full
+        // sourcelink.json, which is what showed the pin on Daqifi.Core to be redundant. The cost
+        // of leaving one in is a version to keep bumping plus the false implication that
+        // SourceLink would stop working without it.
+        var offenders = ProjectFiles()
+            .SelectMany(project => PackageReferenceIdsIn(project)
+                .Where(id => id.StartsWith("Microsoft.SourceLink.", StringComparison.OrdinalIgnoreCase))
+                .Select(id => $"{Path.GetRelativePath(RepositoryRoot, project)} references {id}"))
+            .ToList();
+
+        Assert.True(offenders.Count == 0,
+            "The .NET SDK bundles SourceLink for every target framework in this repo, so these " +
+            "references are redundant pins: " + string.Join("; ", offenders));
+    }
+
+    [Fact]
+    public void EveryTargetFrameworkIsNet8OrLater_WhichIsWhatMakesThatPinRedundant()
+    {
+        // The precondition the check above rests on, asserted rather than assumed. SourceLink is
+        // only bundled from .NET 8 on, so a project that started targeting netstandard2.0 or
+        // net472 would need the PackageReference back - and without this test that project would
+        // silently ship without SourceLink while the guard above still passed.
+        var offenders = TargetFrameworkMonikers()
+            .Where(t => NetVersionOf(t.Moniker) is not { Major: >= 8 })
+            .Select(t => $"{t.Project} targets {t.Moniker}")
+            .ToList();
+
+        Assert.True(offenders.Count == 0,
+            "A target framework older than net8.0 does not get SourceLink from the SDK, so " +
+            "NoProjectPinsTheSourceLinkPackageTheSdkAlreadyBundles no longer holds for: " +
+            string.Join("; ", offenders));
+    }
+
+    [Fact]
+    public void TheTargetFrameworkSweepSeesTheMonikersTheRepoActuallyTargets()
+    {
+        // Guards the check above against going vacuous: if the sweep stopped finding monikers it
+        // would pass by looking at nothing rather than by the monikers being current.
+        var monikers = TargetFrameworkMonikers()
+            .Select(t => t.Moniker)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Contains("net9.0", monikers);
+        Assert.Contains("net10.0", monikers);
+    }
+
+    [Fact]
+    public void ThePackageReferenceSweepSeesTheReferencesTheProjectsActuallyDeclare()
+    {
+        // The same anti-vacuous guard for the PackageReference sweep.
+        var ids = ProjectFiles()
+            .SelectMany(PackageReferenceIdsIn)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Contains("Google.Protobuf", ids);
+        Assert.Contains("HidSharp", ids);
+    }
 }
