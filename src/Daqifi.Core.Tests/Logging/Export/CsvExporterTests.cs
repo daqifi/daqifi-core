@@ -685,4 +685,75 @@ public class CsvExporterTests
         await Assert.ThrowsAsync<ArgumentException>(async () =>
             await ExportToLinesAsync(source, new CsvExportOptions { Delimiter = bad }));
     }
+
+    // ── #675 natural channel ordering ────────────────────────────────────────
+
+    [Fact]
+    public async Task Export_TwelveChannelsInDescriptorOrder_WritesColumnsInNaturalOrder()
+    {
+        // The bug needs a two-digit channel index to appear at all, so the existing suites — all
+        // of which use one or two channels — could not have caught it. A 12-channel board exported
+        // its columns as AI0, AI1, AI10, AI11, AI2, …, silently misaligning every reading from the
+        // third column on while each value stayed individually correct.
+        var channels = Enumerable.Range(0, 12)
+            .Select(i => new ChannelDescriptor("Nq1", "SN001", $"AI{i}", ChannelType.Analog))
+            .ToList();
+
+        var source = new InMemorySampleSource(
+            channels.OrderBy(c => c, ChannelDescriptorComparer.Default),
+            channels.Select((c, i) => new SampleRow(T0, c.Key, i)));
+
+        var (lines, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+
+        Assert.Equal(
+            "Time," + string.Join(",", channels.Select(c => c.Key)),
+            header);
+
+        // And the values line up with the header they were written under.
+        Assert.Equal(
+            new DateTime(T0).ToString("O") + "," + string.Join(",", Enumerable.Range(0, 12)),
+            lines[1]);
+    }
+
+    [Fact]
+    public async Task Export_ChannelsSortedLexicographically_ShowsTheColumnOrderThisIssueIsAbout()
+    {
+        // Pins the old behaviour as the thing the comparer fixes: the exporter writes whatever
+        // order the source hands it, so ordering the source lexicographically still misplaces
+        // AI10 and AI11 — the fix has to live in the source, not in CsvExporter.
+        var channels = Enumerable.Range(0, 12)
+            .Select(i => new ChannelDescriptor("Nq1", "SN001", $"AI{i}", ChannelType.Analog))
+            .OrderBy(c => c.ChannelName, StringComparer.Ordinal)
+            .ToList();
+
+        var source = new InMemorySampleSource(channels, [new SampleRow(T0, channels[0].Key, 1.0)]);
+
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+
+        Assert.Equal(
+            "Time,Nq1:SN001:AI0,Nq1:SN001:AI1,Nq1:SN001:AI10,Nq1:SN001:AI11,Nq1:SN001:AI2,"
+            + "Nq1:SN001:AI3,Nq1:SN001:AI4,Nq1:SN001:AI5,Nq1:SN001:AI6,Nq1:SN001:AI7,"
+            + "Nq1:SN001:AI8,Nq1:SN001:AI9",
+            header);
+    }
+
+    [Fact]
+    public async Task Export_NineChannels_IsUnaffectedByTheOrderingChange()
+    {
+        // Backward compatibility: with a single digit, lexicographic and natural order are
+        // identical, so no existing export's bytes move.
+        var channels = Enumerable.Range(0, 9)
+            .Select(i => new ChannelDescriptor("Nq1", "SN001", $"AI{i}", ChannelType.Analog))
+            .ToList();
+
+        var lexicographic = channels.OrderBy(c => c.ChannelName, StringComparer.Ordinal).ToList();
+        var natural = channels.OrderBy(c => c, ChannelDescriptorComparer.Default).ToList();
+
+        Assert.Equal(lexicographic, natural);
+
+        var source = new InMemorySampleSource(natural, [new SampleRow(T0, channels[0].Key, 1.0)]);
+        var (_, header) = await ExportToLinesAsync(source, new CsvExportOptions());
+
+        Assert.Equal("Time," + string.Join(",", channels.Select(c => c.Key)), header);
+    }
 }
