@@ -44,9 +44,16 @@ public class TargetFrameworkTests
     /// and a project that used the lower-case spelling would otherwise read as declaring no
     /// frameworks at all and pass every assertion below vacuously.
     /// </remarks>
-    private static HashSet<string> TargetFrameworksOf(string project)
+    private static HashSet<string> TargetFrameworksOf(string project) =>
+        TargetFrameworksIn(XDocument.Load(ProjectPath(project)));
+
+    /// <summary>
+    /// The parsing half of <see cref="TargetFrameworksOf"/>, split out so a test can feed it an
+    /// in-memory project rather than reimplementing the query against one.
+    /// </summary>
+    private static HashSet<string> TargetFrameworksIn(XDocument project)
     {
-        var properties = XDocument.Load(ProjectPath(project))
+        var properties = project
             .Descendants("PropertyGroup")
             .Elements()
             .Where(e => e.Name.LocalName.Equals("TargetFramework", StringComparison.OrdinalIgnoreCase)
@@ -116,21 +123,18 @@ public class TargetFrameworkTests
             $"{Describe(tests)}, leaving {Describe(untested)} shipped untested.");
     }
 
-    [Fact]
-    public void TargetFrameworkElements_AreMatchedCaseInsensitively()
+    [Theory]
+    [InlineData("<Project><PropertyGroup><targetframeworks>net9.0;net10.0</targetframeworks></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><TARGETFRAMEWORKS>net9.0;net10.0</TARGETFRAMEWORKS></PropertyGroup></Project>")]
+    [InlineData("<Project><PropertyGroup><targetframework>net9.0</targetframework><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>")]
+    public void TargetFrameworkElements_AreMatchedCaseInsensitively(string project)
     {
-        // Pins the behaviour the parser above depends on, so a future rewrite that switches to
-        // an ordinal element-name match fails here rather than by quietly reading every
-        // project as targeting nothing.
-        var document = XDocument.Parse(
-            "<Project><PropertyGroup><targetframeworks>net9.0;net10.0</targetframeworks></PropertyGroup></Project>");
+        // Runs the real parser - not a copy of its query - over an in-memory project, so
+        // switching TargetFrameworksIn to an ordinal element-name match fails here rather than
+        // quietly making every lower-cased project read as targeting nothing, which would let
+        // the relationship checks above pass vacuously.
+        var frameworks = TargetFrameworksIn(XDocument.Parse(project));
 
-        var matched = document.Descendants("PropertyGroup")
-            .Elements()
-            .Where(e => e.Name.LocalName.Equals("TargetFrameworks", StringComparison.OrdinalIgnoreCase))
-            .SelectMany(e => e.Value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        Assert.Equal("net10.0;net9.0", Describe(matched));
+        Assert.Equal("net10.0;net9.0", Describe(frameworks));
     }
 }
