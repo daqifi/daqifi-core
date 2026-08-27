@@ -60,11 +60,12 @@ namespace Daqifi.Core.Device.Internal
         /// <param name="existing">
         /// The channels from the prior population. Any whose identity (type, number) still appears
         /// in <paramref name="message"/> is updated in place and re-used, so consumer-held
-        /// <see cref="IChannel"/> references — and the configuration on them (direction/output/PWM
-        /// state) — survive a routine status re-population untouched. <c>IsEnabled</c> is the
-        /// exception: analog channels resync it from the device-reported enabled mask (field 22)
-        /// whenever the device sends one, so Core's view cannot silently drift from the device's
-        /// (#409).
+        /// <see cref="IChannel"/> references — and the configuration on them (output value, PWM
+        /// state) — survive a routine status re-population untouched. The two exceptions are the
+        /// pieces of state the device itself reports, which resync from it whenever it sends one,
+        /// so Core's view cannot silently drift from the device's: analog <c>IsEnabled</c> from
+        /// the enabled mask (field 22, #409) and digital <c>Direction</c> from the direction mask
+        /// (field 37, #685).
         /// </param>
         /// <param name="destination">The list to append the resulting channel instances to, in order.</param>
         /// <returns>How many analog and digital channels were populated.</returns>
@@ -229,14 +230,20 @@ namespace Daqifi.Core.Device.Internal
         private static int PopulateDigitalChannels(DaqifiOutMessage message, Dictionary<(ChannelType, int), IChannel> existingByKey, List<IChannel> destination)
         {
             var count = (int)message.DigitalPortNum;
+            var digitalPortDir = message.DigitalPortDir;
 
             for (var i = 0; i < count; i++)
             {
                 var isPwmCapable = i < 32 && (PwmCapableChannelMask & (1 << i)) != 0;
+                var reportedDirection = ReadReportedDirection(digitalPortDir, i);
 
                 if (existingByKey.TryGetValue((ChannelType.Digital, i), out var existing) && existing is DigitalChannel existingDigital)
                 {
                     existingDigital.IsPwmCapable = isPwmCapable;
+                    if (reportedDirection.HasValue)
+                    {
+                        existingDigital.Direction = reportedDirection.Value;
+                    }
                     destination.Add(existingDigital);
                     continue;
                 }
@@ -244,7 +251,7 @@ namespace Daqifi.Core.Device.Internal
                 var channel = new DigitalChannel(i, isPwmCapable)
                 {
                     Name = $"DIO{i}",
-                    Direction = ChannelDirection.Input,
+                    Direction = reportedDirection ?? ChannelDirection.Input,
                     IsEnabled = false
                 };
 
@@ -252,6 +259,43 @@ namespace Daqifi.Core.Device.Internal
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// Reads channel <paramref name="channelNumber"/>'s direction out of a device-reported
+        /// direction mask (digital_port_dir, field 37), or <c>null</c> when the device did not
+        /// report a bit for that channel.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The mask is bit-packed the same way the analog enable mask is — little-endian, bit
+        /// <c>n</c> = channel <c>n</c>, 2 bytes for 16 channels — but its <b>polarity is inverted
+        /// relative to the direction Core sends outbound</b>. This is the PIC's TRIS register as
+        /// the firmware holds it, so <c>1</c> means <i>input</i> and <c>0</c> means <i>output</i>,
+        /// while <see cref="Communication.Producers.ScpiMessageProducer.SetDioPortDirection"/>
+        /// sends <c>1</c> for output. Do not copy the outbound convention here; the round trip was
+        /// confirmed on an Nq1 (fw 3.7.2) — commanding DIO2 to Output clears its bit, commanding
+        /// it back to Input sets it (#685).
+        /// </para>
+        /// <para>
+        /// Returning <c>null</c> rather than a direction when the mask is absent or too short is
+        /// what keeps a locally-commanded direction from being stomped: firmware that never
+        /// populates the field, and the SD-card/replay paths that synthesize status messages
+        /// without one, leave <see cref="IChannel.Direction"/> exactly as it was (or at the
+        /// <see cref="ChannelDirection.Input"/> default for a channel being created).
+        /// </para>
+        /// </remarks>
+        private static ChannelDirection? ReadReportedDirection(Google.Protobuf.ByteString mask, int channelNumber)
+        {
+            var byteIndex = channelNumber / 8;
+            if (byteIndex >= mask.Length)
+            {
+                return null;
+            }
+
+            return (mask[byteIndex] & (1 << (channelNumber % 8))) != 0
+                ? ChannelDirection.Input
+                : ChannelDirection.Output;
         }
 
         /// <summary>

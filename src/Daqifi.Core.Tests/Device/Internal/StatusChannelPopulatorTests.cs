@@ -1,6 +1,7 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.Internal;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
@@ -132,6 +133,84 @@ public class StatusChannelPopulatorTests
 
         var channel = Assert.IsType<DigitalChannel>(destination[channelNumber]);
         Assert.Equal(expected, channel.IsPwmCapable);
+    }
+
+    [Theory]
+    [InlineData(0b1111_1111, ChannelDirection.Input)]
+    [InlineData(0b1111_1011, ChannelDirection.Output)]
+    public void Populate_SetsDigitalDirection_FromTheReportedDirectionMask(byte lowByte, ChannelDirection expected)
+    {
+        // digital_port_dir is TRIS-encoded: bit set = input, bit clear = output — the inverse of
+        // the argument Core sends outbound. Bit 2 is the one under test here (#685).
+        var message = new DaqifiOutMessage { DigitalPortNum = 16 };
+        message.DigitalPortDir = ByteString.CopyFrom(new byte[] { lowByte, 0xFF });
+        var destination = new List<IChannel>();
+
+        Create().Populate(message, Array.Empty<IChannel>(), destination);
+
+        Assert.Equal(expected, destination[2].Direction);
+        // The channels the device reported as inputs are unaffected either way.
+        Assert.Equal(ChannelDirection.Input, destination[4].Direction);
+        Assert.Equal(ChannelDirection.Input, destination[15].Direction);
+    }
+
+    [Fact]
+    public void Populate_ResyncsDigitalDirection_OnAnExistingChannel()
+    {
+        // The device's own view outranks Core's, the same way analog IsEnabled does (#409):
+        // an output pin left driven by a previous session must not come back as an input.
+        var existing = new DigitalChannel(2, isPwmCapable: false) { Direction = ChannelDirection.Input };
+        var message = new DaqifiOutMessage { DigitalPortNum = 3 };
+        message.DigitalPortDir = ByteString.CopyFrom(new byte[] { 0b1111_1011 });
+        var destination = new List<IChannel>();
+
+        Create().Populate(message, new IChannel[] { existing }, destination);
+
+        Assert.Same(existing, destination[2]);
+        Assert.Equal(ChannelDirection.Output, existing.Direction);
+    }
+
+    [Fact]
+    public void Populate_LeavesDigitalDirectionAlone_WhenNoDirectionMaskIsReported()
+    {
+        // Firmware that never populates the field, and the SD-card/replay paths that synthesize
+        // status messages without one, must not stomp a locally-commanded direction.
+        var existing = new DigitalChannel(0, isPwmCapable: true) { Direction = ChannelDirection.Output };
+        var destination = new List<IChannel>();
+
+        Create().Populate(
+            new DaqifiOutMessage { DigitalPortNum = 1 }, new IChannel[] { existing }, destination);
+
+        Assert.Equal(ChannelDirection.Output, destination[0].Direction);
+    }
+
+    [Fact]
+    public void Populate_DefaultsDigitalDirectionToInput_ForChannelsBeyondTheReportedMask()
+    {
+        // A one-byte mask describes channels 0-7 only; channel 8 is "not reported", not "output".
+        var existingBeyondMask = new DigitalChannel(8, isPwmCapable: false) { Direction = ChannelDirection.Output };
+        var message = new DaqifiOutMessage { DigitalPortNum = 9 };
+        message.DigitalPortDir = ByteString.CopyFrom(new byte[] { 0b1111_1011 });
+        var destination = new List<IChannel>();
+
+        Create().Populate(message, new IChannel[] { existingBeyondMask }, destination);
+
+        Assert.Equal(ChannelDirection.Output, destination[2].Direction);   // described, and an output
+        Assert.Equal(ChannelDirection.Input, destination[7].Direction);    // described, and an input
+        Assert.Equal(ChannelDirection.Output, destination[8].Direction);   // undescribed: left as it was
+    }
+
+    [Fact]
+    public void Populate_DefaultsNewDigitalChannelsToInput_WhenTheMaskIsTooShort()
+    {
+        var message = new DaqifiOutMessage { DigitalPortNum = 10 };
+        message.DigitalPortDir = ByteString.CopyFrom(new byte[] { 0b0000_0000 });
+        var destination = new List<IChannel>();
+
+        Create().Populate(message, Array.Empty<IChannel>(), destination);
+
+        Assert.Equal(ChannelDirection.Output, destination[0].Direction);   // described
+        Assert.Equal(ChannelDirection.Input, destination[9].Direction);    // undescribed: Input default
     }
 
     [Theory]

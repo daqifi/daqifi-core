@@ -581,7 +581,7 @@ public class ChannelPopulationTests
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_DigitalChannelsHaveCorrectDirection()
+    public void PopulateChannelsFromStatus_DigitalChannelsDefaultToInput_WhenTheDeviceReportsNoDirections()
     {
         // Arrange
         var device = new DaqifiDevice("TestDevice");
@@ -596,6 +596,31 @@ public class ChannelPopulationTests
         // Assert
         var digitalChannels = device.Channels.Where(c => c.Type == ChannelType.Digital).ToList();
         Assert.All(digitalChannels, c => Assert.Equal(ChannelDirection.Input, c.Direction));
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_DigitalChannelsTakeTheirDirectionFromTheDevice()
+    {
+        // #685: the direction the device reports (digital_port_dir, TRIS-encoded: bit set = input)
+        // is the truth, and it survives a reconnect on the board even though Core's init sequence
+        // never resets it.
+        // Arrange
+        var device = new DaqifiDevice("TestDevice");
+        var message = new DaqifiOutMessage
+        {
+            DigitalPortNum = 16,
+            DigitalPortDir = Google.Protobuf.ByteString.CopyFrom(new byte[] { 0b1111_1011, 0b1111_1111 })
+        };
+
+        // Act
+        device.PopulateChannelsFromStatus(message);
+
+        // Assert
+        var digitalChannels = device.Channels.Where(c => c.Type == ChannelType.Digital).ToList();
+        Assert.Equal(ChannelDirection.Output, digitalChannels[2].Direction);
+        Assert.All(
+            digitalChannels.Where(c => c.ChannelNumber != 2),
+            c => Assert.Equal(ChannelDirection.Input, c.Direction));
     }
 
     [Fact]
