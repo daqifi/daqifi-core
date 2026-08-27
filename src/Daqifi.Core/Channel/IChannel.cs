@@ -28,6 +28,13 @@ public interface IChannel
     /// <summary>
     /// Gets or sets the channel direction (Input or Output).
     /// </summary>
+    /// <remarks>
+    /// On a digital channel this tracks the direction the <i>device</i> reports, resynced from
+    /// every status message, so it stays right across a reconnect even though the pin's direction
+    /// persists on the board and nothing in Core's init sequence resets it (#685). Use
+    /// <c>IStreamingDevice.SetDioDirection</c> to change it; assigning here only moves Core's
+    /// view, and the next status message will overwrite it with the device's.
+    /// </remarks>
     ChannelDirection Direction { get; set; }
 
     /// <summary>

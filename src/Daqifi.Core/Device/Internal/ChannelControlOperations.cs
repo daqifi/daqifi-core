@@ -141,10 +141,31 @@ namespace Daqifi.Core.Device.Internal
             EnsureChannelBelongs(channel);
             EnsurePwmNotEnabled(channel);
 
-            channel.Direction = direction;
+            // Send first, then record the new direction — the reverse of the mirror-then-send
+            // order used elsewhere, and deliberately so now that a status frame can write this
+            // same property (#685).
+            //
+            // Mirroring first would leave a window between the local write and the wire write in
+            // which a status frame the device encoded *before* it applied this command can land
+            // and revert Core's view. Ordinarily a later frame would repair that, but this device
+            // sends no unsolicited status frames at all — measured on an Nq1 (fw 3.7.2): zero over
+            // 10s idle and zero over 10s of streaming, they arrive only as replies to
+            // SYSTem:SYSInfoPB?. So there may be no later frame, and Core would report the pin
+            // backwards indefinitely while the device sat in the commanded direction.
+            //
+            // Writing after the send closes that: whatever a concurrent status refresh wrote
+            // while the command was in flight, the commanded value has the last word within this
+            // call, and it is the value the device is now in. It also means a send that throws
+            // leaves Core's view untouched rather than claiming a direction the pin never took —
+            // the same principle as the PWM guard above (#449).
             _host.Send(ScpiMessageProducer.SetDioPortDirection(
                 channel.ChannelNumber,
                 direction == ChannelDirection.Output ? 1 : 0));
+
+            // Under the channels lock, which is the lock the status-frame resync of this property
+            // writes under — the discipline SetChannelsEnabled already follows for analog
+            // IsEnabled (#409). Blocking I/O stays outside it, hence the send above.
+            _host.WithChannelsLock(() => channel.Direction = direction);
         }
 
         /// <inheritdoc cref="IStreamingDevice.SetDioValue" />
