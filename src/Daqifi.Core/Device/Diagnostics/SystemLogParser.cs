@@ -25,6 +25,16 @@ namespace Daqifi.Core.Device.Diagnostics;
 public static class SystemLogParser
 {
     /// <summary>
+    /// The characters stripped from each end of a line before it is classified. Deliberately not
+    /// <see cref="string.Trim()"/>: that removes every Unicode whitespace character, which includes
+    /// control characters such as vertical tab (<c>\u000B</c>), form feed (<c>\u000C</c>) and NEL
+    /// (<c>\u0085</c>) — exactly the evidence the corruption check looks for, erased just before it
+    /// runs. Only the padding and line endings a real firmware line can carry are removed here, so
+    /// <c>"\u000Bstream-junk"</c> stays corrupt while <c>"entry\r"</c> still becomes <c>"entry"</c>.
+    /// </summary>
+    private static readonly char[] PaddingAndLineEndings = { ' ', '\t', '\r', '\n' };
+
+    /// <summary>
     /// Parses log response lines into entries.
     /// </summary>
     /// <param name="lines">The raw response lines from the device.</param>
@@ -46,16 +56,13 @@ public static class SystemLogParser
                 continue;
             }
 
-            var message = rawLine.Trim();
+            var message = rawLine.Trim(PaddingAndLineEndings);
 
             if (ScpiResponseClassifier.IsErrorResponseLine(message))
             {
                 continue;
             }
 
-            // Tested against the trimmed line, not the raw one: the classifier treats any control
-            // character as evidence of binary, and a raw line still carrying its CR from a CRLF
-            // ending would trip it. Trim() has already removed CR/LF/tab at the ends by here.
             if (ScpiResponseClassifier.IsBinaryCorruptedLine(message))
             {
                 continue;

@@ -108,6 +108,26 @@ public class SystemLogParserTests
             entries.Select(e => e.Message));
     }
 
+    [Theory]
+    // Control characters that .NET also classifies as whitespace: an unrestricted Trim() would
+    // erase them at a line edge and hand a clean-looking string to the corruption check.
+    [InlineData("\u000B")] // vertical tab
+    [InlineData("\u000C")] // form feed
+    [InlineData("\u0085")] // NEL
+    public void Parse_DropsNoiseWhoseControlBytesSitAtTheLineEdge(string controlChar)
+    {
+        var lines = new[]
+        {
+            controlChar + "stream-junk",
+            "trailing-junk" + controlChar,
+            "Test info message",
+        };
+
+        var entries = SystemLogParser.Parse(lines);
+
+        Assert.Equal("Test info message", Assert.Single(entries).Message);
+    }
+
     [Fact]
     public void Parse_WhenEveryLineIsStreamNoise_ReturnsEmpty()
     {
