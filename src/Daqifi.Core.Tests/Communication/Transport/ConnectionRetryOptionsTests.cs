@@ -248,7 +248,7 @@ public class ConnectionRetryOptionsTests
 
         // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
-        Assert.Contains("greater than zero", ex.Message);
+        Assert.Contains("at least 1 millisecond", ex.Message);
         Assert.Equal(TimeSpan.FromSeconds(5), options.ConnectionTimeout); // unchanged
     }
 
@@ -264,6 +264,31 @@ public class ConnectionRetryOptionsTests
 
         // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
+    }
+
+    [Fact]
+    public void ConnectionTimeout_SubMillisecond_ShouldThrowNamingTheProperty()
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act — positive, but both transports narrow the timeout to a millisecond int, where a
+        // single tick truncates to 0 and lands back in the platform error this guard exists for.
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.ConnectionTimeout = TimeSpan.FromTicks(1));
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
+    }
+
+    [Fact]
+    public void ConnectionTimeout_AtOneMillisecond_ShouldBeAccepted()
+    {
+        // Arrange & Act — the smallest value that survives the narrowing intact.
+        var options = new ConnectionRetryOptions { ConnectionTimeout = TimeSpan.FromMilliseconds(1) };
+
+        // Assert
+        Assert.Equal(1, (int)options.ConnectionTimeout.TotalMilliseconds);
     }
 
     [Fact]

@@ -104,23 +104,26 @@ public class ConnectionRetryOptions
     /// Gets or sets the connection timeout for each attempt. Default is 5 seconds.
     /// </summary>
     /// <remarks>
-    /// The upper bound exists because both transports hand this value to the platform as a
-    /// millisecond <see cref="int"/>; anything longer would silently wrap round to a negative
-    /// timeout and be rejected by the platform instead of by us.
+    /// Both bounds exist because both transports hand this value to the platform as a millisecond
+    /// <see cref="int"/>. A sub-millisecond span truncates to zero, which the platform rejects
+    /// exactly as it rejected an outright zero; anything longer than <see cref="int.MaxValue"/>
+    /// milliseconds wraps round to a negative timeout, which it also rejects. Both are the very
+    /// error this validation exists to keep away from the retry loop.
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// Thrown when the value is zero or negative, or longer than <see cref="int.MaxValue"/>
-    /// milliseconds (about 24.8 days).
+    /// Thrown when the value is under 1 millisecond (zero and negatives included) or longer than
+    /// <see cref="int.MaxValue"/> milliseconds (about 24.8 days).
     /// </exception>
     public TimeSpan ConnectionTimeout
     {
         get => _connectionTimeout;
         set
         {
-            if (value <= TimeSpan.Zero)
+            if (value.TotalMilliseconds < 1)
             {
                 throw new ArgumentOutOfRangeException(
-                    nameof(ConnectionTimeout), value, "The connection timeout must be greater than zero.");
+                    nameof(ConnectionTimeout), value,
+                    "The connection timeout must be at least 1 millisecond.");
             }
 
             if (value.TotalMilliseconds > int.MaxValue)
