@@ -141,7 +141,20 @@ namespace Daqifi.Core.Device.Internal
             EnsureChannelBelongs(channel);
             EnsurePwmNotEnabled(channel);
 
-            channel.Direction = direction;
+            // Mutate under the channels lock, which is the same lock the status-frame resync of
+            // this property writes under (#685) — the discipline SetChannelsEnabled already
+            // follows for analog IsEnabled (#409). Without it the command's write and a
+            // concurrent population's write to the same property are unsynchronized.
+            //
+            // What the lock does not give is causal ordering against a status frame the device
+            // encoded before it applied this command: if one is in flight, it wins briefly and
+            // the next status frame corrects it. That is the same accepted characteristic as
+            // analog IsEnabled, and its window is narrow in practice — the device sends no
+            // unsolicited status frames at all (measured on an Nq1, fw 3.7.2: zero over 10s idle
+            // and 10s streaming), so a status frame only exists here if a caller has a
+            // RefreshDeviceStatusAsync running concurrently on another thread.
+            _host.WithChannelsLock(() => channel.Direction = direction);
+
             _host.Send(ScpiMessageProducer.SetDioPortDirection(
                 channel.ChannelNumber,
                 direction == ChannelDirection.Output ? 1 : 0));

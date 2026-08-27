@@ -243,6 +243,25 @@ public class ChannelControlOperationsTests
     }
 
     [Fact]
+    public void SetDioDirection_MutatesDirectionUnderTheChannelsLock()
+    {
+        // The status-frame resync writes this same property under the channels lock (#685), so
+        // the command path has to write it under that lock too — the discipline SetChannelsEnabled
+        // already follows for analog IsEnabled (#409). Qodo flagged the unsynchronized pair on
+        // PR #686.
+        var digital = new LockObservingDigitalChannel(channelNumber: 5);
+        var host = new FakeHost(digital);
+        digital.Host = host;
+        var ops = new ChannelControlOperations(host);
+
+        ops.SetDioDirection(digital, ChannelDirection.Output);
+
+        Assert.True(digital.DirectionWrittenUnderLock);
+        Assert.Equal(ChannelDirection.Output, digital.Direction);
+        Assert.Equal(new[] { "send:DIO:PORt:DIRection 5,1" }, host.Calls);
+    }
+
+    [Fact]
     public void SetDioDirection_AnalogChannel_ThrowsBeforeConnectionCheck()
     {
         var analog = new AnalogChannel(channelNumber: 0, resolution: 65535);
@@ -606,6 +625,57 @@ public class ChannelControlOperationsTests
 
     #endregion
 
+    /// <summary>
+    /// An <see cref="IDigitalChannel"/> that records whether its <see cref="Direction"/> was
+    /// assigned from inside <see cref="FakeHost.WithChannelsLock"/>. A wrapper rather than a
+    /// subclass because <see cref="DigitalChannel.Direction"/> is not virtual; every other member
+    /// forwards to a real <see cref="DigitalChannel"/> so the behaviour under test is unchanged.
+    /// </summary>
+    private sealed class LockObservingDigitalChannel : IDigitalChannel
+    {
+        private readonly DigitalChannel _inner;
+
+        public LockObservingDigitalChannel(int channelNumber)
+        {
+            _inner = new DigitalChannel(channelNumber);
+        }
+
+        public FakeHost? Host { get; set; }
+
+        public bool DirectionWrittenUnderLock { get; private set; }
+
+        public ChannelDirection Direction
+        {
+            get => _inner.Direction;
+            set
+            {
+                DirectionWrittenUnderLock = Host?.InChannelsLock ?? false;
+                _inner.Direction = value;
+            }
+        }
+
+        public int ChannelNumber => _inner.ChannelNumber;
+        public string Name { get => _inner.Name; set => _inner.Name = value; }
+        public bool IsEnabled { get => _inner.IsEnabled; set => _inner.IsEnabled = value; }
+        public ChannelType Type => _inner.Type;
+        public IDataSample? ActiveSample => _inner.ActiveSample;
+        public bool OutputValue { get => _inner.OutputValue; set => _inner.OutputValue = value; }
+        public bool IsHigh => _inner.IsHigh;
+        public bool IsPwmCapable => _inner.IsPwmCapable;
+        public bool IsPwmEnabled { get => _inner.IsPwmEnabled; set => _inner.IsPwmEnabled = value; }
+        public int PwmDutyCyclePercent { get => _inner.PwmDutyCyclePercent; set => _inner.PwmDutyCyclePercent = value; }
+
+        public event EventHandler<SampleReceivedEventArgs>? SampleReceived
+        {
+            add => _inner.SampleReceived += value;
+            remove => _inner.SampleReceived -= value;
+        }
+
+        public void SetActiveSample(double value, DateTime timestamp) => _inner.SetActiveSample(value, timestamp);
+
+        public void SetActiveSample(IDataSample sample) => _inner.SetActiveSample(sample);
+    }
+
     #region Fake host
 
     /// <summary>
@@ -629,6 +699,12 @@ public class ChannelControlOperationsTests
         /// passing it.
         /// </summary>
         private bool _inChannelsLock;
+
+        /// <summary>
+        /// Whether a <see cref="WithChannelsLock"/> callback is currently on the stack, so a test
+        /// can assert that a mutation happens inside the critical section rather than beside it.
+        /// </summary>
+        public bool InChannelsLock => _inChannelsLock;
 
         public FakeHost(params IChannel[] channels)
         {
