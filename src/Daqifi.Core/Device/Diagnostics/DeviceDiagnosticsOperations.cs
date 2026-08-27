@@ -278,7 +278,11 @@ namespace Daqifi.Core.Device.Diagnostics
         /// firmware-authored text, one entry per line. Losing one entry out of ten is visible in the
         /// result, and the log read is destructive on the device — the buffer is cleared by the very
         /// query that read it — so throwing the surviving entries away would destroy more than it
-        /// protects.
+        /// protects. Their parsers instead reject the mangled lines individually, which is what keeps
+        /// stream noise from being reported as log entries (issue #682): <see cref="SystemLogParser"/>
+        /// applies <see cref="ScpiResponseClassifier.IsBinaryCorruptedLine"/> per line, and
+        /// <see cref="CommandHistoryParser"/> gets it for free from requiring each line to match
+        /// <c>&lt;int&gt;: &lt;text&gt;</c>.
         /// </para>
         /// <para>
         /// <see cref="ClearSystemLogAsync"/> and <see cref="TestSystemLogAsync"/> answer with a short

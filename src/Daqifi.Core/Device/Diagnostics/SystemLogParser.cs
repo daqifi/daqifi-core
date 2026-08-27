@@ -7,9 +7,20 @@ namespace Daqifi.Core.Device.Diagnostics;
 /// Parses the response from the <c>SYSTem:LOG?</c> SCPI query into <see cref="SystemLogEntry"/> objects.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The firmware dumps the log buffer as free-form text, one entry per line. Blank lines and SCPI
 /// error/status lines (e.g. a <c>**ERROR</c> response if the query itself failed) are dropped; every
 /// other line becomes one <see cref="SystemLogEntry"/> with its trailing line ending trimmed.
+/// </para>
+/// <para>
+/// Lines carrying non-text bytes are dropped too. Reading the log does not stop the stream, so when
+/// the query runs mid-capture the firmware's protobuf frames land on the reply and split it into
+/// hundreds of mangled lines (issue #537). Without this filter every one of them became an entry: a
+/// bench read of an 8-entry log while streaming returned ~723 entries, 715 of them fabricated out of
+/// frame bytes (issue #682). Survivors are still kept -- the log read is destructive on the device,
+/// so discarding the whole response would lose the real entries for good -- at the cost of the one
+/// boundary entry that arrives with noise welded onto its front.
+/// </para>
 /// </remarks>
 public static class SystemLogParser
 {
@@ -38,6 +49,14 @@ public static class SystemLogParser
             var message = rawLine.Trim();
 
             if (ScpiResponseClassifier.IsErrorResponseLine(message))
+            {
+                continue;
+            }
+
+            // Tested against the trimmed line, not the raw one: the classifier treats any control
+            // character as evidence of binary, and a raw line still carrying its CR from a CRLF
+            // ending would trip it. Trim() has already removed CR/LF/tab at the ends by here.
+            if (ScpiResponseClassifier.IsBinaryCorruptedLine(message))
             {
                 continue;
             }

@@ -65,6 +65,58 @@ public class SystemLogParserTests
     }
 
     [Fact]
+    public void Parse_DropsLinesCarryingStreamBytes()
+    {
+        // Issue #682: read mid-stream, the firmware's protobuf frames split the reply into
+        // hundreds of mangled lines and every one of them used to become a log entry.
+        var lines = new[]
+        {
+            "Test log message 1",
+            "\uFFFD\uFFFD\u0008\u0001\uFFFD\u0002",
+            "\u0000\u0012\u0004junk",
+            "Test info message",
+        };
+
+        var entries = SystemLogParser.Parse(lines);
+
+        Assert.Equal(new[] { "Test log message 1", "Test info message" }, entries.Select(e => e.Message));
+    }
+
+    [Fact]
+    public void Parse_DropsTheBoundaryEntryThatArrivesWithNoiseWeldedOn()
+    {
+        // The single real entry the frame bytes land on top of goes with them. Documented
+        // cost of the filter: losing 1 of 8 beats fabricating 715 (issue #682).
+        var lines = new[] { " * \uFFFD\uFFFDTest log message 1", "Test error message" };
+
+        var entries = SystemLogParser.Parse(lines);
+
+        Assert.Equal(new[] { "Test error message" }, entries.Select(e => e.Message));
+    }
+
+    [Fact]
+    public void Parse_KeepsCleanLinesWithTabsAndCarriageReturns()
+    {
+        // The filter must be inert on the normal (idle) path: tab is a real firmware
+        // delimiter, and a trailing CR from a CRLF line ending is not evidence of binary.
+        var lines = new[] { "12:00:01\tTest log message 1\r", "12:00:02\tTest info message\r" };
+
+        var entries = SystemLogParser.Parse(lines);
+
+        Assert.Equal(
+            new[] { "12:00:01\tTest log message 1", "12:00:02\tTest info message" },
+            entries.Select(e => e.Message));
+    }
+
+    [Fact]
+    public void Parse_WhenEveryLineIsStreamNoise_ReturnsEmpty()
+    {
+        var lines = new[] { "\uFFFD\u0008\u0001", "\u0000\u0012\uFFFD" };
+
+        Assert.Empty(SystemLogParser.Parse(lines));
+    }
+
+    [Fact]
     public void Parse_WhenEmpty_ReturnsEmpty()
     {
         Assert.Empty(SystemLogParser.Parse(Array.Empty<string>()));
