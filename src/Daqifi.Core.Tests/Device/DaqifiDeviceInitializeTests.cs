@@ -348,23 +348,41 @@ namespace Daqifi.Core.Tests.Device
             Assert.Equal(DeviceState.Connected, device.State);
         }
 
-        [Fact]
-        public async Task InitializeAsync_WhenCancelledDuringInitScpiSettleDelays_StopsThere()
+        /// <summary>
+        /// The init SCPI setup sequence, in the order it is sent. Cancelling as any one of these
+        /// goes out must stop the sequence there, leaving every later command unsent.
+        /// </summary>
+        public static TheoryData<string, string[]> InitScpiSequenceCancellationPoints => new()
+        {
+            { "SYSTem:ECHO", new[] { "StopStreamData", "SYSTem:POWer:STATe", "SYSTem:STReam:FORmat" } },
+            { "StopStreamData", new[] { "SYSTem:POWer:STATe", "SYSTem:STReam:FORmat" } },
+            { "SYSTem:POWer:STATe", new[] { "SYSTem:STReam:FORmat" } },
+        };
+
+        [Theory]
+        [MemberData(nameof(InitScpiSequenceCancellationPoints))]
+        public async Task InitializeAsync_WhenCancelledMidInitScpiSequence_SendsNoLaterCommand(
+            string cancelAfterCommand,
+            string[] commandsThatMustNotFollow)
         {
             // The point of #667 item 1: the init SCPI setup sequence used to space its commands
             // with Thread.Sleep(100), which blocked a thread-pool thread and could not observe
             // the token — a caller who cancelled during that window had to wait out the whole
             // 300ms and every remaining command still went to the device. Awaiting the delays
-            // instead makes the sequence stop where it was cancelled.
+            // instead, and checking the token before each write, makes the sequence stop where it
+            // was cancelled. The token is checked before each write and not only by the delays:
+            // an awaited delay only observes cancellation while it is still pending, so
+            // cancellation landing between a delay completing and the next Send would otherwise
+            // still reach the device.
             var device = new TestableDaqifiDevice("TestDevice");
             device.Connect();
             using var cts = new CancellationTokenSource();
 
-            // Cancel as soon as the sequence's first command is sent, i.e. while the first settle
-            // delay is what the sequence is waiting on.
+            // Cancel as the named command goes out, i.e. while the settle delay that follows it is
+            // what the sequence is waiting on.
             device.OnCommandSent = data =>
             {
-                if (data.Contains("SYSTem:ECHO"))
+                if (data.Contains(cancelAfterCommand))
                 {
                     cts.Cancel();
                 }
@@ -373,11 +391,12 @@ namespace Daqifi.Core.Tests.Device
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => device.InitializeAsync(TimeSpan.FromSeconds(5), cts.Token));
 
-            // The commands sequenced after the cancelled delay never reached the device.
             var sent = device.DirectSentMessages.Select(m => m.Data).ToList();
-            Assert.Contains(sent, d => d.Contains("SYSTem:ECHO"));
-            Assert.DoesNotContain(sent, d => d.Contains("StopStreamData"));
-            Assert.DoesNotContain(sent, d => d.Contains("SYSTem:POWer:STATe"));
+            Assert.Contains(sent, d => d.Contains(cancelAfterCommand));
+            foreach (var command in commandsThatMustNotFollow)
+            {
+                Assert.DoesNotContain(sent, d => d.Contains(command));
+            }
 
             // Caller-initiated cancellation is not a device fault.
             Assert.NotEqual(DeviceState.Error, device.State);

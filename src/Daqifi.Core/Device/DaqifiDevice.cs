@@ -3255,6 +3255,13 @@ namespace Daqifi.Core.Device
                     // sleep already in progress before it can observe the token.
                     initLines = await ExecuteTextCommandAsync(async token =>
                     {
+                        // The token is observed immediately before every write, not just by the
+                        // delays. An awaited Task.Delay only sees cancellation while it is still
+                        // pending, so cancellation landing in the window between a delay
+                        // completing and the next Send would otherwise still put a state-changing
+                        // command on the wire after the caller had asked to stop.
+                        token.ThrowIfCancellationRequested();
+
                         // Echo is a per-device text-mode setting, not stream state: this session
                         // needs it off to parse its own replies, and the value is the same one any
                         // other Core session already set. Safe to send either way.
@@ -3270,12 +3277,15 @@ namespace Daqifi.Core.Device
                         }
 
                         await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.StopStreaming);
                         await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.TurnDeviceOn);
                         await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.SetProtobufStreamFormat);
                     }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
