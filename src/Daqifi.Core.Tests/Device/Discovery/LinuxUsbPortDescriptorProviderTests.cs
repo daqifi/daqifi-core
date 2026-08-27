@@ -1,5 +1,5 @@
 using Daqifi.Core.Device.Discovery;
-using System.Runtime.InteropServices;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
@@ -326,16 +326,14 @@ public class LinuxUsbPortDescriptorProviderTests : IDisposable
         Assert.Null(provider.GetDescriptor("/dev/ttyDAQIFI-" + Guid.NewGuid().ToString("N")));
     }
 
-    [Fact]
+    // Elsewhere /sys/class/tty either does not exist or means something else, so the gate — not the
+    // filesystem — has to produce the answer. On Linux the same call is covered above.
+    [PlatformFact(
+        TestPlatforms.Linux,
+        "The off-Linux gate can only be observed off Linux; on Linux the same call reads the real " +
+        "/sys/class/tty and is covered by GetDescriptor_PortThatDoesNotExist_ReturnsNull.")]
     public void GetDescriptor_OffLinux_AnswersNullForEveryPort()
     {
-        // Elsewhere /sys/class/tty either does not exist or means something else, so the gate — not
-        // the filesystem — has to produce the answer. On Linux the same call is covered above.
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        {
-            return;
-        }
-
         var provider = new LinuxUsbPortDescriptorProvider();
 
         Assert.Null(provider.GetDescriptor("ttyACM0"));
