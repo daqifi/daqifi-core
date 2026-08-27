@@ -4,6 +4,7 @@ using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -259,6 +260,41 @@ public class ChannelControlOperationsTests
         Assert.True(digital.DirectionWrittenUnderLock);
         Assert.Equal(ChannelDirection.Output, digital.Direction);
         Assert.Equal(new[] { "send:DIO:PORt:DIRection 5,1" }, host.Calls);
+    }
+
+    [Fact]
+    public void SetDioDirection_CommandWins_WhenAStatusFrameLandsWhileItIsInFlight()
+    {
+        // Qodo, PR #686. A status frame the device encoded before it applied this command can
+        // land while the command is in flight and revert Core's view. Nothing would repair that:
+        // this device sends no unsolicited status frames (bench-measured), so there may be no
+        // later frame at all, and Core would report the pin backwards indefinitely while the
+        // device sat in the commanded direction. The command has to have the last word.
+        var digital = new DigitalChannel(channelNumber: 5) { Direction = ChannelDirection.Input };
+        var host = new FakeHost(digital);
+        var ops = new ChannelControlOperations(host);
+
+        // A stale status frame resyncing Direction back to Input, mid-command.
+        host.OnSend = () => digital.Direction = ChannelDirection.Input;
+
+        ops.SetDioDirection(digital, ChannelDirection.Output);
+
+        Assert.Equal(ChannelDirection.Output, digital.Direction);
+        Assert.Equal(new[] { "send:DIO:PORt:DIRection 5,1" }, host.Calls);
+    }
+
+    [Fact]
+    public void SetDioDirection_FailedSend_LeavesCoreDirectionUntouched()
+    {
+        // Recording a direction the pin never took would tell every caller the pin is doing
+        // something it is not — the same principle as the PWM guard (#449).
+        var digital = new DigitalChannel(channelNumber: 5) { Direction = ChannelDirection.Input };
+        var host = new FakeHost(digital) { SendFailure = new IOException("cable pulled") };
+        var ops = new ChannelControlOperations(host);
+
+        Assert.Throws<IOException>(() => ops.SetDioDirection(digital, ChannelDirection.Output));
+
+        Assert.Equal(ChannelDirection.Input, digital.Direction);
     }
 
     [Fact]
@@ -728,6 +764,18 @@ public class ChannelControlOperationsTests
             lock (_calls) { _calls.Add(call); }
         }
 
+        /// <summary>
+        /// Runs at the moment of a <see cref="Send{T}"/>, so a test can simulate something landing
+        /// while a command is in flight — a status frame resyncing channel state, say.
+        /// </summary>
+        public Action? OnSend { get; set; }
+
+        /// <summary>
+        /// When set, <see cref="Send{T}"/> throws this instead of recording, so a test can check
+        /// what local state a failed command leaves behind.
+        /// </summary>
+        public Exception? SendFailure { get; set; }
+
         public void Send<T>(IOutboundMessage<T> message)
         {
             if (_inChannelsLock)
@@ -737,7 +785,13 @@ public class ChannelControlOperationsTests
                     "the channels lock (see IDeviceOperationHost.WithChannelsLock).");
             }
 
+            if (SendFailure is not null)
+            {
+                throw SendFailure;
+            }
+
             Record("send:" + message.Data);
+            OnSend?.Invoke();
         }
 
         public IReadOnlyList<IChannel> SnapshotChannels() => _channels.ToArray();

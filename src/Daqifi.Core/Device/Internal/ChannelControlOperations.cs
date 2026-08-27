@@ -141,23 +141,31 @@ namespace Daqifi.Core.Device.Internal
             EnsureChannelBelongs(channel);
             EnsurePwmNotEnabled(channel);
 
-            // Mutate under the channels lock, which is the same lock the status-frame resync of
-            // this property writes under (#685) — the discipline SetChannelsEnabled already
-            // follows for analog IsEnabled (#409). Without it the command's write and a
-            // concurrent population's write to the same property are unsynchronized.
+            // Send first, then record the new direction — the reverse of the mirror-then-send
+            // order used elsewhere, and deliberately so now that a status frame can write this
+            // same property (#685).
             //
-            // What the lock does not give is causal ordering against a status frame the device
-            // encoded before it applied this command: if one is in flight, it wins briefly and
-            // the next status frame corrects it. That is the same accepted characteristic as
-            // analog IsEnabled, and its window is narrow in practice — the device sends no
-            // unsolicited status frames at all (measured on an Nq1, fw 3.7.2: zero over 10s idle
-            // and 10s streaming), so a status frame only exists here if a caller has a
-            // RefreshDeviceStatusAsync running concurrently on another thread.
-            _host.WithChannelsLock(() => channel.Direction = direction);
-
+            // Mirroring first would leave a window between the local write and the wire write in
+            // which a status frame the device encoded *before* it applied this command can land
+            // and revert Core's view. Ordinarily a later frame would repair that, but this device
+            // sends no unsolicited status frames at all — measured on an Nq1 (fw 3.7.2): zero over
+            // 10s idle and zero over 10s of streaming, they arrive only as replies to
+            // SYSTem:SYSInfoPB?. So there may be no later frame, and Core would report the pin
+            // backwards indefinitely while the device sat in the commanded direction.
+            //
+            // Writing after the send closes that: whatever a concurrent status refresh wrote
+            // while the command was in flight, the commanded value has the last word within this
+            // call, and it is the value the device is now in. It also means a send that throws
+            // leaves Core's view untouched rather than claiming a direction the pin never took —
+            // the same principle as the PWM guard above (#449).
             _host.Send(ScpiMessageProducer.SetDioPortDirection(
                 channel.ChannelNumber,
                 direction == ChannelDirection.Output ? 1 : 0));
+
+            // Under the channels lock, which is the lock the status-frame resync of this property
+            // writes under — the discipline SetChannelsEnabled already follows for analog
+            // IsEnabled (#409). Blocking I/O stays outside it, hence the send above.
+            _host.WithChannelsLock(() => channel.Direction = direction);
         }
 
         /// <inheritdoc cref="IStreamingDevice.SetDioValue" />
