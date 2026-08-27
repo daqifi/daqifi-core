@@ -131,7 +131,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// a <see cref="ChannelScaling"/> is immutable and stands alone, so a reader either sees the
     /// whole old instance or the whole new one — there is no torn state to protect and no invariant
     /// shared with the calibration fields. That matters because the decode path reads this once per
-    /// sample on the USB float path, which otherwise takes no lock at all;
+    /// sample while decoding a stream frame, a path that otherwise takes no lock at all;
     /// <see cref="Volatile"/> keeps the publication safe without putting a lock back into the hot
     /// path.
     /// </remarks>

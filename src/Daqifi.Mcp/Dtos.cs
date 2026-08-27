@@ -346,8 +346,9 @@ public sealed record SdDeleteResult(string DeviceId, string FileName);
 /// <param name="Timestamp">When the sample was taken, reconstructed from the device clock.</param>
 /// <param name="DeviceTimestamp">The device's own clock ticks for the sample, verbatim.</param>
 /// <param name="RawValue">
-/// The raw ADC count the value was decoded from, or <c>null</c> when the device sent an
-/// already-scaled value (the USB float path does) or the channel is digital.
+/// The raw ADC count the value was decoded from. Supported firmware streams raw counts on every
+/// transport, so an analog reading carries one; <c>null</c> means the channel is digital, or that
+/// the frame carried an already-scaled value, which no supported firmware sends.
 /// </param>
 public sealed record ChannelReading(
     string Column,
