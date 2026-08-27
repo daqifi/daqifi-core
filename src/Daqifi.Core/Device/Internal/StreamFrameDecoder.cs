@@ -355,8 +355,9 @@ namespace Daqifi.Core.Device.Internal
         }
 
         /// <summary>
-        /// The number of analog values a frame carries, from whichever payload the transport used —
-        /// USB streams pre-scaled floats, WiFi streams raw ADC counts.
+        /// The number of analog values a frame carries, from whichever payload it used. Supported
+        /// firmware always fills the raw-count payload; the float payload is read only because the
+        /// protocol still defines it.
         /// </summary>
         private static int CountAnalogValues(DaqifiOutMessage message) =>
             message.AnalogInDataFloat.Count > 0
@@ -393,8 +394,9 @@ namespace Daqifi.Core.Device.Internal
 
         /// <summary>
         /// Decodes a streaming frame into per-channel samples: selects the active channels in
-        /// device order, chooses the correct value source (USB pre-scaled float vs. WiFi raw ADC
-        /// count scaled via calibration), unpacks digital bits, and pushes a sample to each channel.
+        /// device order, chooses the correct value source (the frame's raw ADC counts, scaled via
+        /// calibration, or the already-scaled floats it carries instead), unpacks digital bits, and
+        /// pushes a sample to each channel.
         /// </summary>
         /// <param name="message">The streaming message to decode.</param>
         /// <param name="suppressAnalog">
@@ -535,8 +537,10 @@ namespace Daqifi.Core.Device.Internal
 
         /// <summary>
         /// Maps a frame's analog values to the enabled analog channels, in ascending channel order.
-        /// USB firmware streams pre-scaled floats (used directly); WiFi firmware streams raw ADC
-        /// counts (scaled per channel via <see cref="IAnalogChannel.GetScaledValue"/>).
+        /// A frame carrying raw ADC counts is scaled per channel via
+        /// <see cref="IAnalogChannel.GetScaledValue"/> — this is what every supported firmware
+        /// sends, on every transport. A frame carrying pre-scaled floats is used as-is; the
+        /// protocol still defines that payload, but no supported firmware fills it.
         /// </summary>
         /// <param name="message">The frame being decoded.</param>
         /// <param name="activeAnalog">
@@ -546,7 +550,10 @@ namespace Daqifi.Core.Device.Internal
         /// </param>
         /// <param name="hostTimestamp">The reconstructed host timestamp for this frame.</param>
         /// <param name="deviceTimestamp">The frame's raw device tick value.</param>
-        /// <param name="hasFloat">Whether the frame carries pre-scaled floats rather than raw counts.</param>
+        /// <param name="hasFloat">
+        /// Whether the frame carries pre-scaled floats rather than raw counts. False for every frame
+        /// supported firmware sends; kept because the protocol still defines the float payload.
+        /// </param>
         private static void DecodeAnalog(
             DaqifiOutMessage message,
             IAnalogChannel[] activeAnalog,
@@ -565,13 +572,14 @@ namespace Daqifi.Core.Device.Internal
 
                 if (hasFloat)
                 {
-                    // USB firmware already scaled to volts; no raw ADC count is available.
+                    // The frame carried volts already; no raw ADC count to report. Defensive:
+                    // no supported firmware fills this payload.
                     scaled = message.AnalogInDataFloat[i];
                     raw = null;
                 }
                 else
                 {
-                    // WiFi firmware sent a raw ADC count; apply this channel's calibration.
+                    // The normal path: a raw ADC count, scaled by this channel's calibration.
                     var rawValue = message.AnalogInData[i];
                     scaled = channel.GetScaledValue(rawValue);
                     raw = rawValue;

@@ -116,7 +116,7 @@ public class DaqifiStreamingDeviceDecodeTests
     #region Analog decoding
 
     [Fact]
-    public void Decode_UsbFloatPath_UsesFloatsDirectlyWithNoRawValue()
+    public void Decode_PreScaledFloatFrame_UsesFloatsDirectlyWithNoRawValue()
     {
         // Arrange: 3 analog channels, enable AI0 and AI2 (leaving a gap at AI1).
         var device = CreateStreamingDevice(analogCount: 3);
@@ -148,7 +148,7 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_WifiRawPath_AppliesChannelCalibrationAndPreservesRawCount()
+    public void Decode_RawCountFrame_AppliesChannelCalibrationAndPreservesRawCount()
     {
         // Arrange: give the channels a non-identity port range so scaling is observable.
         var device = CreateStreamingDevice(analogCount: 2, portRange: 10.0f, resolution: 65535);

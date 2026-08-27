@@ -156,8 +156,8 @@ public class ProtobufProtocolHandler : IProtocolHandler
     private static bool IsStreamMessage(DaqifiOutMessage message)
     {
         // Stream messages contain timestamp and data.
-        // USB firmware sends AnalogInDataFloat (pre-scaled floats) while WiFi firmware
-        // may send AnalogInData (raw integer ADC counts). Both must be detected.
+        // Supported firmware sends AnalogInData (raw integer ADC counts) on every transport, but
+        // the protocol also defines AnalogInDataFloat (pre-scaled floats). Both must be detected.
         return message.MsgTimeStamp != 0 &&
                (message.AnalogInData.Count > 0 ||
                 message.AnalogInDataFloat.Count > 0 ||

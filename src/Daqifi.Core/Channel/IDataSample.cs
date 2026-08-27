@@ -19,9 +19,12 @@ public interface IDataSample
 
     /// <summary>
     /// Gets the raw device value this sample was decoded from, when one exists: the raw ADC count
-    /// for a calibration-scaled analog sample, or the 0/1 bit for a digital sample. It is
-    /// <c>null</c> when the device supplied an already-scaled value (e.g. the USB pre-scaled
-    /// float path) or when the sample was not produced by the decode pipeline.
+    /// for a calibration-scaled analog sample, or the 0/1 bit for a digital sample. Every supported
+    /// firmware streams raw ADC counts on every transport, so a streamed analog sample carries a
+    /// raw count here and its <see cref="Value"/> is the result of Core's calibration formula.
+    /// It is <c>null</c> when the sample was not produced by the decode pipeline, or when the
+    /// frame it came from carried an already-scaled value instead of a count — a case the protocol
+    /// still allows but no supported firmware produces.
     /// </summary>
     int? RawValue { get; }
 

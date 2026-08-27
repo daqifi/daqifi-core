@@ -125,7 +125,8 @@ public class ProtobufProtocolHandlerTests
     [Fact]
     public async Task HandleAsync_WithFloatStreamMessage_CallsStreamHandler()
     {
-        // Arrange - USB firmware sends pre-scaled float values (AnalogInDataFloat)
+        // Arrange - a frame carrying pre-scaled floats (AnalogInDataFloat). No supported firmware
+        // sends this shape on any transport, but the protocol defines it and detection must cover it.
         var streamHandlerCalled = false;
         DaqifiOutMessage? receivedMessage = null;
 
@@ -161,7 +162,7 @@ public class ProtobufProtocolHandlerTests
     [InlineData(0u, 0u, 2u, 0u, 0, 0, false, ProtobufMessageType.Status)]
     [InlineData(0u, 0u, 0u, 12345u, 1, 0, false, ProtobufMessageType.Stream)]   // int data
     [InlineData(0u, 0u, 0u, 12345u, 0, 1, false, ProtobufMessageType.Stream)]   // digital data
-    [InlineData(0u, 0u, 0u, 12345u, 0, 0, true, ProtobufMessageType.Stream)]    // float data (USB firmware)
+    [InlineData(0u, 0u, 0u, 12345u, 0, 0, true, ProtobufMessageType.Stream)]    // float data (protocol-only shape)
     [InlineData(0u, 0u, 0u, 0u, 0, 0, false, ProtobufMessageType.Unknown)]
     public void DetectMessageType_ReturnsCorrectType(
         uint analogInPortNum,
