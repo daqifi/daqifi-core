@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using System.Diagnostics;
@@ -668,6 +669,244 @@ public class DaqifiDeviceStaleTextLineTests
         Assert.False(finalized, "The finalize phase ran for an exchange that never started.");
     }
 
+    // ── The terminator short-circuit (#667 item 4). Three call sites end their setup action with
+    // SYSTem:ERRor? so the exchange has a reply to finish on; recognising that reply lets it stop
+    // the moment the reply lands instead of waiting out a completion window sized for a device
+    // that might still be talking. The same pre-send boundaries the tests above are about are what
+    // keep a LEFTOVER reply from ending an exchange it does not belong to. ────────────────────
+
+    [Fact]
+    public async Task ExecuteTextCommand_EndsAsSoonAsTheReplyItAskedToFinishOnArrives()
+    {
+        // The completion window is deliberately huge next to the reply, so an exchange that waits
+        // it out cannot be mistaken for one that recognised the terminator. On the real device this
+        // window is 500ms (connect) or 1000ms (SD listing, confirmed commands), and every
+        // millisecond of it used to be spent waiting for lines that by construction never come.
+        //
+        // The bound sits halfway between the two outcomes rather than close to either: recognising
+        // the terminator costs the reader's latency and nothing else, while waiting the window out
+        // takes 4000ms, so a loaded runner has 2 full seconds of slack before this says the wrong
+        // thing (issue #687).
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Terminating Device", transport);
+
+        device.Connect();
+
+        var sw = Stopwatch.StartNew();
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                device.Send(ScpiMessageProducer.GetSystemError);
+                transport.Release();
+            },
+            responseTimeoutMs: 3000,
+            completionTimeoutMs: 4000,
+            terminatorShortCircuit: true);
+        sw.Stop();
+
+        Assert.Contains(lines, l => l.Contains("No error"));
+        Assert.True(
+            sw.ElapsedMilliseconds < 2000,
+            $"Expected the exchange to end on the terminator, not to wait out its 4000ms completion window; took {sw.ElapsedMilliseconds}ms.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_WaitsOutItsWindowUnlessItOptedIntoTheShortCircuit()
+    {
+        // The gate, and the reason it exists. An exchange that sends the terminator but does not
+        // opt in — the SD listing and the confirming administration commands, every call site but
+        // the connect-time init — must behave exactly as it did before this existed.
+        //
+        // They are held back because a stale reply the device emits AFTER this exchange starts
+        // sending is indistinguishable from its own, and finishing on one truncates the response.
+        // For a directory listing that means caching a partial or empty card silently, since a
+        // listing cut short before its end-of-listing marker reads as Unterminated, which is not an
+        // error. Identical setup to the opted-in test above, minus the opt-in.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Non-Opted-In Device", transport);
+
+        device.Connect();
+
+        var sw = Stopwatch.StartNew();
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                device.Send(ScpiMessageProducer.GetSystemError);
+                transport.Release();
+            },
+            responseTimeoutMs: 3000,
+            completionTimeoutMs: 1500);
+        sw.Stop();
+
+        Assert.Contains(lines, l => l.Contains("No error"));
+        Assert.True(
+            sw.ElapsedMilliseconds >= 1000,
+            $"Expected an exchange that did not opt in to wait out its 1500ms completion window; took {sw.ElapsedMilliseconds}ms.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_DoesNotEndEarlyOnAnErrorReplyItNeverAskedFor()
+    {
+        // The command half of the guard. A device can volunteer an error-queue-shaped line
+        // alongside a command's output, and an exchange that never asked for a terminator has no
+        // reason to treat it as one — it may still be mid-dump. Without this half, SYSTem:LOG? on
+        // a device with something to complain about would return a truncated log.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Unasking Device", transport);
+
+        device.Connect();
+
+        var sw = Stopwatch.StartNew();
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                device.Send(new ScpiMessage("SYSTem:LOG?"));
+                transport.Release();
+            },
+            responseTimeoutMs: 3000,
+            completionTimeoutMs: 400,
+            terminatorShortCircuit: true);
+        sw.Stop();
+
+        Assert.Contains(lines, l => l.Contains("No error"));
+        Assert.True(
+            sw.ElapsedMilliseconds >= 350,
+            $"Expected the exchange to wait out its 400ms completion window for a reply it never asked for; took {sw.ElapsedMilliseconds}ms.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_IsNotEndedByATerminatorThatArrivedBeforeItSent()
+    {
+        // The failure this guard exists to prevent, and the reason TrySplitAtSdListTerminator
+        // scans from the END: a terminator reply from an earlier, timed-out exchange can lead this
+        // one's response. Stopping on it would cut collection off before the listing arrives and
+        // report an empty SD card for a card with files on it.
+        //
+        // The stale terminator is released at the stale-line boundary and provably collected before
+        // the setup action returns, which puts it inside the capture-to-send window (#553); the
+        // listing line then arrives 150ms after the send boundary, by which point an exchange that
+        // had stopped on the stale terminator would already have returned without it.
+        //
+        // Unlike the #553 test above, the stale line here is CONTENT, not a blank — so it is not
+        // dropped, the wait loop counts it as evidence immediately, and phase 2's completion window
+        // is what has to cover the listing line's arrival rather than phase 1's much longer
+        // first-response timeout. That window is therefore 2000ms against a 150ms release: more
+        // than ten times the delay it has to cover, so a runner that starves the release thread
+        // still lands inside it (issue #687, and the CI failure this replaced).
+        using var transport = new TwoStageReleaseTransport(
+            staleLine: "0,\"No error\"\r\n",
+            contentLine: "/data/log.bin 4096\r\n");
+
+        Thread? releaseContent = null;
+        using var device = new StaleBoundaryHookTestableDevice(
+            "Stale-Terminator Device",
+            transport,
+            onStaleLineBoundaryCaptured: () => transport.ReleaseStale(),
+            onSendBoundaryCaptured: () =>
+            {
+                // One exchange, so one release; guarded so a future extra exchange cannot turn a
+                // second Start() on the same thread into an unrelated failure here.
+                if (releaseContent != null) return;
+
+                releaseContent = new Thread(() =>
+                {
+                    Thread.Sleep(150);
+                    transport.ReleaseContent();
+                })
+                { IsBackground = true, Name = "stale-terminator-test-content-release" };
+                releaseContent.Start();
+            });
+
+        device.Connect();
+
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                Assert.True(
+                    transport.WaitForStaleConsumed(TimeSpan.FromSeconds(10)),
+                    "The reader never collected the stale terminator, so the boundary under test was never exercised.");
+                device.Send(ScpiMessageProducer.GetSystemError);
+            },
+            responseTimeoutMs: 5000,
+            completionTimeoutMs: 2000,
+            terminatorShortCircuit: true);
+
+        // The listing survived: collection did not stop on the leading stale terminator.
+        Assert.Contains(lines, l => l.Contains("/data/log.bin"));
+
+        // And the stale terminator is still handed to the caller, exactly as before. The
+        // short-circuit decides when to stop listening, never what the exchange returns — which is
+        // what leaves TrySplitAtSdListTerminator the authority on which terminator is the real one.
+        Assert.Contains(lines, l => l.Contains("No error"));
+
+        releaseContent?.Join(TimeSpan.FromSeconds(10));
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_IsNotEndedByATerminatorThatArrivesWhileItsCommandIsStillQueued()
+    {
+        // The other half of the same boundary (#593): the setup action returns when the command is
+        // queued, not when it is written, so a leftover reply can arrive after the exchange
+        // believes it has sent and before the device has been asked anything. An earlier command
+        // holds the producer thread, so this exchange's SYSTem:ERRor? provably cannot be on the
+        // wire when the reply lands — nothing has been asked, so nothing can be answering, and the
+        // line-count boundary alone cannot tell.
+        using var transport = new QueuedWriteTransport();
+
+        var terminatorReleased = false;
+        using var device = new StaleLineTestableDevice(
+            "Queued-Terminator Device",
+            transport,
+            onSendBoundaryCaptured: () =>
+            {
+                terminatorReleased = true;
+                transport.ReleaseLine("0,\"No error\"\r\n");
+            });
+
+        device.Connect();
+
+        transport.HoldWrites();
+        device.Send(new ScpiMessage("EARLIER:COMMAND"));
+        Assert.True(
+            transport.WaitForWriteStarted(TimeSpan.FromSeconds(10)),
+            "The producer never picked up the earlier command.");
+
+        // The window is wide, and the bound well inside it, because the two outcomes have to be
+        // unmistakable: an exchange that short-circuits here returns in roughly the time the reader
+        // takes to pick the line up (~350ms observed), one that correctly keeps waiting returns no
+        // earlier than this window. A bound near the window's own length would sit between them.
+        // The write hold is bounded at 30s, so 1500ms cannot expire it.
+        var sw = Stopwatch.StartNew();
+        var lines = await device.CallExecuteTextCommandAsync(
+            () => device.Send(ScpiMessageProducer.GetSystemError),
+            responseTimeoutMs: 3000,
+            completionTimeoutMs: 1500,
+            terminatorShortCircuit: true);
+        sw.Stop();
+
+        Assert.True(
+            terminatorReleased,
+            "The exchange never reached its send boundary, so the terminator was never put on the wire.");
+        Assert.True(
+            sw.ElapsedMilliseconds >= 1000,
+            $"Expected the exchange to keep waiting for a terminator that cannot be its own; took {sw.ElapsedMilliseconds}ms.");
+        Assert.Contains(lines, l => l.Contains("No error"));
+
+        transport.ReleaseWrite();
+        Assert.False(
+            transport.HoldExpired,
+            "The write hold expired on its own bound, so the queued-behind-a-held-write window this test needs was not actually held open.");
+
+        device.Disconnect();
+    }
+
     /// <summary>
     /// Exposes <see cref="DaqifiDevice.OnStaleLineBoundaryCaptured"/> so a test can release a line
     /// into the transport at the exact instant the exchange's stale-line boundary is captured —
@@ -693,17 +932,24 @@ public class DaqifiDeviceStaleTextLineTests
 
         internal override void OnSendBoundaryCaptured() => _onSendBoundaryCaptured?.Invoke();
 
-        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
+        /// <param name="terminatorShortCircuit">
+        /// Opts this exchange into finishing on its <c>SYSTem:ERRor?</c> reply, the way the
+        /// connect-time init exchange does. Off by default, matching every other call site.
+        /// </param>
+        public async Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
             Action setupAction,
             bool keepBlankLines = false,
             int responseTimeoutMs = 500,
-            int completionTimeoutMs = 150)
+            int completionTimeoutMs = 150,
+            bool terminatorShortCircuit = false)
         {
-            return ExecuteTextCommandAsync(
+            using var scope = terminatorShortCircuit ? EnableTerminatorShortCircuit() : null;
+
+            return await ExecuteTextCommandAsync(
                 setupAction,
                 responseTimeoutMs: responseTimeoutMs,
                 completionTimeoutMs: completionTimeoutMs,
-                keepBlankLines: keepBlankLines);
+                keepBlankLines: keepBlankLines).ConfigureAwait(false);
         }
     }
 
@@ -772,17 +1018,24 @@ public class DaqifiDeviceStaleTextLineTests
         /// </summary>
         internal override void OnSendBoundaryCaptured() => _onSendBoundaryCaptured?.Invoke();
 
-        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
+        /// <param name="terminatorShortCircuit">
+        /// Opts this exchange into finishing on its <c>SYSTem:ERRor?</c> reply, the way the
+        /// connect-time init exchange does. Off by default, matching every other call site.
+        /// </param>
+        public async Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
             Action setupAction,
             bool keepBlankLines = false,
             int responseTimeoutMs = 500,
-            int completionTimeoutMs = 150)
+            int completionTimeoutMs = 150,
+            bool terminatorShortCircuit = false)
         {
-            return ExecuteTextCommandAsync(
+            using var scope = terminatorShortCircuit ? EnableTerminatorShortCircuit() : null;
+
+            return await ExecuteTextCommandAsync(
                 setupAction,
                 responseTimeoutMs: responseTimeoutMs,
                 completionTimeoutMs: completionTimeoutMs,
-                keepBlankLines: keepBlankLines);
+                keepBlankLines: keepBlankLines).ConfigureAwait(false);
         }
 
         public Task<IReadOnlyList<string>> CallWithPrepareAsync(
