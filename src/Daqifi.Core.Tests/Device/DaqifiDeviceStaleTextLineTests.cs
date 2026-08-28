@@ -682,6 +682,11 @@ public class DaqifiDeviceStaleTextLineTests
         // it out cannot be mistaken for one that recognised the terminator. On the real device this
         // window is 500ms (connect) or 1000ms (SD listing, confirmed commands), and every
         // millisecond of it used to be spent waiting for lines that by construction never come.
+        //
+        // The bound sits halfway between the two outcomes rather than close to either: recognising
+        // the terminator costs the reader's latency and nothing else, while waiting the window out
+        // takes 4000ms, so a loaded runner has 2 full seconds of slack before this says the wrong
+        // thing (issue #687).
         using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
         using var device = new StaleLineTestableDevice("Terminating Device", transport);
 
@@ -695,13 +700,13 @@ public class DaqifiDeviceStaleTextLineTests
                 transport.Release();
             },
             responseTimeoutMs: 3000,
-            completionTimeoutMs: 2000);
+            completionTimeoutMs: 4000);
         sw.Stop();
 
         Assert.Contains(lines, l => l.Contains("No error"));
         Assert.True(
-            sw.ElapsedMilliseconds < 1500,
-            $"Expected the exchange to end on the terminator, not to wait out its 2000ms completion window; took {sw.ElapsedMilliseconds}ms.");
+            sw.ElapsedMilliseconds < 2000,
+            $"Expected the exchange to end on the terminator, not to wait out its 4000ms completion window; took {sw.ElapsedMilliseconds}ms.");
 
         device.Disconnect();
     }
@@ -747,9 +752,15 @@ public class DaqifiDeviceStaleTextLineTests
         //
         // The stale terminator is released at the stale-line boundary and provably collected before
         // the setup action returns, which puts it inside the capture-to-send window (#553); the
-        // listing line then arrives 150ms after the send boundary, well past the 300ms completion
-        // window an early stop would have ended on. Anchored to the exchange rather than the clock
-        // for the reason the #553 test above records (issue #687).
+        // listing line then arrives 150ms after the send boundary, by which point an exchange that
+        // had stopped on the stale terminator would already have returned without it.
+        //
+        // Unlike the #553 test above, the stale line here is CONTENT, not a blank — so it is not
+        // dropped, the wait loop counts it as evidence immediately, and phase 2's completion window
+        // is what has to cover the listing line's arrival rather than phase 1's much longer
+        // first-response timeout. That window is therefore 2000ms against a 150ms release: more
+        // than ten times the delay it has to cover, so a runner that starves the release thread
+        // still lands inside it (issue #687, and the CI failure this replaced).
         using var transport = new TwoStageReleaseTransport(
             staleLine: "0,\"No error\"\r\n",
             contentLine: "/data/log.bin 4096\r\n");
@@ -785,7 +796,7 @@ public class DaqifiDeviceStaleTextLineTests
                 device.Send(ScpiMessageProducer.GetSystemError);
             },
             responseTimeoutMs: 5000,
-            completionTimeoutMs: 300);
+            completionTimeoutMs: 2000);
 
         // The listing survived: collection did not stop on the leading stale terminator.
         Assert.Contains(lines, l => l.Contains("/data/log.bin"));
