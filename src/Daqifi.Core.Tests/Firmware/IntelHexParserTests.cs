@@ -1,3 +1,4 @@
+using System.Reflection;
 using Daqifi.Core.Firmware;
 
 namespace Daqifi.Core.Tests.Firmware;
@@ -429,6 +430,40 @@ public class IntelHexParserTests
 
         Assert.Single(result);
         Assert.Equal(0x1D, result[0][4]);
+    }
+
+    #endregion
+
+    #region Default Protected Range Constants
+
+    /// <summary>
+    /// The SCREAMING_SNAKE spellings shipped on the public surface before #484 renamed them are
+    /// kept as forwarders so that source written against the released package still compiles -
+    /// the source compatibility ADR 0002 promises - and marked
+    /// <see cref="ObsoleteAttribute" /> so a recompile says which name to move to.
+    /// </summary>
+    /// <remarks>
+    /// The obsoletion is the only part of these two constants that needs a test. Everything else
+    /// about them is already a build error: PublicAPI.Shipped.txt records a public const by
+    /// <b>value</b>, so changing either literal - or letting a forwarder drift from the constant
+    /// it forwards to - fails RS0016/RS0017, and deleting one fails RS0017 as a removed entry.
+    /// Both were written, mutation-tested, and dropped for turning the build red rather than
+    /// failing on a green one. <c>[Obsolete]</c> is not recorded in those files, so nothing but
+    /// this notices if it is removed and the rename quietly stops telling anyone.
+    /// </remarks>
+    [Theory]
+    [InlineData("DEFAULT_BEGIN_PROTECTED_ADDRESS")]
+    [InlineData("DEFAULT_END_PROTECTED_ADDRESS")]
+    public void ObsoleteProtectedRangeConstant_IsStillPublicAndMarkedObsolete(string name)
+    {
+        // Read by reflection rather than by name so that removing the field fails here as a
+        // missing member naming the promise, rather than as a compile error in this file.
+        var field = typeof(IntelHexParser).GetField(name, BindingFlags.Public | BindingFlags.Static);
+
+        Assert.True(field != null,
+            $"IntelHexParser.{name} was removed. It is a shipped public constant; dropping it "
+            + "breaks source compatibility (ADR 0002) and needs a major version.");
+        Assert.NotNull(field!.GetCustomAttribute<ObsoleteAttribute>());
     }
 
     #endregion

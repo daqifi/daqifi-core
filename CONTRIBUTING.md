@@ -17,6 +17,26 @@ All code changes go through a pull request:
 3. Open a PR against `main` describing the change and linking any related issue.
 4. CI must pass and the PR needs review before merge.
 
+### Code style is enforced by the build, not by review
+
+Two rules are wired in the root `.editorconfig` and made effective by
+`EnforceCodeStyleInBuild` in `Directory.Build.props`. Because warnings are errors, a violation
+fails the build rather than waiting for someone to notice it in review:
+
+- **IDE0161** — namespaces are file-scoped, everywhere in the repo.
+- **CA1707** — no underscores in the names of `Daqifi.Core`'s public members. Test method names
+  are unaffected: the rule is scoped to the library project, and only to its public surface.
+
+Both have an IDE code fix on the error. To convert a whole project at once:
+
+```
+dotnet format style <project-or-solution> --diagnostics IDE0161
+```
+
+Renaming a public member is an API change, so it also needs the `PublicAPI.*.txt` update below —
+and, if the old name shipped, an `[Obsolete]` forwarder rather than a removal. `IntelHexParser`'s
+two protected-address constants are the worked example.
+
 ### Awaits in `Daqifi.Core` must be `ConfigureAwait(false)`
 
 `Daqifi.Core` ships synchronous facades (`DaqifiDevice.Connect()`,
