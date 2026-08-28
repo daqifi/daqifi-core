@@ -817,11 +817,13 @@ device.StopStreaming();
 ```
 
 `IDataSample.Value` is already scaled (volts for analog, 0/1 for digital). `RawValue` carries the raw
-ADC count or bit when one exists (`null` for the USB pre-scaled float path), and `DeviceTimestamp`
-carries the raw device tick count alongside the rollover-adjusted host `Timestamp`. A stray frame that
-arrives outside a streaming session is still re-raised via `MessageReceived` but is not decoded into
-samples. `GetChannelsSnapshot()` is used above (rather than the live `Channels` property) because the
-channel list can be repopulated concurrently when a new device status message arrives.
+ADC count or bit when one exists — every supported firmware streams raw ADC counts, on USB and WiFi
+alike, so a streamed analog sample always carries one and its `Value` is the result of Core's own
+calibration formula. `DeviceTimestamp` carries the raw device tick count alongside the
+rollover-adjusted host `Timestamp`. A stray frame that arrives outside a streaming session is still
+re-raised via `MessageReceived` but is not decoded into samples. `GetChannelsSnapshot()` is used
+above (rather than the live `Channels` property) because the channel list can be repopulated
+concurrently when a new device status message arrives.
 
 #### Engineering units (`ChannelScaling`)
 

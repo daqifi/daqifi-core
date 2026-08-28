@@ -329,10 +329,15 @@ namespace Daqifi.Core.Tests.Device
         [Fact]
         public async Task InitializeAsync_WhenCancelledDuringWait_ThrowsOperationCanceledException()
         {
-            // Arrange — device never populates, so the wait loop is observing cancellation
+            // Arrange — device never populates, so the wait loop is observing cancellation.
+            // Cancellation is fired from the GetDeviceInfo request rather than from a timer:
+            // that request is the wait loop's first act, so this lands in the wait loop by
+            // construction. A timer would now be racing the init SCPI setup sequence, whose
+            // settle delays observe the token themselves (#667) and would cancel it first.
             var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false);
             device.Connect();
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+            using var cts = new CancellationTokenSource();
+            device.OnDeviceInfoRequested = () => cts.Cancel();
 
             // Act & Assert
             await Assert.ThrowsAsync<OperationCanceledException>(
@@ -341,6 +346,60 @@ namespace Daqifi.Core.Tests.Device
             // Caller-initiated cancellation is not a device fault — state must not flip to Error.
             Assert.NotEqual(DeviceState.Error, device.State);
             Assert.Equal(DeviceState.Connected, device.State);
+        }
+
+        /// <summary>
+        /// The init SCPI setup sequence, in the order it is sent. Cancelling as any one of these
+        /// goes out must stop the sequence there, leaving every later command unsent.
+        /// </summary>
+        public static TheoryData<string, string[]> InitScpiSequenceCancellationPoints => new()
+        {
+            { "SYSTem:ECHO", new[] { "StopStreamData", "SYSTem:POWer:STATe", "SYSTem:STReam:FORmat" } },
+            { "StopStreamData", new[] { "SYSTem:POWer:STATe", "SYSTem:STReam:FORmat" } },
+            { "SYSTem:POWer:STATe", new[] { "SYSTem:STReam:FORmat" } },
+        };
+
+        [Theory]
+        [MemberData(nameof(InitScpiSequenceCancellationPoints))]
+        public async Task InitializeAsync_WhenCancelledMidInitScpiSequence_SendsNoLaterCommand(
+            string cancelAfterCommand,
+            string[] commandsThatMustNotFollow)
+        {
+            // The point of #667 item 1: the init SCPI setup sequence used to space its commands
+            // with Thread.Sleep(100), which blocked a thread-pool thread and could not observe
+            // the token — a caller who cancelled during that window had to wait out the whole
+            // 300ms and every remaining command still went to the device. Awaiting the delays
+            // instead, and checking the token before each write, makes the sequence stop where it
+            // was cancelled. The token is checked before each write and not only by the delays:
+            // an awaited delay only observes cancellation while it is still pending, so
+            // cancellation landing between a delay completing and the next Send would otherwise
+            // still reach the device.
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+            using var cts = new CancellationTokenSource();
+
+            // Cancel as the named command goes out, i.e. while the settle delay that follows it is
+            // what the sequence is waiting on.
+            device.OnCommandSent = data =>
+            {
+                if (data.Contains(cancelAfterCommand))
+                {
+                    cts.Cancel();
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => device.InitializeAsync(TimeSpan.FromSeconds(5), cts.Token));
+
+            var sent = device.DirectSentMessages.Select(m => m.Data).ToList();
+            Assert.Contains(sent, d => d.Contains(cancelAfterCommand));
+            foreach (var command in commandsThatMustNotFollow)
+            {
+                Assert.DoesNotContain(sent, d => d.Contains(command));
+            }
+
+            // Caller-initiated cancellation is not a device fault.
+            Assert.NotEqual(DeviceState.Error, device.State);
         }
 
         [Fact]
@@ -480,6 +539,21 @@ namespace Daqifi.Core.Tests.Device
             /// </summary>
             public TimeSpan? AsyncPopulationDelay { get; set; }
 
+            /// <summary>
+            /// Invoked when a GetDeviceInfo (SYSInfoPB?) request is observed. That request is the
+            /// first thing <c>WaitForChannelsPopulatedAsync</c> sends, so a test that needs
+            /// cancellation to land inside the wait loop — rather than earlier, in the init SCPI
+            /// setup sequence, whose settle delays are now cancellable (#667) — can cancel here
+            /// and get that placement deterministically instead of racing a timer against it.
+            /// </summary>
+            public Action? OnDeviceInfoRequested { get; set; }
+
+            /// <summary>
+            /// Invoked with the text of every command the device sends, so a test can act at a
+            /// precise point in a command sequence rather than by waiting a guessed interval.
+            /// </summary>
+            public Action<string>? OnCommandSent { get; set; }
+
             public TestableDaqifiDevice(
                 string name,
                 IPAddress? ipAddress = null,
@@ -498,6 +572,7 @@ namespace Daqifi.Core.Tests.Device
                 if (message is IOutboundMessage<string> stringMessage)
                 {
                     DirectSentMessages.Add(stringMessage);
+                    OnCommandSent?.Invoke(stringMessage.Data);
 
                     // Simulate the device responding to GetDeviceInfo (SYSInfoPB?) with a
                     // protobuf status message that populates channels. The real flow does this
@@ -505,6 +580,7 @@ namespace Daqifi.Core.Tests.Device
                     if (stringMessage.Data.Contains("SYSInfoPB"))
                     {
                         DeviceInfoRequestCount++;
+                        OnDeviceInfoRequested?.Invoke();
                         if (PopulateChannelsOnDeviceInfo)
                         {
                             if (AsyncPopulationDelay is { } delay)
@@ -532,7 +608,7 @@ namespace Daqifi.Core.Tests.Device
                 }
             }
 
-            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
@@ -540,6 +616,31 @@ namespace Daqifi.Core.Tests.Device
                 Func<CancellationToken, Task>? prepareAsync = null,
                 Func<Task>? finalizeAsync = null,
                 bool keepBlankLines = false)
+            {
+                return RunTextExchangeAsync(
+                    _ => { setupAction(); return Task.CompletedTask; },
+                    cancellationToken,
+                    prepareAsync,
+                    finalizeAsync);
+            }
+
+            // The init SCPI setup sequence uses the async overload so its settle delays do not
+            // block a thread-pool thread (#667). Both overloads funnel into the same body here,
+            // mirroring the production class, so the double keeps intercepting either one.
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
+            }
+
+            private async Task<IReadOnlyList<string>> RunTextExchangeAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                CancellationToken cancellationToken,
+                Func<CancellationToken, Task>? prepareAsync,
+                Func<Task>? finalizeAsync)
             {
                 try
                 {
@@ -551,7 +652,7 @@ namespace Daqifi.Core.Tests.Device
                     }
 
                     // Run the setup action so that Send() calls inside it are captured
-                    setupAction();
+                    await setupActionAsync(cancellationToken).ConfigureAwait(false);
                     TextCommandAttemptCount++;
 
                     if (_failFirstAttempt && TextCommandAttemptCount == 1)
@@ -648,7 +749,7 @@ namespace Daqifi.Core.Tests.Device
                 return Task.FromResult<Daqifi.Core.Device.Capabilities.CapabilityDocument?>(null);
             }
 
-            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
@@ -657,6 +758,29 @@ namespace Daqifi.Core.Tests.Device
                 Func<Task>? finalizeAsync = null,
                 bool keepBlankLines = false)
             {
+                return RunTextExchangeAsync(
+                    _ => { setupAction(); return Task.CompletedTask; },
+                    cancellationToken,
+                    prepareAsync,
+                    finalizeAsync);
+            }
+
+            // The init SCPI setup sequence uses the async overload (#667); intercept both.
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
+            }
+
+            private async Task<IReadOnlyList<string>> RunTextExchangeAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                CancellationToken cancellationToken,
+                Func<CancellationToken, Task>? prepareAsync,
+                Func<Task>? finalizeAsync)
+            {
                 try
                 {
                     if (prepareAsync != null)
@@ -664,7 +788,7 @@ namespace Daqifi.Core.Tests.Device
                         await prepareAsync(cancellationToken).ConfigureAwait(false);
                     }
 
-                    setupAction();
+                    await setupActionAsync(cancellationToken).ConfigureAwait(false);
                     return Array.Empty<string>();
                 }
                 finally
@@ -758,7 +882,7 @@ namespace Daqifi.Core.Tests.Device
                 return Task.CompletedTask;
             }
 
-            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
@@ -767,6 +891,31 @@ namespace Daqifi.Core.Tests.Device
                 Func<Task>? finalizeAsync = null,
                 bool keepBlankLines = false)
             {
+                return RunTextExchangeAsync(
+                    _ => { setupAction(); return Task.CompletedTask; },
+                    cancellationToken,
+                    prepareAsync,
+                    finalizeAsync);
+            }
+
+            // The init SCPI setup sequence uses the async overload (#667); intercept both. This
+            // double's whole purpose is to park the first exchange, so missing one of the two
+            // overloads would silently stop it parking anything.
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
+            }
+
+            private async Task<IReadOnlyList<string>> RunTextExchangeAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                CancellationToken cancellationToken,
+                Func<CancellationToken, Task>? prepareAsync,
+                Func<Task>? finalizeAsync)
+            {
                 try
                 {
                     if (prepareAsync != null)
@@ -774,7 +923,7 @@ namespace Daqifi.Core.Tests.Device
                         await prepareAsync(cancellationToken).ConfigureAwait(false);
                     }
 
-                    setupAction();
+                    await setupActionAsync(cancellationToken).ConfigureAwait(false);
 
                     // Park only the very first exchange — the one belonging to the initialization
                     // the test starts first.
@@ -848,7 +997,7 @@ namespace Daqifi.Core.Tests.Device
                 }
             }
 
-            protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
                 Action setupAction,
                 int responseTimeoutMs = 1000,
                 int completionTimeoutMs = 250,
@@ -856,6 +1005,30 @@ namespace Daqifi.Core.Tests.Device
                 Func<CancellationToken, Task>? prepareAsync = null,
                 Func<Task>? finalizeAsync = null,
                 bool keepBlankLines = false)
+            {
+                return RunTextExchangeAsync(
+                    _ => { setupAction(); return Task.CompletedTask; },
+                    cancellationToken,
+                    prepareAsync,
+                    finalizeAsync);
+            }
+
+            // The init SCPI setup sequence uses the async overload (#667); intercept both, so the
+            // MutateDuringInitialization hook and the USB-step classification below still run.
+            protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                int responseTimeoutMs = 1000,
+                int completionTimeoutMs = 250,
+                CancellationToken cancellationToken = default)
+            {
+                return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
+            }
+
+            private async Task<IReadOnlyList<string>> RunTextExchangeAsync(
+                Func<CancellationToken, Task> setupActionAsync,
+                CancellationToken cancellationToken,
+                Func<CancellationToken, Task>? prepareAsync,
+                Func<Task>? finalizeAsync)
             {
                 try
                 {
@@ -873,7 +1046,7 @@ namespace Daqifi.Core.Tests.Device
                     }
 
                     var before = _sent.Count;
-                    setupAction();
+                    await setupActionAsync(cancellationToken).ConfigureAwait(false);
                     var sentThisCall = _sent.Skip(before).ToList();
                     var isUsbStep = sentThisCall.Any(d => d.Contains("STReam:INTerface"));
 

@@ -98,6 +98,40 @@ public class DeviceDiagnosticsOperationsTests
     }
 
     [Fact]
+    public async Task GetSystemLogAsync_CorruptedByStreamData_KeepsRealEntriesAndDropsTheNoise()
+    {
+        // Issue #682: mid-stream the firmware's protobuf frames split the reply into hundreds of
+        // mangled lines. The log read is destructive, so unlike the numeric queries this must NOT
+        // throw the survivors away -- it drops the mangled lines one by one instead.
+        var host = new FakeHost();
+        host.EnqueueResponse(
+            "\uFFFD\u0008\u0001\uFFFD\u0002",
+            "first entry",
+            "\u0000\u0012\u0004\uFFFD",
+            "second entry",
+            "");
+        var ops = new DeviceDiagnosticsOperations(host);
+
+        var entries = await ops.GetSystemLogAsync();
+
+        Assert.Equal(new[] { "first entry", "second entry" }, GetMessages(entries));
+    }
+
+    [Fact]
+    public async Task GetSystemLogAsync_EntirelyStreamNoise_ReturnsEmptyRatherThanThrowing()
+    {
+        // Documents the deliberate boundary of the #682 filter: an all-noise response is still a
+        // response, and the numeric queries' DeviceDiagnosticsCorruptedResponseException is
+        // deliberately not extended here (the read already cleared the device's buffer, so there
+        // is nothing to retry). On hardware real entries always survived alongside the noise.
+        var host = new FakeHost();
+        host.EnqueueResponse("\uFFFD\u0008\u0001", "\u0000\u0012\uFFFD", "");
+        var ops = new DeviceDiagnosticsOperations(host);
+
+        Assert.Empty(await ops.GetSystemLogAsync());
+    }
+
+    [Fact]
     public async Task GetSystemLogAsync_NotConnected_ThrowsAndSendsNothing()
     {
         var host = new FakeHost { IsConnected = false };
