@@ -43,22 +43,31 @@ public static class FakeClockPump
     /// <paramref name="until"/> completes, and reports how much device time that took.
     /// </summary>
     /// <remarks>
-    /// Returns rather than throws when the real-time bound is hit: the caller knows what the
-    /// failure means for its own scenario and can say so, which reads better than a bare timeout
-    /// from in here. Every caller asserts on <paramref name="until"/> afterwards.
+    /// <para>
+    /// Fails the test if the bound is reached with <paramref name="until"/> still outstanding,
+    /// rather than returning quietly. Every caller here is pumping towards work it expects to
+    /// finish, so a quiet return would hand back a device-time total that means nothing and leave
+    /// the caller to notice — which is a footgun the next caller would have to remember to
+    /// disarm.
+    /// </para>
     /// </remarks>
     /// <param name="clock">The clock to advance.</param>
     /// <param name="until">The work to wait for.</param>
     /// <param name="slice">How far to jump per step.</param>
+    /// <param name="because">
+    /// What the caller was waiting for, in its own terms, for the failure message. Falls back to a
+    /// generic one.
+    /// </param>
     /// <param name="realTimeBound">
-    /// Real time after which to stop stepping, whatever <paramref name="until"/> is doing.
-    /// Defaults to <see cref="DefaultRealTimeBound"/>.
+    /// Real time after which to give up, whatever <paramref name="until"/> is doing. Defaults to
+    /// <see cref="DefaultRealTimeBound"/>.
     /// </param>
     /// <returns>The total device time advanced.</returns>
     public static async Task<TimeSpan> UntilAsync(
         FakeTimeProvider clock,
         Task until,
         TimeSpan slice,
+        string? because = null,
         TimeSpan? realTimeBound = null)
     {
         ArgumentNullException.ThrowIfNull(clock);
@@ -77,6 +86,11 @@ public static class FakeClockPump
             // the thread pool a chance to run the continuations the Advance above just released.
             await Task.Delay(1).ConfigureAwait(false);
         }
+
+        Assert.True(
+            until.IsCompleted,
+            because ?? $"the work never completed after {advanced.TotalSeconds:F0}s of stepped "
+                + $"device time and {limit.TotalSeconds:F0}s of real time.");
 
         return advanced;
     }

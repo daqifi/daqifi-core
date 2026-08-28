@@ -51,9 +51,13 @@ public class OperationSerializerDrainBarrierTests
 
         var drain = serializer.DrainOutboundQueueAsync(CancellationToken.None);
 
-        var advanced = await FakeClockPump.UntilAsync(clock, drain, TimeSpan.FromMilliseconds(10), RealTimeBound);
+        var advanced = await FakeClockPump.UntilAsync(
+            clock,
+            drain,
+            TimeSpan.FromMilliseconds(10),
+            "the barrier never gave up on a producer that never went idle.",
+            RealTimeBound);
 
-        Assert.True(drain.IsCompleted, "the barrier never gave up on a producer that never went idle.");
         await drain;
 
         // It waited out the budget rather than giving up on the first poll...
@@ -110,7 +114,13 @@ public class OperationSerializerDrainBarrierTests
 
         producer.IsIdle = true;
 
-        var advanced = await FakeClockPump.UntilAsync(clock, drain, TimeSpan.FromMilliseconds(10), RealTimeBound);
+        var advanced = await FakeClockPump.UntilAsync(
+            clock,
+            drain,
+            TimeSpan.FromMilliseconds(10),
+            "the barrier never returned after the producer went idle.",
+            RealTimeBound);
+
         await drain;
 
         Assert.True(

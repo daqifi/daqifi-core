@@ -1292,13 +1292,23 @@ public class SdCardOperationsCollaboratorTests
             // than one jump, because jumping the whole budget here would abandon the transfer
             // before it ever reached the wire — which is precisely the failure the two-second
             // test above had to buy headroom against.
-            await FakeClockPump.UntilAsync(clock, entered.Task, TimeSpan.FromMilliseconds(100), ParkedTestBudget);
+            await FakeClockPump.UntilAsync(
+                clock,
+                entered.Task,
+                TimeSpan.FromMilliseconds(100),
+                "the transfer never reached its parked read, so it never got as far as the wire.",
+                ParkedTestBudget);
 
             Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
 
             // Phase two: the transfer is in flight and ignoring its token. Step past the hard
             // deadline — thirty minutes and five seconds of device time — in one jump.
-            await FakeClockPump.UntilAsync(clock, download, TimeSpan.FromMinutes(31), ParkedTestBudget);
+            await FakeClockPump.UntilAsync(
+                clock,
+                download,
+                TimeSpan.FromMinutes(31),
+                "the hard deadline never fired, so the transfer was never abandoned.",
+                ParkedTestBudget);
 
             await Assert.ThrowsAsync<TimeoutException>(() => download.WaitAsync(guard.Token));
 

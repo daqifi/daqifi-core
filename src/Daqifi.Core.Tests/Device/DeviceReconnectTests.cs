@@ -1295,7 +1295,12 @@ public class DeviceReconnectTests
         transport.FailNextConnects(int.MaxValue);
         transport.SimulateDrop();
 
-        await FakeClockPump.UntilAsync(clock, failed, TimeSpan.FromSeconds(30), GateTimeout);
+        await FakeClockPump.UntilAsync(
+            clock,
+            failed,
+            TimeSpan.FromSeconds(30),
+            "the reconnect loop never reached its give-up report.",
+            GateTimeout);
 
         var result = await failed;
 
@@ -1333,7 +1338,12 @@ public class DeviceReconnectTests
         transport.SimulateDrop();
 
         var wallClock = Stopwatch.StartNew();
-        await FakeClockPump.UntilAsync(clock, reconnected, TimeSpan.FromSeconds(30), GateTimeout);
+        await FakeClockPump.UntilAsync(
+            clock,
+            reconnected,
+            TimeSpan.FromSeconds(30),
+            "the reconnect loop never got back up.",
+            GateTimeout);
         var result = await reconnected;
         wallClock.Stop();
 

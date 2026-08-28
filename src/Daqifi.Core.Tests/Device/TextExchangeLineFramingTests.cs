@@ -171,9 +171,11 @@ public class TextExchangeLineFramingTests
         // when it reaches it, so a slice that lands before the registration just moves the clock
         // on — which can only make the total larger, never smaller. An exchange that gave up early
         // therefore still shows up as a total short of the timeout.
-        var advanced = await FakeClockPump.UntilAsync(clock, call, TimeSpan.FromMilliseconds(250));
-
-        Assert.True(call.IsCompleted, "the exchange never finished waiting out its response window.");
+        var advanced = await FakeClockPump.UntilAsync(
+            clock,
+            call,
+            TimeSpan.FromMilliseconds(250),
+            "the exchange never finished waiting out its response window.");
 
         var lines = await call;
         Assert.Empty(lines);
