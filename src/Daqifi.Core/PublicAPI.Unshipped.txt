@@ -1,0 +1,52 @@
+#nullable enable
+Daqifi.Core.Logging.Export.ChannelDescriptorComparer
+Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Compare(Daqifi.Core.Logging.Export.ChannelDescriptor? x, Daqifi.Core.Logging.Export.ChannelDescriptor? y) -> int
+Daqifi.Core.Logging.Export.ChannelNameComparer
+Daqifi.Core.Logging.Export.ChannelNameComparer.Compare(string? x, string? y) -> int
+Daqifi.Core.Logging.Export.LiveCsvRecordingExtensions
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.Deconstruct(out long SampleCount, out long RowCount, out long DroppedSampleCount, out long UnmappedSampleCount, out long NonMonotonicSampleCount) -> void
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.DroppedSampleCount.get -> long
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.DroppedSampleCount.init -> void
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.Equals(Daqifi.Core.Logging.Export.LiveCsvRecordingResult other) -> bool
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.LiveCsvRecordingResult() -> void
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.LiveCsvRecordingResult(long SampleCount, long RowCount, long DroppedSampleCount, long UnmappedSampleCount, long NonMonotonicSampleCount) -> void
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.NonMonotonicSampleCount.get -> long
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.NonMonotonicSampleCount.init -> void
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.RowCount.get -> long
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.RowCount.init -> void
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.SampleCount.get -> long
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.SampleCount.init -> void
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.UnmappedSampleCount.get -> long
+Daqifi.Core.Logging.Export.LiveCsvRecordingResult.UnmappedSampleCount.init -> void
+Daqifi.Core.Logging.Export.LiveSampleSource
+Daqifi.Core.Logging.Export.LiveSampleSource.GetChannels() -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Logging.Export.ChannelDescriptor!>!
+Daqifi.Core.Logging.Export.LiveSampleSource.GetSampleCountAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<int>
+Daqifi.Core.Logging.Export.LiveSampleSource.LiveSampleSource(System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Channel.LiveSample!>! samples, System.Collections.Generic.IEnumerable<Daqifi.Core.Channel.IChannel!>! channels, string! deviceName, string? deviceSerialNumber) -> void
+Daqifi.Core.Logging.Export.LiveSampleSource.NonMonotonicSampleCount.get -> long
+Daqifi.Core.Logging.Export.LiveSampleSource.RowCount.get -> long
+Daqifi.Core.Logging.Export.LiveSampleSource.SampleCount.get -> long
+Daqifi.Core.Logging.Export.LiveSampleSource.StreamSamples(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Logging.Export.SampleRow!>!
+Daqifi.Core.Logging.Export.LiveSampleSource.UnmappedSampleCount.get -> long
+Daqifi.Core.Logging.Export.SdCardLogSampleSource
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.AnalogChannelCount.get -> int
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.DroppedAnalogColumns.get -> int
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.GetChannels() -> System.Collections.Generic.IReadOnlyList<Daqifi.Core.Logging.Export.ChannelDescriptor!>!
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.GetSampleCountAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<int>
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.NonMonotonicEntryCount.get -> long
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.RowCount.get -> long
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.SampleCount.get -> long
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.SdCardLogSampleSource(System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Device.SdCard.SdCardLogEntry!>! samples, string? deviceSerialNumber, int analogChannelCount, string? deviceName = null) -> void
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.StreamSamples(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Logging.Export.SampleRow!>!
+Daqifi.Core.Logging.Export.SdCardLogSessionExtensions
+const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DefaultDeviceName = "Daqifi" -> string!
+const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DigitalChannelName = "DIO" -> string!
+override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.GetHashCode() -> int
+static Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Default.get -> Daqifi.Core.Logging.Export.ChannelDescriptorComparer!
+static Daqifi.Core.Logging.Export.ChannelNameComparer.Instance.get -> Daqifi.Core.Logging.Export.ChannelNameComparer!
+static Daqifi.Core.Logging.Export.LiveCsvRecordingExtensions.RecordLiveSamplesToCsvAsync(this Daqifi.Core.Device.IStreamingDevice! device, System.IO.TextWriter! writer, Daqifi.Core.Logging.Export.CsvExportOptions? options = null, System.TimeSpan? duration = null, int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Logging.Export.LiveCsvRecordingResult>!
+static Daqifi.Core.Logging.Export.LiveCsvRecordingResult.operator !=(Daqifi.Core.Logging.Export.LiveCsvRecordingResult left, Daqifi.Core.Logging.Export.LiveCsvRecordingResult right) -> bool
+static Daqifi.Core.Logging.Export.LiveCsvRecordingResult.operator ==(Daqifi.Core.Logging.Export.LiveCsvRecordingResult left, Daqifi.Core.Logging.Export.LiveCsvRecordingResult right) -> bool
+static Daqifi.Core.Logging.Export.SdCardLogSessionExtensions.AsSampleSource(this Daqifi.Core.Device.SdCard.SdCardLogSession! session, Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration? fallbackConfiguration = null, string? deviceName = null) -> Daqifi.Core.Logging.Export.SdCardLogSampleSource!
+~override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.Equals(object obj) -> bool
+~override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.ToString() -> string
