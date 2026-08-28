@@ -116,7 +116,7 @@ public class DaqifiStreamingDeviceDecodeTests
     #region Analog decoding
 
     [Fact]
-    public void Decode_UsbFloatPath_UsesFloatsDirectlyWithNoRawValue()
+    public void Decode_PreScaledFloatFrame_UsesFloatsDirectlyWithNoRawValue()
     {
         // Arrange: 3 analog channels, enable AI0 and AI2 (leaving a gap at AI1).
         var device = CreateStreamingDevice(analogCount: 3);
@@ -148,7 +148,7 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_WifiRawPath_AppliesChannelCalibrationAndPreservesRawCount()
+    public void Decode_RawCountFrame_AppliesChannelCalibrationAndPreservesRawCount()
     {
         // Arrange: give the channels a non-identity port range so scaling is observable.
         var device = CreateStreamingDevice(analogCount: 2, portRange: 10.0f, resolution: 65535);
@@ -304,6 +304,38 @@ public class DaqifiStreamingDeviceDecodeTests
         Assert.NotNull(dio0.ActiveSample);
         Assert.Equal(1.0, dio0.ActiveSample!.Value);
         Assert.Null(dio1.ActiveSample); // output channel skipped
+    }
+
+    [Fact]
+    public void Decode_Digital_SkipsOutputDirectionChannels_TheDeviceItselfReported()
+    {
+        // Regression for #685. A pin left as an output by a previous session stays an output on
+        // the board across a reconnect, and nothing in Core's init sequence resets it. Before the
+        // fix Core hardcoded every freshly populated channel to Input, so the guard above never
+        // fired on a reconnect and the pin's own driven level was delivered as an input reading.
+        // Nobody calls SetDioDirection here — the direction comes only from the status frame.
+        var device = new DecodableStreamingDevice("TestDevice");
+        device.Connect();
+
+        var status = new DaqifiOutMessage { DigitalPortNum = 2 };
+        status.DigitalPortDir = ByteString.CopyFrom(new byte[] { 0b1111_1101 }); // TRIS: DIO1 is an output
+        device.PopulateChannelsFromStatus(status);
+
+        var dio0 = DigitalChannel(device, 0);
+        var dio1 = DigitalChannel(device, 1);
+        dio0.IsEnabled = true;
+        dio1.IsEnabled = true;
+        device.StartStreaming();
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
+        frame.DigitalData = ByteString.CopyFrom(new byte[] { 0b11 });
+
+        device.InvokeStreamMessage(frame);
+
+        Assert.Equal(ChannelDirection.Output, dio1.Direction);
+        Assert.NotNull(dio0.ActiveSample);
+        Assert.Equal(1.0, dio0.ActiveSample!.Value);
+        Assert.Null(dio1.ActiveSample);
     }
 
     [Fact]

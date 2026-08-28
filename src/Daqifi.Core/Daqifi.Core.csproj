@@ -26,7 +26,6 @@
          IOKit DllImports compile on every target and only execute on macOS. -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.400" PrivateAssets="All" />
     <PackageReference Include="System.IO.Ports" Version="10.0.11" />
     <!-- Public API surface tracking (issue #636). ADR 0002 makes source
          compatibility a promise; RS0016/RS0017 turn a change to the public

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- ImplicitUsings, Nullable and TreatWarningsAsErrors come from the repo-root
+         Directory.Build.props. Nothing centralized may be restated here; see
+         Daqifi.Core.Tests/Build/DirectoryBuildPropsTests.cs. -->
+
+    <!-- Single-target on purpose, unlike the other three projects. BenchmarkDotNet's
+         toolchain builds and launches the host project itself, and `dotnet run` on a
+         multi-targeted project refuses to pick a framework, so the documented
+         `dotnet run -c Release` would need a -f every time. Measuring the library on
+         net9.0 as well is a job matrix, not a second TargetFramework: add
+         [SimpleJob(RuntimeMoniker.Net90)] to a class and BenchmarkDotNet runs both
+         runtimes from this one host. See the README. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+
+    <!-- Out of the pack path: this is a measuring instrument, not a shipped asset.
+         It also keeps the repo-root Directory.Build.targets package metadata off it. -->
+    <IsPackable>false</IsPackable>
+
+    <!-- Out of the test path. CI runs `dotnet test Daqifi.Core.sln`, which walks every
+         project in the solution; without this the benchmark project is asked for tests
+         it does not have. Benchmark timings on a shared runner are far too noisy to
+         gate a PR on (issue #640 says so explicitly), so this project is only ever run
+         on demand — see .github/workflows/benchmarks.yml. -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+    <ProjectReference Include="..\Daqifi.Core\Daqifi.Core.csproj" />
+  </ItemGroup>
+
+</Project>

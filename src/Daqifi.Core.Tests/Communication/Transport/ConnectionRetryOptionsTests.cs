@@ -161,4 +161,171 @@ public class ConnectionRetryOptionsTests
         Assert.Equal(TimeSpan.FromSeconds(1), delay2); // 1 * 1.5^0 = 1
         Assert.Equal(TimeSpan.FromMilliseconds(1500), delay3); // 1 * 1.5^1 = 1.5
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(int.MinValue)]
+    public void MaxAttempts_BelowOne_ShouldThrowNamingTheProperty(int value)
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxAttempts = value);
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.MaxAttempts), ex.ParamName);
+        Assert.Equal(3, options.MaxAttempts); // unchanged
+    }
+
+    [Fact]
+    public void InitialDelay_Negative_ShouldThrowNamingTheProperty()
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.InitialDelay = TimeSpan.FromMilliseconds(-1));
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.InitialDelay), ex.ParamName);
+    }
+
+    [Fact]
+    public void InitialDelay_Zero_ShouldBeAccepted()
+    {
+        // Arrange & Act — zero means "retry immediately", which the executor supports.
+        var options = new ConnectionRetryOptions { InitialDelay = TimeSpan.Zero };
+
+        // Assert
+        Assert.Equal(TimeSpan.Zero, options.InitialDelay);
+        Assert.Equal(TimeSpan.Zero, options.CalculateDelay(2));
+    }
+
+    [Fact]
+    public void MaxDelay_Negative_ShouldThrowNamingTheProperty()
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.MaxDelay = TimeSpan.FromSeconds(-1));
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.MaxDelay), ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(0.5)]
+    [InlineData(-2.0)]
+    [InlineData(double.NaN)]
+    public void BackoffMultiplier_BelowOne_ShouldThrowNamingTheProperty(double value)
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => options.BackoffMultiplier = value);
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.BackoffMultiplier), ex.ParamName);
+    }
+
+    [Fact]
+    public void ConnectionTimeout_Zero_ShouldThrowNamingTheProperty()
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act — the bench repro: the platform used to answer this with an
+        // ArgumentOutOfRangeException naming SerialPort.WriteTimeout, after the full backoff.
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.ConnectionTimeout = TimeSpan.Zero);
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
+        Assert.Contains("at least 1 millisecond", ex.Message);
+        Assert.Equal(TimeSpan.FromSeconds(5), options.ConnectionTimeout); // unchanged
+    }
+
+    [Fact]
+    public void ConnectionTimeout_Negative_ShouldThrowNamingTheProperty()
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.ConnectionTimeout = TimeSpan.FromSeconds(-1));
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
+    }
+
+    [Fact]
+    public void ConnectionTimeout_SubMillisecond_ShouldThrowNamingTheProperty()
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act — positive, but both transports narrow the timeout to a millisecond int, where a
+        // single tick truncates to 0 and lands back in the platform error this guard exists for.
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.ConnectionTimeout = TimeSpan.FromTicks(1));
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
+    }
+
+    [Fact]
+    public void ConnectionTimeout_AtOneMillisecond_ShouldBeAccepted()
+    {
+        // Arrange & Act — the smallest value that survives the narrowing intact.
+        var options = new ConnectionRetryOptions { ConnectionTimeout = TimeSpan.FromMilliseconds(1) };
+
+        // Assert
+        Assert.Equal(1, (int)options.ConnectionTimeout.TotalMilliseconds);
+    }
+
+    [Fact]
+    public void ConnectionTimeout_BeyondIntMaxMilliseconds_ShouldThrowNamingTheProperty()
+    {
+        // Arrange
+        var options = new ConnectionRetryOptions();
+
+        // Act — both transports narrow this to a millisecond int, so a longer span would
+        // wrap round to a negative timeout and be rejected by the platform instead.
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.ConnectionTimeout = TimeSpan.FromMilliseconds((double)int.MaxValue + 1));
+
+        // Assert
+        Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
+    }
+
+    [Fact]
+    public void ConnectionTimeout_AtIntMaxMilliseconds_ShouldBeAccepted()
+    {
+        // Arrange & Act
+        var options = new ConnectionRetryOptions
+        {
+            ConnectionTimeout = TimeSpan.FromMilliseconds(int.MaxValue)
+        };
+
+        // Assert
+        Assert.Equal(int.MaxValue, (int)options.ConnectionTimeout.TotalMilliseconds);
+    }
+
+    [Fact]
+    public void PresetPolicies_ShouldSatisfyTheirOwnGuards()
+    {
+        // Act & Assert — the presets go through the same setters, so this would throw
+        // at construction if a guard and a preset ever disagreed.
+        Assert.True(ConnectionRetryOptions.NoRetry.ConnectionTimeout > TimeSpan.Zero);
+        Assert.True(ConnectionRetryOptions.Fast.ConnectionTimeout > TimeSpan.Zero);
+        Assert.True(ConnectionRetryOptions.Resilient.ConnectionTimeout > TimeSpan.Zero);
+    }
 }

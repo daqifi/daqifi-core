@@ -58,7 +58,19 @@ public sealed class CapabilityChannel
     /// </summary>
     public bool SupportsPwm { get; init; }
 
-    /// <summary>Gets the lowest PWM frequency the pin accepts, or <c>null</c> when not stated.</summary>
+    /// <summary>
+    /// Gets the lowest PWM frequency the pin advertises, or <c>null</c> when not stated.
+    /// </summary>
+    /// <remarks>
+    /// Do not use this as a floor. The device under-reports it: every supported firmware
+    /// advertises 1 Hz here, but below
+    /// <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> (6 Hz) the firmware's 16-bit
+    /// period register silently wraps and the output runs in the kilohertz range, so a commanded
+    /// 1 Hz is not what the pin produces. <see cref="DaqifiStreamingDevice.SetPwmFrequency"/>
+    /// rejects anything below that constant, which is the value to use as the real floor. This is
+    /// the one field on the capability document known to be wrong rather than merely absent —
+    /// <see cref="PwmMaximumFrequencyHz"/> and the set of PWM-capable pins both match the hardware.
+    /// </remarks>
     public int? PwmMinimumFrequencyHz { get; init; }
 
     /// <summary>Gets the highest PWM frequency the pin accepts, or <c>null</c> when not stated.</summary>

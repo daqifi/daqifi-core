@@ -61,157 +61,228 @@ public class ProtobufMessageParser : IMessageParser<DaqifiOutMessage>
         var messages = new List<IInboundMessage<DaqifiOutMessage>>();
         consumedBytes = 0;
 
-        if (data.Length == 0)
-            return messages;
+        var offset = 0;
 
-        var currentIndex = 0;
-
-        while (currentIndex < data.Length)
+        while (true)
         {
-            var remainingData = data.Slice(currentIndex);
-
-            if (!TryReadLengthPrefix(remainingData, out var messageLength, out var prefixBytes, out var prefixIsMalformed))
+            var step = StepFrame(data, offset, anyFrameRead: messages.Count > 0, out var frame, out var nextOffset);
+            if (step == ProtobufFrameStep.EndOfBuffer)
             {
-                if (prefixIsMalformed)
-                {
-                    // Skip this byte and resync; advancing by 1 (not by prefixBytes) is
-                    // important because the malformed run may overlap a valid frame that
-                    // starts mid-way through it.
-                    currentIndex++;
-                    consumedBytes = currentIndex;
-                    continue;
-                }
-
-                break; // Not enough data for length prefix yet — wait for the next read.
-            }
-
-            if (messageLength <= 0 || messageLength > MaxMessageSizeBytes)
-            {
-                currentIndex++;
-                consumedBytes = currentIndex;
-                continue;
-            }
-
-            if (remainingData.Length < prefixBytes + messageLength)
-            {
-                // Not enough buffered data for this frame yet. For a real partial frame
-                // this just means "wait a bit" — streaming messages are well under 1 KB,
-                // so the next read or two will complete it. But a plausible-looking yet
-                // bogus prefix can claim thousands of bytes, and waiting for that much
-                // never-arriving data is exactly the stall that masqueraded as "parser
-                // hung": device LED blinking, buffer growing, zero messages parsed.
-                //
-                // Two recovery gates protect the wait path from garbage while leaving
-                // real partial frames intact for the caller to complete:
-                //
-                //  1. Gap gate: a declared length more than MaxPartialFrameGapBytes
-                //     beyond the *payload* bytes currently buffered (remainingData
-                //     minus the prefix we already consumed when reading it) is almost
-                //     certainly garbage. Real partials for streaming frames leave
-                //     gaps measured in hundreds of bytes, not kilobytes.
-                //
-                //  2. Field-tag gate: when at least one body byte is available, we
-                //     can peek at it. The first body byte of a real DaqifiOutMessage
-                //     is a protobuf field tag — field_number >= 1 and wire_type in
-                //     {0,1,2,5}. A byte that fails both conditions (e.g., wire_type
-                //     of deprecated SGROUP/EGROUP or field_number == 0) is not a
-                //     real frame start; treat it as garbage. A multi-byte tag
-                //     (continuation bit set) can't be fully validated from one byte,
-                //     so we let it through and wait.
-                //
-                // Neither gate advances into a real frame's prefix or payload: only
-                // into bytes already identified as implausible. Callers that trim
-                // consumedBytes from their buffer never lose recoverable data.
-                var availableBodyBytes = remainingData.Length - prefixBytes;
-                var missingPayload = messageLength - availableBodyBytes;
-                var firstBodyByteIsGarbage = availableBodyBytes > 0
-                    && !IsPlausibleFieldTagByte(remainingData[prefixBytes]);
-
-                // Gap gate ONLY applies in the pure-prefix-no-body case
-                // (no body bytes arrived). Once any body byte is buffered,
-                // the field-tag gate above provides positive evidence that
-                // the prefix really is a frame start; a large declared
-                // length at that point is just a multi-chunk read of a
-                // legitimate frame (e.g. a multi-KB initial-status frame
-                // on a transport that returns smaller reads). Including
-                // availableBodyBytes == 1 here would corrupt real frames
-                // whose first body byte arrives alone — a single-byte
-                // mistaken advance is unrecoverable because callers trim
-                // consumedBytes from their buffer.
-                var gapIsSuspicious = availableBodyBytes == 0
-                    && missingPayload > MaxPartialFrameGapBytes;
-
-                if (gapIsSuspicious || firstBodyByteIsGarbage)
-                {
-                    currentIndex++;
-                    consumedBytes = currentIndex;
-                    continue;
-                }
-
-                // The declared frame isn't fully buffered. Normally that means a
-                // genuine frame split across reads — wait for the rest. But the
-                // same condition is reached by leading non-protobuf noise whose
-                // bytes happen to varint-decode to a plausible length with a
-                // plausible first body byte. The motivating case (issue #268): an
-                // echo-on device prefixes its SYSInfoPB? reply with the echoed
-                // ASCII command ("SYSTem:SYSInfoPB?\r\n") and trails it with a
-                // "DAQIFI>" prompt. The leading 'S' (0x53) decodes as length 83
-                // and the next byte 'Y' looks like a field tag, so a plain wait
-                // would block forever on 83 bytes that never arrive while the real
-                // frame sitting further along is never parsed — the device is
-                // silently missed.
-                //
-                // Tell the two apart structurally: a genuine partial frame runs
-                // past the end of the buffer, so nothing parseable can follow it;
-                // noise, by contrast, is followed by the real, complete frame. Scan
-                // ahead for the next fully-buffered, parseable frame. If one exists,
-                // the current position is noise — skip straight to it (everything
-                // before the first parseable frame is, by definition, not a frame
-                // start and holds no recoverable partial, since a partial would
-                // extend past the buffer end and thus past that frame). If none
-                // exists, this really is a partial: preserve it and wait.
-                //
-                // Only do this when no frame has been parsed yet in this call. Once
-                // we've emitted at least one frame from this buffer, a trailing
-                // under-buffered frame is overwhelmingly a genuine split frame to
-                // wait for (the normal streaming case) — not leading noise — so we
-                // skip the linear scan and keep that hot path cheap. Stray bytes
-                // appearing mid-stream are still recovered: the caller trims the
-                // preceding frame and those bytes lead the next call, where no frame
-                // has been parsed yet and the scan runs. Discovery always reaches
-                // here with zero frames parsed, so it recovers on the first reply.
-                if (messages.Count == 0)
-                {
-                    var nextFrameIndex = FindNextParseableFrameStart(data, currentIndex + 1);
-                    if (nextFrameIndex >= 0)
-                    {
-                        currentIndex = nextFrameIndex;
-                        consumedBytes = currentIndex;
-                        continue;
-                    }
-                }
-
+                // Either the buffer is exhausted or what remains is a partial frame the
+                // caller should complete on its next read. Leave consumedBytes where the
+                // last advancing step put it so those bytes are preserved.
                 break;
             }
 
-            try
+            offset = nextOffset;
+            consumedBytes = offset;
+
+            if (step == ProtobufFrameStep.Frame)
             {
-                // ParseFrom(ReadOnlySpan) avoids the per-attempt byte[] copy, which matters
-                // because byte-by-byte resync over a garbage buffer can call this many times
-                // before finding (or failing to find) a valid frame.
-                var message = DaqifiOutMessage.Parser.ParseFrom(remainingData.Slice(prefixBytes, messageLength));
-                currentIndex += prefixBytes + messageLength;
-                consumedBytes = currentIndex;
-                messages.Add(new ProtobufMessage(message));
-            }
-            catch (Exception)
-            {
-                currentIndex++;
-                consumedBytes = currentIndex;
+                messages.Add(new ProtobufMessage(frame!));
             }
         }
 
         return messages;
+    }
+
+    /// <summary>
+    /// Reads at most one frame from <paramref name="data"/>, starting at
+    /// <paramref name="offset"/>, so a caller can take each frame as it is decoded instead of
+    /// waiting for a whole buffer to be parsed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This exists for <c>SdCardFileParser</c>, which reads a log in 64 KB chunks and hands
+    /// samples to the caller as they appear. Going through <see cref="ParseMessages(byte[], out int)"/>
+    /// meant the first sample of a 10,000-row log paid for every frame in that first chunk —
+    /// 1.6 ms and 6.7 MB before anything came back, against about 2 µs for the CSV and JSON
+    /// parsers (issue #697). Stepping decodes exactly as far as the caller asks.
+    /// </para>
+    /// <para>
+    /// The parameter is an array rather than a <see cref="ReadOnlySpan{T}"/> because the SD card
+    /// caller is an async iterator, which cannot hold a ref struct across a <c>yield</c>.
+    /// </para>
+    /// </remarks>
+    /// <param name="data">The buffer to read from.</param>
+    /// <param name="offset">The index to start reading at.</param>
+    /// <param name="anyFrameRead">
+    /// Whether a frame has already been read from this buffer. Leading-noise recovery only runs
+    /// before the first frame — see the wait path in <see cref="StepFrame"/> — so a caller
+    /// stepping through one buffer must pass <c>true</c> once it has taken a frame from it, and
+    /// reset to <c>false</c> for the next buffer.
+    /// </param>
+    /// <param name="frame">The decoded frame, or <c>null</c> when this step produced none.</param>
+    /// <param name="nextOffset">
+    /// The index to step from next. Unchanged from <paramref name="offset"/> when the result is
+    /// <see cref="ProtobufFrameStep.EndOfBuffer"/>, so it doubles as the count of bytes consumed.
+    /// </param>
+    /// <returns>What the step produced.</returns>
+    internal ProtobufFrameStep TryReadFrame(
+        byte[] data,
+        int offset,
+        bool anyFrameRead,
+        out DaqifiOutMessage? frame,
+        out int nextOffset)
+        => StepFrame(new ReadOnlySpan<byte>(data), offset, anyFrameRead, out frame, out nextOffset);
+
+    /// <summary>
+    /// The single frame-boundary implementation, shared by <see cref="ParseMessages(ReadOnlySpan{byte}, out int)"/>
+    /// and <see cref="TryReadFrame"/> so the resync and partial-frame rules below have exactly
+    /// one definition.
+    /// </summary>
+    private static ProtobufFrameStep StepFrame(
+        ReadOnlySpan<byte> data,
+        int offset,
+        bool anyFrameRead,
+        out DaqifiOutMessage? frame,
+        out int nextOffset)
+    {
+        frame = null;
+        nextOffset = offset;
+
+        if (offset >= data.Length)
+        {
+            return ProtobufFrameStep.EndOfBuffer;
+        }
+
+        var remainingData = data.Slice(offset);
+
+        if (!TryReadLengthPrefix(remainingData, out var messageLength, out var prefixBytes, out var prefixIsMalformed))
+        {
+            if (prefixIsMalformed)
+            {
+                // Skip this byte and resync; advancing by 1 (not by prefixBytes) is
+                // important because the malformed run may overlap a valid frame that
+                // starts mid-way through it.
+                nextOffset = offset + 1;
+                return ProtobufFrameStep.Resync;
+            }
+
+            return ProtobufFrameStep.EndOfBuffer; // Not enough data for length prefix yet — wait for the next read.
+        }
+
+        if (messageLength <= 0 || messageLength > MaxMessageSizeBytes)
+        {
+            nextOffset = offset + 1;
+            return ProtobufFrameStep.Resync;
+        }
+
+        if (remainingData.Length < prefixBytes + messageLength)
+        {
+            // Not enough buffered data for this frame yet. For a real partial frame
+            // this just means "wait a bit" — streaming messages are well under 1 KB,
+            // so the next read or two will complete it. But a plausible-looking yet
+            // bogus prefix can claim thousands of bytes, and waiting for that much
+            // never-arriving data is exactly the stall that masqueraded as "parser
+            // hung": device LED blinking, buffer growing, zero messages parsed.
+            //
+            // Two recovery gates protect the wait path from garbage while leaving
+            // real partial frames intact for the caller to complete:
+            //
+            //  1. Gap gate: a declared length more than MaxPartialFrameGapBytes
+            //     beyond the *payload* bytes currently buffered (remainingData
+            //     minus the prefix we already consumed when reading it) is almost
+            //     certainly garbage. Real partials for streaming frames leave
+            //     gaps measured in hundreds of bytes, not kilobytes.
+            //
+            //  2. Field-tag gate: when at least one body byte is available, we
+            //     can peek at it. The first body byte of a real DaqifiOutMessage
+            //     is a protobuf field tag — field_number >= 1 and wire_type in
+            //     {0,1,2,5}. A byte that fails both conditions (e.g., wire_type
+            //     of deprecated SGROUP/EGROUP or field_number == 0) is not a
+            //     real frame start; treat it as garbage. A multi-byte tag
+            //     (continuation bit set) can't be fully validated from one byte,
+            //     so we let it through and wait.
+            //
+            // Neither gate advances into a real frame's prefix or payload: only
+            // into bytes already identified as implausible. Callers that trim
+            // consumedBytes from their buffer never lose recoverable data.
+            var availableBodyBytes = remainingData.Length - prefixBytes;
+            var missingPayload = messageLength - availableBodyBytes;
+            var firstBodyByteIsGarbage = availableBodyBytes > 0
+                && !IsPlausibleFieldTagByte(remainingData[prefixBytes]);
+
+            // Gap gate ONLY applies in the pure-prefix-no-body case
+            // (no body bytes arrived). Once any body byte is buffered,
+            // the field-tag gate above provides positive evidence that
+            // the prefix really is a frame start; a large declared
+            // length at that point is just a multi-chunk read of a
+            // legitimate frame (e.g. a multi-KB initial-status frame
+            // on a transport that returns smaller reads). Including
+            // availableBodyBytes == 1 here would corrupt real frames
+            // whose first body byte arrives alone — a single-byte
+            // mistaken advance is unrecoverable because callers trim
+            // consumedBytes from their buffer.
+            var gapIsSuspicious = availableBodyBytes == 0
+                && missingPayload > MaxPartialFrameGapBytes;
+
+            if (gapIsSuspicious || firstBodyByteIsGarbage)
+            {
+                nextOffset = offset + 1;
+                return ProtobufFrameStep.Resync;
+            }
+
+            // The declared frame isn't fully buffered. Normally that means a
+            // genuine frame split across reads — wait for the rest. But the
+            // same condition is reached by leading non-protobuf noise whose
+            // bytes happen to varint-decode to a plausible length with a
+            // plausible first body byte. The motivating case (issue #268): an
+            // echo-on device prefixes its SYSInfoPB? reply with the echoed
+            // ASCII command ("SYSTem:SYSInfoPB?\r\n") and trails it with a
+            // "DAQIFI>" prompt. The leading 'S' (0x53) decodes as length 83
+            // and the next byte 'Y' looks like a field tag, so a plain wait
+            // would block forever on 83 bytes that never arrive while the real
+            // frame sitting further along is never parsed — the device is
+            // silently missed.
+            //
+            // Tell the two apart structurally: a genuine partial frame runs
+            // past the end of the buffer, so nothing parseable can follow it;
+            // noise, by contrast, is followed by the real, complete frame. Scan
+            // ahead for the next fully-buffered, parseable frame. If one exists,
+            // the current position is noise — skip straight to it (everything
+            // before the first parseable frame is, by definition, not a frame
+            // start and holds no recoverable partial, since a partial would
+            // extend past the buffer end and thus past that frame). If none
+            // exists, this really is a partial: preserve it and wait.
+            //
+            // Only do this when no frame has been read yet from this buffer. Once
+            // one frame has come out of it, a trailing under-buffered frame is
+            // overwhelmingly a genuine split frame to wait for (the normal
+            // streaming case) — not leading noise — so we skip the linear scan and
+            // keep that hot path cheap. Stray bytes appearing mid-stream are still
+            // recovered: the caller trims the preceding frame and those bytes lead
+            // the next buffer, where no frame has been read yet and the scan runs.
+            // Discovery always reaches here with zero frames read, so it recovers
+            // on the first reply.
+            if (!anyFrameRead)
+            {
+                var nextFrameIndex = FindNextParseableFrameStart(data, offset + 1);
+                if (nextFrameIndex >= 0)
+                {
+                    nextOffset = nextFrameIndex;
+                    return ProtobufFrameStep.Resync;
+                }
+            }
+
+            return ProtobufFrameStep.EndOfBuffer;
+        }
+
+        try
+        {
+            // ParseFrom(ReadOnlySpan) avoids the per-attempt byte[] copy, which matters
+            // because byte-by-byte resync over a garbage buffer can call this many times
+            // before finding (or failing to find) a valid frame.
+            frame = DaqifiOutMessage.Parser.ParseFrom(remainingData.Slice(prefixBytes, messageLength));
+            nextOffset = offset + prefixBytes + messageLength;
+            return ProtobufFrameStep.Frame;
+        }
+        catch (Exception)
+        {
+            frame = null;
+            nextOffset = offset + 1;
+            return ProtobufFrameStep.Resync;
+        }
     }
 
     /// <summary>

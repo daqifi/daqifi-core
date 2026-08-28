@@ -2,9 +2,12 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <!-- Single-target while Daqifi.Core multi-targets net9.0;net10.0. Tracked as
-         an explicit decision in issue #643, not left implicit here. -->
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- Multi-targeted to match Daqifi.Core (issue #643). This is a dotnet tool:
+         the package carries one self-contained asset folder per target framework,
+         and `dotnet tool install` picks the highest one the machine can run. With
+         net9.0 alone, a machine that has only the .NET 10 runtime had to install
+         .NET 9 as well just to run `daqifi-mcp`. -->
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
     <RootNamespace>Daqifi.Mcp</RootNamespace>
     <AssemblyName>daqifi-mcp</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>

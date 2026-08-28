@@ -405,9 +405,10 @@ public class DeviceDiagnosticsTests
     [Fact]
     public async Task GetSystemLogAsync_WhenALineIsCorrupted_StillReturnsTheSurvivingEntries()
     {
-        // Deliberately NOT guarded: the log read clears the buffer on the device, so the entries
-        // that did arrive are all anyone will ever get. Throwing them away would destroy more than
-        // it protects, and a missing entry is visible in the result anyway.
+        // The whole response is deliberately NOT rejected: the log read clears the buffer on the
+        // device, so the entries that did arrive are all anyone will ever get, and throwing them
+        // away would destroy more than it protects. The corrupted line itself is dropped though --
+        // mid-stream there are hundreds of them, and each one used to become a log entry (#682).
         var device = new TestableDiagnosticsDevice("TestDevice")
         {
             CannedTextResponse = { "\u0000Test log message 1", "Test info message" },
@@ -416,8 +417,7 @@ public class DeviceDiagnosticsTests
 
         var entries = await device.GetSystemLogAsync();
 
-        Assert.Equal(2, entries.Count);
-        Assert.Equal("Test info message", entries[1].Message);
+        Assert.Equal("Test info message", Assert.Single(entries).Message);
     }
 
     [Fact]

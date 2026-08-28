@@ -1,5 +1,5 @@
-using System.Runtime.InteropServices;
 using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
@@ -81,19 +81,17 @@ public class WindowsUsbPortDescriptorProviderTests
 
     // ---- the platform gate ------------------------------------------------
 
-    [Fact]
+    // Unlike LinuxUsbPortDescriptorProviderTests.GetDescriptor_OffLinux, there is no unconditional
+    // twin of this test that also exercises GetDescriptor on Windows: doing so would reach
+    // WindowsPnpPortMap.Shared, whose first lookup can rebuild the map and run a real WMI query —
+    // slow and flaky in a unit-test run. The Windows-side lookup logic is fully covered above
+    // through the injectable Resolve seam instead.
+    [PlatformFact(
+        TestPlatforms.Windows,
+        "The off-Windows gate can only be observed off Windows; on Windows the same call would " +
+        "reach WindowsPnpPortMap.Shared and run a real WMI query.")]
     public void GetDescriptor_OffWindows_ReturnsNullWithoutTouchingTheMap()
     {
-        // Unlike LinuxUsbPortDescriptorProviderTests.GetDescriptor_OffLinux, there is no
-        // unconditional twin of this test that also exercises GetDescriptor on Windows: doing so
-        // would reach WindowsPnpPortMap.Shared, whose first lookup can rebuild the map and run a
-        // real WMI query — slow and flaky in a unit-test run. The Windows-side lookup logic is
-        // fully covered above through the injectable Resolve seam instead.
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            return;
-        }
-
         var provider = new WindowsUsbPortDescriptorProvider();
 
 #pragma warning disable CA1416 // GetDescriptor is Windows-gated at runtime, not by this call site.

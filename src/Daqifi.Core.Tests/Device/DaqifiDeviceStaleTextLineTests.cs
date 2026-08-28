@@ -150,28 +150,64 @@ public class DaqifiDeviceStaleTextLineTests
         // loop into phase 2's short completionTimeoutMs immediately -- ending collection before
         // the real response (released deliberately late here) has a chance to arrive, and
         // returning empty for a device that did, in fact, answer.
+        //
+        // Both halves of that setup are anchored to the exchange rather than to the clock, which
+        // is what makes the test say what it means on a loaded runner (issue #687): the blank has
+        // to be INSIDE the boundary (collected before sentBoundaryLineCount is captured) for the
+        // seed to be the thing under test at all, and the real response has to arrive AFTER the
+        // boundary for the bug to be able to lose it. A Thread.Sleep in the setup action stood in
+        // for the first of those and lost the race often enough on macOS CI to fail this test: the
+        // blank then landed at or past the boundary, counted as genuine evidence, and the exchange
+        // legitimately ended on the short timeout before the response was released.
         using var transport = new TwoStageReleaseTransport(staleLine: "\r\n", contentLine: "0,\"No error\"\r\n");
+
+        // Released a fixed interval after the send boundary is captured, on a thread of its own:
+        // strictly later than the boundary (so it can never be mistaken for the stale blank's
+        // company inside it), comfortably later than phase 2's 100ms completion timeout (so the
+        // bug's seed provably loses it), and nowhere near phase 1's 5000ms first-response timeout
+        // even if the runner stalls the release thread for seconds. A thread rather than
+        // Task.Delay because the thread pool this test suite shares is exactly what gets starved.
+        Thread? releaseContent = null;
         using var device = new StaleBoundaryHookTestableDevice(
-            "Stale-Then-Real Device", transport, onStaleLineBoundaryCaptured: () => transport.ReleaseStale());
+            "Stale-Then-Real Device",
+            transport,
+            onStaleLineBoundaryCaptured: () => transport.ReleaseStale(),
+            onSendBoundaryCaptured: () =>
+            {
+                // One exchange, so one release. Guarded anyway: a second Start() on the same
+                // thread throws, which would turn any future extra exchange into an unrelated
+                // and thoroughly confusing failure here.
+                if (releaseContent != null) return;
+
+                releaseContent = new Thread(() =>
+                {
+                    Thread.Sleep(150);
+                    transport.ReleaseContent();
+                })
+                { IsBackground = true, Name = "stale-blank-test-content-release" };
+                releaseContent.Start();
+            });
 
         device.Connect();
 
         var lines = await device.CallExecuteTextCommandAsync(
             () =>
             {
-                // Give the reader thread time to actually collect the stale blank released by the
-                // boundary hook above before the command is considered sent, then release the real
-                // response after this setup action has already returned -- squarely inside the
-                // wait loop's window, and after phase 2's short timeout would have already fired
-                // on the bug's seed.
-                Thread.Sleep(50);
-                _ = Task.Delay(150).ContinueWith(_ => transport.ReleaseContent());
+                // Wait for the reader to have provably collected the stale blank released by the
+                // boundary hook above, rather than sleeping and hoping it got there: until it has,
+                // the blank is not yet inside the boundary this test is about. The generous
+                // timeout is a deadlock guard, not a pacing knob -- on an idle machine this
+                // returns in single-digit milliseconds.
+                Assert.True(
+                    transport.WaitForStaleConsumed(TimeSpan.FromSeconds(10)),
+                    "The reader never collected the stale blank, so the boundary under test was never exercised.");
             },
-            responseTimeoutMs: 1000,
+            responseTimeoutMs: 5000,
             completionTimeoutMs: 100);
 
         Assert.Contains(lines, l => l.Contains("No error"));
 
+        releaseContent?.Join(TimeSpan.FromSeconds(10));
         device.Disconnect();
     }
 
@@ -640,15 +676,22 @@ public class DaqifiDeviceStaleTextLineTests
     private sealed class StaleBoundaryHookTestableDevice : DaqifiDevice
     {
         private readonly Action _onStaleLineBoundaryCaptured;
+        private readonly Action? _onSendBoundaryCaptured;
 
         public StaleBoundaryHookTestableDevice(
-            string name, IStreamTransport transport, Action onStaleLineBoundaryCaptured)
+            string name,
+            IStreamTransport transport,
+            Action onStaleLineBoundaryCaptured,
+            Action? onSendBoundaryCaptured = null)
             : base(name, transport)
         {
             _onStaleLineBoundaryCaptured = onStaleLineBoundaryCaptured;
+            _onSendBoundaryCaptured = onSendBoundaryCaptured;
         }
 
         internal override void OnStaleLineBoundaryCaptured() => _onStaleLineBoundaryCaptured();
+
+        internal override void OnSendBoundaryCaptured() => _onSendBoundaryCaptured?.Invoke();
 
         public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
             Action setupAction,
@@ -936,6 +979,9 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>Releases the content line into the stream immediately.</summary>
         public void ReleaseContent() => _stream.ReleaseContent();
 
+        /// <summary>See <see cref="TwoStageStream.WaitForStaleConsumed"/>.</summary>
+        public bool WaitForStaleConsumed(TimeSpan timeout) => _stream.WaitForStaleConsumed(timeout);
+
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
@@ -969,6 +1015,8 @@ public class DaqifiDeviceStaleTextLineTests
             private readonly byte[] _stale;
             private readonly byte[] _content;
             private readonly object _gate = new();
+            private readonly TaskCompletionSource<bool> _staleConsumed =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
             private bool _staleReleased;
             private bool _contentReleased;
             private int _stalePosition;
@@ -1004,10 +1052,31 @@ public class DaqifiDeviceStaleTextLineTests
 
             public override void Flush() { }
 
+            /// <summary>
+            /// Blocks until the reader has provably turned the stale line into a collected line.
+            /// </summary>
+            /// <remarks>
+            /// The signal is raised on the reader's <em>next</em> entry into <see cref="Read"/>
+            /// after the last stale byte was handed over, and that "next" is what makes it a
+            /// statement about the parsed line rather than about the bytes. The consumer runs one
+            /// thread through read, parse, raise <c>MessageParsed</c>, read, so coming back for
+            /// more bytes means the line built from the previous read has already been appended to
+            /// the exchange's collected lines. A wall-clock sleep can only guess at that point.
+            /// </remarks>
+            public bool WaitForStaleConsumed(TimeSpan timeout) => _staleConsumed.Task.Wait(timeout);
+
             public override int Read(byte[] buffer, int offset, int count)
             {
                 lock (_gate)
                 {
+                    // Entering a read with the stale line fully handed over: see
+                    // WaitForStaleConsumed for why this, and not the handover itself, is the
+                    // moment the line is known to have been collected.
+                    if (_staleReleased && _stalePosition >= _stale.Length)
+                    {
+                        _staleConsumed.TrySetResult(true);
+                    }
+
                     // The stale line always drains first -- it is the one released earliest on
                     // real hardware too (a leftover from an earlier exchange, arriving before this
                     // exchange has sent anything).

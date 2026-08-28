@@ -1,5 +1,5 @@
 using Daqifi.Core.Device.Discovery;
-using System.Runtime.InteropServices;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
@@ -153,17 +153,15 @@ public class MacOsUsbPortDescriptorProviderTests
 
     #region The platform gate
 
-    [Fact]
+    // Elsewhere ioreg either does not exist or means something else, so the gate has to produce the
+    // answer without ever spawning a process. On macOS the real ioreg-backed path is exercised
+    // manually rather than in CI, for the reasons in the type-level remarks.
+    [PlatformFact(
+        TestPlatforms.MacOS,
+        "The off-macOS gate can only be observed off macOS; on macOS the same call reaches the " +
+        "real ioreg, which CI does not exercise.")]
     public void GetDescriptor_OffMacOS_AnswersNullForEveryPort()
     {
-        // Elsewhere ioreg either does not exist or means something else, so the gate has to
-        // produce the answer without ever spawning a process. On macOS the real ioreg-backed path
-        // is exercised manually rather than in CI, for the reasons in the type-level remarks.
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            return;
-        }
-
         var provider = new MacOsUsbPortDescriptorProvider();
 
         Assert.Null(provider.GetDescriptor("/dev/cu.usbmodem101"));

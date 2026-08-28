@@ -16,8 +16,10 @@ public class DataSample : IDataSample
     public double Value { get; set; }
 
     /// <summary>
-    /// Gets the raw device value this sample was decoded from, or <c>null</c> when the device
-    /// supplied an already-scaled value or the sample was not produced by the decode pipeline.
+    /// Gets the raw device value this sample was decoded from — the raw ADC count for a streamed
+    /// analog sample, or the 0/1 bit for a digital one. <c>null</c> when the sample was not
+    /// produced by the decode pipeline, or when its frame carried an already-scaled value instead
+    /// of a count, which no supported firmware sends.
     /// </summary>
     public int? RawValue { get; init; }
 

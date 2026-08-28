@@ -134,3 +134,7 @@ SESSION_LOG.md
 
 # Python bytecode from .github/scripts
 __pycache__/
+
+# BenchmarkDotNet writes its reports and the generated per-benchmark projects here.
+# The baselines worth keeping live in src/Daqifi.Core.Benchmarks/README.md instead.
+BenchmarkDotNet.Artifacts/

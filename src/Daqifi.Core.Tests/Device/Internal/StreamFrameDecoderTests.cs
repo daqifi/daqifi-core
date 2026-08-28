@@ -594,8 +594,8 @@ public class StreamFrameDecoderTests
     #region Engineering units (#501)
 
     /// <summary>
-    /// The USB path is the one that bypasses <see cref="IAnalogChannel.GetScaledValue"/> entirely —
-    /// the firmware already sent volts — so it is the path an engineering-unit conversion is most
+    /// The pre-scaled float frame bypasses <see cref="IAnalogChannel.GetScaledValue"/> entirely —
+    /// the frame already carries volts — so it is the branch an engineering-unit conversion is most
     /// easily forgotten on.
     /// </summary>
     [Fact]
@@ -616,8 +616,8 @@ public class StreamFrameDecoderTests
     }
 
     /// <summary>
-    /// The WiFi path, where the calibration conversion runs first. Both conversions must apply, in
-    /// that order.
+    /// The raw-count frame — what every supported firmware sends — where the calibration conversion
+    /// runs first. Both conversions must apply, in that order.
     /// </summary>
     [Fact]
     public void RawCountSample_IsCalibratedThenScaled()
@@ -783,8 +783,8 @@ public class StreamFrameDecoderTests
     }
 
     /// <summary>
-    /// A frame carrying raw ADC counts rather than pre-scaled floats — the WiFi firmware's shape,
-    /// which is the branch that runs the per-channel calibration.
+    /// A frame carrying raw ADC counts rather than pre-scaled floats — the shape every supported
+    /// firmware sends, and the branch that runs the per-channel calibration.
     /// </summary>
     private static DaqifiOutMessage RawCountFrame(uint timestamp, params int[] counts)
     {
