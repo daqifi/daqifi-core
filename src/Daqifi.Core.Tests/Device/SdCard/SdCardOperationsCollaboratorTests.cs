@@ -1183,8 +1183,21 @@ public class SdCardOperationsCollaboratorTests
         var host = new FakeHost
         {
             IsStreaming = true,
-            // 200ms budget → a ~300ms hard deadline (the grace is clamped to a 100ms floor).
-            SdCardDownloadTimeout = TimeSpan.FromMilliseconds(200),
+            // 2s budget → a 2.2s hard deadline (the grace is 10% of the budget, floored at 100ms).
+            //
+            // The deadline has to outlast the transfer's own run-up to the GET, which is a fixed
+            // 100ms SD-interface settle delay the download awaits before sending anything. That
+            // delay resumes on the shared thread pool, so on a loaded runner it can finish far
+            // later than 100ms after it was started, while the deadline runs on its own timer and
+            // does not slip with it. The previous 200ms budget left only 200ms of margin for that
+            // slip, and lost: the deadline fired first, the transfer was abandoned before the GET
+            // ever went out, and the assertion below failed on macOS CI with "Item not found in
+            // collection" — after every test in the run had passed, so it turned main red rather
+            // than reporting a real defect.
+            //
+            // 2s is not a pacing knob and nothing here waits on it deliberately: it is headroom,
+            // twenty times the delay it has to cover.
+            SdCardDownloadTimeout = TimeSpan.FromSeconds(2),
             RawCaptureStreamFactory = () => new ParkedStream(entered, release.Task),
         };
         var ops = new SdCardOperations(host);
@@ -1194,7 +1207,7 @@ public class SdCardOperationsCollaboratorTests
         // MemoryStream needs no disposal, and disposing it here would only manufacture a race.
         var destination = new MemoryStream();
 
-        // Bounded well above the ~300ms hard deadline this test asserts. The stream deliberately
+        // Bounded well above the 2.2s hard deadline this test asserts. The stream deliberately
         // ignores its token, so if the deadline itself regressed the download would never return,
         // and an unbounded await would hang the whole run instead of failing the one test that
         // caught it. The bound is a token rather than WaitAsync(TimeSpan) on purpose: the latter
@@ -1202,10 +1215,19 @@ public class SdCardOperationsCollaboratorTests
         // passed as a success. A cancelled token surfaces as TaskCanceledException and fails.
         using var guard = new CancellationTokenSource(ParkedTestBudget);
 
+        var download = ops.DownloadSdCardFileAsync("data.bin", destination);
+
         try
         {
-            await Assert.ThrowsAsync<TimeoutException>(
-                () => ops.DownloadSdCardFileAsync("data.bin", destination).WaitAsync(guard.Token));
+            // Anchor on the transfer having reached the parked read rather than on the clock: that
+            // read is entered only after the GET has been sent, so waiting for it is what makes
+            // the assertions below statements about a transfer that was genuinely in flight when
+            // the deadline abandoned it. It also names the failure — a run where the deadline beat
+            // the settle delay fails here, pointing at the timing, instead of failing later on a
+            // bare "item not found" that reads like a missing command.
+            await entered.Task.WaitAsync(ParkedTestBudget);
+
+            await Assert.ThrowsAsync<TimeoutException>(() => download.WaitAsync(guard.Token));
 
             Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
             Assert.DoesNotContain("send:" + DisableSd, host.Calls);
@@ -1218,6 +1240,11 @@ public class SdCardOperationsCollaboratorTests
         finally
         {
             release.TrySetResult(true);
+
+            // The download is awaited on the passing path, but not on one that fails at the anchor
+            // above. Observe it either way so a faulted task cannot resurface as an
+            // UnobservedTaskException in some later, unrelated test sharing this process.
+            _ = download.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
         }
     }
 
