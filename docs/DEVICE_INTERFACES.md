@@ -1001,7 +1001,6 @@ Use `ScpiMessageProducer` for device commands:
 ```csharp
 // Device control
 device.Send(ScpiMessageProducer.TurnDeviceOn);
-device.Send(ScpiMessageProducer.TurnDeviceOff);
 device.Send(ScpiMessageProducer.GetDeviceInfo);
 
 // Streaming control

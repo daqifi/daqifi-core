@@ -39,6 +39,8 @@ Daqifi.Core.Logging.Export.SdCardLogSampleSource.SampleCount.get -> long
 Daqifi.Core.Logging.Export.SdCardLogSampleSource.SdCardLogSampleSource(System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Device.SdCard.SdCardLogEntry!>! samples, string? deviceSerialNumber, int analogChannelCount, string? deviceName = null) -> void
 Daqifi.Core.Logging.Export.SdCardLogSampleSource.StreamSamples(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<Daqifi.Core.Logging.Export.SampleRow!>!
 Daqifi.Core.Logging.Export.SdCardLogSessionExtensions
+const Daqifi.Core.Firmware.IntelHexParser.DefaultBeginProtectedAddress = 488505344 -> uint
+const Daqifi.Core.Firmware.IntelHexParser.DefaultEndProtectedAddress = 488636416 -> uint
 const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DefaultDeviceName = "Daqifi" -> string!
 const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DigitalChannelName = "DIO" -> string!
 override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.GetHashCode() -> int
