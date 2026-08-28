@@ -1658,6 +1658,15 @@ namespace Daqifi.Core.Device
             // and dropped, turning a caller's bug into a silently missing command.
             ArgumentNullException.ThrowIfNull(message);
 
+            // Remember what a running exchange sent last, so the engine can recognise the reply that
+            // ends it (issue #667 item 4). Guarded by the in-exchange flag, which is AsyncLocal: a
+            // send from any other flow — including one being parked by TryDeferSend just below —
+            // reads false there and so cannot overwrite the running exchange's last command.
+            if (_isInsideTextExchange.Value && message is IOutboundMessage<string> textCommand)
+            {
+                _lastExchangeTextCommand = textCommand.Data;
+            }
+
             if (_operations.TryDeferSend(message))
             {
                 return;
@@ -1665,6 +1674,19 @@ namespace Daqifi.Core.Device
 
             SendNow(message);
         }
+
+        /// <summary>
+        /// The last text command a running text exchange enqueued, or <c>null</c> outside one and
+        /// before the first send of each.
+        /// </summary>
+        /// <remarks>
+        /// Written only by the exchange's own flow (see <see cref="Send{T}"/>) and read only by
+        /// <see cref="ITextExchangeHost.IsExchangeTerminatorReply"/> on that same flow, but the two
+        /// sit either side of the awaits the setup action may contain, so the read can land on a
+        /// different thread-pool thread than the write. <c>volatile</c> for that hop; no lock,
+        /// because the seam that reads it is documented as taking none.
+        /// </remarks>
+        private volatile string? _lastExchangeTextCommand;
 
         /// <summary>
         /// Serializes writes on the producer-less path, where <see cref="Send{T}"/> writes to the
@@ -2013,7 +2035,45 @@ namespace Daqifi.Core.Device
         bool ITextExchangeHost.IsInsideTextExchange
         {
             get => _isInsideTextExchange.Value;
-            set => _isInsideTextExchange.Value = value;
+            set
+            {
+                // The engine raises this flag exactly once at the start of each exchange and each
+                // raw capture, which is also the moment command tracking has to start over: without
+                // the reset, an exchange whose setup action sends nothing at all would inherit the
+                // previous exchange's last command and could be ended by a reply to a query it
+                // never sent.
+                if (value)
+                {
+                    _lastExchangeTextCommand = null;
+                }
+
+                _isInsideTextExchange.Value = value;
+            }
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// One query terminates an exchange today: <c>SYSTem:ERRor?</c>, which three call sites send
+        /// last for exactly this purpose — the connect-time init (#667 item 2), the SD directory
+        /// listing (#396) and the confirming administration commands. Recognising its reply is what
+        /// lets those exchanges stop the moment it lands instead of waiting out a completion window
+        /// sized for a device that might still be talking.
+        /// <para>
+        /// Both halves are load-bearing. The command check keeps an exchange that never asked from
+        /// being ended by an error reply the device volunteered on its own, and the shape check is
+        /// the bare <c>-200,"Execution error"</c> form the query answers with — deliberately not
+        /// <see cref="ScpiResponseClassifier.IsScpiErrorLine"/>, which matches the <c>**ERROR:</c>
+        /// form a device volunteers alongside a command's output and would fire on a complaint that
+        /// is not this exchange's terminator at all.
+        /// </para>
+        /// </remarks>
+        bool ITextExchangeHost.IsExchangeTerminatorReply(string line)
+        {
+            return string.Equals(
+                       _lastExchangeTextCommand,
+                       ScpiMessageProducer.GetSystemError.Data,
+                       StringComparison.Ordinal)
+                   && ScpiResponseClassifier.IsSystemErrorReplyLine(line);
         }
 
         /// <inheritdoc />

@@ -420,14 +420,22 @@ namespace Daqifi.Core.Device.Internal
                 // Declared out here rather than beside its first use because both the wait loop
                 // and the projection ask it, and they sit on opposite sides of the consumer swap's
                 // try/finally.
+                //
+                // Split in two because the terminator short-circuit below asks the same question of
+                // a content line (#667 item 4). It may: declining to short-circuit only leaves the
+                // exchange waiting exactly as long as it used to, so applying the narrower rule
+                // there costs a fast reply nothing — unlike applying it to the projection, which
+                // would discard one.
+                bool ArrivedBeforeSend(int index, CollectedLine collected) =>
+                    index < sentBoundaryLineCount
+                    || (writerBoundary.HasValue
+                        && collected.WriterAtArrival.HasValue
+                        && collected.WriterAtArrival.Value.HasWorkOutstanding
+                        && collected.WriterAtArrival.Value.StartedWrites
+                            <= writerBoundary.Value.StartedWrites);
+
                 bool IsPreSendBlank(int index, CollectedLine collected) =>
-                    collected.Text.Length == 0
-                    && (index < sentBoundaryLineCount
-                        || (writerBoundary.HasValue
-                            && collected.WriterAtArrival.HasValue
-                            && collected.WriterAtArrival.Value.HasWorkOutstanding
-                            && collected.WriterAtArrival.Value.StartedWrites
-                                <= writerBoundary.Value.StartedWrites));
+                    collected.Text.Length == 0 && ArrivedBeforeSend(index, collected);
 
                 try
                 {
@@ -630,6 +638,64 @@ namespace Daqifi.Core.Device.Internal
                         }
                     }
 
+                    // Whether any line in [from, to) is the reply that ends this exchange — the
+                    // answer to a query the setup action sent last precisely so the exchange would
+                    // have something to finish on (issue #667 item 4). Without this, those exchanges
+                    // sit out their whole completion window after the terminator has already
+                    // arrived: 500ms on every connect, 1000ms on every SD listing and every
+                    // confirmed administration command, all of it spent waiting for lines that by
+                    // construction are never coming.
+                    //
+                    // Two guards stand in front of the question, and they are what make asking it
+                    // safe. A terminator-shaped line that arrived before this exchange sent anything
+                    // is a leftover from an EARLIER exchange -- the case TrySplitAtSdListTerminator
+                    // scans from the end for, whose comment records that stopping at the first match
+                    // reports an empty card. Such a line is skipped here, so it cannot end the
+                    // exchange, and the projection below still hands the caller every line it
+                    // collected: this decides only when to stop listening, never what is returned.
+                    // What the caller does with a response holding two terminator-shaped lines is
+                    // unchanged, and TrySplitAtSdListTerminator remains the authority on which of
+                    // them is real.
+                    //
+                    // The residual case, and the reason the completion window stays as a fallback
+                    // rather than being tightened: a stale reply the device only emits AFTER this
+                    // exchange's commands have begun going out is not distinguishable from ours by
+                    // either guard. It has to be read from the buffer more than the 50ms consumer
+                    // settle above plus the send boundary after it, so it is narrow -- but it is not
+                    // impossible, and it is why nothing here is allowed to change the result.
+                    bool TryFindTerminator(int from, int to)
+                    {
+                        var candidates = new List<string>();
+                        lock (collectedLinesGate)
+                        {
+                            var start = Math.Max(from, staleLineCount);
+                            var end = Math.Min(to, collectedLines.Count);
+                            for (var i = start; i < end; i++)
+                            {
+                                var collected = collectedLines[i];
+                                if (collected.Text.Length == 0 || ArrivedBeforeSend(i, collected))
+                                {
+                                    continue;
+                                }
+
+                                candidates.Add(collected.Text);
+                            }
+                        }
+
+                        // Asked with the gate released: the host's answer is documented as cheap and
+                        // lock-free, but the reader thread has to be able to take this gate, and
+                        // nothing that calls out of the engine may hold it.
+                        foreach (var candidate in candidates)
+                        {
+                            if (_host.IsExchangeTerminatorReply(candidate))
+                            {
+                                return true;
+                            }
+                        }
+
+                        return false;
+                    }
+
                     // Wait for responses using a two-phase inactivity-based timeout:
                     // Phase 1: Wait up to responseTimeoutMs for the first response.
                     // Phase 2: After receiving data, wait completionTimeoutMs of inactivity to finish.
@@ -673,7 +739,18 @@ namespace Daqifi.Core.Device.Internal
                     // loop expressed the same thing by taking its "previous count" from here.
                     var observedLineCount = CollectedLineCount();
 
-                    while (true)
+                    // Checked before the loop as well as inside it, and for the same reason
+                    // hasReceivedAny is seeded above: on a device that answers faster than the
+                    // exchange gets here, the terminator has already landed, and a check that only
+                    // ran on a subsequent arrival would never see it — leaving exactly the wait this
+                    // is meant to remove, on exactly the fast devices it helps most (#592).
+                    var terminatorSeen = TryFindTerminator(0, observedLineCount);
+                    if (terminatorSeen)
+                    {
+                        Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Terminator reply already present entering wait loop"));
+                    }
+
+                    while (!terminatorSeen)
                     {
                         var now = sw.Elapsed;
 
@@ -739,6 +816,7 @@ namespace Daqifi.Core.Device.Internal
                         var currentCount = CollectedLineCount();
                         if (currentCount > observedLineCount)
                         {
+                            var previousLineCount = observedLineCount;
                             observedLineCount = currentCount;
                             lastMessageAt = sw.Elapsed;
 
@@ -751,6 +829,16 @@ namespace Daqifi.Core.Device.Internal
                             {
                                 hasReceivedAny = true;
                                 Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                            }
+
+                            // Only the lines that just arrived are examined: an earlier one that was
+                            // going to end this exchange already did, and re-reading the whole
+                            // response on every arrival would make a long SD listing quadratic in
+                            // the number of lines it collects.
+                            if (TryFindTerminator(previousLineCount, currentCount))
+                            {
+                                terminatorSeen = true;
+                                Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Terminator reply at {ElapsedMs}ms; ending collection", sw.ElapsedMilliseconds));
                             }
                         }
                     }

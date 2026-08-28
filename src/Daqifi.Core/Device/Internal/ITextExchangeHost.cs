@@ -144,6 +144,31 @@ namespace Daqifi.Core.Device.Internal
         OutboundWriterSample? SampleOutboundWriter();
 
         /// <summary>
+        /// Whether <paramref name="line"/> is the reply that ends the exchange now running — the
+        /// answer to a query the exchange deliberately sent last so that it would have something to
+        /// finish on, rather than sitting out its whole inactivity window in silence.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The engine asks rather than decides: which query terminates an exchange, and what its
+        /// reply looks like, are SCPI facts that belong to the device. Here they would be the one
+        /// piece of protocol knowledge in an otherwise line-protocol-generic engine.
+        /// </para>
+        /// <para>
+        /// Answering <c>true</c> only shortens the wait; it never changes what the exchange returns,
+        /// and the engine still applies its own staleness boundaries before asking at all. So a
+        /// host that cannot tell should answer <c>false</c> — the exchange then waits out its
+        /// completion window exactly as it did before this seam existed.
+        /// </para>
+        /// <para>
+        /// Called on the exchange's own thread while it holds no gate, but once per newly arrived
+        /// line: it must stay cheap and must not take any lock the exchange holds.
+        /// </para>
+        /// </remarks>
+        /// <param name="line">A line collected after this exchange's commands began going out.</param>
+        bool IsExchangeTerminatorReply(string line);
+
+        /// <summary>
         /// Forwards the temporary text consumer's failures to the device's
         /// <see cref="DaqifiDevice.ErrorOccurred"/> surface for the lifetime of the returned scope.
         /// </summary>
