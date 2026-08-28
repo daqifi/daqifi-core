@@ -640,29 +640,30 @@ namespace Daqifi.Core.Device.Internal
 
                     // Whether any line in [from, to) is the reply that ends this exchange — the
                     // answer to a query the setup action sent last precisely so the exchange would
-                    // have something to finish on (issue #667 item 4). Without this, those exchanges
-                    // sit out their whole completion window after the terminator has already
-                    // arrived: 500ms on every connect, 1000ms on every SD listing and every
-                    // confirmed administration command, all of it spent waiting for lines that by
-                    // construction are never coming.
+                    // have something to finish on (issue #667 item 4). Without this, such an
+                    // exchange sits out its whole completion window after the terminator has already
+                    // arrived, waiting for lines that by construction are never coming: 500ms on
+                    // every connect.
                     //
-                    // Two guards stand in front of the question, and they are what make asking it
-                    // safe. A terminator-shaped line that arrived before this exchange sent anything
-                    // is a leftover from an EARLIER exchange -- the case TrySplitAtSdListTerminator
-                    // scans from the end for, whose comment records that stopping at the first match
+                    // The host decides, and answers no unless the exchange opted in — today only the
+                    // connect-time init does. The reason the SD listing and the confirming commands
+                    // do NOT, though they send the same terminator and would save twice as much, is
+                    // the residual case below; DaqifiDevice.EnableTerminatorShortCircuit records it
+                    // in full.
+                    //
+                    // The guard in front of the question is the exchange's own pre-send boundary. A
+                    // terminator-shaped line that arrived before this exchange sent anything is a
+                    // leftover from an EARLIER exchange -- the case TrySplitAtSdListTerminator scans
+                    // from the end for, whose comment records that stopping at the first match
                     // reports an empty card. Such a line is skipped here, so it cannot end the
                     // exchange, and the projection below still hands the caller every line it
                     // collected: this decides only when to stop listening, never what is returned.
-                    // What the caller does with a response holding two terminator-shaped lines is
-                    // unchanged, and TrySplitAtSdListTerminator remains the authority on which of
-                    // them is real.
                     //
-                    // The residual case, and the reason the completion window stays as a fallback
-                    // rather than being tightened: a stale reply the device only emits AFTER this
-                    // exchange's commands have begun going out is not distinguishable from ours by
-                    // either guard. It has to be read from the buffer more than the 50ms consumer
-                    // settle above plus the send boundary after it, so it is narrow -- but it is not
-                    // impossible, and it is why nothing here is allowed to change the result.
+                    // What the guard cannot catch, and why this stays opt-in rather than becoming
+                    // the default: a stale reply the device only emits AFTER this exchange's
+                    // commands have begun going out is indistinguishable from ours. SCPI replies
+                    // carry no correlation, so there is nothing here that could tell them apart —
+                    // the safety has to come from the caller knowing no such reply can be pending.
                     bool TryFindTerminator(int from, int to)
                     {
                         var candidates = new List<string>();

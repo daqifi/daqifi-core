@@ -700,13 +700,50 @@ public class DaqifiDeviceStaleTextLineTests
                 transport.Release();
             },
             responseTimeoutMs: 3000,
-            completionTimeoutMs: 4000);
+            completionTimeoutMs: 4000,
+            terminatorShortCircuit: true);
         sw.Stop();
 
         Assert.Contains(lines, l => l.Contains("No error"));
         Assert.True(
             sw.ElapsedMilliseconds < 2000,
             $"Expected the exchange to end on the terminator, not to wait out its 4000ms completion window; took {sw.ElapsedMilliseconds}ms.");
+
+        device.Disconnect();
+    }
+
+    [Fact]
+    public async Task ExecuteTextCommand_WaitsOutItsWindowUnlessItOptedIntoTheShortCircuit()
+    {
+        // The gate, and the reason it exists. An exchange that sends the terminator but does not
+        // opt in — the SD listing and the confirming administration commands, every call site but
+        // the connect-time init — must behave exactly as it did before this existed.
+        //
+        // They are held back because a stale reply the device emits AFTER this exchange starts
+        // sending is indistinguishable from its own, and finishing on one truncates the response.
+        // For a directory listing that means caching a partial or empty card silently, since a
+        // listing cut short before its end-of-listing marker reads as Unterminated, which is not an
+        // error. Identical setup to the opted-in test above, minus the opt-in.
+        using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+        using var device = new StaleLineTestableDevice("Non-Opted-In Device", transport);
+
+        device.Connect();
+
+        var sw = Stopwatch.StartNew();
+        var lines = await device.CallExecuteTextCommandAsync(
+            () =>
+            {
+                device.Send(ScpiMessageProducer.GetSystemError);
+                transport.Release();
+            },
+            responseTimeoutMs: 3000,
+            completionTimeoutMs: 1500);
+        sw.Stop();
+
+        Assert.Contains(lines, l => l.Contains("No error"));
+        Assert.True(
+            sw.ElapsedMilliseconds >= 1000,
+            $"Expected an exchange that did not opt in to wait out its 1500ms completion window; took {sw.ElapsedMilliseconds}ms.");
 
         device.Disconnect();
     }
@@ -731,7 +768,8 @@ public class DaqifiDeviceStaleTextLineTests
                 transport.Release();
             },
             responseTimeoutMs: 3000,
-            completionTimeoutMs: 400);
+            completionTimeoutMs: 400,
+            terminatorShortCircuit: true);
         sw.Stop();
 
         Assert.Contains(lines, l => l.Contains("No error"));
@@ -796,7 +834,8 @@ public class DaqifiDeviceStaleTextLineTests
                 device.Send(ScpiMessageProducer.GetSystemError);
             },
             responseTimeoutMs: 5000,
-            completionTimeoutMs: 2000);
+            completionTimeoutMs: 2000,
+            terminatorShortCircuit: true);
 
         // The listing survived: collection did not stop on the leading stale terminator.
         Assert.Contains(lines, l => l.Contains("/data/log.bin"));
@@ -848,7 +887,8 @@ public class DaqifiDeviceStaleTextLineTests
         var lines = await device.CallExecuteTextCommandAsync(
             () => device.Send(ScpiMessageProducer.GetSystemError),
             responseTimeoutMs: 3000,
-            completionTimeoutMs: 1500);
+            completionTimeoutMs: 1500,
+            terminatorShortCircuit: true);
         sw.Stop();
 
         Assert.True(
@@ -892,17 +932,24 @@ public class DaqifiDeviceStaleTextLineTests
 
         internal override void OnSendBoundaryCaptured() => _onSendBoundaryCaptured?.Invoke();
 
-        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
+        /// <param name="terminatorShortCircuit">
+        /// Opts this exchange into finishing on its <c>SYSTem:ERRor?</c> reply, the way the
+        /// connect-time init exchange does. Off by default, matching every other call site.
+        /// </param>
+        public async Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
             Action setupAction,
             bool keepBlankLines = false,
             int responseTimeoutMs = 500,
-            int completionTimeoutMs = 150)
+            int completionTimeoutMs = 150,
+            bool terminatorShortCircuit = false)
         {
-            return ExecuteTextCommandAsync(
+            using var scope = terminatorShortCircuit ? EnableTerminatorShortCircuit() : null;
+
+            return await ExecuteTextCommandAsync(
                 setupAction,
                 responseTimeoutMs: responseTimeoutMs,
                 completionTimeoutMs: completionTimeoutMs,
-                keepBlankLines: keepBlankLines);
+                keepBlankLines: keepBlankLines).ConfigureAwait(false);
         }
     }
 
@@ -971,17 +1018,24 @@ public class DaqifiDeviceStaleTextLineTests
         /// </summary>
         internal override void OnSendBoundaryCaptured() => _onSendBoundaryCaptured?.Invoke();
 
-        public Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
+        /// <param name="terminatorShortCircuit">
+        /// Opts this exchange into finishing on its <c>SYSTem:ERRor?</c> reply, the way the
+        /// connect-time init exchange does. Off by default, matching every other call site.
+        /// </param>
+        public async Task<IReadOnlyList<string>> CallExecuteTextCommandAsync(
             Action setupAction,
             bool keepBlankLines = false,
             int responseTimeoutMs = 500,
-            int completionTimeoutMs = 150)
+            int completionTimeoutMs = 150,
+            bool terminatorShortCircuit = false)
         {
-            return ExecuteTextCommandAsync(
+            using var scope = terminatorShortCircuit ? EnableTerminatorShortCircuit() : null;
+
+            return await ExecuteTextCommandAsync(
                 setupAction,
                 responseTimeoutMs: responseTimeoutMs,
                 completionTimeoutMs: completionTimeoutMs,
-                keepBlankLines: keepBlankLines);
+                keepBlankLines: keepBlankLines).ConfigureAwait(false);
         }
 
         public Task<IReadOnlyList<string>> CallWithPrepareAsync(
