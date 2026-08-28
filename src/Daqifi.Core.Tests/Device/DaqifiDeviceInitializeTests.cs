@@ -330,6 +330,25 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public async Task InitializeAsync_AsksForAWindowLongEnoughForTheVerdictToTrailAnEcho()
+        {
+            // The terminator's reply trails the commands, and on a device that echoes it is an echo
+            // line that starts the inactivity clock. The other two users of this same query raise
+            // their completion window to 1000ms for that reason; this path takes 500ms instead —
+            // long enough for a reply that arrives ~6ms after the write on the bench, while still
+            // leaving the saving #667 item 2 exists for. Pinned because it is a deliberate
+            // divergence from the sibling call sites, not an oversight, and because reverting to
+            // the 250ms default would silently narrow it.
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+
+            await device.InitializeAsync();
+
+            Assert.Equal(500, device.LastCompletionTimeoutMs);
+            Assert.Equal(1000, device.LastResponseTimeoutMs);
+        }
+
+        [Fact]
         public async Task InitializeAsync_WithPreserveActiveStream_DoesNotReadTheErrorQueue()
         {
             // Reading the error queue pops the entry it returns. An observe session must not take
@@ -600,6 +619,16 @@ namespace Daqifi.Core.Tests.Device
             public int TextCommandAttemptCount { get; private set; }
 
             /// <summary>
+            /// The response and completion timeouts the last text exchange asked for. The init
+            /// sequence's completion window is what its saving comes out of (#667), so it is a
+            /// deliberate value rather than an incidental one, and a test can check it.
+            /// </summary>
+            public int LastResponseTimeoutMs { get; private set; }
+
+            /// <inheritdoc cref="LastResponseTimeoutMs"/>
+            public int LastCompletionTimeoutMs { get; private set; }
+
+            /// <summary>
             /// When true, a GetDeviceInfo request synchronously populates channels (simulating
             /// the device's status response). Settable so tests can toggle the behavior between
             /// initialization attempts.
@@ -692,6 +721,8 @@ namespace Daqifi.Core.Tests.Device
                 Func<Task>? finalizeAsync = null,
                 bool keepBlankLines = false)
             {
+                LastResponseTimeoutMs = responseTimeoutMs;
+                LastCompletionTimeoutMs = completionTimeoutMs;
                 return RunTextExchangeAsync(
                     _ => { setupAction(); return Task.CompletedTask; },
                     cancellationToken,
@@ -708,6 +739,8 @@ namespace Daqifi.Core.Tests.Device
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default)
             {
+                LastResponseTimeoutMs = responseTimeoutMs;
+                LastCompletionTimeoutMs = completionTimeoutMs;
                 return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
             }
 

@@ -568,6 +568,39 @@ namespace Daqifi.Core.Device
         private const int InitScpiSettleDelayMs = 100;
 
         /// <summary>
+        /// Inactivity window in milliseconds the <see cref="InitializeAsync"/> SCPI setup exchange
+        /// allows after a line arrives, before it treats the device as having finished.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Stated explicitly rather than defaulted because this is the knob the whole saving in
+        /// issue #667 item 2 comes out of. The exchange ends one inactivity window after the last
+        /// line, so once the terminator query has been answered this is pure waiting: the shorter
+        /// it is, the sooner initialization finishes.
+        /// </para>
+        /// <para>
+        /// The other two users of the same <c>SYSTem:ERRor?</c> terminator — the SD directory
+        /// listing and the confirming-administration exchange — both raise their window to 1000ms,
+        /// and this deliberately does not follow them. What they are protecting against is a
+        /// verdict that trails an echo by more than the window: there, losing it means reporting an
+        /// incomplete listing or failing a command the device actually accepted. Here it means
+        /// only that the queue is not consulted, which is exactly where initialization stood before
+        /// the terminator was added at all — the volunteered <c>**ERROR:</c> form is still read from
+        /// the same response either way. The downside is therefore a lost improvement rather than a
+        /// new failure, which buys a shorter window than they can take.
+        /// </para>
+        /// <para>
+        /// 500ms rather than the 250ms default for headroom: on a device that echoes, the echo of
+        /// the terminator command itself resets this clock immediately before the reply lands, and
+        /// the bench Nyquist answers about 6ms after the write — so the realistic gap is tens of
+        /// milliseconds and this leaves an order of magnitude over it, on a link slower than the
+        /// USB CDC the figure was measured on. Bench-measured cost of the extra headroom over
+        /// 250ms is about 250ms of the saving; see the PR for the A/B.
+        /// </para>
+        /// </remarks>
+        private const int InitScpiCompletionTimeoutMs = 500;
+
+        /// <summary>
         /// Owns THE device operation lock and the backlog of sends parked behind it. Every text
         /// exchange, every <see cref="RunExclusiveAsync{TResult}"/> block, every deferred
         /// <see cref="Send{T}"/> and both teardown paths coordinate through this one collaborator
@@ -3331,7 +3364,10 @@ namespace Daqifi.Core.Device
                         token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.GetSystemError);
-                    }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    },
+                    responseTimeoutMs: 1000,
+                    completionTimeoutMs: InitScpiCompletionTimeoutMs,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                     // Shared with DaqifiStreamingDevice's SCPI error detection so both sites
                     // recognize the same set of delimiter-separated error formats — a bare
