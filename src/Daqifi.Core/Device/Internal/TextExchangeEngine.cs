@@ -3,7 +3,6 @@ using Daqifi.Core.Communication.Transport;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.ExceptionServices;
@@ -38,6 +37,14 @@ namespace Daqifi.Core.Device.Internal
     /// </remarks>
     internal sealed class TextExchangeEngine
     {
+        /// <summary>
+        /// How long the exchange lets the freshly started text consumer settle before it takes the
+        /// stale-line boundary. Was an unnamed <c>50</c>; named here because it is now one of the
+        /// waits driven by <see cref="ITextExchangeHost.TimeProvider"/> and a reader needs to know
+        /// which one (issue #637). The duration is unchanged.
+        /// </summary>
+        private static readonly TimeSpan TextConsumerSettleDelay = TimeSpan.FromMilliseconds(50);
+
         private readonly ITextExchangeHost _host;
 
         internal TextExchangeEngine(ITextExchangeHost host)
@@ -314,7 +321,17 @@ namespace Daqifi.Core.Device.Internal
                 // part-way and left the device half-way into the state it was establishing.
                 exchangeStarted = true;
 
-                var sw = Stopwatch.StartNew();
+                // Elapsed time for this exchange, read through the device's clock rather than a
+                // Stopwatch (issue #637). On the real device TimeProvider.System.GetTimestamp() IS
+                // Stopwatch.GetTimestamp(), so this is the same monotonic tick source it always
+                // was — still deliberately not a wall clock, because a clock that steps (NTP, a
+                // correction) would move these deadlines under a request already in flight. What
+                // it buys is a test that can drive the first-response timeout below without
+                // waiting it out.
+                var clock = _host.TimeProvider;
+                var startedAt = clock.GetTimestamp();
+                TimeSpan Elapsed() => clock.GetElapsedTime(startedAt);
+                long ElapsedMs() => (long)Elapsed().TotalMilliseconds;
 
                 // Prepare phase, if any. Deliberately here: inside the lock, so no competing text
                 // exchange can interleave between it and the setup action below and undo the state
@@ -325,7 +342,7 @@ namespace Daqifi.Core.Device.Internal
                 {
                     await prepareAsync(cancellationToken).ConfigureAwait(false);
 
-                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Prepare phase completed at {ElapsedMs}ms", ElapsedMs()));
                 }
 
                 // Let anything queued before this exchange opened reach the wire while the protobuf
@@ -450,7 +467,7 @@ namespace Daqifi.Core.Device.Internal
                     // consumer thread's blocking Read will unblock within 500ms.
                     SuspendInboundConsumer();
 
-                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Protobuf consumer stopped at {ElapsedMs}ms", ElapsedMs()));
 
                     // Create a temporary text consumer on the same stream.
                     //
@@ -524,9 +541,9 @@ namespace Daqifi.Core.Device.Internal
                     textConsumer.Start();
                     // ConfigureAwait(false): the lock is held, so resuming on a captured
                     // sync context (e.g. UI thread) would deadlock if that thread calls Disconnect().
-                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TextConsumerSettleDelay, clock, cancellationToken).ConfigureAwait(false);
 
-                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Text consumer started at {ElapsedMs}ms", ElapsedMs()));
 
                     // Mark the boundary between "already in flight" and "answers to this exchange".
                     // Anything captured before the setup action has sent anything is a late reply to
@@ -606,7 +623,7 @@ namespace Daqifi.Core.Device.Internal
                     // this exchange's own response timeout.
                     _host.OnSendBoundaryCaptured();
 
-                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Setup action completed at {ElapsedMs}ms", ElapsedMs()));
 
                     // Whether anything beyond staleLineCount would actually survive the projection
                     // below as evidence this exchange got an answer -- i.e. not a blank that will be
@@ -642,10 +659,11 @@ namespace Daqifi.Core.Device.Internal
                     // exchange the moment the inactivity window actually expires. No timeout is
                     // shortened here and no wait is skipped — only the quantisation is gone.
                     //
-                    // Timed off the Stopwatch rather than DateTime.UtcNow: these are elapsed-time
-                    // deadlines, and a wall clock that steps (NTP, a DST-less clock correction)
-                    // would move them under a request already in flight.
-                    var waitStart = sw.Elapsed;
+                    // Timed off the clock's monotonic timestamp rather than DateTime.UtcNow:
+                    // these are elapsed-time deadlines, and a wall clock that steps (NTP, a
+                    // DST-less clock correction) would move them under a request already in
+                    // flight. GetElapsedTime keeps that property for the fake clock too.
+                    var waitStart = Elapsed();
                     var lastMessageAt = waitStart;
                     var maxWait = TimeSpan.FromMilliseconds(responseTimeoutMs * 5);
 
@@ -675,7 +693,7 @@ namespace Daqifi.Core.Device.Internal
 
                     while (true)
                     {
-                        var now = sw.Elapsed;
+                        var now = Elapsed();
 
                         // The overall ceiling, unchanged: collection never runs longer than this
                         // however busy the device is, so a device that talks forever cannot hold
@@ -727,7 +745,7 @@ namespace Daqifi.Core.Device.Internal
                             // this exchange holds the device's operation lock across it, so
                             // resuming on a captured sync context would deadlock if that thread
                             // calls Disconnect().
-                            await lineArrived.WaitAsync(waitFor, cancellationToken).ConfigureAwait(false);
+                            await lineArrived.WaitAsync(waitFor, clock, cancellationToken).ConfigureAwait(false);
                         }
                         catch (TimeoutException)
                         {
@@ -740,7 +758,7 @@ namespace Daqifi.Core.Device.Internal
                         if (currentCount > observedLineCount)
                         {
                             observedLineCount = currentCount;
-                            lastMessageAt = sw.Elapsed;
+                            lastMessageAt = Elapsed();
 
                             // A count increase is not the same thing as an answer: the new line can
                             // be a leftover blank that the projection below will discard. Asking
@@ -750,7 +768,7 @@ namespace Daqifi.Core.Device.Internal
                             if (!hasReceivedAny && HasResponseEvidenceBeyondStaleBoundary())
                             {
                                 hasReceivedAny = true;
-                                Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                                Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] First response at {ElapsedMs}ms", ElapsedMs()));
                             }
                         }
                     }
@@ -763,7 +781,7 @@ namespace Daqifi.Core.Device.Internal
                     _host.OnReplyWaitCompleted(hasReceivedAny);
 
                     var collectedLineCount = CollectedLineCount();
-                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", sw.ElapsedMilliseconds, collectedLineCount));
+                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Collection complete at {ElapsedMs}ms, {LineCount} lines", ElapsedMs(), collectedLineCount));
 
                     // Stop the text consumer
                     textConsumer.StopSafely();
@@ -785,7 +803,7 @@ namespace Daqifi.Core.Device.Internal
                     // Restart the protobuf consumer
                     RestartMessageConsumerAfterSwap();
 
-                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", sw.ElapsedMilliseconds));
+                    Log(logger => logger.LogDebug("[ExecuteTextCommandAsync] Total elapsed: {ElapsedMs}ms", ElapsedMs()));
                 }
 
                 // The text consumer has been stopped and disposed by this point, but both are

@@ -179,6 +179,7 @@ public class ConnectionGuardTests
         public bool HoldsOperationLock => throw new NotSupportedException();
         public bool IsInsideTextExchange { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
         public ILogger Logger => throw new NotSupportedException();
+        public TimeProvider TimeProvider => TimeProvider.System;
         public void AttachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) => throw new NotSupportedException();
         public void DetachInboundHandler(IMessageConsumer<DaqifiOutMessage> consumer) => throw new NotSupportedException();
         public Task WaitForOperationLockAsync(CancellationToken cancellationToken) => throw new NotSupportedException();

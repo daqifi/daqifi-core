@@ -3,13 +3,16 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device.SdCard;
+using Daqifi.Core.Tests.TestSupport;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace Daqifi.Core.Tests.Device.SdCard;
@@ -1249,6 +1252,70 @@ public class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task DownloadSdCardFileAsync_OnTheShippingBudget_IsAbandonedAtItsHardDeadline()
+    {
+        // The same watchdog as the test above (#399/#401), but on the budget the library actually
+        // ships — thirty minutes, plus the five-second grace HardDeadlineFor adds — asserted on a
+        // stepped clock (issue #637).
+        //
+        // That budget is why the test above uses two seconds instead. Read its comment: the two
+        // seconds are not a scenario, they are a compromise between "long enough that the settle
+        // delay cannot slip past the deadline on a loaded runner" and "short enough to sit in a
+        // unit-test suite" — and the compromise had already lost once on macOS CI, turning main
+        // red after every test had passed. On a clock nobody but this test can move, neither
+        // pressure exists: the deadline cannot beat the settle delay, because the settle delay is
+        // on the same clock and this test decides when each of them elapses.
+        var clock = new FakeTimeProvider();
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = new FakeHost
+        {
+            IsStreaming = true,
+            TimeProvider = clock,
+            SdCardDownloadTimeout = TimeSpan.FromMinutes(30),
+            RawCaptureStreamFactory = () => new ParkedStream(entered, release.Task),
+        };
+        var ops = new SdCardOperations(host);
+
+        // Deliberately not disposed, for the same reason as the test above: the worker is still
+        // running when the call returns and may still touch this stream.
+        var destination = new MemoryStream();
+
+        using var guard = new CancellationTokenSource(ParkedTestBudget);
+
+        var download = ops.DownloadSdCardFileAsync("data.bin", destination);
+
+        try
+        {
+            // Phase one: walk the clock forward in slices the size of the SD interface settle
+            // delay, until the transfer has sent its GET and parked in the read. Slices rather
+            // than one jump, because jumping the whole budget here would abandon the transfer
+            // before it ever reached the wire — which is precisely the failure the two-second
+            // test above had to buy headroom against.
+            await FakeClockPump.UntilAsync(clock, entered.Task, TimeSpan.FromMilliseconds(100), ParkedTestBudget);
+
+            Assert.Contains("send:SYSTem:STORage:SD:GET \"data.bin\"", host.Calls);
+
+            // Phase two: the transfer is in flight and ignoring its token. Step past the hard
+            // deadline — thirty minutes and five seconds of device time — in one jump.
+            await FakeClockPump.UntilAsync(clock, download, TimeSpan.FromMinutes(31), ParkedTestBudget);
+
+            await Assert.ThrowsAsync<TimeoutException>(() => download.WaitAsync(guard.Token));
+
+            // Abandoned, not cleaned up after: the worker still owns the transport, so none of the
+            // restore writes may go out (#399/#401/#533).
+            Assert.DoesNotContain("send:" + DisableSd, host.Calls);
+            Assert.DoesNotContain("send:" + EnableLan, host.Calls);
+            Assert.Equal(0, host.StartStreamingCallCount);
+        }
+        finally
+        {
+            release.TrySetResult(true);
+            _ = download.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
+        }
+    }
+
+    [Fact]
     public async Task DownloadSdCardFileAsync_OverWifiWithoutTheFeature_ThrowsBeforeTouchingTheWire()
     {
         var host = new FakeHost
@@ -1461,6 +1528,12 @@ public class SdCardOperationsCollaboratorTests
 
         public TimeSpan SdCardDownloadTimeout { get; set; } = TimeSpan.FromMinutes(30);
         public TimeSpan SdCardTransferIdleTimeout { get; set; } = TimeSpan.FromSeconds(20);
+
+        /// <summary>
+        /// The clock the SD operations read (issue #637). Settable so a test can hand them a
+        /// <c>FakeTimeProvider</c> and step one of the budgets above forward rather than spend it.
+        /// </summary>
+        public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
         /// <summary>The one feature <see cref="EnsureSupported"/> refuses; null means everything is supported.</summary>
         public DeviceFeature? UnsupportedFeature { get; set; }

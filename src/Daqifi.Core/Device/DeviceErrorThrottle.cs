@@ -57,16 +57,29 @@ internal sealed class DeviceErrorThrottle
     private readonly TimeSpan _interval;
 
     /// <summary>
+    /// The clock the spacing is measured on (issue #637). <see cref="TimeProvider.System"/> unless
+    /// a test substitutes one, and its <c>GetTimestamp</c> is <c>Stopwatch.GetTimestamp</c>, so the
+    /// production behaviour is byte-for-byte what it was.
+    /// </summary>
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>
     /// Initializes a new throttle.
     /// </summary>
     /// <param name="interval">
     /// Minimum spacing between raises of the same bucket. Defaults to <see cref="DefaultInterval"/>.
     /// <see cref="TimeSpan.Zero"/> disables collapsing entirely (every occurrence passes).
     /// </param>
+    /// <param name="timeProvider">
+    /// Clock the spacing is measured on. Defaults to <see cref="TimeProvider.System"/>, which is
+    /// the <see cref="Stopwatch"/> tick source this used before the parameter existed. A test
+    /// passes a fake one to step the interval forward rather than wait it out (issue #637).
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="interval"/> is negative.</exception>
-    public DeviceErrorThrottle(TimeSpan? interval = null)
+    public DeviceErrorThrottle(TimeSpan? interval = null, TimeProvider? timeProvider = null)
     {
         _interval = interval ?? DefaultInterval;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         if (_interval < TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
@@ -103,9 +116,9 @@ internal sealed class DeviceErrorThrottle
 
         lock (bucket)
         {
-            var now = Stopwatch.GetTimestamp();
+            var now = _timeProvider.GetTimestamp();
 
-            if (bucket.HasRaised && Stopwatch.GetElapsedTime(bucket.LastRaised, now) < _interval)
+            if (bucket.HasRaised && _timeProvider.GetElapsedTime(bucket.LastRaised, now) < _interval)
             {
                 // Saturate rather than overflow: a run long enough to wrap int is already
                 // "enormous", and a negative count would be worse than an inexact one.

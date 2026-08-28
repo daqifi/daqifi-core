@@ -1,5 +1,7 @@
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
+using Microsoft.Extensions.Time.Testing;
 using System.Diagnostics;
 using System.Text;
 
@@ -146,29 +148,47 @@ public class TextExchangeLineFramingTests
         // The control that keeps the fix honest. Counting blank lines as an answer must not turn
         // an unresponsive device into one that answered quickly — a silent link is still a silent
         // link, and the caller is entitled to the full first-response window before it gives up.
+        // On a stepped clock (issue #637). The window this asserts is three seconds long, and it
+        // used to be three seconds of the suite's wall time — for a test whose whole point is that
+        // nothing happens during them. Stepping the device's clock instead measures the same
+        // property more precisely: the old bound allowed the exchange to give up half a second
+        // early, because that slack was what kept a loaded runner from failing a correct
+        // implementation. A clock nobody else can move needs no slack.
+        var clock = new FakeTimeProvider();
         using var transport = new ScriptedReplyTransport("\r\n");
         using var device = new LineFramingTestableDevice("Silent Device", transport);
+        device.SetTimeProviderForTesting(clock);
 
         device.Connect();
 
-        var stopwatch = Stopwatch.StartNew();
-        var lines = await device.CallAsync(() => { /* never released: nothing reaches the stream */ });
-        stopwatch.Stop();
+        var call = device.CallAsync(() => { /* never released: nothing reaches the stream */ });
 
+        // Advance in slices and count them, rather than jumping straight to the deadline: the
+        // quantity under test is how much device time the exchange consumed before it gave up, and
+        // a single jump past the deadline would prove only that it finished eventually.
+        //
+        // Over-advancing is safe in the direction that matters. The exchange registers its wait
+        // when it reaches it, so a slice that lands before the registration just moves the clock
+        // on — which can only make the total larger, never smaller. An exchange that gave up early
+        // therefore still shows up as a total short of the timeout.
+        var advanced = await FakeClockPump.UntilAsync(clock, call, TimeSpan.FromMilliseconds(250));
+
+        Assert.True(call.IsCompleted, "the exchange never finished waiting out its response window.");
+
+        var lines = await call;
         Assert.Empty(lines);
 
-        // The mirror of AssertRecognisedTheReply, and the half of this control that no longer
-        // depends on the clock: silence must leave the exchange with nothing it would keep as an
-        // answer. If counting blank lines ever started counting a device that sent none, this
-        // flips to true here while the elapsed-time check below stays happily green.
+        // The mirror of AssertRecognisedTheReply: silence must leave the exchange with nothing it
+        // would keep as an answer. If counting blank lines ever started counting a device that sent
+        // none, this flips to true here while the elapsed check below stays happily green.
         Assert.False(
             device.RecognisedTheReply,
             "A silent device left the exchange believing it had been answered.");
 
         Assert.True(
-            stopwatch.ElapsedMilliseconds >= ResponseTimeoutMs - 500,
+            advanced >= TimeSpan.FromMilliseconds(ResponseTimeoutMs),
             $"A silent device should have used the whole {ResponseTimeoutMs}ms response window, "
-            + $"but the exchange gave up after {stopwatch.ElapsedMilliseconds}ms.");
+            + $"but the exchange gave up after {advanced.TotalMilliseconds:F0}ms of device time.");
 
         device.Disconnect();
     }
