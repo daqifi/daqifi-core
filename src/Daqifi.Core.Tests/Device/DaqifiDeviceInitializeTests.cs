@@ -270,6 +270,100 @@ namespace Daqifi.Core.Tests.Device
         }
 
         [Fact]
+        public async Task InitializeAsync_EndsTheSetupSequenceWithTheErrorQueueQuery()
+        {
+            // Issue #667 item 2. None of the four setup commands answers unless something goes
+            // wrong, so the text exchange had nothing to complete on and waited out its whole
+            // 1000ms response timeout on every connect. The error-queue query gives it a reply to
+            // finish on — the same terminator the SD directory listing uses (#396) — so it has to
+            // be sent, and sent last, or it terminates nothing.
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+
+            await device.InitializeAsync();
+
+            var sentData = device.DirectSentMessages.Select(m => m.Data).ToList();
+            var terminatorIndex = sentData.FindIndex(d => d.Contains("SYSTem:ERRor?"));
+            var lastSetupIndex = sentData.FindIndex(d => d.Contains("SYSTem:STReam:FORmat 0"));
+
+            Assert.True(terminatorIndex >= 0, "The init sequence must query the error queue.");
+            Assert.True(
+                terminatorIndex > lastSetupIndex,
+                "The terminator must follow the setup commands, or it cannot report on them.");
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenErrorQueueReportsNoError_SucceedsWithoutRetrying()
+        {
+            // The terminator's ordinary reply on a healthy device. It is emphatically not a
+            // failure, and it contains the word "error" — so a check that matched on message text
+            // rather than parsing the code would make every single connect retry and then throw.
+            var device = new TestableDaqifiDevice("TestDevice",
+                textCommandResponse: new[] { "0,\"No error\"\r\n" });
+            device.Connect();
+
+            await device.InitializeAsync();
+
+            Assert.Equal(DeviceState.Ready, device.State);
+            Assert.Equal(1, device.TextCommandAttemptCount);
+        }
+
+        [Theory]
+        [InlineData("-200,\"Execution error\"\r\n")]
+        [InlineData("-113,\"Undefined header\"\r\n")]
+        public async Task InitializeAsync_WhenErrorQueueReportsAFailure_ThrowsTypedExceptionAfterRetry(
+            string errorReply)
+        {
+            // The error-queue reply carries a bare code with no ERROR token, so IsScpiErrorLine
+            // does not match it — before #667 item 2 added the query, a setup command that failed
+            // silently (recorded in the queue rather than volunteered) was never noticed at all.
+            var device = new TestableDaqifiDevice("TestDevice",
+                textCommandResponse: new[] { errorReply });
+            device.Connect();
+
+            var ex = await Assert.ThrowsAsync<ScpiInitializationErrorException>(
+                () => device.InitializeAsync());
+
+            Assert.Equal(errorReply.Trim(), ex.LastScpiError);
+            Assert.Equal(DeviceState.Error, device.State);
+            Assert.Equal(2, device.TextCommandAttemptCount);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_AsksForAWindowLongEnoughForTheVerdictToTrailAnEcho()
+        {
+            // The terminator's reply trails the commands, and on a device that echoes it is an echo
+            // line that starts the inactivity clock. The other two users of this same query raise
+            // their completion window to 1000ms for that reason; this path takes 500ms instead —
+            // long enough for a reply that arrives ~6ms after the write on the bench, while still
+            // leaving the saving #667 item 2 exists for. Pinned because it is a deliberate
+            // divergence from the sibling call sites, not an oversight, and because reverting to
+            // the 250ms default would silently narrow it.
+            var device = new TestableDaqifiDevice("TestDevice");
+            device.Connect();
+
+            await device.InitializeAsync();
+
+            Assert.Equal(500, device.LastCompletionTimeoutMs);
+            Assert.Equal(1000, device.LastResponseTimeoutMs);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WithPreserveActiveStream_DoesNotReadTheErrorQueue()
+        {
+            // Reading the error queue pops the entry it returns. An observe session must not take
+            // one that belongs to the session actually driving the device, so it forgoes the
+            // terminator — and the response-timeout saving with it (#385, #667).
+            var device = new TestableDaqifiDevice("TestDevice") { PreserveActiveStream = true };
+            device.Connect();
+
+            await device.InitializeAsync();
+
+            var sentData = device.DirectSentMessages.Select(m => m.Data).ToList();
+            Assert.DoesNotContain(sentData, d => d.Contains("SYSTem:ERRor?"));
+        }
+
+        [Fact]
         public async Task InitializeAsync_WhenChannelsPopulate_ExposesPopulatedChannels()
         {
             // Arrange — device responds to GetDeviceInfo by populating channels
@@ -525,6 +619,16 @@ namespace Daqifi.Core.Tests.Device
             public int TextCommandAttemptCount { get; private set; }
 
             /// <summary>
+            /// The response and completion timeouts the last text exchange asked for. The init
+            /// sequence's completion window is what its saving comes out of (#667), so it is a
+            /// deliberate value rather than an incidental one, and a test can check it.
+            /// </summary>
+            public int LastResponseTimeoutMs { get; private set; }
+
+            /// <inheritdoc cref="LastResponseTimeoutMs"/>
+            public int LastCompletionTimeoutMs { get; private set; }
+
+            /// <summary>
             /// When true, a GetDeviceInfo request synchronously populates channels (simulating
             /// the device's status response). Settable so tests can toggle the behavior between
             /// initialization attempts.
@@ -617,6 +721,8 @@ namespace Daqifi.Core.Tests.Device
                 Func<Task>? finalizeAsync = null,
                 bool keepBlankLines = false)
             {
+                LastResponseTimeoutMs = responseTimeoutMs;
+                LastCompletionTimeoutMs = completionTimeoutMs;
                 return RunTextExchangeAsync(
                     _ => { setupAction(); return Task.CompletedTask; },
                     cancellationToken,
@@ -633,6 +739,8 @@ namespace Daqifi.Core.Tests.Device
                 int completionTimeoutMs = 250,
                 CancellationToken cancellationToken = default)
             {
+                LastResponseTimeoutMs = responseTimeoutMs;
+                LastCompletionTimeoutMs = completionTimeoutMs;
                 return RunTextExchangeAsync(setupActionAsync, cancellationToken, prepareAsync: null, finalizeAsync: null);
             }
 
