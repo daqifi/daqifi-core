@@ -21,6 +21,13 @@ namespace Daqifi.Core.Device.Capabilities;
 /// property that is <c>null</c> means "this document did not state it", never "the device does not
 /// have it".
 /// </para>
+/// <para>
+/// The document is the device's own account of itself, and it is accurate everywhere Core has
+/// checked it against hardware — with one exception. <see cref="CapabilityChannel.PwmMinimumFrequencyHz"/>
+/// advertises 1 Hz on every supported firmware, a frequency the hardware cannot actually produce;
+/// use <see cref="DaqifiStreamingDevice.MinPwmFrequencyHz"/> as the PWM floor instead. See that
+/// property's remarks for the detail.
+/// </para>
 /// </remarks>
 public sealed class CapabilityDocument
 {
