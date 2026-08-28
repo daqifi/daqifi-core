@@ -529,6 +529,14 @@ namespace Daqifi.Core.Tests.Device
 
         #region Cost
 
+        // The two tests below are coarse guards, not instruments. They answer one yes/no question
+        // each - does this allocate per call, and does attaching the aggregator cost the decode
+        // path anything - and they answer it with a hand-rolled warmup on whatever machine the
+        // suite happens to be running on, which is exactly the arrangement issue #531 was filed
+        // about. The instrument is src/Daqifi.Core.Benchmarks (issue #640): StreamDecodeBenchmarks
+        // reports allocation per frame under [MemoryDiagnoser], with BenchmarkDotNet handling
+        // warmup and tiering. Take a number from there; take a pass/fail from here.
+
         [Fact]
         public void Record_AfterTheFirstSamplePerChannel_AllocatesNothing()
         {

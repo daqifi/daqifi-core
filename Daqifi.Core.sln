@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Mcp", "src\Daqifi.Mc
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Mcp.Tests", "src\Daqifi.Mcp.Tests\Daqifi.Mcp.Tests.csproj", "{209097AD-D34D-425B-8F22-0936F26C83D3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daqifi.Core.Benchmarks", "src\Daqifi.Core.Benchmarks\Daqifi.Core.Benchmarks.csproj", "{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -71,6 +73,18 @@ Global
 		{209097AD-D34D-425B-8F22-0936F26C83D3}.Release|x64.Build.0 = Release|Any CPU
 		{209097AD-D34D-425B-8F22-0936F26C83D3}.Release|x86.ActiveCfg = Release|Any CPU
 		{209097AD-D34D-425B-8F22-0936F26C83D3}.Release|x86.Build.0 = Release|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Debug|x64.Build.0 = Debug|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Debug|x86.Build.0 = Debug|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Release|x64.ActiveCfg = Release|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Release|x64.Build.0 = Release|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Release|x86.ActiveCfg = Release|Any CPU
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -80,5 +94,6 @@ Global
 		{A3E04AD3-E095-48CD-99C7-BD82EF2AB128} = {5412868F-5B63-486D-8EA6-ED8C83418517}
 		{8E836FD9-80B1-4245-8D7A-94D6FAB7021D} = {5412868F-5B63-486D-8EA6-ED8C83418517}
 		{209097AD-D34D-425B-8F22-0936F26C83D3} = {5412868F-5B63-486D-8EA6-ED8C83418517}
+		{BA7A6AF9-CB05-49DE-88F5-D5A95F187ED6} = {5412868F-5B63-486D-8EA6-ED8C83418517}
 	EndGlobalSection
 EndGlobal

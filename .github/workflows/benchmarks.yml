@@ -1,0 +1,89 @@
+name: Benchmarks
+
+# On demand only, never on a pull request (issue #640). Timings on a shared GitHub
+# runner are far too noisy to gate a merge on: a perf check that fails a green PR
+# once a week lands straight back in the #634/#632 flake pattern, and the fix for
+# that is not a wider tolerance, it is not gating. Run this before a release, or
+# either side of a change that claims a performance win, and paste the table into
+# the ticket that claims it.
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: 'BenchmarkDotNet filter, e.g. *Decode* or *SdCard*'
+        required: false
+        default: '*'
+        type: string
+      job:
+        description: 'BenchmarkDotNet job. "short" for a quick look, "default" for numbers worth recording.'
+        required: false
+        default: 'default'
+        type: choice
+        options:
+          - default
+          - short
+
+jobs:
+  benchmark:
+    name: benchmark
+    # Pinned to one OS on purpose. A benchmark number is only meaningful against
+    # another number from the same machine shape, and comparing a run on a Windows
+    # runner with a baseline taken on a Linux one would produce a "regression" that
+    # is nothing but the runner. The cross-platform question CI answers is
+    # correctness (the three-OS test matrix); this answers a different one.
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: |
+          9.0.x
+          10.0.x
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+        restore-keys: |
+          nuget-${{ runner.os }}-
+
+    # BenchmarkDotNet builds and launches its own process per benchmark, so this is
+    # `dotnet run` rather than a build-then-test split.
+    #
+    # The filter arrives through the environment, not through ${{ }} interpolation into
+    # the script. `filter` is a free-text input, so interpolating it would splice whatever
+    # was typed straight into the shell — a value containing a quote closes the quoting and
+    # the rest runs as commands, on a runner holding this repo's token. `job` is a choice
+    # input with two fixed options, so it has no such freedom and is interpolated directly.
+    - name: Run benchmarks
+      env:
+        FILTER: ${{ inputs.filter }}
+      run: |
+        dotnet run -c Release \
+          --project src/Daqifi.Core.Benchmarks/Daqifi.Core.Benchmarks.csproj \
+          -- --filter "$FILTER" \
+             ${{ inputs.job == 'short' && '--job short' || '' }} \
+             --exporters github markdown json
+
+    # The whole point of a manual run: the tables have to be readable afterwards
+    # without re-running anything.
+    - name: Summarize
+      if: always()
+      run: |
+        for report in BenchmarkDotNet.Artifacts/results/*-report-github.md; do
+          [ -e "$report" ] || continue
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+        done
+
+    - name: Upload reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-reports
+        path: BenchmarkDotNet.Artifacts/results/
+        if-no-files-found: warn
