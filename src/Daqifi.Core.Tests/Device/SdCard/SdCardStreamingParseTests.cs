@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.SdCard;
 using Xunit;
 
@@ -147,6 +148,83 @@ public class SdCardStreamingParseTests
 
         // Bounding the config scan must not cost samples.
         Assert.Equal(41, (await ToListAsync(boundedSession.Samples)).Count);
+    }
+
+    [Fact]
+    public async Task ParseAsync_StatusMessageStatesTheClock_ConfigScanStopsAtIt()
+    {
+        // Issue #697. When the log opens with a status message that states the timestamp clock,
+        // that message settles the configuration on its own — the embedded-field scan over the
+        // following messages is skipped, and whatever it would have found is discarded unread.
+        // The scan used to read ConfigurationScanMessageLimit messages (512 by default) anyway,
+        // so opening such a log decoded 512 messages and threw 511 of them away before the
+        // caller saw a single sample.
+        //
+        // A small read buffer turns that into a byte count: stopping at the status message is
+        // one buffer, while grinding through the whole look-ahead window is dozens.
+        var builder = new SdCardTestFileBuilder();
+        builder.AddMessage(SdCardTestFileBuilder.CreateStatusMessage(timestampFreq: 1000));
+        for (var i = 0; i < 2_000; i++)
+        {
+            builder.AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: (uint)((i + 1) * 1000),
+                analogFloatValues: new[] { (float)i }));
+        }
+
+        using var inner = builder.Build();
+        await using var counting = new CountingStream(inner);
+
+        const int bufferSize = 256;
+        var session = await new SdCardFileParser().ParseAsync(
+            counting, "status_first.bin", new SdCardParseOptions { BufferSize = bufferSize });
+
+        var enumerator = session.Samples.GetAsyncEnumerator();
+        await using (enumerator.ConfigureAwait(false))
+        {
+            Assert.True(await enumerator.MoveNextAsync());
+        }
+
+        // The config pass stops at the status message and the sample pass stops at the first
+        // sample: one read buffer each, with room to spare for a straddling frame.
+        Assert.True(
+            counting.BytesRead <= bufferSize * 4,
+            $"Read {counting.BytesRead} bytes to produce one sample; the configuration scan " +
+            "should have stopped at the leading status message.");
+
+        // ...and stopping early cost nothing: the configuration is the one the file states.
+        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequency);
+        Assert.Equal(8, session.DeviceConfig.AnalogPortCount);
+        Assert.Equal("12345", session.DeviceConfig.DeviceSerialNumber);
+    }
+
+    [Fact]
+    public async Task ParseAsync_StatusMessageWithoutTheClock_ConfigScanKeepsReading()
+    {
+        // The other side of the early exit above: a status message that does NOT state the
+        // clock settles nothing, so the scan must go on reading until it finds one. Pinning
+        // this keeps the #697 optimization from being widened into "stop at the first message",
+        // which would silently drop the timestamp frequency for this firmware shape.
+        var statusMessage = new DaqifiOutMessage { AnalogInPortNum = 4, DigitalPortNum = 2 };
+
+        var builder = new SdCardTestFileBuilder().AddMessage(statusMessage);
+        for (var i = 0; i < 300; i++)
+        {
+            builder.AddMessage(SdCardTestFileBuilder.CreateStreamMessage(
+                timestamp: (uint)((i + 1) * 1000),
+                analogFloatValues: new[] { (float)i }));
+        }
+
+        // The clock only turns up well past the first message.
+        var late = SdCardTestFileBuilder.CreateStreamMessage(301_000, analogFloatValues: new[] { 301f });
+        late.TimestampFreq = 1000;
+        builder.AddMessage(late);
+
+        using var stream = builder.Build();
+        var session = await new SdCardFileParser().ParseAsync(stream, "late_clock.bin");
+
+        Assert.Equal(1000u, session.DeviceConfig!.TimestampFrequency);
+        Assert.Equal(4, session.DeviceConfig.AnalogPortCount);
+        Assert.Equal(2, session.DeviceConfig.DigitalPortCount);
     }
 
     [Fact]
