@@ -562,6 +562,12 @@ namespace Daqifi.Core.Device
         private const int InitScpiErrorRetryDelayMs = 150;
 
         /// <summary>
+        /// Delay in milliseconds between the stream-state commands of the <see cref="InitializeAsync"/>
+        /// SCPI setup sequence, giving the firmware time to act on each one before the next arrives.
+        /// </summary>
+        private const int InitScpiSettleDelayMs = 100;
+
+        /// <summary>
         /// Owns THE device operation lock and the backlog of sends parked behind it. Every text
         /// exchange, every <see cref="RunExclusiveAsync{TResult}"/> block, every deferred
         /// <see cref="Send{T}"/> and both teardown paths coordinate through this one collaborator
@@ -3242,8 +3248,20 @@ namespace Daqifi.Core.Device
                         await Task.Delay(InitScpiErrorRetryDelayMs, cancellationToken).ConfigureAwait(false);
                     }
 
-                    initLines = await ExecuteTextCommandAsync(() =>
+                    // The async setup overload, so the settle delays between commands are awaited
+                    // rather than blocking the thread-pool thread in Thread.Sleep for 300ms
+                    // (issue #667, #485 success criterion 3). Awaiting also makes them
+                    // cancellable, so a cancelled InitializeAsync no longer has to wait out a
+                    // sleep already in progress before it can observe the token.
+                    initLines = await ExecuteTextCommandAsync(async token =>
                     {
+                        // The token is observed immediately before every write, not just by the
+                        // delays. An awaited Task.Delay only sees cancellation while it is still
+                        // pending, so cancellation landing in the window between a delay
+                        // completing and the next Send would otherwise still put a state-changing
+                        // command on the wire after the caller had asked to stop.
+                        token.ThrowIfCancellationRequested();
+
                         // Echo is a per-device text-mode setting, not stream state: this session
                         // needs it off to parse its own replies, and the value is the same one any
                         // other Core session already set. Safe to send either way.
@@ -3258,13 +3276,16 @@ namespace Daqifi.Core.Device
                             return;
                         }
 
-                        Thread.Sleep(100);
+                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.StopStreaming);
-                        Thread.Sleep(100);
+                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.TurnDeviceOn);
-                        Thread.Sleep(100);
+                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.SetProtobufStreamFormat);
                     }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
