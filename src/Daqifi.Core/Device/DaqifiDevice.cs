@@ -1658,6 +1658,15 @@ namespace Daqifi.Core.Device
             // and dropped, turning a caller's bug into a silently missing command.
             ArgumentNullException.ThrowIfNull(message);
 
+            // Remember what a running exchange sent last, so the engine can recognise the reply that
+            // ends it (issue #667 item 4). Guarded by the in-exchange flag, which is AsyncLocal: a
+            // send from any other flow — including one being parked by TryDeferSend just below —
+            // reads false there and so cannot overwrite the running exchange's last command.
+            if (_isInsideTextExchange.Value && message is IOutboundMessage<string> textCommand)
+            {
+                _lastExchangeTextCommand = textCommand.Data;
+            }
+
             if (_operations.TryDeferSend(message))
             {
                 return;
@@ -1665,6 +1674,19 @@ namespace Daqifi.Core.Device
 
             SendNow(message);
         }
+
+        /// <summary>
+        /// The last text command a running text exchange enqueued, or <c>null</c> outside one and
+        /// before the first send of each.
+        /// </summary>
+        /// <remarks>
+        /// Written only by the exchange's own flow (see <see cref="Send{T}"/>) and read only by
+        /// <see cref="ITextExchangeHost.IsExchangeTerminatorReply"/> on that same flow, but the two
+        /// sit either side of the awaits the setup action may contain, so the read can land on a
+        /// different thread-pool thread than the write. <c>volatile</c> for that hop; no lock,
+        /// because the seam that reads it is documented as taking none.
+        /// </remarks>
+        private volatile string? _lastExchangeTextCommand;
 
         /// <summary>
         /// Serializes writes on the producer-less path, where <see cref="Send{T}"/> writes to the
@@ -2013,7 +2035,105 @@ namespace Daqifi.Core.Device
         bool ITextExchangeHost.IsInsideTextExchange
         {
             get => _isInsideTextExchange.Value;
-            set => _isInsideTextExchange.Value = value;
+            set
+            {
+                // The engine raises this flag exactly once at the start of each exchange and each
+                // raw capture, which is also the moment command tracking has to start over: without
+                // the reset, an exchange whose setup action sends nothing at all would inherit the
+                // previous exchange's last command and could be ended by a reply to a query it
+                // never sent.
+                if (value)
+                {
+                    _lastExchangeTextCommand = null;
+                }
+
+                _isInsideTextExchange.Value = value;
+            }
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// <para>
+        /// One query terminates an exchange: <c>SYSTem:ERRor?</c>. Three call sites send it last for
+        /// exactly this purpose — the connect-time init (#667 item 2), the SD directory listing
+        /// (#396) and the confirming administration commands — but only the init exchange opts into
+        /// finishing early on it, via <see cref="EnableTerminatorShortCircuit"/>. The other two are
+        /// deliberately left on their completion windows; see that method for why.
+        /// </para>
+        /// <para>
+        /// The other two halves are load-bearing too. The command check keeps an exchange that never
+        /// asked from being ended by an error reply the device volunteered on its own, and the shape
+        /// check is the bare <c>-200,"Execution error"</c> form the query answers with — deliberately
+        /// not <see cref="ScpiResponseClassifier.IsScpiErrorLine"/>, which matches the
+        /// <c>**ERROR:</c> form a device volunteers alongside a command's output and would fire on a
+        /// complaint that is not this exchange's terminator at all.
+        /// </para>
+        /// </remarks>
+        bool ITextExchangeHost.IsExchangeTerminatorReply(string line)
+        {
+            return _terminatorShortCircuitEnabled.Value
+                   && string.Equals(
+                       _lastExchangeTextCommand,
+                       ScpiMessageProducer.GetSystemError.Data,
+                       StringComparison.Ordinal)
+                   && ScpiResponseClassifier.IsSystemErrorReplyLine(line);
+        }
+
+        /// <summary>
+        /// Whether the exchange running on this flow may finish as soon as its terminator reply
+        /// arrives, rather than waiting out its completion window.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="AsyncLocal{T}"/> so the opt-in reaches the engine and its wait loop — which run
+        /// as callees of the flow that sets it — without leaking to an exchange another thread is
+        /// running at the same time. The direction matters: an AsyncLocal write flows forward to
+        /// callees but never back to the caller, and callees are exactly who has to see this. That is
+        /// the opposite of <see cref="_lastExchangeTextCommand"/>, which is written by a callee (a
+        /// <see cref="Send{T}"/> inside the setup action) and so cannot be one.
+        /// </remarks>
+        private readonly AsyncLocal<bool> _terminatorShortCircuitEnabled = new();
+
+        /// <summary>
+        /// Lets the exchange started on this flow end as soon as its <c>SYSTem:ERRor?</c> reply
+        /// arrives. Dispose the returned scope to put it back.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Opt-in rather than always-on because the terminator cannot be proven to be <i>ours</i>. A
+        /// reply to an earlier, timed-out exchange that the device only emits once this exchange has
+        /// begun sending passes every boundary the engine has, and finishing on it truncates the
+        /// response. Where the response is a directory listing, the caller then caches a partial or
+        /// empty one and answers "is my file on the card?" from it — silently, because a listing cut
+        /// short before its end-of-listing marker reads as <c>Unterminated</c>, which is explicitly
+        /// not an error. That is the failure #396 exists to prevent, and it is not worth a second
+        /// off a listing.
+        /// </para>
+        /// <para>
+        /// The connect-time init exchange is the one place that hazard does not apply. It is the
+        /// first exchange on a freshly opened transport, so there is no earlier exchange of this
+        /// session to have left a reply in flight; a previous session's leftovers are what the
+        /// consumer settle and the stale-line boundary already cover; and its retry only runs once a
+        /// reply has been read, so the retry cannot inherit one either.
+        /// </para>
+        /// <para>
+        /// Widening this to the SD listing or the confirming commands needs the terminator tied to
+        /// the query that asked for it — a correlation SCPI does not offer — or a caller that can
+        /// detect a truncated response and re-run it on the full window. Neither is in scope here.
+        /// </para>
+        /// </remarks>
+        internal IDisposable EnableTerminatorShortCircuit()
+        {
+            _terminatorShortCircuitEnabled.Value = true;
+            return new TerminatorShortCircuitScope(this);
+        }
+
+        private sealed class TerminatorShortCircuitScope : IDisposable
+        {
+            private readonly DaqifiDevice _device;
+
+            internal TerminatorShortCircuitScope(DaqifiDevice device) => _device = device;
+
+            public void Dispose() => _device._terminatorShortCircuitEnabled.Value = false;
         }
 
         /// <inheritdoc />
@@ -3300,6 +3420,12 @@ namespace Daqifi.Core.Device
                     {
                         await Task.Delay(InitScpiErrorRetryDelayMs, cancellationToken).ConfigureAwait(false);
                     }
+
+                    // Scoped to this exchange alone, not to InitializeAsync as a whole: the
+                    // capability-document read and everything after it stay on their completion
+                    // windows. EnableTerminatorShortCircuit explains why this is the one exchange
+                    // that may finish early on its terminator (issue #667 item 4).
+                    using var terminatorShortCircuit = EnableTerminatorShortCircuit();
 
                     // The async setup overload, so the settle delays between commands are awaited
                     // rather than blocking the thread-pool thread in Thread.Sleep for 300ms
