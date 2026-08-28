@@ -2153,6 +2153,26 @@ namespace Daqifi.Core.Device
         }
 
         /// <summary>
+        /// Returns true when <paramref name="line"/> is a <c>SYSTem:ERRor?</c> reply reporting a
+        /// real error — the <c>&lt;code&gt;,"&lt;message&gt;"</c> form with a non-zero code, e.g.
+        /// <c>-200,"Execution error"</c>.
+        /// </summary>
+        /// <remarks>
+        /// Code 0 (<c>0,"No error"</c>) is the empty-queue answer and is emphatically not a
+        /// failure: it is the ordinary reply to the terminator the initialization sequence sends,
+        /// so treating it as one would make every healthy connect retry and then throw. The code is
+        /// parsed rather than the message matched, for the same reason
+        /// <see cref="DrainErrorQueueAsync"/> parses it — an error message that happened to contain
+        /// the words "no error" must not read as an empty queue.
+        /// </remarks>
+        private static bool IsFailedSystemErrorReply(string line)
+        {
+            return ScpiResponseClassifier.IsSystemErrorReplyLine(line)
+                   && ScpiResponseClassifier.TryParseSystemErrorReplyCode(line, out var code)
+                   && code != 0;
+        }
+
+        /// <summary>
         /// Lowest capability-document schema version daqifi-core will parse.
         /// </summary>
         public const int MinimumCapabilityDocumentApiVersion = 1;
@@ -3271,6 +3291,13 @@ namespace Daqifi.Core.Device
                         // session must not touch it — StopStreamData ends another session's
                         // acquisition outright (#385), and the power-state and stream-format
                         // commands reconfigure the same single acquisition it is running.
+                        //
+                        // The terminator below is skipped with them, deliberately. Reading the
+                        // error queue pops the entry it returns, so an observe session that asked
+                        // for it could consume an error belonging to the session actually driving
+                        // the device. That path keeps the old behaviour and still waits out the
+                        // full response timeout; it is the rarer one, and not paying 600ms there
+                        // is not worth taking an entry that is not ours.
                         if (preserveActiveStream)
                         {
                             return;
@@ -3288,13 +3315,39 @@ namespace Daqifi.Core.Device
                         token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.SetProtobufStreamFormat);
+
+                        // None of the four commands above answers unless something goes wrong, so
+                        // the exchange had nothing to complete on and sat out its whole 1000ms
+                        // response timeout on every connect (issue #667 item 2). Asking the error
+                        // queue gives it a reply to finish on: the wait loop flips to its 250ms
+                        // completion window as soon as this lands, which is the same terminator
+                        // trick the SD directory listing already uses for the same reason (#396).
+                        //
+                        // The settle delay before it is not optional. It is what makes the reply
+                        // mean something: the firmware has to have acted on SetProtobufStreamFormat
+                        // and queued any complaint about it before we ask, or a command that failed
+                        // would be reported as "0, No error" and the retry below would never run.
+                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+
+                        Send(ScpiMessageProducer.GetSystemError);
                     }, responseTimeoutMs: 1000, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                     // Shared with DaqifiStreamingDevice's SCPI error detection so both sites
                     // recognize the same set of delimiter-separated error formats — a bare
                     // "**ERROR"-prefix check would miss "ERROR: ..." and space/tab-delimited
                     // variants like "ERROR -200,..." or "ERROR\t-200,...".
-                    errorLine = initLines.FirstOrDefault(ScpiResponseClassifier.IsScpiErrorLine);
+                    //
+                    // Falling back to the error-queue reply is what keeps the terminator above
+                    // from being a question whose answer is thrown away. The two forms are
+                    // genuinely different shapes: a volunteered error carries an ERROR token
+                    // ("**ERROR: -200,..."), while the query answers with a bare code
+                    // ("-200,\"Execution error\""), which IsScpiErrorLine does not — and should
+                    // not — match. Checking both means a failed setup command is now caught
+                    // whether the device volunteered it or only recorded it, where before only
+                    // the volunteered form was ever seen.
+                    errorLine = initLines.FirstOrDefault(ScpiResponseClassifier.IsScpiErrorLine)
+                                ?? initLines.LastOrDefault(IsFailedSystemErrorReply);
                     if (errorLine == null)
                     {
                         break;
