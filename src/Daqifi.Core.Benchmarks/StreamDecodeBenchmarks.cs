@@ -54,13 +54,9 @@ public class StreamDecodeBenchmarks
     /// </summary>
     private const uint TicksPerFrame = 50_000;
 
-    private BenchmarkStreamingDevice _floatDevice = null!;
-    private BenchmarkStreamingDevice _rawDevice = null!;
-    private BenchmarkStreamingDevice _combinedDevice = null!;
-
-    private DaqifiOutMessage[] _floatFrames = null!;
-    private DaqifiOutMessage[] _rawFrames = null!;
-    private DaqifiOutMessage[] _combinedFrames = null!;
+    private DecodeCase _float = null!;
+    private DecodeCase _raw = null!;
+    private DecodeCase _combined = null!;
 
     /// <summary>
     /// Sink for the subscriber below, so the JIT cannot decide the sample never escapes and elide
@@ -71,41 +67,31 @@ public class StreamDecodeBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _floatFrames = BuildFrames(analogFloat: true, digital: false);
-        _rawFrames = BuildFrames(analogFloat: false, digital: false);
-        _combinedFrames = BuildFrames(analogFloat: true, digital: true);
-
-        _floatDevice = CreateDevice(digitalPortCount: 0);
-        _rawDevice = CreateDevice(digitalPortCount: 0);
-        _combinedDevice = CreateDevice(digitalPortCount: DigitalChannelCount);
+        _float = new DecodeCase(CreateDevice(digitalPortCount: 0), BuildFrames(analogFloat: true, digital: false));
+        _raw = new DecodeCase(CreateDevice(digitalPortCount: 0), BuildFrames(analogFloat: false, digital: false));
+        _combined = new DecodeCase(
+            CreateDevice(digitalPortCount: DigitalChannelCount),
+            BuildFrames(analogFloat: true, digital: true));
     }
 
     /// <summary>
     /// The common shape: the firmware's fast streaming encoder sends calibrated floats.
     /// </summary>
     [Benchmark(Baseline = true, OperationsPerInvoke = FrameCount)]
-    public void DecodeAnalogFloatFrame() => Decode(_floatDevice, _floatFrames);
+    public void DecodeAnalogFloatFrame() => _float.Replay();
 
     /// <summary>
     /// The same frame carrying raw ADC counts instead, which routes each value through
     /// <see cref="IAnalogChannel.GetScaledValue"/> — the per-sample calibration arithmetic.
     /// </summary>
     [Benchmark(OperationsPerInvoke = FrameCount)]
-    public void DecodeRawAnalogFrame() => Decode(_rawDevice, _rawFrames);
+    public void DecodeRawAnalogFrame() => _raw.Replay();
 
     /// <summary>
     /// Analog and digital in one frame, the shape a stream with DIO enabled produces.
     /// </summary>
     [Benchmark(OperationsPerInvoke = FrameCount)]
-    public void DecodeCombinedFrame() => Decode(_combinedDevice, _combinedFrames);
-
-    private static void Decode(BenchmarkStreamingDevice device, DaqifiOutMessage[] frames)
-    {
-        for (var i = 0; i < frames.Length; i++)
-        {
-            device.InjectStreamFrame(frames[i]);
-        }
-    }
+    public void DecodeCombinedFrame() => _combined.Replay();
 
     private BenchmarkStreamingDevice CreateDevice(int digitalPortCount)
     {
@@ -153,12 +139,9 @@ public class StreamDecodeBenchmarks
 
         for (var frame = 0; frame < FrameCount; frame++)
         {
-            var message = new DaqifiOutMessage
-            {
-                // A real device's tick counter advances between frames, so the gap detector and the
-                // timestamp reconstructor do their real work rather than seeing the same tick twice.
-                MsgTimeStamp = (uint)(frame + 1) * TicksPerFrame,
-            };
+            // The timestamp is not set here: DecodeCase.Replay stamps every frame as it goes, so
+            // the clock keeps advancing across invocations instead of restarting each time.
+            var message = new DaqifiOutMessage();
 
             for (var channel = 0; channel < AnalogChannelCount; channel++)
             {
@@ -181,6 +164,46 @@ public class StreamDecodeBenchmarks
         }
 
         return frames;
+    }
+
+    /// <summary>
+    /// One decode case: a device, the frames replayed into it, and the device clock those frames
+    /// are stamped with.
+    /// </summary>
+    /// <remarks>
+    /// The clock is the reason this is a class rather than two fields. BenchmarkDotNet invokes a
+    /// benchmark many times against the same instance, so a fixed set of timestamps baked into the
+    /// frames would restart the device clock at the top of every invocation — and the decoder is
+    /// stateful. Its timestamp anchor and gap detector would see a large backwards step once per
+    /// invocation, putting the first frame of each invocation down a different path from the other
+    /// 999 and making the first invocation differ from the rest.
+    ///
+    /// Stamping each frame as it is replayed keeps the clock monotonic for the whole run, so the
+    /// device looks like one long 1 kHz acquisition — including the genuine 32-bit tick rollover
+    /// every ~86 seconds of device time, which is a case the decoder is built to handle rather
+    /// than an artefact of the harness. The cost inside the measured loop is one addition and one
+    /// field write per frame, sub-nanosecond against a ~260 ns decode, and it allocates nothing.
+    /// </remarks>
+    private sealed class DecodeCase(BenchmarkStreamingDevice device, DaqifiOutMessage[] frames)
+    {
+        private uint _deviceTicks;
+
+        public void Replay()
+        {
+            for (var i = 0; i < frames.Length; i++)
+            {
+                // Deliberately unchecked: the device's tick counter is a rolling 32-bit value and
+                // wrapping is what it really does.
+                unchecked
+                {
+                    _deviceTicks += TicksPerFrame;
+                }
+
+                var frame = frames[i];
+                frame.MsgTimeStamp = _deviceTicks;
+                device.InjectStreamFrame(frame);
+            }
+        }
     }
 
     /// <summary>

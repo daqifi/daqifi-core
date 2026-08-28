@@ -53,11 +53,19 @@ jobs:
 
     # BenchmarkDotNet builds and launches its own process per benchmark, so this is
     # `dotnet run` rather than a build-then-test split.
+    #
+    # The filter arrives through the environment, not through ${{ }} interpolation into
+    # the script. `filter` is a free-text input, so interpolating it would splice whatever
+    # was typed straight into the shell — a value containing a quote closes the quoting and
+    # the rest runs as commands, on a runner holding this repo's token. `job` is a choice
+    # input with two fixed options, so it has no such freedom and is interpolated directly.
     - name: Run benchmarks
+      env:
+        FILTER: ${{ inputs.filter }}
       run: |
         dotnet run -c Release \
           --project src/Daqifi.Core.Benchmarks/Daqifi.Core.Benchmarks.csproj \
-          -- --filter '${{ inputs.filter }}' \
+          -- --filter "$FILTER" \
              ${{ inputs.job == 'short' && '--job short' || '' }} \
              --exporters github markdown json
 

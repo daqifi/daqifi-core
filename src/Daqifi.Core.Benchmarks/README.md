@@ -87,39 +87,39 @@ Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
-| DecodeAnalogFloatFrame | 257.9 ns | 1.38 KB |
-| DecodeRawAnalogFrame | 332.2 ns | 1.38 KB |
-| DecodeCombinedFrame | 820.5 ns | 2.78 KB |
+| DecodeAnalogFloatFrame | 257.7 ns | 1.38 KB |
+| DecodeRawAnalogFrame | 329.8 ns | 1.38 KB |
+| DecodeCombinedFrame | 814.6 ns | 2.78 KB |
 
 **Protobuf framing** — per frame:
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
-| ParseWholeFrames | 162.4 ns | 1.22 KB |
-| ParseWithTrailingPartialFrame | 166.2 ns | 1.22 KB |
+| ParseWholeFrames | 164.4 ns | 1.22 KB |
+| ParseWithTrailingPartialFrame | 163.0 ns | 1.22 KB |
 
 **Stream consumer** — per frame, end to end through the reader loop:
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
-| ConsumeScriptedStream | 196.1 ns | 1.33 KB |
+| ConsumeScriptedStream | 197.0 ns | 1.33 KB |
 
 **SD-card parsing** — per 10,000-row file, 8 analog channels:
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
-| ProtobufDrainAll | 4,800 µs | 16,880 KB |
-| ProtobufTimeToFirstSample | 1,627 µs | 6,754 KB |
-| CsvDrainAll | 5,556 µs | 15,212 KB |
+| ProtobufDrainAll | 4,636 µs | 16,880 KB |
+| ProtobufTimeToFirstSample | 1,623 µs | 6,754 KB |
+| CsvDrainAll | 5,412 µs | 15,212 KB |
 | CsvTimeToFirstSample | 1.96 µs | 13.6 KB |
-| JsonDrainAll | 7,040 µs | 7,181 KB |
-| JsonTimeToFirstSample | 2.09 µs | 9.9 KB |
+| JsonDrainAll | 7,042 µs | 7,181 KB |
+| JsonTimeToFirstSample | 2.10 µs | 9.9 KB |
 
 **Channel scaling** — per sample:
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
-| GetScaledValue | 4.26 ns | – |
+| GetScaledValue | 4.25 ns | – |
 | ApplyTransducerScaling | 0.67 ns | – |
 | ApplyIdentityScaling | 0.67 ns | – |
 
