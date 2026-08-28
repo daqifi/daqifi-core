@@ -127,46 +127,68 @@ public sealed class SdCardFileParser
         var fileCreatedDate = options.SessionStartTime
                               ?? SdCardFileListParser.TryParseDateFromLogFileName(fileName);
 
-        // Only the leading messages are held, never the whole file: firmware states the
+        // Only the leading messages are examined, never the whole file: firmware states the
         // configuration in the status message or in the first handful of stream messages.
         // No progress is reported for this pass — it is not the caller's read of the file.
-        var prefix = new List<DaqifiOutMessage>();
+        //
+        // The scan reads only as far as it has to. It used to read the whole
+        // ConfigurationScanMessageLimit window every time and decide afterwards, so the common
+        // case — a status message that states everything, which is then used on its own —
+        // decoded 512 messages and discarded 511 of them before the caller saw a sample
+        // (issue #697). Each break below is a point at which no later message can change the
+        // configuration that comes out of this pass.
+        SdCardDeviceConfiguration? statusConfig = null;
+        var scanner = new ConfigurationScanner();
+        var messagesScanned = 0;
         var limit = options.ConfigurationScanMessageLimit;
+
         await foreach (var message in openMessages(null, ct).WithCancellation(ct).ConfigureAwait(false))
         {
-            prefix.Add(message);
-            if (limit > 0 && prefix.Count >= limit)
+            // Some firmware versions embed config fields (e.g., AnalogInPortNum/TimestampFreq)
+            // inside stream messages, so we only treat the first message as a dedicated status
+            // message when it has no stream payload.
+            if (messagesScanned == 0 && !HasStreamPayload(message))
+            {
+                statusConfig = ExtractDeviceConfiguration(message);
+            }
+
+            messagesScanned++;
+            scanner.Add(message);
+
+            // A status message that stated the timestamp clock settles it: the embedded-field
+            // scan below is skipped entirely in that case, so what the rest of the file says is
+            // never consulted and there is nothing left to read for.
+            if (statusConfig is { TimestampFrequency: not 0 })
+            {
+                break;
+            }
+
+            // Every field the scan can find has been found.
+            if (scanner.IsComplete)
+            {
+                break;
+            }
+
+            if (limit > 0 && messagesScanned >= limit)
             {
                 break;
             }
         }
 
-        SdCardDeviceConfiguration? config = null;
-
-        // First, check if the first message is a dedicated status message.
-        // Some firmware versions embed config fields (e.g., AnalogInPortNum/TimestampFreq)
-        // inside stream messages, so we only treat the first message as status when it
-        // has no stream payload.
-        if (prefix.Count > 0 && !HasStreamPayload(prefix[0]))
-        {
-            config = ExtractDeviceConfiguration(prefix[0]);
-        }
+        var config = statusConfig;
 
         // If no dedicated status message was found, or the status message had no TimestampFreq,
-        // scan the leading messages for config fields. Device firmware often embeds config fields
-        // (TimestampFreq, DeviceSn, etc.) in streaming data messages rather than writing
-        // a separate status header.
+        // use the config fields scanned out of the leading messages. Device firmware often embeds
+        // config fields (TimestampFreq, DeviceSn, etc.) in streaming data messages rather than
+        // writing a separate status header.
         if (config == null || config.TimestampFrequency == 0)
         {
-            var scannedConfig = ScanMessagesForConfiguration(prefix);
+            var scannedConfig = scanner.ToConfiguration();
             if (scannedConfig != null)
             {
                 config = MergeConfigurations(config, scannedConfig);
             }
         }
-
-        // The prefix has served its purpose; the sample pass re-reads the log from the start.
-        prefix.Clear();
 
         // Whatever the file itself stated, captured before the override is merged in so the
         // two sources stay distinguishable when reporting which one was used.
@@ -227,6 +249,13 @@ public sealed class SdCardFileParser
     /// Deserializes protobuf messages from the stream, holding at most one read buffer plus
     /// the bytes of a straddling frame.
     /// </summary>
+    /// <remarks>
+    /// Each frame is handed on as it is decoded rather than after its whole chunk has been
+    /// parsed. Parsing the chunk first made the caller's first sample cost every frame in the
+    /// leading <see cref="SdCardParseOptions.BufferSize"/> bytes — about 1,300 of them at the
+    /// 64 KB default — which is what made this parser two to three orders of magnitude slower
+    /// to its first sample than the CSV and JSON parsers (issue #697).
+    /// </remarks>
     private static async IAsyncEnumerable<DaqifiOutMessage> ReadMessagesAsync(
         Stream stream,
         SdCardParseOptions options,
@@ -258,10 +287,35 @@ public sealed class SdCardFileParser
             // Strip end-of-file marker if present at the tail
             chunk = StripEndOfFileMarker(chunk);
 
-            var parsed = parser.ParseMessages(chunk, out var consumed);
+            var consumed = 0;
+            var framesFromChunk = 0;
 
-            // Carry unconsumed bytes forward. Computed before yielding so the reader's state
-            // is already consistent when the consumer pauses mid-chunk.
+            while (true)
+            {
+                // The parser only applies its leading-noise recovery before the first frame of
+                // a buffer, so framesFromChunk has to be per-chunk — exactly what the count of
+                // a whole-chunk parse used to say.
+                var step = parser.TryReadFrame(chunk, consumed, framesFromChunk > 0, out var frame, out var nextOffset);
+                if (step == ProtobufFrameStep.EndOfBuffer)
+                {
+                    break;
+                }
+
+                consumed = nextOffset;
+
+                if (step != ProtobufFrameStep.Frame)
+                {
+                    continue;
+                }
+
+                framesFromChunk++;
+                messagesRead++;
+                yield return frame!;
+            }
+
+            // Carry the bytes the parser did not consume — a frame straddling this chunk and
+            // the next. The inner loop has fully drained the chunk by now, so the reader's
+            // state is consistent again before the next read.
             if (consumed < chunk.Length)
             {
                 carry = new byte[chunk.Length - consumed];
@@ -272,23 +326,33 @@ public sealed class SdCardFileParser
                 carry = Array.Empty<byte>();
             }
 
-            foreach (var msg in parsed)
-            {
-                messagesRead++;
-                yield return msg.Data;
-            }
-
             progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messagesRead));
         }
 
         // Try to parse any remaining carry bytes (may contain a partial final message)
         if (carry.Length > 0)
         {
-            var parsed = parser.ParseMessages(carry, out _);
-            foreach (var msg in parsed)
+            var offset = 0;
+            var framesFromCarry = 0;
+
+            while (true)
             {
+                var step = parser.TryReadFrame(carry, offset, framesFromCarry > 0, out var frame, out var nextOffset);
+                if (step == ProtobufFrameStep.EndOfBuffer)
+                {
+                    break;
+                }
+
+                offset = nextOffset;
+
+                if (step != ProtobufFrameStep.Frame)
+                {
+                    continue;
+                }
+
+                framesFromCarry++;
                 messagesRead++;
-                yield return msg.Data;
+                yield return frame!;
             }
 
             progress?.Report(new SdCardParseProgress(totalBytesRead, totalBytes, messagesRead));
@@ -431,56 +495,75 @@ public sealed class SdCardFileParser
     }
 
     /// <summary>
-    /// Scans all messages for device configuration fields that may be embedded in streaming
-    /// data messages. Returns a merged configuration from the first non-zero value found
-    /// for each field, or null if no config fields are found in any message.
+    /// Collects the device configuration fields that firmware may embed in streaming data
+    /// messages, keeping the first non-zero value seen for each, and reporting when there is
+    /// nothing left to look for.
     /// </summary>
-    private static SdCardDeviceConfiguration? ScanMessagesForConfiguration(List<DaqifiOutMessage> messages)
+    /// <remarks>
+    /// Accumulating message by message rather than over a materialized list is what lets
+    /// <see cref="BuildSessionAsync"/> stop reading the moment the answer is settled, instead of
+    /// always reading <see cref="SdCardParseOptions.ConfigurationScanMessageLimit"/> messages
+    /// first (issue #697).
+    /// </remarks>
+    private sealed class ConfigurationScanner
     {
-        uint timestampFreq = 0;
-        uint analogPortNum = 0;
-        uint digitalPortNum = 0;
-        ulong deviceSn = 0;
-        string? devicePn = null;
-        string? fwRev = null;
-        IReadOnlyList<(double Slope, double Intercept)>? calibration = null;
-        uint resolution = 0;
-        IReadOnlyList<double>? portRange = null;
-        IReadOnlyList<double>? internalScaleM = null;
+        private uint _timestampFreq;
+        private uint _analogPortNum;
+        private uint _digitalPortNum;
+        private ulong _deviceSn;
+        private string? _devicePn;
+        private string? _fwRev;
+        private IReadOnlyList<(double Slope, double Intercept)>? _calibration;
+        private uint _resolution;
+        private IReadOnlyList<double>? _portRange;
+        private IReadOnlyList<double>? _internalScaleM;
 
-        foreach (var msg in messages)
+        /// <summary>
+        /// Gets a value indicating whether every field has been found, so no further message
+        /// can change the result.
+        /// </summary>
+        public bool IsComplete =>
+            _timestampFreq != 0 && _analogPortNum != 0 && _digitalPortNum != 0 &&
+            _deviceSn != 0 && _devicePn != null && _fwRev != null && _calibration != null &&
+            _resolution != 0 && _portRange != null && _internalScaleM != null;
+
+        /// <summary>
+        /// Takes whichever configuration fields <paramref name="msg"/> states and that have not
+        /// been seen already.
+        /// </summary>
+        public void Add(DaqifiOutMessage msg)
         {
-            if (timestampFreq == 0 && msg.TimestampFreq != 0)
+            if (_timestampFreq == 0 && msg.TimestampFreq != 0)
             {
-                timestampFreq = msg.TimestampFreq;
+                _timestampFreq = msg.TimestampFreq;
             }
 
-            if (analogPortNum == 0 && msg.AnalogInPortNum != 0)
+            if (_analogPortNum == 0 && msg.AnalogInPortNum != 0)
             {
-                analogPortNum = msg.AnalogInPortNum;
+                _analogPortNum = msg.AnalogInPortNum;
             }
 
-            if (digitalPortNum == 0 && msg.DigitalPortNum != 0)
+            if (_digitalPortNum == 0 && msg.DigitalPortNum != 0)
             {
-                digitalPortNum = msg.DigitalPortNum;
+                _digitalPortNum = msg.DigitalPortNum;
             }
 
-            if (deviceSn == 0 && msg.DeviceSn != 0)
+            if (_deviceSn == 0 && msg.DeviceSn != 0)
             {
-                deviceSn = msg.DeviceSn;
+                _deviceSn = msg.DeviceSn;
             }
 
-            if (devicePn == null && !string.IsNullOrEmpty(msg.DevicePn))
+            if (_devicePn == null && !string.IsNullOrEmpty(msg.DevicePn))
             {
-                devicePn = msg.DevicePn;
+                _devicePn = msg.DevicePn;
             }
 
-            if (fwRev == null && !string.IsNullOrEmpty(msg.DeviceFwRev))
+            if (_fwRev == null && !string.IsNullOrEmpty(msg.DeviceFwRev))
             {
-                fwRev = msg.DeviceFwRev;
+                _fwRev = msg.DeviceFwRev;
             }
 
-            if (calibration == null && msg.AnalogInCalM.Count > 0 && msg.AnalogInCalB.Count > 0)
+            if (_calibration == null && msg.AnalogInCalM.Count > 0 && msg.AnalogInCalB.Count > 0)
             {
                 var count = Math.Min(msg.AnalogInCalM.Count, msg.AnalogInCalB.Count);
                 var cal = new (double, double)[count];
@@ -489,52 +572,50 @@ public sealed class SdCardFileParser
                     cal[i] = (msg.AnalogInCalM[i], msg.AnalogInCalB[i]);
                 }
 
-                calibration = cal;
+                _calibration = cal;
             }
 
-            if (resolution == 0 && msg.AnalogInRes != 0)
+            if (_resolution == 0 && msg.AnalogInRes != 0)
             {
-                resolution = msg.AnalogInRes;
+                _resolution = msg.AnalogInRes;
             }
 
-            if (portRange == null && msg.AnalogInPortRange.Count > 0)
+            if (_portRange == null && msg.AnalogInPortRange.Count > 0)
             {
-                portRange = msg.AnalogInPortRange.Select(v => (double)v).ToArray();
+                _portRange = msg.AnalogInPortRange.Select(v => (double)v).ToArray();
             }
 
-            if (internalScaleM == null && msg.AnalogInIntScaleM.Count > 0)
+            if (_internalScaleM == null && msg.AnalogInIntScaleM.Count > 0)
             {
-                internalScaleM = msg.AnalogInIntScaleM.Select(v => (double)v).ToArray();
-            }
-
-            // If we've found all fields, stop scanning
-            if (timestampFreq != 0 && analogPortNum != 0 && digitalPortNum != 0 &&
-                deviceSn != 0 && devicePn != null && fwRev != null && calibration != null &&
-                resolution != 0 && portRange != null && internalScaleM != null)
-            {
-                break;
+                _internalScaleM = msg.AnalogInIntScaleM.Select(v => (double)v).ToArray();
             }
         }
 
-        // Only return a config if we found at least one meaningful field
-        if (timestampFreq == 0 && analogPortNum == 0 && digitalPortNum == 0 &&
-            deviceSn == 0 && devicePn == null && fwRev == null && calibration == null &&
-            resolution == 0 && portRange == null && internalScaleM == null)
+        /// <summary>
+        /// Returns what was found, or <c>null</c> when no message stated a single field.
+        /// </summary>
+        public SdCardDeviceConfiguration? ToConfiguration()
         {
-            return null;
-        }
+            // Only return a config if we found at least one meaningful field
+            if (_timestampFreq == 0 && _analogPortNum == 0 && _digitalPortNum == 0 &&
+                _deviceSn == 0 && _devicePn == null && _fwRev == null && _calibration == null &&
+                _resolution == 0 && _portRange == null && _internalScaleM == null)
+            {
+                return null;
+            }
 
-        return new SdCardDeviceConfiguration(
-            AnalogPortCount: (int)analogPortNum,
-            DigitalPortCount: (int)digitalPortNum,
-            TimestampFrequency: timestampFreq,
-            DeviceSerialNumber: deviceSn != 0 ? deviceSn.ToString() : null,
-            DevicePartNumber: devicePn,
-            FirmwareRevision: fwRev,
-            CalibrationValues: calibration,
-            Resolution: resolution,
-            PortRange: portRange,
-            InternalScaleM: internalScaleM);
+            return new SdCardDeviceConfiguration(
+                AnalogPortCount: (int)_analogPortNum,
+                DigitalPortCount: (int)_digitalPortNum,
+                TimestampFrequency: _timestampFreq,
+                DeviceSerialNumber: _deviceSn != 0 ? _deviceSn.ToString() : null,
+                DevicePartNumber: _devicePn,
+                FirmwareRevision: _fwRev,
+                CalibrationValues: _calibration,
+                Resolution: _resolution,
+                PortRange: _portRange,
+                InternalScaleM: _internalScaleM);
+        }
     }
 
     /// <summary>
