@@ -23,9 +23,10 @@ namespace Daqifi.Core.Tests.Channel;
 /// in shared private validators reached from more than one property or parameter — the
 /// <c>MinValue</c> and <c>MaxValue</c> setters both land on <c>RequireFinite</c>, and each passes
 /// its own <c>ParamName</c>. The census walks entry points, because <c>ParamName</c> is decided at
-/// the call site and that is what the caller reads; <see cref="GuardSite.GuardId"/> is how several
-/// entries say they cover one throw site, so the completeness check below still compares like with
-/// like.
+/// the call site and that is what the caller reads. The completeness check below still compares
+/// like with like: it identifies a throw site by the sentence the guard actually produced, so two
+/// entries that land on one <c>throw</c> collapse to one, and reaching a sentence nobody has seen
+/// before means reaching a <c>throw</c> nobody has seen before.
 /// </para>
 /// <para>
 /// The existing per-type tests are weaker on this ground on purpose: they assert the exception type
@@ -41,10 +42,6 @@ public class ChannelGuardCensusTests
     /// The file the guard is written in, relative to <c>Daqifi.Core/Channel</c>. Used by the
     /// completeness scan below to check this table against the source rather than against itself.
     /// </param>
-    /// <param name="GuardId">
-    /// The throw site this entry exercises. Entries that reach the same <c>throw</c> share a
-    /// <c>GuardId</c>, so the completeness check counts throw sites rather than entry points.
-    /// </param>
     /// <param name="Method">
     /// The member the caller invoked. Its signature is what <paramref name="ParamName"/> is
     /// resolved against, so a renamed parameter or property with a stale guard string fails here.
@@ -54,16 +51,20 @@ public class ChannelGuardCensusTests
     /// Expected <see cref="ArgumentOutOfRangeException.ActualValue"/>, or <c>null</c> for the two
     /// legacy guards listed in <see cref="GuardsThatOmitActualValue"/>.
     /// </param>
-    /// <param name="MessagePrefix">The guard's own message, before the framework's decoration.</param>
+    /// <param name="Message">
+    /// The guard's own sentence, exactly, before the framework's decoration. Also serves as the
+    /// throw site's identity: entries that reach the same <c>throw</c> observe the same sentence,
+    /// which is what lets the completeness check below count throw sites rather than entry points
+    /// without taking anyone's word for which is which.
+    /// </param>
     /// <param name="Act">Invokes the guard with an argument it must reject.</param>
     private sealed record GuardSite(
         string Site,
         string SourceFile,
-        string GuardId,
         MethodBase Method,
         string ParamName,
         object? ActualValue,
-        string MessagePrefix,
+        string Message,
         Action Act);
 
     /// <summary>
@@ -89,6 +90,46 @@ public class ChannelGuardCensusTests
         "AnalogChannel..ctor(channelNumber)",
         "DigitalChannel..ctor(channelNumber)",
     };
+
+    /// <summary>
+    /// Runs every censused guard and reports the file it is declared in alongside the sentence it
+    /// actually produced. The sentence is the throw site's identity: two entry points that land on
+    /// one <c>throw</c> observe the same sentence, and reaching a different sentence means reaching
+    /// a different <c>throw</c>.
+    /// </summary>
+    /// <remarks>
+    /// Observed rather than declared, on purpose. An identity the census merely asserts — a label
+    /// in the table saying "this entry covers that guard" — is checked by nobody, so a
+    /// mislabelled or duplicated entry could pad the count for a file and hide a guard that no
+    /// entry reaches. A sentence cannot be padded: producing a new one means actually reaching a
+    /// new <c>throw</c>.
+    /// </remarks>
+    private static IEnumerable<(string SourceFile, string Message)> ObserveGuards() =>
+        Census().Select(site =>
+        {
+            var ex = Assert.Throws<ArgumentOutOfRangeException>(site.Act);
+            return (site.SourceFile, GuardMessage(ex));
+        });
+
+    /// <summary>
+    /// The sentence the guard itself passed, recovered from the exception the caller receives.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ArgumentOutOfRangeException"/> renders its message as the guard's own text, then
+    /// <c>" (Parameter 'name')"</c>, then a second line carrying the actual value. Only the first
+    /// part is the guard's; the decoration varies per entry point (the <c>MinValue</c> and
+    /// <c>MaxValue</c> setters share a <c>throw</c> but name different parameters), so it has to
+    /// come off before the sentence can serve as the throw site's identity.
+    /// </remarks>
+    private static string GuardMessage(ArgumentOutOfRangeException ex)
+    {
+        var firstLine = ex.Message.Split('\n')[0].TrimEnd('\r');
+        var decoration = $" (Parameter '{ex.ParamName}')";
+
+        return firstLine.EndsWith(decoration, StringComparison.Ordinal)
+            ? firstLine[..^decoration.Length]
+            : firstLine;
+    }
 
     /// <summary>
     /// The COMPLETE set of range guards in <c>Channel</c>, reached through every public entry point
@@ -126,7 +167,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel..ctor(channelNumber)",
                 "AnalogChannel.cs",
-                "AnalogChannel..ctor(channelNumber)",
                 analogCtor,
                 "channelNumber",
                 null,
@@ -136,7 +176,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel..ctor(resolution)",
                 "AnalogChannel.cs",
-                "AnalogChannel.ValidateResolution",
                 analogCtor,
                 "resolution",
                 (uint)0,
@@ -150,7 +189,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel.MinValue",
                 "AnalogChannel.cs",
-                "AnalogChannel.RequireFinite",
                 Setter(typeof(AnalogChannel), nameof(AnalogChannel.MinValue)),
                 nameof(AnalogChannel.MinValue),
                 double.PositiveInfinity,
@@ -160,7 +198,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel.MaxValue",
                 "AnalogChannel.cs",
-                "AnalogChannel.RequireFinite",
                 Setter(typeof(AnalogChannel), nameof(AnalogChannel.MaxValue)),
                 nameof(AnalogChannel.MaxValue),
                 double.PositiveInfinity,
@@ -170,7 +207,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel.CalibrationM",
                 "AnalogChannel.cs",
-                "AnalogChannel.ValidateScaleFactor",
                 Setter(typeof(AnalogChannel), nameof(AnalogChannel.CalibrationM)),
                 nameof(AnalogChannel.CalibrationM),
                 0.0,
@@ -180,7 +216,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel.InternalScaleM",
                 "AnalogChannel.cs",
-                "AnalogChannel.ValidateScaleFactor",
                 Setter(typeof(AnalogChannel), nameof(AnalogChannel.InternalScaleM)),
                 nameof(AnalogChannel.InternalScaleM),
                 0.0,
@@ -190,7 +225,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel.CalibrationB",
                 "AnalogChannel.cs",
-                "AnalogChannel.ValidateOffset",
                 Setter(typeof(AnalogChannel), nameof(AnalogChannel.CalibrationB)),
                 nameof(AnalogChannel.CalibrationB),
                 TooBig,
@@ -200,7 +234,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogChannel.PortRange",
                 "AnalogChannel.cs",
-                "AnalogChannel.ValidatePortRange",
                 Setter(typeof(AnalogChannel), nameof(AnalogChannel.PortRange)),
                 nameof(AnalogChannel.PortRange),
                 0.0,
@@ -211,7 +244,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogOutputChannel..ctor(channelNumber)",
                 "AnalogOutputChannel.cs",
-                "AnalogOutputChannel..ctor(channelNumber)",
                 analogOutCtor,
                 "channelNumber",
                 -1,
@@ -221,7 +253,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogOutputChannel..ctor(resolutionBits)",
                 "AnalogOutputChannel.cs",
-                "AnalogOutputChannel.ValidateResolutionBits",
                 analogOutCtor,
                 "resolutionBits",
                 0,
@@ -231,7 +262,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogOutputChannel..ctor(minimumVoltage)",
                 "AnalogOutputChannel.cs",
-                "AnalogOutputChannel.ValidateRangeEndpoint",
                 analogOutCtor,
                 "minimumVoltage",
                 -TooBig,
@@ -241,7 +271,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "AnalogOutputChannel..ctor(maximumVoltage)",
                 "AnalogOutputChannel.cs",
-                "AnalogOutputChannel.ValidateRangeEndpoint",
                 analogOutCtor,
                 "maximumVoltage",
                 TooBig,
@@ -252,7 +281,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "ChannelScaling..ctor(gain)",
                 "ChannelScaling.cs",
-                "ChannelScaling..ctor(gain)",
                 scalingCtor,
                 "gain",
                 double.PositiveInfinity,
@@ -262,7 +290,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "ChannelScaling..ctor(offset)",
                 "ChannelScaling.cs",
-                "ChannelScaling..ctor(offset)",
                 scalingCtor,
                 "offset",
                 double.PositiveInfinity,
@@ -273,7 +300,6 @@ public class ChannelGuardCensusTests
             new GuardSite(
                 "DigitalChannel..ctor(channelNumber)",
                 "DigitalChannel.cs",
-                "DigitalChannel..ctor(channelNumber)",
                 digitalCtor,
                 "channelNumber",
                 null,
@@ -301,18 +327,20 @@ public class ChannelGuardCensusTests
             Assert.Equal(
                 (site.Site, site.ParamName, site.ActualValue),
                 (site.Site, ex.ParamName, ex.ActualValue));
-            Assert.StartsWith(site.MessagePrefix, ex.Message, StringComparison.Ordinal);
+            // Exact, not a prefix match: the sentence is also the throw site's identity below, and
+            // a prefix match would let one guard's message be a truncation of another's, quietly
+            // merging two throw sites into one.
+            Assert.Equal(site.Message, GuardMessage(ex));
 
             // The message the caller reads is a sentence about the subject and ends in a period.
-            // Asserted on the prefix, which the line above has just pinned to the real message.
-            Assert.EndsWith(".", site.MessagePrefix, StringComparison.Ordinal);
-            Assert.Equal(site.MessagePrefix.Trim(), site.MessagePrefix);
+            Assert.EndsWith(".", site.Message, StringComparison.Ordinal);
+            Assert.Equal(site.Message.Trim(), site.Message);
 
             // Reporting the rejected value is the whole reason to use the three-argument
             // constructor, so a null ActualValue is only tolerated for the two guards that already
             // drifted. A new one fails here rather than quietly joining them.
             Assert.True(
-                site.ActualValue is not null || GuardsThatOmitActualValue.Contains(site.GuardId),
+                site.ActualValue is not null || GuardsThatOmitActualValue.Contains(site.Site),
                 $"{site.Site}: a range guard must report the rejected value as ActualValue. " +
                 "Use the three-argument ArgumentOutOfRangeException constructor.");
 
@@ -363,18 +391,23 @@ public class ChannelGuardCensusTests
         // entry in the table turns this red instead of being silently uncovered. Without this the
         // census could only ever check the guards it already knows about.
         //
-        // Compared per file as DISTINCT GuardIds against throw lines, because several entries can
-        // cover one throw site (the MinValue/MaxValue pair) — counting entries would let a new,
-        // uncensused guard hide behind an entry added for an existing one.
+        // Compared per file as DISTINCT OBSERVED SENTENCES against throw lines. Several entries can
+        // cover one throw site (the MinValue/MaxValue pair), so entry count is the wrong number —
+        // but so is any count of labels the table hands itself, since a mislabelled or duplicated
+        // entry could pad a file's total and hide a guard that no entry reaches. A distinct sentence
+        // has to be earned by actually reaching a distinct throw.
+        //
+        // Treating the sentence as the identity holds while the throw sites in one file say
+        // different things, which they do today. Should two ever collide, this reads one sentence
+        // short and fails — the safe direction: it asks for a look rather than passing on a guard
+        // nobody exercises. The fix is to give them distinct messages, which a caller wants anyway.
         var found = RangeGuardSourceScanner.ThrowSitesIn(ChannelSourceDirectory);
 
-        var censused = Census()
-            .DistinctBy(s => (s.SourceFile, s.GuardId))
-            .Select(s => s.SourceFile);
+        var reached = ObserveGuards().Distinct().Select(g => g.SourceFile);
 
         Assert.Equal(
-            RangeGuardSourceScanner.SummarizeByFile(censused),
-            RangeGuardSourceScanner.SummarizeByFile(found.Select(s => s.File)));
+            RangeGuardSourceScanner.SummarizeByFile(found.Select(s => s.File)),
+            RangeGuardSourceScanner.SummarizeByFile(reached));
     }
 
     [Fact]
