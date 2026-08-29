@@ -75,6 +75,31 @@ jobs:
     - name: Test
       run: dotnet test --no-build --no-restore Daqifi.Core.sln
 
+    # The baseline is only as good as it is current. ApiCompat can only report a
+    # member the baseline package actually contains, so every API added since the
+    # pinned version sits outside the comparison - an out-of-date baseline is a
+    # narrower check, not a stricter one, and the step below would keep passing
+    # while covering less and less. Bumping it is part of cutting a release
+    # (CONTRIBUTING.md); this is what makes forgetting visible instead of silent.
+    #
+    # Deliberately a failure, not a warning: after a release is published this
+    # goes red until the bump lands, which is the point. It costs one unauthenticated
+    # HTTP request to the index the pack step already downloads from.
+    - name: Check the package validation baseline is the latest published version
+      if: matrix.os == 'ubuntu-latest'
+      shell: bash
+      run: |
+        baseline=$(dotnet msbuild src/Daqifi.Core/Daqifi.Core.csproj \
+          -getProperty:PackageValidationBaselineVersion -p:TargetFramework=net10.0 | tr -d '[:space:]')
+        latest=$(curl -sSf https://api.nuget.org/v3-flatcontainer/daqifi.core/index.json | jq -r '.versions[-1]')
+        echo "baseline=$baseline latest=$latest"
+        if [ "$baseline" != "$latest" ]; then
+          echo "::error::PackageValidationBaselineVersion is $baseline but Daqifi.Core $latest is published." \
+               "Everything added since $baseline is outside the ApiCompat comparison." \
+               "Bump it in src/Daqifi.Core/Daqifi.Core.csproj."
+          exit 1
+        fi
+
     # The public API surface is guarded twice (issue #636). RS0016/RS0017 guard it
     # at compile time against the checked-in PublicAPI.*.txt, which the Build step
     # above already covers - but those files are part of the PR, so a PR that

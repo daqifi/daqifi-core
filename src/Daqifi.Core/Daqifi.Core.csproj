@@ -22,9 +22,16 @@
          claims to support. It is what reports a framework silently disappearing
          from the package, or a type that compiles but no longer exists for one
          of the two TFMs. Runs during `dotnet pack` and fails it (CP0002 and
-         friends) when this build removes something 1.7.0 shipped. Bump the
-         baseline when a release goes out; leaving it behind only makes the
-         check stricter. See CONTRIBUTING.md. -->
+         friends) when this build removes something the baseline shipped.
+
+         The baseline MUST be bumped to the new version as part of every
+         release. An out-of-date baseline is not a stricter check, it is a
+         narrower one: ApiCompat can only report a member the baseline package
+         actually contains, so everything added since the pinned version falls
+         outside the comparison entirely and can be removed with nothing to
+         report. CI fails when this drifts behind nuget.org - see the
+         `Check the package validation baseline` step in ci.yml, and
+         CONTRIBUTING.md. -->
     <EnablePackageValidation>true</EnablePackageValidation>
     <PackageValidationBaselineVersion>1.7.0</PackageValidationBaselineVersion>
     <!-- CP0003 compares assembly *versions*, and this repo carries none: the

@@ -91,8 +91,11 @@ Two things to know:
   `--no-build`; it skips the validation targets entirely and the pack passes without checking
   anything.
 - After a release, bump `PackageValidationBaselineVersion` to the version just published, in
-  the same change that moves `Unshipped` entries into `Shipped`. Forgetting only leaves the
-  check comparing against an older release, which is stricter rather than wrong.
+  the same change that moves `Unshipped` entries into `Shipped`. This is required, not
+  housekeeping. An out-of-date baseline is a *narrower* check, not a stricter one: ApiCompat
+  can only report a member the baseline package actually contains, so everything added since
+  the pinned version falls outside the comparison and could be removed with nothing to report.
+  CI fails when the baseline drifts behind nuget.org, so forgetting is loud rather than silent.
 
 An intentional break needs the entry removed from `PublicAPI.Shipped.txt` *and* an ApiCompat
 suppression (`dotnet pack src/Daqifi.Core/Daqifi.Core.csproj -p:ApiCompatGenerateSuppressionFile=true`),

@@ -51,6 +51,9 @@ public class PublicApiTrackingTests
     private static string ApiFilePath(string fileName) =>
         Path.Combine(RepositoryRoot, "src", "Daqifi.Core", fileName);
 
+    private static string CiWorkflowText =>
+        File.ReadAllText(Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
+
     private const string ShippedFileName = "PublicAPI.Shipped.txt";
     private const string UnshippedFileName = "PublicAPI.Unshipped.txt";
 
@@ -119,13 +122,34 @@ public class PublicApiTrackingTests
             .Select(e => e.Value.Trim())
             .SingleOrDefault();
 
-        // Not a specific version - that has to move with every release. Only that one is pinned:
-        // with EnablePackageValidation on but no baseline, validation still runs and still
+        // Not a specific version - that moves with every release. Only that one is pinned at
+        // all: with EnablePackageValidation on but no baseline, validation still runs and still
         // passes, checking the package against nothing but itself.
+        //
+        // Whether the pinned version is still the *newest* published one is a question about
+        // nuget.org, so it is asked in CI rather than here - see the test below.
         Assert.True(
             baseline is not null && Version.TryParse(baseline, out _),
             "Daqifi.Core.csproj must pin PackageValidationBaselineVersion to a published version; "
             + $"found {baseline ?? "<none>"}.");
+    }
+
+    [Fact]
+    public void Ci_FailsWhenTheBaselineHasFallenBehindTheLatestRelease()
+    {
+        // An out-of-date baseline is a narrower check, not a stricter one: ApiCompat can only
+        // report a member the baseline package contains, so everything added since the pinned
+        // version is outside the comparison and could be removed with nothing to report - while
+        // the pack step keeps passing. Nothing in the repo records which version is current, so
+        // CI asks nuget.org, and this asserts it still does.
+        Assert.Contains(
+            "PackageValidationBaselineVersion",
+            CiWorkflowText,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "api.nuget.org/v3-flatcontainer/daqifi.core/index.json",
+            CiWorkflowText,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -136,10 +160,8 @@ public class PublicApiTrackingTests
         // csproj wiring above would still be present and still be checking nothing. Verified by
         // running both forms locally against a removed public member: without --no-build it is
         // CP0002 on both target frameworks, with it the pack is silent.
-        var workflow = File.ReadAllLines(
-            Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
-
-        var packSteps = workflow
+        var packSteps = CiWorkflowText
+            .Split('\n')
             .Select(line => line.Trim())
             .Where(line =>
                 line.StartsWith("run:", StringComparison.Ordinal)
