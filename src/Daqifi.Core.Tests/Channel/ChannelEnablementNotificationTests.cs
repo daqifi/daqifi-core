@@ -65,6 +65,37 @@ public class ChannelEnablementNotificationTests
         Assert.True(observed);
     }
 
+    /// <summary>
+    /// The lock really is released before the handler runs, not merely re-entered by the same
+    /// thread. <see cref="TheHandlerCanReadTheChannelBack_AndSeesTheNewValue"/> cannot tell those
+    /// apart — its read-back is reentrant, so it passes either way, as its own remarks concede.
+    /// Reading the channel from a <em>different</em> thread while the handler is still on the
+    /// stack does tell them apart: that thread has to wait for the lock, so it completes at once
+    /// if the notification is raised outside and blocks until the timeout if it is not.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Channels))]
+    public void TheHandlerRunsWithTheChannelLockAlreadyReleased(IChannel channel)
+    {
+        var readFromAnotherThreadCompleted = false;
+
+        ((IChannelEnablementNotifier)channel).EnablementChanged += () =>
+        {
+            // Blocks the handler until the other thread has taken and released the channel's
+            // lock, so the assertion below is about the state of the lock during the callback
+            // rather than after the setter has returned.
+            var read = Task.Run(() => channel.Name);
+            readFromAnotherThreadCompleted = read.Wait(TimeSpan.FromSeconds(10));
+        };
+
+        channel.IsEnabled = true;
+
+        Assert.True(
+            readFromAnotherThreadCompleted,
+            "A second thread could not read the channel while the EnablementChanged handler was " +
+            "running, so the notification was raised while the channel's lock was still held.");
+    }
+
     [Theory]
     [MemberData(nameof(Channels))]
     public void UnsubscribingStopsNotifications(IChannel channel)
