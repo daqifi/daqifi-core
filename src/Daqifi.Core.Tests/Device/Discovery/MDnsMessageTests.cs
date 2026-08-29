@@ -190,6 +190,45 @@ public class MDnsMessageTests
     }
 
     [Fact]
+    public void TryParseResponse_RejectsAPointerTargetNameThatRunsPastItsOwnRdata()
+    {
+        // The PTR understates RDLENGTH, so its target name reaches past the payload the record
+        // claims. Every byte of the name is still inside the datagram, so a reader bounded only by
+        // the datagram would decode the name, then resynchronize on RDLENGTH and report success —
+        // returning a target assembled from bytes the record never claimed.
+        var packet = new MDnsResponseBuilder()
+            .AddPtr(MDnsResponseBuilder.ServiceType, "DAQiFi-95A7." + MDnsResponseBuilder.ServiceType, declaredRdLength: 4)
+            .Build();
+
+        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+    }
+
+    [Fact]
+    public void TryParseResponse_RejectsAServiceTargetNameThatRunsPastItsOwnRdata()
+    {
+        var instance = "DAQiFi-95A7." + MDnsResponseBuilder.ServiceType;
+        var packet = new MDnsResponseBuilder()
+            .AddSrv(instance, MDnsResponseBuilder.DefaultHost, 9760, declaredRdLength: 8)
+            .Build();
+
+        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+    }
+
+    [Fact]
+    public void TryParseResponse_RejectsHeaderCountsTheDatagramCannotHold()
+    {
+        // 3 x 65535 claimed records in a 12-byte datagram. The counts must not be trusted for
+        // sizing before the records themselves are validated.
+        var packet = new byte[]
+        {
+            0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        };
+
+        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out var records));
+        Assert.Empty(records);
+    }
+
+    [Fact]
     public void TryParseResponse_RejectsCompressionPointerLoop()
     {
         // Header claiming one answer, whose owner name is a pointer to itself.

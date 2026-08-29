@@ -80,12 +80,15 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
 
     // RFC 6762 §5.2 asks a one-shot browse to repeat its query with an increasing interval so a
     // single dropped multicast frame does not cost the whole pass -- which is the exact failure
-    // this finder exists to survive. Offsets are from the start of the pass.
-    private static readonly TimeSpan[] QuerySchedule =
+    // this finder exists to survive. These are the *gaps between* successive queries, not offsets
+    // from the start of the pass: the loop below waits each gap in turn, so the queries go out at
+    // roughly 0 s, 1 s and 3 s. Keeping them as gaps is what makes that true without the loop
+    // having to measure elapsed time.
+    private static readonly TimeSpan[] QueryGaps =
     [
         TimeSpan.Zero,
         TimeSpan.FromSeconds(1),
-        TimeSpan.FromSeconds(3)
+        TimeSpan.FromSeconds(2)
     ];
 
     private readonly IReadOnlyList<string> _serviceLabels;
@@ -287,13 +290,13 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     {
         var target = new IPEndPoint(MulticastGroup, MDnsMessage.MulticastPort);
 
-        foreach (var delay in QuerySchedule)
+        foreach (var gap in QueryGaps)
         {
             try
             {
-                if (delay > TimeSpan.Zero)
+                if (gap > TimeSpan.Zero)
                 {
-                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(gap, cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)

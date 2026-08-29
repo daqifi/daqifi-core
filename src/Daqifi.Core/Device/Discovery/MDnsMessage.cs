@@ -202,7 +202,7 @@ internal static class MDnsMessage
 
         for (var i = 0; i < questionCount; i++)
         {
-            if (!TryReadName(buffer, length, ref offset, out _) || offset + 4 > length)
+            if (!TryReadName(buffer, length, length, ref offset, out _) || offset + 4 > length)
             {
                 return false;
             }
@@ -210,7 +210,10 @@ internal static class MDnsMessage
             offset += 4; // QTYPE + QCLASS
         }
 
-        var parsed = new List<MDnsResourceRecord>(recordCount);
+        // Size the list from the datagram, not from the counts: a hostile header can claim
+        // 3 x 65535 records, and the smallest possible record is 11 bytes, so anything beyond
+        // length/11 is a lie the loop below is about to reject anyway.
+        var parsed = new List<MDnsResourceRecord>(Math.Min(recordCount, length / 11));
         for (var i = 0; i < recordCount; i++)
         {
             if (!TryReadRecord(buffer, length, ref offset, out var record))
@@ -279,7 +282,7 @@ internal static class MDnsMessage
     {
         record = null!;
 
-        if (!TryReadName(buffer, length, ref offset, out var name))
+        if (!TryReadName(buffer, length, length, ref offset, out var name))
         {
             return false;
         }
@@ -315,7 +318,12 @@ internal static class MDnsMessage
             case TypePtr:
             {
                 var cursor = rdataStart;
-                if (!TryReadName(buffer, length, ref cursor, out var ptrTarget))
+
+                // The name's own bytes must fit inside RDATA (a compression pointer inside it may
+                // still resolve elsewhere in the message). Without the rdataEnd bound, a record
+                // that understates RDLENGTH would have its target silently assembled from the
+                // *next* record's bytes and still parse as valid.
+                if (!TryReadName(buffer, length, rdataEnd, ref cursor, out var ptrTarget))
                 {
                     return false;
                 }
@@ -333,7 +341,7 @@ internal static class MDnsMessage
 
                 port = ReadUInt16(buffer, rdataStart + 4);
                 var cursor = rdataStart + 6;
-                if (!TryReadName(buffer, length, ref cursor, out var srvTarget))
+                if (!TryReadName(buffer, length, rdataEnd, ref cursor, out var srvTarget))
                 {
                     return false;
                 }
@@ -412,7 +420,19 @@ internal static class MDnsMessage
     /// Reads a (possibly compression-pointer-bearing) DNS name into its raw labels, advancing
     /// <paramref name="offset"/> past the name as it appears at the current position.
     /// </summary>
-    private static bool TryReadName(byte[] buffer, int length, ref int offset, out IReadOnlyList<string> labels)
+    /// <param name="buffer">The datagram.</param>
+    /// <param name="length">The datagram length — the bound for bytes reached through a pointer.</param>
+    /// <param name="wireLimit">
+    /// The bound for the name's own bytes at <paramref name="offset"/>. For a name inside RDATA
+    /// this is the record's RDATA end, so a record understating RDLENGTH cannot have its name
+    /// completed from the bytes of the record that follows; for an owner name it is
+    /// <paramref name="length"/>. Bytes reached through a compression pointer are bounded by
+    /// <paramref name="length"/> instead, because a pointer legitimately targets any earlier name
+    /// in the message.
+    /// </param>
+    /// <param name="offset">On entry, where the name starts; on success, the byte after it.</param>
+    /// <param name="labels">The decoded labels.</param>
+    private static bool TryReadName(byte[] buffer, int length, int wireLimit, ref int offset, out IReadOnlyList<string> labels)
     {
         var result = new List<string>();
         labels = result;
@@ -423,7 +443,11 @@ internal static class MDnsMessage
 
         while (true)
         {
-            if (cursor < 0 || cursor >= length)
+            // Before the first pointer we are still reading the name's own on-wire bytes; after
+            // one, we are reading a name that lives elsewhere in the message.
+            var bound = resumeAt.HasValue ? length : wireLimit;
+
+            if (cursor < 0 || cursor >= bound)
             {
                 return false;
             }
@@ -432,7 +456,7 @@ internal static class MDnsMessage
 
             if ((labelLength & PointerMask) == PointerMask)
             {
-                if (cursor + 1 >= length)
+                if (cursor + 1 >= bound)
                 {
                     return false;
                 }
@@ -464,7 +488,7 @@ internal static class MDnsMessage
                 break; // root label — end of name
             }
 
-            if (cursor + labelLength > length || result.Count >= MaxLabelCount)
+            if (cursor + labelLength > bound || result.Count >= MaxLabelCount)
             {
                 return false;
             }

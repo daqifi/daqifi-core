@@ -77,18 +77,35 @@ internal sealed class MDnsResponseBuilder
         "friendly=Bench Nyquist"
     ];
 
-    internal MDnsResponseBuilder AddPtr(string owner, string target, uint ttl = 4500, bool inAnswerSection = true)
+    /// <param name="declaredRdLength">
+    /// Overrides the RDLENGTH written to the wire, so a record can understate the size of its own
+    /// payload — the malformed shape a parser must reject rather than complete from the bytes of
+    /// the following record.
+    /// </param>
+    internal MDnsResponseBuilder AddPtr(
+        string owner,
+        string target,
+        uint ttl = 4500,
+        bool inAnswerSection = true,
+        ushort? declaredRdLength = null)
     {
         WriteName(owner);
         var rdLengthAt = WriteRecordHeader(TypePtr, ClassIn, ttl);
         var start = _buffer.Count;
         WriteName(target);
-        PatchUInt16(rdLengthAt, (ushort)(_buffer.Count - start));
+        PatchUInt16(rdLengthAt, declaredRdLength ?? (ushort)(_buffer.Count - start));
         CountRecord(inAnswerSection);
         return this;
     }
 
-    internal MDnsResponseBuilder AddSrv(string owner, string target, ushort port, uint ttl = 120, bool inAnswerSection = false)
+    /// <param name="declaredRdLength">See <see cref="AddPtr"/>.</param>
+    internal MDnsResponseBuilder AddSrv(
+        string owner,
+        string target,
+        ushort port,
+        uint ttl = 120,
+        bool inAnswerSection = false,
+        ushort? declaredRdLength = null)
     {
         WriteName(owner);
         var rdLengthAt = WriteRecordHeader(TypeSrv, ClassInCacheFlush, ttl);
@@ -97,7 +114,7 @@ internal sealed class MDnsResponseBuilder
         WriteUInt16(0); // weight
         WriteUInt16(port);
         WriteName(target);
-        PatchUInt16(rdLengthAt, (ushort)(_buffer.Count - start));
+        PatchUInt16(rdLengthAt, declaredRdLength ?? (ushort)(_buffer.Count - start));
         CountRecord(inAnswerSection);
         return this;
     }
