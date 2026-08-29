@@ -98,37 +98,43 @@ public class ChannelGuardCensusTests
     /// a different <c>throw</c>.
     /// </summary>
     /// <remarks>
-    /// Observed rather than declared, on purpose. An identity the census merely asserts — a label
-    /// in the table saying "this entry covers that guard" — is checked by nobody, so a
-    /// mislabelled or duplicated entry could pad the count for a file and hide a guard that no
-    /// entry reaches. A sentence cannot be padded: producing a new one means actually reaching a
-    /// new <c>throw</c>.
+    /// The sentence is declared in the table but is not taken on trust: every entry's message is
+    /// pinned to the real exception by <see cref="AssertGuardSentenceIsExactly"/> as it is
+    /// observed, so an entry cannot claim a sentence its guard does not produce. That is what
+    /// closes the hole a bare label would leave — a mislabelled or duplicated entry padding the
+    /// count for a file and hiding a guard that no entry reaches. Producing a distinct sentence
+    /// means actually reaching a distinct <c>throw</c>.
     /// </remarks>
     private static IEnumerable<(string SourceFile, string Message)> ObserveGuards() =>
         Census().Select(site =>
         {
             var ex = Assert.Throws<ArgumentOutOfRangeException>(site.Act);
-            return (site.SourceFile, GuardMessage(ex));
+            AssertGuardSentenceIsExactly(site, ex);
+            return (site.SourceFile, site.Message);
         });
 
     /// <summary>
-    /// The sentence the guard itself passed, recovered from the exception the caller receives.
+    /// Asserts that the guard produced exactly the sentence the census declares for it — no
+    /// prefix match, because the sentence doubles as the throw site's identity and a prefix match
+    /// would let one guard's message be a truncation of another's, silently merging two sites.
     /// </summary>
     /// <remarks>
-    /// <see cref="ArgumentOutOfRangeException"/> renders its message as the guard's own text, then
-    /// <c>" (Parameter 'name')"</c>, then a second line carrying the actual value. Only the first
-    /// part is the guard's; the decoration varies per entry point (the <c>MinValue</c> and
-    /// <c>MaxValue</c> setters share a <c>throw</c> but name different parameters), so it has to
-    /// come off before the sentence can serve as the throw site's identity.
+    /// Compared against an exception the framework builds from the census's own declared values,
+    /// rather than by pulling the guard's sentence back out of
+    /// <see cref="ArgumentOutOfRangeException.Message"/>. Extracting it would mean knowing how the
+    /// framework decorates a message with the parameter name and the actual value — and that
+    /// decoration comes from a localizable resource, so hardcoding its English form would fail this
+    /// census on a machine running a localized runtime, for guards that are perfectly correct.
+    /// Building the reference the same way in the same process sidesteps the question entirely:
+    /// whatever the decoration is, both sides get it.
     /// </remarks>
-    private static string GuardMessage(ArgumentOutOfRangeException ex)
+    private static void AssertGuardSentenceIsExactly(GuardSite site, ArgumentOutOfRangeException actual)
     {
-        var firstLine = ex.Message.Split('\n')[0].TrimEnd('\r');
-        var decoration = $" (Parameter '{ex.ParamName}')";
+        var reference = site.ActualValue is null
+            ? new ArgumentOutOfRangeException(site.ParamName, site.Message)
+            : new ArgumentOutOfRangeException(site.ParamName, site.ActualValue, site.Message);
 
-        return firstLine.EndsWith(decoration, StringComparison.Ordinal)
-            ? firstLine[..^decoration.Length]
-            : firstLine;
+        Assert.Equal(reference.Message, actual.Message);
     }
 
     /// <summary>
@@ -327,10 +333,7 @@ public class ChannelGuardCensusTests
             Assert.Equal(
                 (site.Site, site.ParamName, site.ActualValue),
                 (site.Site, ex.ParamName, ex.ActualValue));
-            // Exact, not a prefix match: the sentence is also the throw site's identity below, and
-            // a prefix match would let one guard's message be a truncation of another's, quietly
-            // merging two throw sites into one.
-            Assert.Equal(site.Message, GuardMessage(ex));
+            AssertGuardSentenceIsExactly(site, ex);
 
             // The message the caller reads is a sentence about the subject and ends in a period.
             Assert.EndsWith(".", site.Message, StringComparison.Ordinal);
