@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Daqifi.Core.Device.SdCard;
 
@@ -14,8 +15,14 @@ public sealed class SdCardParseOptions
     public DateTime? SessionStartTime { get; set; }
 
     /// <summary>
-    /// Gets or sets the read buffer size in bytes. Default is 64 KB.
+    /// Gets or sets the read buffer size in bytes. Default is 64 KB. Must be greater than zero.
     /// </summary>
+    /// <remarks>
+    /// Zero is rejected along with negative values, even though <see cref="System.IO.FileStream"/>
+    /// reads a zero buffer size as "no buffering" rather than as an error. The protobuf parser
+    /// allocates a <c>byte[]</c> of this size to read into, and a zero-length read buffer can
+    /// never make progress — so one contract for all three log formats has to be the stricter one.
+    /// </remarks>
     public int BufferSize { get; set; } = 64 * 1024;
 
     /// <summary>
@@ -79,4 +86,33 @@ public sealed class SdCardParseOptions
     /// </para>
     /// </summary>
     public SdCardDeviceConfiguration? ConfigurationOverride { get; set; }
+
+    /// <summary>
+    /// Throws if <paramref name="options"/> asks for something no parser can honour. Called by
+    /// every public parse entry point, before it touches the file.
+    /// </summary>
+    /// <param name="options">The options to validate.</param>
+    /// <param name="paramName">
+    /// The name the caller gave the options argument, captured automatically so the exception
+    /// reports the parameter the caller actually wrote.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="BufferSize"/> is not greater than zero.
+    /// </exception>
+    /// <remarks>
+    /// This lives here, rather than in each parser, because the three log formats had already
+    /// drifted apart on it: the protobuf parser guarded <see cref="BufferSize"/> while the CSV and
+    /// JSON parsers handed the value to <see cref="System.IO.FileStream"/> and inherited its
+    /// different contract (issue #712). Validating the options object once, where it is declared,
+    /// is what stops a fourth format from missing the check the same way.
+    /// </remarks>
+    internal static void ThrowIfInvalid(
+        SdCardParseOptions options,
+        [CallerArgumentExpression(nameof(options))] string? paramName = null)
+    {
+        if (options.BufferSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(paramName, "BufferSize must be greater than zero.");
+        }
+    }
 }

@@ -31,6 +31,9 @@ public sealed class SdCardFileParser
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="SdCardParseOptions.BufferSize"/> is not greater than zero.
+    /// </exception>
     /// <remarks>
     /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
     /// read from it yourself until you have finished enumerating
@@ -49,10 +52,7 @@ public sealed class SdCardFileParser
 
         options ??= new SdCardParseOptions();
 
-        if (options.BufferSize <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
-        }
+        SdCardParseOptions.ThrowIfInvalid(options);
 
         var source = SdCardParseSource.TryCreate(fileStream);
         if (source != null)
@@ -87,6 +87,9 @@ public sealed class SdCardFileParser
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="SdCardParseOptions.BufferSize"/> is not greater than zero.
+    /// </exception>
     /// <remarks>
     /// The returned session opens its own read of the file each time
     /// <see cref="SdCardLogSession.Samples"/> is enumerated, so the file must still exist then.
@@ -100,10 +103,7 @@ public sealed class SdCardFileParser
 
         options ??= new SdCardParseOptions();
 
-        if (options.BufferSize <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), "BufferSize must be greater than zero.");
-        }
+        SdCardParseOptions.ThrowIfInvalid(options);
 
         var source = SdCardParseSource.ForFile(filePath, options.BufferSize);
 
