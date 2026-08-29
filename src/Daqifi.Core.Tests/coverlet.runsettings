@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Settings for the in-process coverage collector (issue #689). Daqifi.Core.Tests.csproj points
+  RunSettingsFilePath at this file; nothing else in the repo runs with it.
+
+  Both values restate what coverlet.msbuild was configured with before the switch, so the
+  reported numbers stay comparable across the change:
+
+  - Format: coverlet.msbuild defaults to its own JSON, so the old csproj had to ask for
+    cobertura. The collector already defaults to cobertura, but the summary script and the
+    uploaded artifact both depend on the format, so it is stated rather than inherited.
+  - ExcludeByAttribute: keeps generated code - the protobuf message types under
+    Daqifi.Core/Generated - out of the denominator. Naming it here replaces the collector's
+    default list rather than adding to it, which is the same thing the old <ExcludeByAttribute>
+    property did.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <ExcludeByAttribute>GeneratedCodeAttribute</ExcludeByAttribute>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
