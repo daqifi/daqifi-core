@@ -101,14 +101,10 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
 
     /// <summary>
     /// The COMPLETE set of public parse entry points across the three parsers — checked against
-    /// the types themselves by
-    /// <see cref="TheGuardedEntryPoints_AreEveryPublicParseEntryPointOnEveryParser"/>, so a
-    /// fourth format (or a new overload) cannot quietly skip the guard.
+    /// the library's own surface by
+    /// <see cref="TheGuardedEntryPoints_AreEveryPublicParseEntryPointInTheLibrary"/>, so a fourth
+    /// format (or a new overload on an existing one) cannot quietly skip the guard.
     /// </summary>
-    /// <remarks>
-    /// <see cref="Sd.SdCardFileParserFactory"/> is deliberately absent: every one of its methods
-    /// forwards to one of these, so listing it would assert the same guard twice.
-    /// </remarks>
     private static ParseEntryPoint[] EntryPoints() =>
     [
         new(typeof(Sd.SdCardFileParser), nameof(Sd.SdCardFileParser.ParseAsync),
@@ -201,36 +197,65 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
     }
 
     /// <summary>
-    /// Completeness: the table above must list every public <c>ParseAsync</c>/<c>ParseFileAsync</c>
-    /// on every parser. Read off the types rather than trusted, so a fourth format's parser — or a
-    /// new overload on an existing one — fails here until it is guarded too.
+    /// Completeness: the table above must cover every public parse entry point the library
+    /// exposes. The expected side is discovered from the assembly rather than restated here, so a
+    /// fourth format's parser — or a new overload on an existing one — fails this test until it
+    /// has a row of its own and, with it, a guard.
     /// </summary>
     [Fact]
-    public void TheGuardedEntryPoints_AreEveryPublicParseEntryPointOnEveryParser()
+    public void TheGuardedEntryPoints_AreEveryPublicParseEntryPointInTheLibrary()
     {
-        var parsers = new[]
-        {
-            typeof(Sd.SdCardFileParser),
-            typeof(Sd.SdCardCsvFileParser),
-            typeof(Sd.SdCardJsonFileParser),
-        };
+        var discovered = DiscoverParseEntryPoints();
 
-        var declared = parsers
-            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-            .Where(m => m.Name is "ParseAsync" or "ParseFileAsync")
-            .Select(m => $"{m.DeclaringType!.Name}.{m.Name}")
-            .Distinct()
+        // Discovery has to find something before an equality against it means anything: a filter
+        // that silently matched nothing would make every assertion below vacuously true.
+        Assert.NotEmpty(discovered);
+
+        // The table keys entry points by type-and-method-name, which describes the surface
+        // completely only while each name resolves to exactly one method. Without this, a new
+        // overload would inherit its sibling's row and never be called with a bad buffer size.
+        foreach (var overloads in discovered.GroupBy(EntryPointKey, StringComparer.Ordinal))
+        {
+            Assert.True(
+                overloads.Count() == 1,
+                $"{overloads.Key} now has {overloads.Count()} overloads. Give the new one its own " +
+                "row in EntryPoints() — and its own guard — rather than letting it share a key.");
+        }
+
+        var declared = discovered
+            .Select(EntryPointKey)
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToArray();
 
         var covered = EntryPoints()
             .Select(e => e.Key)
-            .Distinct()
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToArray();
 
         Assert.Equal<IEnumerable<string>>(declared, covered);
     }
+
+    /// <summary>
+    /// Discovers — rather than restates — the parse entry points: every public instance method on
+    /// <c>Daqifi.Core</c>'s exported surface that accepts an <see cref="Sd.SdCardParseOptions"/>.
+    /// Nothing about the three current parsers is named here, so a fourth format's parser turns up
+    /// without anyone remembering to edit this file. That is the point: #712 happened because two
+    /// formats missed a check nobody had enumerated.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Sd.SdCardFileParserFactory"/> falls outside this by being static, not by being
+    /// named: every one of its methods forwards to one of these, so covering it would assert the
+    /// same guard twice.
+    /// </remarks>
+    private static MethodInfo[] DiscoverParseEntryPoints() =>
+        typeof(Sd.SdCardParseOptions).Assembly
+            .GetExportedTypes()
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            .Where(m => Array.Exists(m.GetParameters(), p => p.ParameterType == typeof(Sd.SdCardParseOptions)))
+            .ToArray();
+
+    private static string EntryPointKey(MethodInfo method) =>
+        $"{method.DeclaringType!.Name}.{method.Name}";
 
     private string PathTo(string fileName) => Path.Combine(_directory, fileName);
 
