@@ -160,6 +160,32 @@ using var serialFinder = new SerialDeviceFinder();
 var serialDevices = await serialFinder.DiscoverAsync();
 ```
 
+**On a home or multi-AP network, browse with mDNS as well.** UDP broadcast does not reliably
+cross an access-point boundary — a device associated to a second AP is online and healthy, yet the
+broadcast sweep returns nothing — so `MDnsDeviceFinder` browses the `_daqifi._tcp.local.` service
+over multicast instead, which is the traffic consumer routers already reflect across APs, SSIDs and
+VLANs. It produces the same `IDeviceInfo` shape, so anything that connects to a broadcast-discovered
+device connects to an mDNS-discovered one unchanged.
+
+```csharp
+using var mdnsFinder = new MDnsDeviceFinder();
+var mdnsDevices = await mdnsFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
+```
+
+Run both and let the aggregator merge them — devices on firmware without an mDNS responder are
+still found over UDP broadcast, so the two paths together cover more networks than either alone:
+
+```csharp
+using var finder = new AllTransportsDeviceFinder(
+    [new WiFiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()]);
+
+var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
+```
+
+Two caveats worth knowing: the device must be on firmware that advertises the service (see
+daqifi-nyquist-firmware#345), and some hardened corporate or guest networks filter multicast
+entirely — connect by IP address directly when they do.
+
 Need fine-grained control? Pass a `CancellationToken` or override the discovery port:
 
 ```csharp
