@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace Daqifi.Core.Tests.Build;
@@ -114,6 +115,34 @@ public class CoverageReportingTests
         var expectedGlob = $"{relative}/*/coverage.cobertura.xml";
 
         Assert.Contains(expectedGlob, WorkflowText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExpectedFrameworks_StayReadableTheWayTheWorkflowReadsThem()
+    {
+        // CI warns about a report that went missing for one framework but not the other, and it
+        // reads the list of frameworks to expect straight out of this project rather than
+        // repeating it. That read is a single-line text match, so a reformatted or renamed
+        // element would not break the build - it would just find nothing to expect and warn
+        // about nothing, which is the failure this catches.
+        var declared = TestProject
+            .Descendants("PropertyGroup")
+            .Elements()
+            .Single(e => e.Name.LocalName == "TargetFrameworks")
+            .Value
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var matched = Regex
+            .Match(File.ReadAllText(TestProjectPath), "<TargetFrameworks>(.*)</TargetFrameworks>")
+            .Groups[1]
+            .Value
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        Assert.NotEmpty(declared);
+        Assert.Equal(declared, matched);
+
+        // And that the check is still pointed at this project.
+        Assert.Contains("src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj", WorkflowText, StringComparison.Ordinal);
     }
 
     [Fact]

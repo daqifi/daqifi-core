@@ -92,10 +92,25 @@ jobs:
         # path: src/coverage/<tfm>/<run guid>/coverage.cobertura.xml (see the results
         # directory Daqifi.Core.Tests.csproj sets). Flatten to the framework-labelled names
         # the summary and the uploaded artifact have always used.
+        #
+        # A failed move degrades to a warning and a report missing from the summary. This step
+        # runs under `set -e`, so letting one abort the step would put coverage back in a
+        # position to fail an otherwise green leg — the whole point of #689.
         for report in src/coverage/*/*/coverage.cobertura.xml; do
           framework=$(basename "$(dirname "$(dirname "$report")")")
-          mv -f "$report" "src/coverage/coverage.$framework.cobertura.xml"
+          mv -f "$report" "src/coverage/coverage.$framework.cobertura.xml" \
+            || echo "::warning::Could not move $report into place; $framework will be missing from the coverage summary."
         done
+
+        # Losing one framework's report and not the other's is otherwise invisible: the table
+        # simply renders a row short. The expected list is read from the test project rather
+        # than repeated here, so it cannot drift from the frameworks the tests actually run on.
+        expected=$(sed -n 's:.*<TargetFrameworks>\(.*\)</TargetFrameworks>.*:\1:p' src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj | tr ';' ' ' || true)
+        for framework in $expected; do
+          test -f "src/coverage/coverage.$framework.cobertura.xml" \
+            || echo "::warning::No coverage report was produced for $framework."
+        done
+
         reports=(src/coverage/*.cobertura.xml)
         if [ ${#reports[@]} -eq 0 ]; then
           echo "No coverage reports were produced by this run." >> "$GITHUB_STEP_SUMMARY"
