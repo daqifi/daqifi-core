@@ -201,89 +201,110 @@ internal sealed class Pic32FirmwareUpdater
     /// Standalone bootloader health check: waits for the bootloader to enumerate, connects the HID
     /// transport and reads back the bootloader version. Touches no flash.
     /// </summary>
-    internal async Task<string> RunHealthCheckAsync(
+    internal Task<string> RunHealthCheckAsync(
         string? targetDevicePath,
         CancellationToken cancellationToken)
     {
-        // Track the phase so a failure is reported against the state it
-        // occurred in, with the matching recovery guidance — mirroring
-        // RunUpdateAsync's failedState/failedOperation capture.
-        var failedState = FirmwareUpdateState.WaitingForBootloader;
-        var failedOperation = "wait for HID bootloader enumeration";
-        try
-        {
-            var hidDevice = await _context.ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.WaitingForBootloader,
-                failedOperation,
-                innerCt => _session.WaitForBootloaderDeviceAsync(targetDevicePath, null, innerCt),
-                cancellationToken).ConfigureAwait(false);
+        return RunDiagnosticAsync(
+            targetDevicePath,
+            failureSubject: "Bootloader health check",
+            async (phase, innerCt) =>
+            {
+                phase.Advance(FirmwareUpdateState.Connecting, "request bootloader version");
+                var version = await _context.ExecuteWithStateTimeoutAsync(
+                    phase.State,
+                    phase.Operation,
+                    _session.RequestVersionAsync,
+                    innerCt).ConfigureAwait(false);
 
-            failedState = FirmwareUpdateState.Connecting;
-            failedOperation = "connect HID transport";
-            await _context.ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Connecting,
-                failedOperation,
-                innerCt => _session.ConnectWithRetryAsync(hidDevice, targetDevicePath, null, innerCt),
-                cancellationToken).ConfigureAwait(false);
-
-            failedOperation = "request bootloader version";
-            var version = await _context.ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Connecting,
-                failedOperation,
-                _session.RequestVersionAsync,
-                cancellationToken).ConfigureAwait(false);
-
-            Logger.LogInformation(
-                "Standalone bootloader health check succeeded; version {BootloaderVersion}.", version);
-            return version;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw _context.CreateFirmwareUpdateException(
-                failedState, failedOperation, ex, failureSubject: "Bootloader health check");
-        }
+                Logger.LogInformation(
+                    "Standalone bootloader health check succeeded; version {BootloaderVersion}.", version);
+                return version;
+            },
+            cancellationToken);
     }
 
     /// <summary>
     /// Standalone bootloader soft reset: connects the HID transport and issues a single
     /// <c>JMP_TO_APP</c> so the device leaves bootloader mode. Touches no flash.
     /// </summary>
-    internal async Task RunSoftResetAsync(
+    internal Task RunSoftResetAsync(
         string? targetDevicePath,
         CancellationToken cancellationToken)
     {
-        var failedState = FirmwareUpdateState.WaitingForBootloader;
-        var failedOperation = "wait for HID bootloader enumeration";
+        return RunDiagnosticAsync<object?>(
+            targetDevicePath,
+            failureSubject: "Bootloader soft reset",
+            async (phase, innerCt) =>
+            {
+                phase.Advance(FirmwareUpdateState.JumpingToApp, "issue JMP_TO_APP soft reset");
+                await _context.ExecuteWithStateTimeoutAsync(
+                    phase.State,
+                    phase.Operation,
+                    _session.SendJumpToApplicationAsync,
+                    innerCt).ConfigureAwait(false);
+
+                Logger.LogInformation(
+                    "Standalone JMP_TO_APP soft reset issued to bootloader without touching flash.");
+                return null;
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// The phase a standalone diagnostic is currently in, so a failure is reported against the
+    /// step it actually occurred in — mirroring <see cref="RunUpdateAsync"/>'s
+    /// failedState/failedOperation capture. Mutable and passed by reference because the shared
+    /// preamble and the caller's final step both advance it, and the catch block reads whatever
+    /// it last held.
+    /// </summary>
+    private sealed class DiagnosticPhase
+    {
+        internal FirmwareUpdateState State { get; private set; } = FirmwareUpdateState.WaitingForBootloader;
+
+        internal string Operation { get; private set; } = "wait for HID bootloader enumeration";
+
+        /// <summary>
+        /// Moves to the next phase. State and operation move together so a step can never
+        /// report one phase's state with another phase's label.
+        /// </summary>
+        internal void Advance(FirmwareUpdateState state, string operation)
+        {
+            State = state;
+            Operation = operation;
+        }
+    }
+
+    /// <summary>
+    /// Runs a standalone bootloader diagnostic: the shared "wait for the bootloader to enumerate,
+    /// then open the HID transport" preamble, then <paramref name="finalStep"/>, with the common
+    /// failure contract — a cancel requested by the caller propagates untouched, and anything else
+    /// is wrapped as a <see cref="FirmwareUpdateException"/> naming the phase that broke.
+    /// Touches no flash.
+    /// </summary>
+    private async Task<T> RunDiagnosticAsync<T>(
+        string? targetDevicePath,
+        string failureSubject,
+        Func<DiagnosticPhase, CancellationToken, Task<T>> finalStep,
+        CancellationToken cancellationToken)
+    {
+        var phase = new DiagnosticPhase();
         try
         {
             var hidDevice = await _context.ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.WaitingForBootloader,
-                failedOperation,
+                phase.State,
+                phase.Operation,
                 innerCt => _session.WaitForBootloaderDeviceAsync(targetDevicePath, null, innerCt),
                 cancellationToken).ConfigureAwait(false);
 
-            failedState = FirmwareUpdateState.Connecting;
-            failedOperation = "connect HID transport";
+            phase.Advance(FirmwareUpdateState.Connecting, "connect HID transport");
             await _context.ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.Connecting,
-                failedOperation,
+                phase.State,
+                phase.Operation,
                 innerCt => _session.ConnectWithRetryAsync(hidDevice, targetDevicePath, null, innerCt),
                 cancellationToken).ConfigureAwait(false);
 
-            failedState = FirmwareUpdateState.JumpingToApp;
-            failedOperation = "issue JMP_TO_APP soft reset";
-            await _context.ExecuteWithStateTimeoutAsync(
-                FirmwareUpdateState.JumpingToApp,
-                failedOperation,
-                _session.SendJumpToApplicationAsync,
-                cancellationToken).ConfigureAwait(false);
-
-            Logger.LogInformation(
-                "Standalone JMP_TO_APP soft reset issued to bootloader without touching flash.");
+            return await finalStep(phase, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -292,7 +313,7 @@ internal sealed class Pic32FirmwareUpdater
         catch (Exception ex)
         {
             throw _context.CreateFirmwareUpdateException(
-                failedState, failedOperation, ex, failureSubject: "Bootloader soft reset");
+                phase.State, phase.Operation, ex, failureSubject: failureSubject);
         }
     }
 
