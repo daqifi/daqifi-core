@@ -5,6 +5,23 @@
 # project stay scoped, via a path-qualified section below.
 root = true
 
+# IDE0161 (file-scoped namespaces) applies to every C# file in the repo.
+#
+# EnforceCodeStyleInBuild in Directory.Build.props is what makes this rule - and
+# the IDE* family generally - run during `dotnet build` rather than only inside
+# an editor. Together with the repo-wide TreatWarningsAsErrors that turns a
+# violation into a failed build, which is the point: a style checked only by
+# whoever happens to open the file in an IDE is not enforced at all (issue #484).
+#
+# The repo had no stated preference, so a new file copied whichever style its
+# neighbour used and the split reached 142 block-scoped files against roughly
+# 200 file-scoped ones. Either style would have been defensible; file-scoped is
+# the one most of the codebase already used, so choosing it converts the smaller
+# half.
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_diagnostic.IDE0161.severity = warning
+
 # CA2007 (ConfigureAwait) applies to the Daqifi.Core library only.
 #
 # Daqifi.Core ships synchronous facades that block on their own async work
@@ -22,6 +39,22 @@ root = true
 # applying to every [*.cs] in the repo.
 [src/Daqifi.Core/**.cs]
 dotnet_diagnostic.CA2007.severity = warning
+
+# CA1707 (no underscores in public member names) is scoped here for a second
+# reason: Daqifi.Core is the only project in the repo that publishes a public
+# surface, and the test projects name their methods Method_Case_Expectation by
+# convention, which this rule would otherwise report on every one of them.
+#
+# Left at CA1707's default api_surface (public) on purpose. Widening it to `all`
+# sounds stricter but is wrong here: it also reports private static fields
+# written in the repo's own _camelCase convention - for instance
+# SdCardFileParserFactory._supportedExtensions - so the extra strictness would
+# be paid for by fighting a convention this repo deliberately follows. The
+# private SCREAMING_SNAKE constants that remain (SdCardOperations,
+# GitHubFirmwareDownloadService, NetworkConfigurationOperations,
+# DeviceDiagnosticsOperations) are invisible outside this assembly and are left
+# alone rather than renamed under a rule that does not police them.
+dotnet_diagnostic.CA1707.severity = warning
 
 # RS0041 (public API should not use nullable-oblivious types) applies to the
 # hand-written surface only.

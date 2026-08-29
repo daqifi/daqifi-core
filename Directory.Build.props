@@ -31,6 +31,14 @@
       turning it on here needed no code changes.
     -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!--
+      Run the IDE* code-style analyzers as part of the build, not just inside an
+      editor (issue #484). Without this the severities declared in .editorconfig
+      are advisory: a violation shows as a squiggle to whoever opens the file and
+      as nothing at all in CI. With it, and with TreatWarningsAsErrors above, a
+      violation fails the build for everyone.
+    -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
 
 </Project>

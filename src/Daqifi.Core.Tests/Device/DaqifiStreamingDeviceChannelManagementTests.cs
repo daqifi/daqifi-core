@@ -11,910 +11,909 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace Daqifi.Core.Tests.Device
+namespace Daqifi.Core.Tests.Device;
+
+/// <summary>
+/// Unit tests for the device-level channel-management API on <see cref="DaqifiStreamingDevice"/>
+/// (ADC enable bitmask, DIO direction/value, analog output, reboot).
+/// </summary>
+public class DaqifiStreamingDeviceChannelManagementTests
 {
-    /// <summary>
-    /// Unit tests for the device-level channel-management API on <see cref="DaqifiStreamingDevice"/>
-    /// (ADC enable bitmask, DIO direction/value, analog output, reboot).
-    /// </summary>
-    public class DaqifiStreamingDeviceChannelManagementTests
+    private static TestableDaqifiStreamingDevice CreateConnectedDevice(int analogChannels = 4, int digitalChannels = 4)
     {
-        private static TestableDaqifiStreamingDevice CreateConnectedDevice(int analogChannels = 4, int digitalChannels = 4)
+        var device = new TestableDaqifiStreamingDevice("TestDevice");
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
-            var device = new TestableDaqifiStreamingDevice("TestDevice");
-            device.PopulateChannelsFromStatus(new DaqifiOutMessage
+            AnalogInPortNum = (uint)analogChannels,
+            AnalogInRes = 65535,
+            DigitalPortNum = (uint)digitalChannels
+        });
+        device.Connect();
+        device.SentMessages.Clear();
+        return device;
+    }
+
+    private static IChannel AnalogChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
+        device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == channelNumber);
+
+    private static IChannel DigitalChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
+        device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == channelNumber);
+
+    #region EnableChannel / DisableChannel - Analog bitmask
+
+    [Fact]
+    public void EnableChannel_Analog_SetsIsEnabledAndSendsBitmask()
+    {
+        var device = CreateConnectedDevice();
+        var channel = AnalogChannelAt(device, 0);
+
+        device.EnableChannel(channel);
+
+        Assert.True(channel.IsEnabled);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
+    }
+
+    [Fact]
+    public void EnableChannel_Analog_AccumulatesFullBitmaskAcrossCalls()
+    {
+        var device = CreateConnectedDevice();
+
+        device.EnableChannel(AnalogChannelAt(device, 1)); // bit 1 = 2
+        device.EnableChannel(AnalogChannelAt(device, 3)); // bit 3 = 8
+
+        // The firmware mask is a set-replace, so the last command must carry the full set (2 + 8 = 10).
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("10").Data, device.SentMessages.Last().Data);
+    }
+
+    [Fact]
+    public void DisableChannel_Analog_SendsBitmaskWithoutThatChannel()
+    {
+        var device = CreateConnectedDevice();
+        device.EnableChannel(AnalogChannelAt(device, 0));
+        device.EnableChannel(AnalogChannelAt(device, 1));
+        device.EnableChannel(AnalogChannelAt(device, 2));
+        device.SentMessages.Clear();
+
+        device.DisableChannel(AnalogChannelAt(device, 1)); // remaining: 0 and 2 => 1 + 4 = 5
+
+        Assert.False(AnalogChannelAt(device, 1).IsEnabled);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
+    }
+
+    [Fact]
+    public void EnableChannel_Analog_DoesNotSendDioCommand()
+    {
+        var device = CreateConnectedDevice();
+
+        device.EnableChannel(AnalogChannelAt(device, 0));
+
+        Assert.DoesNotContain(device.SentMessages, m =>
+            m.Data == ScpiMessageProducer.EnableDioPorts().Data ||
+            m.Data == ScpiMessageProducer.DisableDioPorts().Data);
+    }
+
+    [Fact]
+    public void EnableChannel_Analog_AtBitmaskBoundary_ProducesHighBitMask()
+    {
+        // Channel 31 is the widest bit representable in the 32-bit (1u << n) mask.
+        var device = CreateConnectedDevice(analogChannels: 32, digitalChannels: 0);
+        var channel = AnalogChannelAt(device, 31);
+
+        device.EnableChannel(channel);
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("2147483648").Data, sent.Data);
+    }
+
+    [Fact]
+    public void EnableChannel_Analog_BeyondBitmaskRange_ThrowsInvalidOperationException()
+    {
+        // Channel 32 cannot be encoded in the 32-bit mask, so the deliberate overflow guard fires.
+        var device = CreateConnectedDevice(analogChannels: 33, digitalChannels: 0);
+        var channel = AnalogChannelAt(device, 32);
+
+        Assert.Throws<InvalidOperationException>(() => device.EnableChannel(channel));
+    }
+
+    #endregion
+
+    #region EnableChannels - mixed and batching
+
+    [Fact]
+    public void EnableChannels_MultipleAnalog_SendsSingleBitmaskCommand()
+    {
+        var device = CreateConnectedDevice();
+        var channels = new[] { AnalogChannelAt(device, 0), AnalogChannelAt(device, 2) }; // 1 + 4 = 5
+
+        device.EnableChannels(channels);
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
+    }
+
+    [Fact]
+    public void EnableChannels_Mixed_SendsAdcMaskAndDioEnable()
+    {
+        var device = CreateConnectedDevice();
+        var channels = new[] { AnalogChannelAt(device, 0), DigitalChannelAt(device, 1) };
+
+        device.EnableChannels(channels);
+
+        Assert.Equal(2, device.SentMessages.Count);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels("1").Data);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableDioPorts().Data);
+    }
+
+    [Fact]
+    public void EnableChannels_WithNullCollection_ThrowsArgumentNullException()
+    {
+        var device = CreateConnectedDevice();
+
+        Assert.Throws<ArgumentNullException>(() => device.EnableChannels(null!));
+    }
+
+    [Fact]
+    public void EnableChannels_WithNullEntry_ThrowsAndSendsNothing()
+    {
+        var device = CreateConnectedDevice();
+        var channels = new List<IChannel> { AnalogChannelAt(device, 0), null! };
+
+        Assert.Throws<ArgumentException>(() => device.EnableChannels(channels));
+        // Validation runs before any mutation, so no command is sent and no state changes.
+        Assert.Empty(device.SentMessages);
+        Assert.False(AnalogChannelAt(device, 0).IsEnabled);
+    }
+
+    [Fact]
+    public void EnableChannels_DeferredSequence_IsEnumeratedExactlyOnce()
+    {
+        var device = CreateConnectedDevice();
+        // A single-use sequence throws on a second enumeration; this pins the contract that
+        // EnableChannels materializes the input once (validation pass + mutation pass must not
+        // re-enumerate the caller's sequence).
+        var sequence = new SingleEnumerationSequence(
+            AnalogChannelAt(device, 0), AnalogChannelAt(device, 2)); // 1 + 4 = 5
+
+        device.EnableChannels(sequence);
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
+    }
+
+    [Fact]
+    public void EnableChannels_WithDuplicateChannels_SendsSingleCorrectBitmask()
+    {
+        var device = CreateConnectedDevice();
+        var channel = AnalogChannelAt(device, 2); // bit 2 = 4
+
+        device.EnableChannels(new[] { channel, channel });
+
+        // The mask is recomputed over the device's channel set, so duplicates are idempotent.
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("4").Data, sent.Data);
+    }
+
+    #endregion
+
+    #region Digital enable (global)
+
+    [Fact]
+    public void EnableChannel_Digital_SendsGlobalDioEnable()
+    {
+        var device = CreateConnectedDevice();
+        var channel = DigitalChannelAt(device, 0);
+
+        device.EnableChannel(channel);
+
+        Assert.True(channel.IsEnabled);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableDioPorts().Data, sent.Data);
+    }
+
+    [Fact]
+    public void DisableChannel_Digital_KeepsDioEnabledWhileOthersRemain()
+    {
+        var device = CreateConnectedDevice();
+        device.EnableChannel(DigitalChannelAt(device, 0));
+        device.EnableChannel(DigitalChannelAt(device, 1));
+        device.SentMessages.Clear();
+
+        device.DisableChannel(DigitalChannelAt(device, 0));
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableDioPorts().Data, sent.Data);
+    }
+
+    [Fact]
+    public void DisableChannel_LastDigital_SendsGlobalDioDisable()
+    {
+        var device = CreateConnectedDevice();
+        device.EnableChannel(DigitalChannelAt(device, 0));
+        device.SentMessages.Clear();
+
+        device.DisableChannel(DigitalChannelAt(device, 0));
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
+    }
+
+    #endregion
+
+    #region Concurrent status resync (#409)
+
+    [Fact]
+    public async Task EnableChannel_ConcurrentWithStatusResync_AlwaysSendsMaskIncludingJustEnabledChannel()
+    {
+        // Regression test for #409: PopulateChannelsFromStatus now resyncs analog IsEnabled
+        // from the device's reported mask on the consumer thread. Without a shared critical
+        // section, a status frame could interleave between EnableChannel's IsEnabled mutation
+        // and the ADC mask it computes and sends, silently dropping the just-enabled channel
+        // from the outbound mask. Hammer a concurrent status resync (reporting everything
+        // disabled) against repeated EnableChannel calls and assert the sent mask always
+        // reflects what was just requested.
+        var device = CreateConnectedDevice(analogChannels: 2, digitalChannels: 0);
+        var channel0 = AnalogChannelAt(device, 0);
+        var allDisabledStatus = new DaqifiOutMessage
+        {
+            AnalogInPortNum = 2,
+            AnalogInRes = 65535,
+            AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0000)
+        };
+
+        // Safety net so a regression that reintroduces a deadlock fails the test instead of
+        // hanging CI indefinitely.
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var resyncTask = Task.Run(() =>
+        {
+            var iteration = 0;
+            while (!stop.IsCancellationRequested)
             {
-                AnalogInPortNum = (uint)analogChannels,
-                AnalogInRes = 65535,
-                DigitalPortNum = (uint)digitalChannels
-            });
-            device.Connect();
-            device.SentMessages.Clear();
-            return device;
-        }
-
-        private static IChannel AnalogChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
-            device.Channels.First(c => c.Type == ChannelType.Analog && c.ChannelNumber == channelNumber);
-
-        private static IChannel DigitalChannelAt(DaqifiStreamingDevice device, int channelNumber) =>
-            device.Channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == channelNumber);
-
-        #region EnableChannel / DisableChannel - Analog bitmask
-
-        [Fact]
-        public void EnableChannel_Analog_SetsIsEnabledAndSendsBitmask()
-        {
-            var device = CreateConnectedDevice();
-            var channel = AnalogChannelAt(device, 0);
-
-            device.EnableChannel(channel);
-
-            Assert.True(channel.IsEnabled);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
-        }
-
-        [Fact]
-        public void EnableChannel_Analog_AccumulatesFullBitmaskAcrossCalls()
-        {
-            var device = CreateConnectedDevice();
-
-            device.EnableChannel(AnalogChannelAt(device, 1)); // bit 1 = 2
-            device.EnableChannel(AnalogChannelAt(device, 3)); // bit 3 = 8
-
-            // The firmware mask is a set-replace, so the last command must carry the full set (2 + 8 = 10).
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("10").Data, device.SentMessages.Last().Data);
-        }
-
-        [Fact]
-        public void DisableChannel_Analog_SendsBitmaskWithoutThatChannel()
-        {
-            var device = CreateConnectedDevice();
-            device.EnableChannel(AnalogChannelAt(device, 0));
-            device.EnableChannel(AnalogChannelAt(device, 1));
-            device.EnableChannel(AnalogChannelAt(device, 2));
-            device.SentMessages.Clear();
-
-            device.DisableChannel(AnalogChannelAt(device, 1)); // remaining: 0 and 2 => 1 + 4 = 5
-
-            Assert.False(AnalogChannelAt(device, 1).IsEnabled);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
-        }
-
-        [Fact]
-        public void EnableChannel_Analog_DoesNotSendDioCommand()
-        {
-            var device = CreateConnectedDevice();
-
-            device.EnableChannel(AnalogChannelAt(device, 0));
-
-            Assert.DoesNotContain(device.SentMessages, m =>
-                m.Data == ScpiMessageProducer.EnableDioPorts().Data ||
-                m.Data == ScpiMessageProducer.DisableDioPorts().Data);
-        }
-
-        [Fact]
-        public void EnableChannel_Analog_AtBitmaskBoundary_ProducesHighBitMask()
-        {
-            // Channel 31 is the widest bit representable in the 32-bit (1u << n) mask.
-            var device = CreateConnectedDevice(analogChannels: 32, digitalChannels: 0);
-            var channel = AnalogChannelAt(device, 31);
-
-            device.EnableChannel(channel);
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("2147483648").Data, sent.Data);
-        }
-
-        [Fact]
-        public void EnableChannel_Analog_BeyondBitmaskRange_ThrowsInvalidOperationException()
-        {
-            // Channel 32 cannot be encoded in the 32-bit mask, so the deliberate overflow guard fires.
-            var device = CreateConnectedDevice(analogChannels: 33, digitalChannels: 0);
-            var channel = AnalogChannelAt(device, 32);
-
-            Assert.Throws<InvalidOperationException>(() => device.EnableChannel(channel));
-        }
-
-        #endregion
-
-        #region EnableChannels - mixed and batching
-
-        [Fact]
-        public void EnableChannels_MultipleAnalog_SendsSingleBitmaskCommand()
-        {
-            var device = CreateConnectedDevice();
-            var channels = new[] { AnalogChannelAt(device, 0), AnalogChannelAt(device, 2) }; // 1 + 4 = 5
-
-            device.EnableChannels(channels);
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
-        }
-
-        [Fact]
-        public void EnableChannels_Mixed_SendsAdcMaskAndDioEnable()
-        {
-            var device = CreateConnectedDevice();
-            var channels = new[] { AnalogChannelAt(device, 0), DigitalChannelAt(device, 1) };
-
-            device.EnableChannels(channels);
-
-            Assert.Equal(2, device.SentMessages.Count);
-            Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels("1").Data);
-            Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableDioPorts().Data);
-        }
-
-        [Fact]
-        public void EnableChannels_WithNullCollection_ThrowsArgumentNullException()
-        {
-            var device = CreateConnectedDevice();
-
-            Assert.Throws<ArgumentNullException>(() => device.EnableChannels(null!));
-        }
-
-        [Fact]
-        public void EnableChannels_WithNullEntry_ThrowsAndSendsNothing()
-        {
-            var device = CreateConnectedDevice();
-            var channels = new List<IChannel> { AnalogChannelAt(device, 0), null! };
-
-            Assert.Throws<ArgumentException>(() => device.EnableChannels(channels));
-            // Validation runs before any mutation, so no command is sent and no state changes.
-            Assert.Empty(device.SentMessages);
-            Assert.False(AnalogChannelAt(device, 0).IsEnabled);
-        }
-
-        [Fact]
-        public void EnableChannels_DeferredSequence_IsEnumeratedExactlyOnce()
-        {
-            var device = CreateConnectedDevice();
-            // A single-use sequence throws on a second enumeration; this pins the contract that
-            // EnableChannels materializes the input once (validation pass + mutation pass must not
-            // re-enumerate the caller's sequence).
-            var sequence = new SingleEnumerationSequence(
-                AnalogChannelAt(device, 0), AnalogChannelAt(device, 2)); // 1 + 4 = 5
-
-            device.EnableChannels(sequence);
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("5").Data, sent.Data);
-        }
-
-        [Fact]
-        public void EnableChannels_WithDuplicateChannels_SendsSingleCorrectBitmask()
-        {
-            var device = CreateConnectedDevice();
-            var channel = AnalogChannelAt(device, 2); // bit 2 = 4
-
-            device.EnableChannels(new[] { channel, channel });
-
-            // The mask is recomputed over the device's channel set, so duplicates are idempotent.
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("4").Data, sent.Data);
-        }
-
-        #endregion
-
-        #region Digital enable (global)
-
-        [Fact]
-        public void EnableChannel_Digital_SendsGlobalDioEnable()
-        {
-            var device = CreateConnectedDevice();
-            var channel = DigitalChannelAt(device, 0);
-
-            device.EnableChannel(channel);
-
-            Assert.True(channel.IsEnabled);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableDioPorts().Data, sent.Data);
-        }
-
-        [Fact]
-        public void DisableChannel_Digital_KeepsDioEnabledWhileOthersRemain()
-        {
-            var device = CreateConnectedDevice();
-            device.EnableChannel(DigitalChannelAt(device, 0));
-            device.EnableChannel(DigitalChannelAt(device, 1));
-            device.SentMessages.Clear();
-
-            device.DisableChannel(DigitalChannelAt(device, 0));
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableDioPorts().Data, sent.Data);
-        }
-
-        [Fact]
-        public void DisableChannel_LastDigital_SendsGlobalDioDisable()
-        {
-            var device = CreateConnectedDevice();
-            device.EnableChannel(DigitalChannelAt(device, 0));
-            device.SentMessages.Clear();
-
-            device.DisableChannel(DigitalChannelAt(device, 0));
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
-        }
-
-        #endregion
-
-        #region Concurrent status resync (#409)
-
-        [Fact]
-        public async Task EnableChannel_ConcurrentWithStatusResync_AlwaysSendsMaskIncludingJustEnabledChannel()
-        {
-            // Regression test for #409: PopulateChannelsFromStatus now resyncs analog IsEnabled
-            // from the device's reported mask on the consumer thread. Without a shared critical
-            // section, a status frame could interleave between EnableChannel's IsEnabled mutation
-            // and the ADC mask it computes and sends, silently dropping the just-enabled channel
-            // from the outbound mask. Hammer a concurrent status resync (reporting everything
-            // disabled) against repeated EnableChannel calls and assert the sent mask always
-            // reflects what was just requested.
-            var device = CreateConnectedDevice(analogChannels: 2, digitalChannels: 0);
-            var channel0 = AnalogChannelAt(device, 0);
-            var allDisabledStatus = new DaqifiOutMessage
-            {
-                AnalogInPortNum = 2,
-                AnalogInRes = 65535,
-                AnalogInPortEnabled = Google.Protobuf.ByteString.CopyFrom(0b0000_0000)
-            };
-
-            // Safety net so a regression that reintroduces a deadlock fails the test instead of
-            // hanging CI indefinitely.
-            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var resyncTask = Task.Run(() =>
-            {
-                var iteration = 0;
-                while (!stop.IsCancellationRequested)
+                device.PopulateChannelsFromStatus(allDisabledStatus);
+                // Yield periodically rather than every iteration — yielding every iteration
+                // (e.g. via SpinWait.SpinOnce) spaces status frames out enough that this loop
+                // stops reliably landing inside EnableChannel's now-much-shorter critical
+                // section, silently defeating the regression coverage. Yielding every 64th
+                // iteration keeps the interleaving pressure while still relinquishing the core
+                // regularly enough to avoid pegging it.
+                if (++iteration % 64 == 0)
                 {
-                    device.PopulateChannelsFromStatus(allDisabledStatus);
-                    // Yield periodically rather than every iteration — yielding every iteration
-                    // (e.g. via SpinWait.SpinOnce) spaces status frames out enough that this loop
-                    // stops reliably landing inside EnableChannel's now-much-shorter critical
-                    // section, silently defeating the regression coverage. Yielding every 64th
-                    // iteration keeps the interleaving pressure while still relinquishing the core
-                    // regularly enough to avoid pegging it.
-                    if (++iteration % 64 == 0)
-                    {
-                        Thread.Yield();
-                    }
+                    Thread.Yield();
                 }
-            });
+            }
+        });
 
+        try
+        {
+            for (var i = 0; i < 500; i++)
+            {
+                device.DisableAllChannels();
+                device.SentMessages.Clear();
+
+                device.EnableChannel(channel0);
+
+                var sent = Assert.Single(device.SentMessages);
+                Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+
+            // The cancellation token only stops the loop between iterations — it can't
+            // interrupt a PopulateChannelsFromStatus call already in progress. If a
+            // reintroduced deadlock ever wedges that call, awaiting resyncTask unbounded would
+            // hang CI instead of failing the test. Bound the wait so a deadlock regression
+            // fails deterministically instead.
             try
             {
-                for (var i = 0; i < 500; i++)
-                {
-                    device.DisableAllChannels();
-                    device.SentMessages.Clear();
-
-                    device.EnableChannel(channel0);
-
-                    var sent = Assert.Single(device.SentMessages);
-                    Assert.Equal(ScpiMessageProducer.EnableAdcChannels("1").Data, sent.Data);
-                }
+                await resyncTask.WaitAsync(TimeSpan.FromSeconds(5));
             }
-            finally
+            catch (TimeoutException)
             {
-                stop.Cancel();
-
-                // The cancellation token only stops the loop between iterations — it can't
-                // interrupt a PopulateChannelsFromStatus call already in progress. If a
-                // reintroduced deadlock ever wedges that call, awaiting resyncTask unbounded would
-                // hang CI instead of failing the test. Bound the wait so a deadlock regression
-                // fails deterministically instead.
-                try
-                {
-                    await resyncTask.WaitAsync(TimeSpan.FromSeconds(5));
-                }
-                catch (TimeoutException)
-                {
-                    Assert.Fail("The status-resync worker did not stop within 5s of cancellation — possible deadlock regression.");
-                }
+                Assert.Fail("The status-resync worker did not stop within 5s of cancellation — possible deadlock regression.");
             }
         }
+    }
 
-        #endregion
+    #endregion
 
-        #region DisableAllChannels
+    #region DisableAllChannels
 
-        [Fact]
-        public void DisableAllChannels_ClearsStateAndSendsZeroMaskAndDioDisable()
+    [Fact]
+    public void DisableAllChannels_ClearsStateAndSendsZeroMaskAndDioDisable()
+    {
+        var device = CreateConnectedDevice();
+        device.EnableChannel(AnalogChannelAt(device, 0));
+        device.EnableChannel(DigitalChannelAt(device, 0));
+        device.SentMessages.Clear();
+
+        device.DisableAllChannels();
+
+        Assert.All(device.Channels, c => Assert.False(c.IsEnabled));
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels("0").Data);
+        Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.DisableDioPorts().Data);
+    }
+
+    [Fact]
+    public void DisableAllChannels_AnalogOnlyDevice_DoesNotSendDioCommand()
+    {
+        var device = CreateConnectedDevice(analogChannels: 4, digitalChannels: 0);
+        device.EnableChannel(AnalogChannelAt(device, 0));
+        device.SentMessages.Clear();
+
+        device.DisableAllChannels();
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("0").Data, sent.Data);
+    }
+
+    [Fact]
+    public void DisableAllChannels_DigitalOnlyDevice_DoesNotSendAdcCommand()
+    {
+        var device = CreateConnectedDevice(analogChannels: 0, digitalChannels: 4);
+        device.EnableChannel(DigitalChannelAt(device, 0));
+        device.SentMessages.Clear();
+
+        device.DisableAllChannels();
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
+    }
+
+    #endregion
+
+    #region SetDioDirection
+
+    [Fact]
+    public void SetDioDirection_Output_SetsDirectionAndSendsCommand()
+    {
+        var device = CreateConnectedDevice();
+        var channel = DigitalChannelAt(device, 2);
+
+        device.SetDioDirection(channel, ChannelDirection.Output);
+
+        Assert.Equal(ChannelDirection.Output, channel.Direction);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetDioPortDirection(2, 1).Data, sent.Data);
+    }
+
+    [Fact]
+    public void SetDioDirection_Input_SendsZeroDirection()
+    {
+        var device = CreateConnectedDevice();
+        var channel = DigitalChannelAt(device, 1);
+
+        device.SetDioDirection(channel, ChannelDirection.Input);
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetDioPortDirection(1, 0).Data, sent.Data);
+    }
+
+    [Fact]
+    public void SetDioDirection_OnAnalogChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice();
+        var channel = AnalogChannelAt(device, 0);
+
+        Assert.Throws<ArgumentException>(() => device.SetDioDirection(channel, ChannelDirection.Output));
+    }
+
+    [Fact]
+    public void SetDioDirection_WithUnknownDirection_ThrowsArgumentOutOfRangeException()
+    {
+        var device = CreateConnectedDevice();
+        var channel = DigitalChannelAt(device, 0);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetDioDirection(channel, ChannelDirection.Unknown));
+    }
+
+    [Fact]
+    public void SetDioDirection_WithForeignDigitalChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice();
+        var foreign = new DigitalChannel(1); // correctly typed, but not a member of Channels
+
+        Assert.Throws<ArgumentException>(() => device.SetDioDirection(foreign, ChannelDirection.Output));
+    }
+
+    [Fact]
+    public void SetDioDirection_WhilePwmEnabled_ThrowsInvalidOperationException()
+    {
+        // The firmware silently ignores direction/state writes while PWM is running the pin
+        // (#449) — Core rejects rather than mirroring a level the pin doesn't have.
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        device.SetPwmEnabled(channel, true);
+        device.SentMessages.Clear();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioDirection(channel, ChannelDirection.Output));
+        Assert.Contains("SetPwmEnabled", ex.Message);
+        Assert.Empty(device.SentMessages);
+    }
+
+    #endregion
+
+    #region SetDioValue
+
+    [Fact]
+    public void SetDioValue_High_SetsOutputValueAndSendsCommand()
+    {
+        var device = CreateConnectedDevice();
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 1);
+
+        device.SetDioValue(channel, true);
+
+        Assert.True(channel.OutputValue);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetDioPortState(1, 1).Data, sent.Data);
+    }
+
+    [Fact]
+    public void SetDioValue_Low_SendsZeroState()
+    {
+        var device = CreateConnectedDevice();
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 3);
+        channel.OutputValue = true;
+
+        device.SetDioValue(channel, false);
+
+        Assert.False(channel.OutputValue);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetDioPortState(3, 0).Data, sent.Data);
+    }
+
+    [Fact]
+    public void SetDioValue_OnAnalogChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice();
+        var channel = AnalogChannelAt(device, 0);
+
+        Assert.Throws<ArgumentException>(() => device.SetDioValue(channel, true));
+    }
+
+    [Fact]
+    public void SetDioValue_WithForeignDigitalChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice();
+        var foreign = new DigitalChannel(1); // correctly typed, but not a member of Channels
+
+        Assert.Throws<ArgumentException>(() => device.SetDioValue(foreign, true));
+    }
+
+    [Fact]
+    public void SetDioValue_WhilePwmEnabled_ThrowsInvalidOperationExceptionAndDoesNotMirrorOutputValue()
+    {
+        // The firmware ignores the write entirely; Core must not report success or mirror a
+        // level the pin does not actually have (#449).
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        device.SetPwmEnabled(channel, true);
+        device.SentMessages.Clear();
+        var outputValueBeforeAttempt = channel.OutputValue;
+
+        var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioValue(channel, !outputValueBeforeAttempt));
+        Assert.Contains("SetPwmEnabled", ex.Message);
+        Assert.Equal(outputValueBeforeAttempt, channel.OutputValue);
+        Assert.Empty(device.SentMessages);
+    }
+
+    #endregion
+
+    #region PWM
+
+    // The device populates IsPwmCapable from the firmware board mask 0x00F9: channels
+    // 0, 3, 4, 5, 6, 7 are capable; 1, 2 and 8+ are not. Use 8 digital channels so both
+    // capable and non-capable channels exist.
+
+    [Fact]
+    public void PopulateChannels_SetsPwmCapabilityFromBoardMask()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 16);
+
+        var capable = device.Channels
+            .OfType<IDigitalChannel>()
+            .Where(c => c.IsPwmCapable)
+            .Select(c => c.ChannelNumber)
+            .OrderBy(n => n)
+            .ToList();
+
+        Assert.Equal(new[] { 0, 3, 4, 5, 6, 7 }, capable);
+    }
+
+    [Fact]
+    public void PwmDutyCyclePercent_DefaultsToCommandableValue()
+    {
+        var channel = new DigitalChannel(0, isPwmCapable: true);
+
+        Assert.Equal(50, channel.PwmDutyCyclePercent);
+    }
+
+    [Theory]
+    [InlineData(-5, 1)]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(100, 100)]
+    [InlineData(150, 100)]
+    public void PwmDutyCyclePercent_ClampsToCommandableRangeOnAssignment(int assigned, int expected)
+    {
+        var channel = new DigitalChannel(0, isPwmCapable: true) { PwmDutyCyclePercent = assigned };
+
+        Assert.Equal(expected, channel.PwmDutyCyclePercent);
+    }
+
+    [Fact]
+    public void SetPwmDutyCycle_OnCapableChannel_SetsBookkeepingAndSendsCommand()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+
+        device.SetPwmDutyCycle(channel, 50);
+
+        Assert.Equal(50, channel.PwmDutyCyclePercent);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50).Data, sent.Data);
+    }
+
+    [Theory]
+    [InlineData(0)] // duty 0 is a firmware trap: stored but never applied; disable is the off switch
+    [InlineData(101)]
+    public void SetPwmDutyCycle_OutOfRange_ThrowsArgumentOutOfRangeException(int duty)
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = DigitalChannelAt(device, 4);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetPwmDutyCycle(channel, duty));
+    }
+
+    [Fact]
+    public void SetPwmDutyCycle_OnNonCapableChannel_ThrowsWithCapableList()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = DigitalChannelAt(device, 2);
+
+        var ex = Assert.Throws<ArgumentException>(() => device.SetPwmDutyCycle(channel, 50));
+        Assert.Contains("0, 3, 4, 5, 6, 7", ex.Message);
+    }
+
+    [Fact]
+    public void SetPwmEnabled_True_SetsFlagAndSendsCommand()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+
+        device.SetPwmEnabled(channel, true);
+
+        Assert.True(channel.IsPwmEnabled);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(4, true).Data, sent.Data);
+    }
+
+    [Fact]
+    public void SetPwmEnabled_True_OnNonCapableChannel_Throws()
+    {
+        // The firmware marks a channel PWM-active before its capability check fails and never
+        // rolls it back (bricking digital writes on the channel), so the client hard-blocks this.
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = DigitalChannelAt(device, 2);
+
+        var ex = Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(channel, true));
+        Assert.Contains("0, 3, 4, 5, 6, 7", ex.Message);
+        Assert.Empty(device.SentMessages);
+    }
+
+    [Fact]
+    public void SetPwmEnabled_False_OnNonCapableChannel_IsAllowedAsRecovery()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = DigitalChannelAt(device, 2);
+
+        device.SetPwmEnabled(channel, false);
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(2, false).Data, sent.Data);
+    }
+
+    [Fact]
+    public void SetPwmEnabled_False_ClearsOutputValueBookkeeping()
+    {
+        // Firmware zeroes the stored output value when PWM is disabled; local state mirrors it.
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        channel.OutputValue = true;
+        channel.IsPwmEnabled = true;
+
+        device.SetPwmEnabled(channel, false);
+
+        Assert.False(channel.IsPwmEnabled);
+        Assert.False(channel.OutputValue);
+    }
+
+    [Fact]
+    public void SetPwmEnabled_OnAnalogChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = AnalogChannelAt(device, 0);
+
+        Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(channel, true));
+    }
+
+    [Fact]
+    public void SetPwmEnabled_WithForeignDigitalChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var foreign = new DigitalChannel(4, isPwmCapable: true);
+
+        Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(foreign, true));
+    }
+
+    [Fact]
+    public void PwmFrequencyHz_DefaultsToCommandableValueBeforeAnySetPwmFrequencyCall()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+
+        Assert.Equal(DaqifiStreamingDevice.DefaultPwmFrequencyHz, device.PwmFrequencyHz);
+        Assert.InRange(
+            device.PwmFrequencyHz,
+            DaqifiStreamingDevice.MinPwmFrequencyHz,
+            DaqifiStreamingDevice.MaxPwmFrequencyHz);
+    }
+
+    [Fact]
+    public void SetPwmFrequency_SendsCommandAddressedToChannelZeroAndTracksValue()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+
+        device.SetPwmFrequency(1000);
+
+        Assert.Equal(1000, device.PwmFrequencyHz);
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.SetPwmChannelFrequency(0, 1000).Data, sent.Data);
+    }
+
+    [Theory]
+    [InlineData(5)]     // 1-5 Hz silently wrap the firmware's 16-bit period register
+    [InlineData(50001)] // above the advertised cap
+    public void SetPwmFrequency_OutOfRange_ThrowsArgumentOutOfRangeException(int frequency)
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetPwmFrequency(frequency));
+    }
+
+    [Fact]
+    public void SetPwmEnabled_WhenDisconnected_ThrowsDeviceNotConnectedException()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = DigitalChannelAt(device, 4);
+        device.Disconnect();
+
+        Assert.Throws<DeviceNotConnectedException>(() => device.SetPwmEnabled(channel, true));
+    }
+
+    [Fact]
+    public void PopulateChannelsFromStatus_PreservesPwmBookkeepingAcrossRefresh()
+    {
+        var device = CreateConnectedDevice(digitalChannels: 8);
+        var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
+        device.SetPwmDutyCycle(channel, 42);
+        device.SetPwmEnabled(channel, true);
+
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
-            var device = CreateConnectedDevice();
-            device.EnableChannel(AnalogChannelAt(device, 0));
-            device.EnableChannel(DigitalChannelAt(device, 0));
-            device.SentMessages.Clear();
+            AnalogInPortNum = 4,
+            AnalogInRes = 65535,
+            DigitalPortNum = 8
+        });
 
-            device.DisableAllChannels();
+        var refreshed = (IDigitalChannel)DigitalChannelAt(device, 4);
+        // Channel identity (type, number) is unchanged across the refresh, so the same
+        // instance is updated in place rather than replaced.
+        Assert.Same(channel, refreshed);
+        Assert.True(refreshed.IsPwmEnabled);
+        Assert.Equal(42, refreshed.PwmDutyCyclePercent);
+    }
 
-            Assert.All(device.Channels, c => Assert.False(c.IsEnabled));
-            Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.EnableAdcChannels("0").Data);
-            Assert.Contains(device.SentMessages, m => m.Data == ScpiMessageProducer.DisableDioPorts().Data);
-        }
+    #endregion
 
-        [Fact]
-        public void DisableAllChannels_AnalogOnlyDevice_DoesNotSendDioCommand()
+    #region SetAnalogOutput
+
+    [Fact]
+    public void SetAnalogOutput_SendsLevelThenUpdate()
+    {
+        var device = CreateConnectedDevice();
+
+        device.SetAnalogOutput(1, 5.0);
+
+        Assert.Equal(2, device.SentMessages.Count);
+        Assert.Equal(ScpiMessageProducer.SetAnalogOutputVoltage(1, 5.0).Data, device.SentMessages[0].Data);
+        Assert.Equal(ScpiMessageProducer.UpdateDacOutputs.Data, device.SentMessages[1].Data);
+    }
+
+    [Fact]
+    public void SetAnalogOutput_AddressesDacByChannelNumber()
+    {
+        var device = CreateConnectedDevice();
+        // DAC channels are addressed by number and are not part of the populated input collection;
+        // a channel number with no corresponding entry in Channels must still work and latch.
+        device.SetAnalogOutput(7, 1.25);
+
+        Assert.Equal(2, device.SentMessages.Count);
+        Assert.Equal(ScpiMessageProducer.SetAnalogOutputVoltage(7, 1.25).Data, device.SentMessages[0].Data);
+        Assert.Equal(ScpiMessageProducer.UpdateDacOutputs.Data, device.SentMessages[1].Data);
+    }
+
+    [Fact]
+    public void SetAnalogOutput_NegativeChannel_ThrowsArgumentOutOfRangeException()
+    {
+        var device = CreateConnectedDevice();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(-1, 1.0));
+    }
+
+    [Fact]
+    public void SetAnalogOutput_NonFiniteVoltage_ThrowsArgumentOutOfRangeException()
+    {
+        var device = CreateConnectedDevice();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, double.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, double.PositiveInfinity));
+    }
+
+    #endregion
+
+    #region Membership and connection validation
+
+    [Fact]
+    public void EnableChannel_WithForeignChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice();
+        var foreign = new AnalogChannel(0); // same number, but a different instance not in Channels
+
+        Assert.Throws<ArgumentException>(() => device.EnableChannel(foreign));
+    }
+
+    [Fact]
+    public void EnableChannel_WithNullChannel_ThrowsArgumentNullException()
+    {
+        var device = CreateConnectedDevice();
+
+        Assert.Throws<ArgumentNullException>(() => device.EnableChannel(null!));
+    }
+
+    [Fact]
+    public void DisableChannel_WithForeignChannel_ThrowsArgumentException()
+    {
+        var device = CreateConnectedDevice();
+        var foreign = new AnalogChannel(0);
+
+        Assert.Throws<ArgumentException>(() => device.DisableChannel(foreign));
+    }
+
+    [Fact]
+    public void DisableChannel_WithNullChannel_ThrowsArgumentNullException()
+    {
+        var device = CreateConnectedDevice();
+
+        Assert.Throws<ArgumentNullException>(() => device.DisableChannel(null!));
+    }
+
+    [Fact]
+    public void ChannelManagement_WhenDisconnected_ThrowsDeviceNotConnectedException()
+    {
+        // Populate channels but do not connect.
+        var device = new TestableDaqifiStreamingDevice("TestDevice");
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
-            var device = CreateConnectedDevice(analogChannels: 4, digitalChannels: 0);
-            device.EnableChannel(AnalogChannelAt(device, 0));
-            device.SentMessages.Clear();
+            AnalogInPortNum = 2,
+            AnalogInRes = 65535,
+            DigitalPortNum = 2
+        });
+        var analog = AnalogChannelAt(device, 0);
+        var digital = DigitalChannelAt(device, 0);
 
-            device.DisableAllChannels();
+        Assert.Throws<DeviceNotConnectedException>(() => device.EnableChannel(analog));
+        Assert.Throws<DeviceNotConnectedException>(() => device.EnableChannels(new[] { analog }));
+        Assert.Throws<DeviceNotConnectedException>(() => device.DisableChannel(analog));
+        Assert.Throws<DeviceNotConnectedException>(() => device.DisableAllChannels());
+        Assert.Throws<DeviceNotConnectedException>(() => device.SetDioDirection(digital, ChannelDirection.Output));
+        Assert.Throws<DeviceNotConnectedException>(() => device.SetDioValue(digital, true));
+        Assert.Throws<DeviceNotConnectedException>(() => device.SetAnalogOutput(0, 1.0));
+        Assert.Throws<DeviceNotConnectedException>(() => device.Reboot());
+    }
 
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("0").Data, sent.Data);
-        }
+    #endregion
 
-        [Fact]
-        public void DisableAllChannels_DigitalOnlyDevice_DoesNotSendAdcCommand()
+    #region State preservation across status refresh
+
+    [Fact]
+    public void EnableState_SurvivesStatusRefresh_AndMaskStaysCorrect()
+    {
+        var device = CreateConnectedDevice(analogChannels: 4, digitalChannels: 4);
+        device.EnableChannel(AnalogChannelAt(device, 0));
+        device.EnableChannel(AnalogChannelAt(device, 1));
+        device.SentMessages.Clear();
+
+        // Simulate a later status refresh (e.g. reconnect / metadata re-query), which
+        // recreates the channel instances. Previously-enabled channels must remain enabled.
+        device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
-            var device = CreateConnectedDevice(analogChannels: 0, digitalChannels: 4);
-            device.EnableChannel(DigitalChannelAt(device, 0));
-            device.SentMessages.Clear();
+            AnalogInPortNum = 4,
+            AnalogInRes = 65535,
+            DigitalPortNum = 4
+        });
 
-            device.DisableAllChannels();
+        Assert.True(AnalogChannelAt(device, 0).IsEnabled);
+        Assert.True(AnalogChannelAt(device, 1).IsEnabled);
 
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.DisableDioPorts().Data, sent.Data);
-        }
+        // Enabling another channel still yields the full set-replace mask (0,1,2 => 1+2+4 = 7),
+        // not a mask that dropped the channels enabled before the refresh.
+        device.EnableChannel(AnalogChannelAt(device, 2));
+        Assert.Equal(ScpiMessageProducer.EnableAdcChannels("7").Data, device.SentMessages.Last().Data);
+    }
 
-        #endregion
+    #endregion
 
-        #region SetDioDirection
+    #region Reboot
 
-        [Fact]
-        public void SetDioDirection_Output_SetsDirectionAndSendsCommand()
+    [Fact]
+    public void Reboot_SendsRebootCommandAndDisconnects()
+    {
+        var device = CreateConnectedDevice();
+
+        device.Reboot();
+
+        var sent = Assert.Single(device.SentMessages);
+        Assert.Equal(ScpiMessageProducer.RebootDevice.Data, sent.Data);
+        Assert.False(device.IsConnected);
+    }
+
+    #endregion
+
+    /// <summary>
+    /// An <see cref="IEnumerable{T}"/> that permits exactly one enumeration, throwing on any
+    /// subsequent attempt. Used to prove EnableChannels materializes its input only once.
+    /// </summary>
+    private sealed class SingleEnumerationSequence : IEnumerable<IChannel>
+    {
+        private readonly IChannel[] _items;
+        private bool _enumerated;
+
+        public SingleEnumerationSequence(params IChannel[] items) => _items = items;
+
+        public IEnumerator<IChannel> GetEnumerator()
         {
-            var device = CreateConnectedDevice();
-            var channel = DigitalChannelAt(device, 2);
-
-            device.SetDioDirection(channel, ChannelDirection.Output);
-
-            Assert.Equal(ChannelDirection.Output, channel.Direction);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetDioPortDirection(2, 1).Data, sent.Data);
-        }
-
-        [Fact]
-        public void SetDioDirection_Input_SendsZeroDirection()
-        {
-            var device = CreateConnectedDevice();
-            var channel = DigitalChannelAt(device, 1);
-
-            device.SetDioDirection(channel, ChannelDirection.Input);
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetDioPortDirection(1, 0).Data, sent.Data);
-        }
-
-        [Fact]
-        public void SetDioDirection_OnAnalogChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice();
-            var channel = AnalogChannelAt(device, 0);
-
-            Assert.Throws<ArgumentException>(() => device.SetDioDirection(channel, ChannelDirection.Output));
-        }
-
-        [Fact]
-        public void SetDioDirection_WithUnknownDirection_ThrowsArgumentOutOfRangeException()
-        {
-            var device = CreateConnectedDevice();
-            var channel = DigitalChannelAt(device, 0);
-
-            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetDioDirection(channel, ChannelDirection.Unknown));
-        }
-
-        [Fact]
-        public void SetDioDirection_WithForeignDigitalChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice();
-            var foreign = new DigitalChannel(1); // correctly typed, but not a member of Channels
-
-            Assert.Throws<ArgumentException>(() => device.SetDioDirection(foreign, ChannelDirection.Output));
-        }
-
-        [Fact]
-        public void SetDioDirection_WhilePwmEnabled_ThrowsInvalidOperationException()
-        {
-            // The firmware silently ignores direction/state writes while PWM is running the pin
-            // (#449) — Core rejects rather than mirroring a level the pin doesn't have.
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
-            device.SetPwmEnabled(channel, true);
-            device.SentMessages.Clear();
-
-            var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioDirection(channel, ChannelDirection.Output));
-            Assert.Contains("SetPwmEnabled", ex.Message);
-            Assert.Empty(device.SentMessages);
-        }
-
-        #endregion
-
-        #region SetDioValue
-
-        [Fact]
-        public void SetDioValue_High_SetsOutputValueAndSendsCommand()
-        {
-            var device = CreateConnectedDevice();
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 1);
-
-            device.SetDioValue(channel, true);
-
-            Assert.True(channel.OutputValue);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetDioPortState(1, 1).Data, sent.Data);
-        }
-
-        [Fact]
-        public void SetDioValue_Low_SendsZeroState()
-        {
-            var device = CreateConnectedDevice();
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 3);
-            channel.OutputValue = true;
-
-            device.SetDioValue(channel, false);
-
-            Assert.False(channel.OutputValue);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetDioPortState(3, 0).Data, sent.Data);
-        }
-
-        [Fact]
-        public void SetDioValue_OnAnalogChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice();
-            var channel = AnalogChannelAt(device, 0);
-
-            Assert.Throws<ArgumentException>(() => device.SetDioValue(channel, true));
-        }
-
-        [Fact]
-        public void SetDioValue_WithForeignDigitalChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice();
-            var foreign = new DigitalChannel(1); // correctly typed, but not a member of Channels
-
-            Assert.Throws<ArgumentException>(() => device.SetDioValue(foreign, true));
-        }
-
-        [Fact]
-        public void SetDioValue_WhilePwmEnabled_ThrowsInvalidOperationExceptionAndDoesNotMirrorOutputValue()
-        {
-            // The firmware ignores the write entirely; Core must not report success or mirror a
-            // level the pin does not actually have (#449).
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
-            device.SetPwmEnabled(channel, true);
-            device.SentMessages.Clear();
-            var outputValueBeforeAttempt = channel.OutputValue;
-
-            var ex = Assert.Throws<InvalidOperationException>(() => device.SetDioValue(channel, !outputValueBeforeAttempt));
-            Assert.Contains("SetPwmEnabled", ex.Message);
-            Assert.Equal(outputValueBeforeAttempt, channel.OutputValue);
-            Assert.Empty(device.SentMessages);
-        }
-
-        #endregion
-
-        #region PWM
-
-        // The device populates IsPwmCapable from the firmware board mask 0x00F9: channels
-        // 0, 3, 4, 5, 6, 7 are capable; 1, 2 and 8+ are not. Use 8 digital channels so both
-        // capable and non-capable channels exist.
-
-        [Fact]
-        public void PopulateChannels_SetsPwmCapabilityFromBoardMask()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 16);
-
-            var capable = device.Channels
-                .OfType<IDigitalChannel>()
-                .Where(c => c.IsPwmCapable)
-                .Select(c => c.ChannelNumber)
-                .OrderBy(n => n)
-                .ToList();
-
-            Assert.Equal(new[] { 0, 3, 4, 5, 6, 7 }, capable);
-        }
-
-        [Fact]
-        public void PwmDutyCyclePercent_DefaultsToCommandableValue()
-        {
-            var channel = new DigitalChannel(0, isPwmCapable: true);
-
-            Assert.Equal(50, channel.PwmDutyCyclePercent);
-        }
-
-        [Theory]
-        [InlineData(-5, 1)]
-        [InlineData(0, 1)]
-        [InlineData(1, 1)]
-        [InlineData(100, 100)]
-        [InlineData(150, 100)]
-        public void PwmDutyCyclePercent_ClampsToCommandableRangeOnAssignment(int assigned, int expected)
-        {
-            var channel = new DigitalChannel(0, isPwmCapable: true) { PwmDutyCyclePercent = assigned };
-
-            Assert.Equal(expected, channel.PwmDutyCyclePercent);
-        }
-
-        [Fact]
-        public void SetPwmDutyCycle_OnCapableChannel_SetsBookkeepingAndSendsCommand()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
-
-            device.SetPwmDutyCycle(channel, 50);
-
-            Assert.Equal(50, channel.PwmDutyCyclePercent);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50).Data, sent.Data);
-        }
-
-        [Theory]
-        [InlineData(0)] // duty 0 is a firmware trap: stored but never applied; disable is the off switch
-        [InlineData(101)]
-        public void SetPwmDutyCycle_OutOfRange_ThrowsArgumentOutOfRangeException(int duty)
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = DigitalChannelAt(device, 4);
-
-            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetPwmDutyCycle(channel, duty));
-        }
-
-        [Fact]
-        public void SetPwmDutyCycle_OnNonCapableChannel_ThrowsWithCapableList()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = DigitalChannelAt(device, 2);
-
-            var ex = Assert.Throws<ArgumentException>(() => device.SetPwmDutyCycle(channel, 50));
-            Assert.Contains("0, 3, 4, 5, 6, 7", ex.Message);
-        }
-
-        [Fact]
-        public void SetPwmEnabled_True_SetsFlagAndSendsCommand()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
-
-            device.SetPwmEnabled(channel, true);
-
-            Assert.True(channel.IsPwmEnabled);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(4, true).Data, sent.Data);
-        }
-
-        [Fact]
-        public void SetPwmEnabled_True_OnNonCapableChannel_Throws()
-        {
-            // The firmware marks a channel PWM-active before its capability check fails and never
-            // rolls it back (bricking digital writes on the channel), so the client hard-blocks this.
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = DigitalChannelAt(device, 2);
-
-            var ex = Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(channel, true));
-            Assert.Contains("0, 3, 4, 5, 6, 7", ex.Message);
-            Assert.Empty(device.SentMessages);
-        }
-
-        [Fact]
-        public void SetPwmEnabled_False_OnNonCapableChannel_IsAllowedAsRecovery()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = DigitalChannelAt(device, 2);
-
-            device.SetPwmEnabled(channel, false);
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetPwmChannelEnabled(2, false).Data, sent.Data);
-        }
-
-        [Fact]
-        public void SetPwmEnabled_False_ClearsOutputValueBookkeeping()
-        {
-            // Firmware zeroes the stored output value when PWM is disabled; local state mirrors it.
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
-            channel.OutputValue = true;
-            channel.IsPwmEnabled = true;
-
-            device.SetPwmEnabled(channel, false);
-
-            Assert.False(channel.IsPwmEnabled);
-            Assert.False(channel.OutputValue);
-        }
-
-        [Fact]
-        public void SetPwmEnabled_OnAnalogChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = AnalogChannelAt(device, 0);
-
-            Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(channel, true));
-        }
-
-        [Fact]
-        public void SetPwmEnabled_WithForeignDigitalChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var foreign = new DigitalChannel(4, isPwmCapable: true);
-
-            Assert.Throws<ArgumentException>(() => device.SetPwmEnabled(foreign, true));
-        }
-
-        [Fact]
-        public void PwmFrequencyHz_DefaultsToCommandableValueBeforeAnySetPwmFrequencyCall()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-
-            Assert.Equal(DaqifiStreamingDevice.DefaultPwmFrequencyHz, device.PwmFrequencyHz);
-            Assert.InRange(
-                device.PwmFrequencyHz,
-                DaqifiStreamingDevice.MinPwmFrequencyHz,
-                DaqifiStreamingDevice.MaxPwmFrequencyHz);
-        }
-
-        [Fact]
-        public void SetPwmFrequency_SendsCommandAddressedToChannelZeroAndTracksValue()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-
-            device.SetPwmFrequency(1000);
-
-            Assert.Equal(1000, device.PwmFrequencyHz);
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.SetPwmChannelFrequency(0, 1000).Data, sent.Data);
-        }
-
-        [Theory]
-        [InlineData(5)]     // 1-5 Hz silently wrap the firmware's 16-bit period register
-        [InlineData(50001)] // above the advertised cap
-        public void SetPwmFrequency_OutOfRange_ThrowsArgumentOutOfRangeException(int frequency)
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-
-            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetPwmFrequency(frequency));
-        }
-
-        [Fact]
-        public void SetPwmEnabled_WhenDisconnected_ThrowsDeviceNotConnectedException()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = DigitalChannelAt(device, 4);
-            device.Disconnect();
-
-            Assert.Throws<DeviceNotConnectedException>(() => device.SetPwmEnabled(channel, true));
-        }
-
-        [Fact]
-        public void PopulateChannelsFromStatus_PreservesPwmBookkeepingAcrossRefresh()
-        {
-            var device = CreateConnectedDevice(digitalChannels: 8);
-            var channel = (IDigitalChannel)DigitalChannelAt(device, 4);
-            device.SetPwmDutyCycle(channel, 42);
-            device.SetPwmEnabled(channel, true);
-
-            device.PopulateChannelsFromStatus(new DaqifiOutMessage
+            if (_enumerated)
             {
-                AnalogInPortNum = 4,
-                AnalogInRes = 65535,
-                DigitalPortNum = 8
-            });
-
-            var refreshed = (IDigitalChannel)DigitalChannelAt(device, 4);
-            // Channel identity (type, number) is unchanged across the refresh, so the same
-            // instance is updated in place rather than replaced.
-            Assert.Same(channel, refreshed);
-            Assert.True(refreshed.IsPwmEnabled);
-            Assert.Equal(42, refreshed.PwmDutyCyclePercent);
-        }
-
-        #endregion
-
-        #region SetAnalogOutput
-
-        [Fact]
-        public void SetAnalogOutput_SendsLevelThenUpdate()
-        {
-            var device = CreateConnectedDevice();
-
-            device.SetAnalogOutput(1, 5.0);
-
-            Assert.Equal(2, device.SentMessages.Count);
-            Assert.Equal(ScpiMessageProducer.SetAnalogOutputVoltage(1, 5.0).Data, device.SentMessages[0].Data);
-            Assert.Equal(ScpiMessageProducer.UpdateDacOutputs.Data, device.SentMessages[1].Data);
-        }
-
-        [Fact]
-        public void SetAnalogOutput_AddressesDacByChannelNumber()
-        {
-            var device = CreateConnectedDevice();
-            // DAC channels are addressed by number and are not part of the populated input collection;
-            // a channel number with no corresponding entry in Channels must still work and latch.
-            device.SetAnalogOutput(7, 1.25);
-
-            Assert.Equal(2, device.SentMessages.Count);
-            Assert.Equal(ScpiMessageProducer.SetAnalogOutputVoltage(7, 1.25).Data, device.SentMessages[0].Data);
-            Assert.Equal(ScpiMessageProducer.UpdateDacOutputs.Data, device.SentMessages[1].Data);
-        }
-
-        [Fact]
-        public void SetAnalogOutput_NegativeChannel_ThrowsArgumentOutOfRangeException()
-        {
-            var device = CreateConnectedDevice();
-
-            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(-1, 1.0));
-        }
-
-        [Fact]
-        public void SetAnalogOutput_NonFiniteVoltage_ThrowsArgumentOutOfRangeException()
-        {
-            var device = CreateConnectedDevice();
-
-            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, double.NaN));
-            Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(0, double.PositiveInfinity));
-        }
-
-        #endregion
-
-        #region Membership and connection validation
-
-        [Fact]
-        public void EnableChannel_WithForeignChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice();
-            var foreign = new AnalogChannel(0); // same number, but a different instance not in Channels
-
-            Assert.Throws<ArgumentException>(() => device.EnableChannel(foreign));
-        }
-
-        [Fact]
-        public void EnableChannel_WithNullChannel_ThrowsArgumentNullException()
-        {
-            var device = CreateConnectedDevice();
-
-            Assert.Throws<ArgumentNullException>(() => device.EnableChannel(null!));
-        }
-
-        [Fact]
-        public void DisableChannel_WithForeignChannel_ThrowsArgumentException()
-        {
-            var device = CreateConnectedDevice();
-            var foreign = new AnalogChannel(0);
-
-            Assert.Throws<ArgumentException>(() => device.DisableChannel(foreign));
-        }
-
-        [Fact]
-        public void DisableChannel_WithNullChannel_ThrowsArgumentNullException()
-        {
-            var device = CreateConnectedDevice();
-
-            Assert.Throws<ArgumentNullException>(() => device.DisableChannel(null!));
-        }
-
-        [Fact]
-        public void ChannelManagement_WhenDisconnected_ThrowsDeviceNotConnectedException()
-        {
-            // Populate channels but do not connect.
-            var device = new TestableDaqifiStreamingDevice("TestDevice");
-            device.PopulateChannelsFromStatus(new DaqifiOutMessage
-            {
-                AnalogInPortNum = 2,
-                AnalogInRes = 65535,
-                DigitalPortNum = 2
-            });
-            var analog = AnalogChannelAt(device, 0);
-            var digital = DigitalChannelAt(device, 0);
-
-            Assert.Throws<DeviceNotConnectedException>(() => device.EnableChannel(analog));
-            Assert.Throws<DeviceNotConnectedException>(() => device.EnableChannels(new[] { analog }));
-            Assert.Throws<DeviceNotConnectedException>(() => device.DisableChannel(analog));
-            Assert.Throws<DeviceNotConnectedException>(() => device.DisableAllChannels());
-            Assert.Throws<DeviceNotConnectedException>(() => device.SetDioDirection(digital, ChannelDirection.Output));
-            Assert.Throws<DeviceNotConnectedException>(() => device.SetDioValue(digital, true));
-            Assert.Throws<DeviceNotConnectedException>(() => device.SetAnalogOutput(0, 1.0));
-            Assert.Throws<DeviceNotConnectedException>(() => device.Reboot());
-        }
-
-        #endregion
-
-        #region State preservation across status refresh
-
-        [Fact]
-        public void EnableState_SurvivesStatusRefresh_AndMaskStaysCorrect()
-        {
-            var device = CreateConnectedDevice(analogChannels: 4, digitalChannels: 4);
-            device.EnableChannel(AnalogChannelAt(device, 0));
-            device.EnableChannel(AnalogChannelAt(device, 1));
-            device.SentMessages.Clear();
-
-            // Simulate a later status refresh (e.g. reconnect / metadata re-query), which
-            // recreates the channel instances. Previously-enabled channels must remain enabled.
-            device.PopulateChannelsFromStatus(new DaqifiOutMessage
-            {
-                AnalogInPortNum = 4,
-                AnalogInRes = 65535,
-                DigitalPortNum = 4
-            });
-
-            Assert.True(AnalogChannelAt(device, 0).IsEnabled);
-            Assert.True(AnalogChannelAt(device, 1).IsEnabled);
-
-            // Enabling another channel still yields the full set-replace mask (0,1,2 => 1+2+4 = 7),
-            // not a mask that dropped the channels enabled before the refresh.
-            device.EnableChannel(AnalogChannelAt(device, 2));
-            Assert.Equal(ScpiMessageProducer.EnableAdcChannels("7").Data, device.SentMessages.Last().Data);
-        }
-
-        #endregion
-
-        #region Reboot
-
-        [Fact]
-        public void Reboot_SendsRebootCommandAndDisconnects()
-        {
-            var device = CreateConnectedDevice();
-
-            device.Reboot();
-
-            var sent = Assert.Single(device.SentMessages);
-            Assert.Equal(ScpiMessageProducer.RebootDevice.Data, sent.Data);
-            Assert.False(device.IsConnected);
-        }
-
-        #endregion
-
-        /// <summary>
-        /// An <see cref="IEnumerable{T}"/> that permits exactly one enumeration, throwing on any
-        /// subsequent attempt. Used to prove EnableChannels materializes its input only once.
-        /// </summary>
-        private sealed class SingleEnumerationSequence : IEnumerable<IChannel>
-        {
-            private readonly IChannel[] _items;
-            private bool _enumerated;
-
-            public SingleEnumerationSequence(params IChannel[] items) => _items = items;
-
-            public IEnumerator<IChannel> GetEnumerator()
-            {
-                if (_enumerated)
-                {
-                    throw new InvalidOperationException("Sequence was enumerated more than once.");
-                }
-
-                _enumerated = true;
-                return ((IEnumerable<IChannel>)_items).GetEnumerator();
+                throw new InvalidOperationException("Sequence was enumerated more than once.");
             }
 
-            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+            _enumerated = true;
+            return ((IEnumerable<IChannel>)_items).GetEnumerator();
         }
 
-        /// <summary>
-        /// A testable <see cref="DaqifiStreamingDevice"/> that captures sent messages instead of
-        /// writing to a transport, mirroring the pattern in <see cref="DaqifiStreamingDeviceTests"/>.
-        /// </summary>
-        private sealed class TestableDaqifiStreamingDevice : DaqifiStreamingDevice
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    /// <summary>
+    /// A testable <see cref="DaqifiStreamingDevice"/> that captures sent messages instead of
+    /// writing to a transport, mirroring the pattern in <see cref="DaqifiStreamingDeviceTests"/>.
+    /// </summary>
+    private sealed class TestableDaqifiStreamingDevice : DaqifiStreamingDevice
+    {
+        public List<IOutboundMessage<string>> SentMessages { get; } = new();
+
+        public TestableDaqifiStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
         {
-            public List<IOutboundMessage<string>> SentMessages { get; } = new();
+        }
 
-            public TestableDaqifiStreamingDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
+        public override void Send<T>(IOutboundMessage<T> message)
+        {
+            // Capture instead of sending so tests run without a real connection.
+            if (message is IOutboundMessage<string> stringMessage)
             {
-            }
-
-            public override void Send<T>(IOutboundMessage<T> message)
-            {
-                // Capture instead of sending so tests run without a real connection.
-                if (message is IOutboundMessage<string> stringMessage)
-                {
-                    SentMessages.Add(stringMessage);
-                }
+                SentMessages.Add(stringMessage);
             }
         }
     }

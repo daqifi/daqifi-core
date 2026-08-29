@@ -1,118 +1,117 @@
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Daqifi.Core.Device.Network
+namespace Daqifi.Core.Device.Network;
+
+/// <summary>
+/// Represents a device that supports network configuration.
+/// </summary>
+public interface INetworkConfigurable
 {
     /// <summary>
-    /// Represents a device that supports network configuration.
+    /// Gets the current network configuration.
     /// </summary>
-    public interface INetworkConfigurable
-    {
-        /// <summary>
-        /// Gets the current network configuration.
-        /// </summary>
-        NetworkConfiguration NetworkConfiguration { get; }
+    NetworkConfiguration NetworkConfiguration { get; }
 
-        /// <summary>
-        /// Updates the device network configuration with the specified settings.
-        /// </summary>
-        /// <param name="configuration">The new network configuration to apply.</param>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <remarks>
-        /// <para>
-        /// This method performs the following steps:
-        /// </para>
-        /// <list type="number">
-        /// <item><description>Stops any active streaming</description></item>
-        /// <item><description>Sends WiFi mode configuration command</description></item>
-        /// <item><description>Sets the SSID</description></item>
-        /// <item><description>Sets the security type</description></item>
-        /// <item><description>Sets the password (if security is enabled)</description></item>
-        /// <item><description>Sets the static IP, subnet mask, and gateway (only those provided as non-null)</description></item>
-        /// <item><description>Enables the LAN interface</description></item>
-        /// <item><description>Saves the configuration to persist across restarts</description></item>
-        /// <item><description>Applies the LAN configuration, restarting the WiFi module</description></item>
-        /// <item><description>Waits for the WiFi module to restart</description></item>
-        /// </list>
-        /// <para>
-        /// The save deliberately precedes the apply. The device persists the staged settings rather
-        /// than only the live ones, so saving first makes the new configuration durable before the
-        /// applying restart can disturb the control connection. Applying last also means no command
-        /// follows the restart, so none can be lost to it (#352).
-        /// </para>
-        /// <para>
-        /// Cancellation applies only up to that save: past it the device has committed, so
-        /// cancelling during the restart wait ends the wait early rather than failing the call.
-        /// Reporting a cancellation there would tell the caller nothing happened while the device
-        /// was in fact already sitting on the new configuration.
-        /// </para>
-        /// <para>
-        /// <b>Over a WiFi/TCP control connection this is expected to drop the connection.</b>
-        /// Restarting the WiFi module takes the device off the network carrying the control link
-        /// whenever the new configuration points somewhere else — unavoidable when switching
-        /// networks, and harmless here because the configuration is already saved. Callers should
-        /// treat the device as disconnected once this method returns over WiFi and rediscover or
-        /// reconnect on the new network, typically at a new address.
-        /// </para>
-        /// <para>
-        /// Note: The SD card and LAN interfaces share the same SPI bus on the device hardware
-        /// and cannot be used simultaneously. This method handles the interface switching automatically.
-        /// </para>
-        /// </remarks>
-        Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Updates the device network configuration with the specified settings.
+    /// </summary>
+    /// <param name="configuration">The new network configuration to apply.</param>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+    /// <returns>A task that represents the asynchronous operation.</returns>
+    /// <remarks>
+    /// <para>
+    /// This method performs the following steps:
+    /// </para>
+    /// <list type="number">
+    /// <item><description>Stops any active streaming</description></item>
+    /// <item><description>Sends WiFi mode configuration command</description></item>
+    /// <item><description>Sets the SSID</description></item>
+    /// <item><description>Sets the security type</description></item>
+    /// <item><description>Sets the password (if security is enabled)</description></item>
+    /// <item><description>Sets the static IP, subnet mask, and gateway (only those provided as non-null)</description></item>
+    /// <item><description>Enables the LAN interface</description></item>
+    /// <item><description>Saves the configuration to persist across restarts</description></item>
+    /// <item><description>Applies the LAN configuration, restarting the WiFi module</description></item>
+    /// <item><description>Waits for the WiFi module to restart</description></item>
+    /// </list>
+    /// <para>
+    /// The save deliberately precedes the apply. The device persists the staged settings rather
+    /// than only the live ones, so saving first makes the new configuration durable before the
+    /// applying restart can disturb the control connection. Applying last also means no command
+    /// follows the restart, so none can be lost to it (#352).
+    /// </para>
+    /// <para>
+    /// Cancellation applies only up to that save: past it the device has committed, so
+    /// cancelling during the restart wait ends the wait early rather than failing the call.
+    /// Reporting a cancellation there would tell the caller nothing happened while the device
+    /// was in fact already sitting on the new configuration.
+    /// </para>
+    /// <para>
+    /// <b>Over a WiFi/TCP control connection this is expected to drop the connection.</b>
+    /// Restarting the WiFi module takes the device off the network carrying the control link
+    /// whenever the new configuration points somewhere else — unavoidable when switching
+    /// networks, and harmless here because the configuration is already saved. Callers should
+    /// treat the device as disconnected once this method returns over WiFi and rediscover or
+    /// reconnect on the new network, typically at a new address.
+    /// </para>
+    /// <para>
+    /// Note: The SD card and LAN interfaces share the same SPI bus on the device hardware
+    /// and cannot be used simultaneously. This method handles the interface switching automatically.
+    /// </para>
+    /// </remarks>
+    Task UpdateNetworkConfigurationAsync(NetworkConfiguration configuration, CancellationToken cancellationToken = default);
 
-        /// <summary>
-        /// Loads the persisted LAN configuration from the device's NVM back into its runtime settings.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <remarks>
-        /// The inverse of the save step performed by <see cref="UpdateNetworkConfigurationAsync"/>. This is a
-        /// thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:LOAD</c>): it repopulates
-        /// the device's runtime WiFi settings from the last saved values but does not itself re-apply them to
-        /// the live interface — send an apply/reboot afterwards if the loaded values must take effect on the
-        /// active connection. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
-        /// </remarks>
-        Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Loads the persisted LAN configuration from the device's NVM back into its runtime settings.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+    /// <returns>A task that represents the asynchronous operation.</returns>
+    /// <remarks>
+    /// The inverse of the save step performed by <see cref="UpdateNetworkConfigurationAsync"/>. This is a
+    /// thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:LOAD</c>): it repopulates
+    /// the device's runtime WiFi settings from the last saved values but does not itself re-apply them to
+    /// the live interface — send an apply/reboot afterwards if the loaded values must take effect on the
+    /// active connection. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
+    /// </remarks>
+    Task LoadNetworkConfigurationAsync(CancellationToken cancellationToken = default);
 
-        /// <summary>
-        /// Resets the device's LAN configuration to firmware factory defaults.
-        /// </summary>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
-        /// <returns>A task that represents the asynchronous operation.</returns>
-        /// <remarks>
-        /// A thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:FACRESET</c>): it restores
-        /// the default WiFi settings into the device's runtime settings. Persist and/or apply them afterwards
-        /// for the reset to take effect. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
-        /// </remarks>
-        Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Resets the device's LAN configuration to firmware factory defaults.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
+    /// <returns>A task that represents the asynchronous operation.</returns>
+    /// <remarks>
+    /// A thin wrapper over the firmware NVM primitive (<c>SYSTem:COMMunicate:LAN:FACRESET</c>): it restores
+    /// the default WiFi settings into the device's runtime settings. Persist and/or apply them afterwards
+    /// for the reset to take effect. The local <see cref="NetworkConfiguration"/> snapshot is not refreshed.
+    /// </remarks>
+    Task FactoryResetNetworkAsync(CancellationToken cancellationToken = default);
 
-        /// <summary>
-        /// Prepares the SD card interface for use. Over USB the LAN interface is disabled first to
-        /// free the shared SPI bus for the SD card. Over WiFi/TCP the LAN is left enabled.
-        /// </summary>
-        /// <remarks>
-        /// On older firmware the SD card and LAN interfaces share the same SPI bus and cannot be
-        /// used simultaneously, so over USB the LAN is disabled before accessing the SD card. On
-        /// firmware &gt;= v3.7.0 (#598/#599) the Harmony SPI driver arbitrates SD/WiFi transactions
-        /// on the shared bus, so over a WiFi/TCP control transport the LAN MUST stay enabled (the
-        /// SD reply routes back over that channel). Call this method before accessing the SD card.
-        /// </remarks>
-        void PrepareSdInterface();
+    /// <summary>
+    /// Prepares the SD card interface for use. Over USB the LAN interface is disabled first to
+    /// free the shared SPI bus for the SD card. Over WiFi/TCP the LAN is left enabled.
+    /// </summary>
+    /// <remarks>
+    /// On older firmware the SD card and LAN interfaces share the same SPI bus and cannot be
+    /// used simultaneously, so over USB the LAN is disabled before accessing the SD card. On
+    /// firmware &gt;= v3.7.0 (#598/#599) the Harmony SPI driver arbitrates SD/WiFi transactions
+    /// on the shared bus, so over a WiFi/TCP control transport the LAN MUST stay enabled (the
+    /// SD reply routes back over that channel). Call this method before accessing the SD card.
+    /// </remarks>
+    void PrepareSdInterface();
 
-        /// <summary>
-        /// Prepares the LAN interface for use by disabling the SD card interface. Over USB the LAN
-        /// is re-enabled; over WiFi/TCP the LAN (never disabled) is left untouched.
-        /// </summary>
-        /// <remarks>
-        /// The mirror of <see cref="PrepareSdInterface"/> for restoring the interface after an SD
-        /// card operation. Over USB it disables the SD subsystem and re-enables the LAN. Over a
-        /// WiFi/TCP control transport the LAN was never disabled, so it is left alone (re-enabling
-        /// it would re-initialize the WiFi module and drop the connection). Note: a
-        /// network-reconfiguration flow that must unconditionally bring the LAN back up should
-        /// enable it explicitly rather than rely on this transport-aware helper.
-        /// </remarks>
-        void PrepareLanInterface();
-    }
+    /// <summary>
+    /// Prepares the LAN interface for use by disabling the SD card interface. Over USB the LAN
+    /// is re-enabled; over WiFi/TCP the LAN (never disabled) is left untouched.
+    /// </summary>
+    /// <remarks>
+    /// The mirror of <see cref="PrepareSdInterface"/> for restoring the interface after an SD
+    /// card operation. Over USB it disables the SD subsystem and re-enables the LAN. Over a
+    /// WiFi/TCP control transport the LAN was never disabled, so it is left alone (re-enabling
+    /// it would re-initialize the WiFi module and drop the connection). Note: a
+    /// network-reconfiguration flow that must unconditionally bring the LAN back up should
+    /// enable it explicitly rather than rely on this transport-aware helper.
+    /// </remarks>
+    void PrepareLanInterface();
 }

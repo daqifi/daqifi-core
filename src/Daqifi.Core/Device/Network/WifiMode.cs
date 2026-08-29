@@ -1,22 +1,21 @@
 using System.ComponentModel;
 
-namespace Daqifi.Core.Device.Network
+namespace Daqifi.Core.Device.Network;
+
+/// <summary>
+/// Specifies the WiFi operating mode for the device.
+/// </summary>
+public enum WifiMode
 {
     /// <summary>
-    /// Specifies the WiFi operating mode for the device.
+    /// Device connects to an existing WiFi network as a client.
     /// </summary>
-    public enum WifiMode
-    {
-        /// <summary>
-        /// Device connects to an existing WiFi network as a client.
-        /// </summary>
-        [Description("Existing Network")]
-        ExistingNetwork = 1,
+    [Description("Existing Network")]
+    ExistingNetwork = 1,
 
-        /// <summary>
-        /// Device creates its own WiFi network as an access point.
-        /// </summary>
-        [Description("Self Hosted")]
-        SelfHosted = 4
-    }
+    /// <summary>
+    /// Device creates its own WiFi network as an access point.
+    /// </summary>
+    [Description("Self Hosted")]
+    SelfHosted = 4
 }
