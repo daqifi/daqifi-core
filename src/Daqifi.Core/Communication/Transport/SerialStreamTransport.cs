@@ -38,6 +38,27 @@ namespace Daqifi.Core.Communication.Transport;
 /// An intentional <see cref="Disconnect"/> disarms both detectors first, so it reports a normal
 /// disconnect and never a loss.
 /// </para>
+/// <para>
+/// <b>Idle CPU on Unix.</b> A connected but completely silent device is not free on macOS or Linux.
+/// .NET's Unix <c>SerialStream</c> services a pending read from a helper thread that alternates a
+/// 1 ms sleep with <c>TIOCMGET</c>/<c>FIONREAD</c> ioctls, so it costs roughly <b>2% of one core
+/// for as long as a read is outstanding</b> — and a stream transport keeps exactly one outstanding
+/// at all times, by design. Measured over a 30 s idle window on <c>System.IO.Ports</c> 10.0.11
+/// (issue #673): 0.0% with the port merely open, 2.0% on macOS and 2.3% on Linux with a blocking
+/// read pending, and about 3% for a whole connected <see cref="Device.DaqifiStreamingDevice"/>.
+/// Callers holding many devices open for hours should budget for it. Windows drives reads through
+/// overlapped I/O rather than a poll loop and so is not expected to pay it, but that has not been
+/// measured.
+/// </para>
+/// <para>
+/// Nothing above <see cref="SerialPort"/> reaches that cost: it is unaffected by
+/// <see cref="OperationalReadTimeoutMs"/> (an infinite read timeout measured slightly worse, not
+/// better) and by the shape of the consumer's read loop. The only lever that does reach it is not
+/// having a read outstanding — gating each read on <see cref="SerialPort.BytesToRead"/>, which is a
+/// bare <c>FIONREAD</c> ioctl that does not start the helper thread, measures about 0.1%. That
+/// trade has deliberately not been taken, because it buys the saving with added first-byte latency
+/// after an idle gap on a path whose timing the SCPI exchanges depend on.
+/// </para>
 /// </remarks>
 public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
 {
@@ -64,7 +85,8 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     /// <summary>
     /// Blocking-read timeout applied once the port is open. The connection timeout is only
     /// needed for retry/backoff logic, not for reads during normal operation; a short value
-    /// keeps consumer threads stoppable (StopSafely).
+    /// keeps consumer threads stoppable (StopSafely). It is a shutdown-latency knob, not a CPU one
+    /// — see the idle-CPU paragraph on the class for why changing it does not move idle cost.
     /// </summary>
     private const int OperationalReadTimeoutMs = 500;
 
