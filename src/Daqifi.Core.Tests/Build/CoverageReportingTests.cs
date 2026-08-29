@@ -117,14 +117,58 @@ public class CoverageReportingTests
         Assert.Contains(expectedGlob, WorkflowText, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The <c>sed</c> expression CI uses to read the expected frameworks, and the file it reads,
+    /// lifted out of the workflow so the test runs the real thing rather than a copy of it.
+    /// </summary>
+    private static (string Expression, string File) FrameworkReadFromWorkflow()
+    {
+        var invocation = Regex.Match(WorkflowText, @"sed -n 's:(?<expression>.*?):\\1:p' (?<file>\S+)");
+
+        Assert.True(invocation.Success,
+            "The coverage step no longer reads the expected frameworks with the `sed -n 's:...:\\1:p' <project>` " +
+            "form this test knows how to exercise. Either restore it or teach this test the new form - what " +
+            "must not happen is CI reading the frameworks in a way nothing checks.");
+
+        return (invocation.Groups["expression"].Value, invocation.Groups["file"].Value);
+    }
+
+    /// <summary>
+    /// Translates a POSIX basic regular expression - what <c>sed</c> takes - into the equivalent
+    /// .NET pattern, so the workflow's own expression can be run here.
+    /// </summary>
+    /// <remarks>
+    /// Only the grouping difference is translated, because that is the only construct the
+    /// expression uses. Anything else backslash-escaped would mean a rewrite this cannot
+    /// faithfully reproduce, and quietly mistranslating it would be worse than failing.
+    /// </remarks>
+    private static string BasicRegexToDotNet(string expression)
+    {
+        var translated = expression.Replace(@"\(", "(", StringComparison.Ordinal)
+                                   .Replace(@"\)", ")", StringComparison.Ordinal);
+
+        Assert.DoesNotContain(@"\", translated, StringComparison.Ordinal);
+
+        return translated;
+    }
+
     [Fact]
     public void ExpectedFrameworks_StayReadableTheWayTheWorkflowReadsThem()
     {
         // CI warns about a report that went missing for one framework but not the other, and it
         // reads the list of frameworks to expect straight out of this project rather than
-        // repeating it. That read is a single-line text match, so a reformatted or renamed
-        // element would not break the build - it would just find nothing to expect and warn
-        // about nothing, which is the failure this catches.
+        // repeating it. Both halves of that can rot silently: a reformatted <TargetFrameworks>
+        // or an edited sed expression would not break the build, it would just find nothing to
+        // expect and warn about nothing. So run the workflow's own expression over the real
+        // project file and check it still recovers the frameworks the project declares.
+        var (expression, file) = FrameworkReadFromWorkflow();
+
+        Assert.Equal("src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj", file);
+
+        // The workflow splits the match on ';' (`tr ';' ' '`), so a change of separator has to
+        // show up here too.
+        Assert.Contains(@"tr ';' ' '", WorkflowText, StringComparison.Ordinal);
+
         var declared = TestProject
             .Descendants("PropertyGroup")
             .Elements()
@@ -132,17 +176,14 @@ public class CoverageReportingTests
             .Value
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        var matched = Regex
-            .Match(File.ReadAllText(TestProjectPath), "<TargetFrameworks>(.*)</TargetFrameworks>")
+        var read = Regex
+            .Match(File.ReadAllText(TestProjectPath), BasicRegexToDotNet(expression))
             .Groups[1]
             .Value
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         Assert.NotEmpty(declared);
-        Assert.Equal(declared, matched);
-
-        // And that the check is still pointed at this project.
-        Assert.Contains("src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj", WorkflowText, StringComparison.Ordinal);
+        Assert.Equal(declared, read);
     }
 
     [Fact]
