@@ -61,8 +61,9 @@ public class DaqifiDeviceStaleTextLineTests
     // ── The capture-to-send window (#553) — the gap between the stale-line boundary capture
     // and the setup action actually finishing, which the access-counted mock above cannot
     // target: both existing Stream accesses land before the boundary is even captured. These
-    // use a dedicated hook fired at the boundary itself, and a setup action slow enough that a
-    // line released there is guaranteed to have arrived before the boundary closes. ───────────
+    // use a dedicated hook fired at the boundary itself, and a setup action that blocks until the
+    // line released there has provably been collected, so it is inside the boundary by
+    // construction rather than by winning a race against the reader thread. ───────────────────
 
     [Fact]
     public async Task ExecuteTextCommand_DropsABlankThatArrivesWhileTheCommandIsStillBeingSent()
@@ -72,6 +73,13 @@ public class DaqifiDeviceStaleTextLineTests
         // actually gotten its command onto the wire. Without the fix this leaks through as
         // "the device answered and its response was empty", which is the exact SYSTem:LOG?
         // misattribution the issue describes.
+        //
+        // The setup action blocks on the reader having actually collected that blank rather than
+        // sleeping for a fixed interval and hoping it got there. The sleep it replaces is what
+        // made this test fail intermittently on the macOS CI leg: a runner that does not schedule
+        // the reader thread inside the sleep leaves the blank landing at or past the send
+        // boundary, where it is genuine evidence and is correctly kept — so the test failed with
+        // a collection of [""] while the production code was behaving exactly as specified.
         using var transport = new ReleaseOnStreamAccessMockTransport("\r\n");
         using var device = new StaleBoundaryHookTestableDevice(
             "Slow-Sending Device", transport, onStaleLineBoundaryCaptured: () => transport.Release());
@@ -79,7 +87,7 @@ public class DaqifiDeviceStaleTextLineTests
         device.Connect();
 
         var lines = await device.CallExecuteTextCommandAsync(
-            () => Thread.Sleep(100),
+            () => WaitForReleasedLineCollected(transport),
             keepBlankLines: true);
 
         Assert.Empty(lines);
@@ -92,14 +100,18 @@ public class DaqifiDeviceStaleTextLineTests
     {
         // The complement, and the reason the fix only narrows the boundary for blanks: a content
         // line released in the same window is left alone, matching the deliberate decision
-        // recorded in #553 not to risk discarding a genuinely fast reply.
+        // recorded in #553 not to risk discarding a genuinely fast reply. Same handshake as
+        // above: without it a slow runner moves the line past the boundary, and the test then
+        // passes for the wrong reason — a line that was never inside the window cannot show that
+        // lines inside the window survive it.
         using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
         using var device = new StaleBoundaryHookTestableDevice(
             "Fast-Replying Device", transport, onStaleLineBoundaryCaptured: () => transport.Release());
 
         device.Connect();
 
-        var lines = await device.CallExecuteTextCommandAsync(() => Thread.Sleep(100));
+        var lines = await device.CallExecuteTextCommandAsync(
+            () => WaitForReleasedLineCollected(transport));
 
         Assert.Contains(lines, l => l.Contains("No error"));
 
@@ -114,24 +126,33 @@ public class DaqifiDeviceStaleTextLineTests
         // time the loop took its first sample was invisible to it -- the exchange then sat out
         // the full responseTimeoutMs instead of the short completionTimeoutMs, even though
         // nothing was actually missing. The content line is released at the stale-line boundary
-        // (before the setup action even runs), and the setup action then sleeps well past any
-        // reasonable read-thread latency, so the reply is guaranteed to already be in
-        // collectedLines by the time the wait loop takes its first sample -- deterministically
-        // reproducing the "reply beat the loop" case a fast device produces on real hardware.
+        // (before the setup action even runs), and the setup action then blocks until the reader
+        // has provably collected it, so the reply is guaranteed to already be in collectedLines by
+        // the time the wait loop takes its first sample -- deterministically reproducing the
+        // "reply beat the loop" case a fast device produces on real hardware.
         using var transport = new ReleaseOnStreamAccessMockTransport("0,\"No error\"\r\n");
+
+        // Timed from the send boundary rather than from the call, because the wait loop is the
+        // only thing this assertion is about. Anchoring the stopwatch here also keeps the reader
+        // thread's scheduling latency -- unbounded on a loaded runner, and now waited on rather
+        // than slept through -- out of the measured window entirely.
+        Stopwatch? sw = null;
         using var device = new StaleBoundaryHookTestableDevice(
-            "Already-Answered Device", transport, onStaleLineBoundaryCaptured: () => transport.Release());
+            "Already-Answered Device",
+            transport,
+            onStaleLineBoundaryCaptured: () => transport.Release(),
+            onSendBoundaryCaptured: () => sw ??= Stopwatch.StartNew());
 
         device.Connect();
 
-        var sw = Stopwatch.StartNew();
         var lines = await device.CallExecuteTextCommandAsync(
-            () => Thread.Sleep(100),
+            () => WaitForReleasedLineCollected(transport),
             responseTimeoutMs: 3000,
             completionTimeoutMs: 100);
-        sw.Stop();
+        sw?.Stop();
 
         Assert.Contains(lines, l => l.Contains("No error"));
+        Assert.NotNull(sw);
         // Well short of responseTimeoutMs (3000ms): without the fix this reliably took >=3000ms,
         // because hasReceivedAny never flipped and phase 1's full timeout ran out.
         Assert.True(
@@ -139,6 +160,26 @@ public class DaqifiDeviceStaleTextLineTests
             $"Expected the exchange to finish near completionTimeoutMs (100ms), took {sw.ElapsedMilliseconds}ms.");
 
         device.Disconnect();
+    }
+
+    /// <summary>
+    /// Blocks until the line released at the stale-line boundary has provably been collected by
+    /// the exchange, for use as the setup action of a capture-to-send-window test.
+    /// </summary>
+    /// <remarks>
+    /// These tests need the released line to be INSIDE the send boundary, and the only thing that
+    /// puts it there is the reader thread having turned it into a collected line before the setup
+    /// action returns. A fixed sleep asserts that by hoping for it: the reader is a dedicated
+    /// background thread polling a stream that idles in 10ms steps, so a runner that does not
+    /// schedule it promptly moves the line past the boundary and the test fails describing a bug
+    /// that is not there. The generous timeout is a deadlock guard, not a pacing knob — on an
+    /// idle machine this returns in single-digit milliseconds.
+    /// </remarks>
+    private static void WaitForReleasedLineCollected(ReleaseOnStreamAccessMockTransport transport)
+    {
+        Assert.True(
+            transport.WaitForLineCollected(TimeSpan.FromSeconds(10)),
+            "The reader never collected the released line, so the boundary under test was never exercised.");
     }
 
     [Fact]
@@ -1118,6 +1159,9 @@ public class DaqifiDeviceStaleTextLineTests
         /// <summary>Releases the withheld line immediately.</summary>
         public void Release() => _stream.Release();
 
+        /// <summary>See <see cref="WithheldLineStream.WaitForLineCollected"/>.</summary>
+        public bool WaitForLineCollected(TimeSpan timeout) => _stream.WaitForLineCollected(timeout);
+
         public Task ConnectAsync() => ConnectAsync(null);
 
         public Task ConnectAsync(ConnectionRetryOptions? retryOptions)
@@ -1150,6 +1194,8 @@ public class DaqifiDeviceStaleTextLineTests
         {
             private readonly byte[] _line;
             private readonly object _gate = new();
+            private readonly TaskCompletionSource<bool> _lineCollected =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
             private bool _released;
             private int _position;
 
@@ -1163,6 +1209,19 @@ public class DaqifiDeviceStaleTextLineTests
                 }
             }
 
+            /// <summary>
+            /// Blocks until the reader has provably turned the withheld line into a collected line.
+            /// </summary>
+            /// <remarks>
+            /// The signal is raised on the reader's <em>next</em> entry into <see cref="Read"/>
+            /// after the last byte was handed over, and that "next" is what makes it a statement
+            /// about the parsed line rather than about the bytes. The consumer runs one thread
+            /// through read, parse, raise <c>MessageParsed</c>, read, so coming back for more bytes
+            /// means the line built from the previous read has already been appended to the
+            /// exchange's collected lines. A wall-clock sleep can only guess at that point.
+            /// </remarks>
+            public bool WaitForLineCollected(TimeSpan timeout) => _lineCollected.Task.Wait(timeout);
+
             public override bool CanRead => true;
             public override bool CanSeek => false;
             public override bool CanWrite => true;
@@ -1175,6 +1234,14 @@ public class DaqifiDeviceStaleTextLineTests
             {
                 lock (_gate)
                 {
+                    // Entering a read with the line fully handed over: see WaitForLineCollected
+                    // for why this, and not the handover itself, is the moment the line is known
+                    // to have been collected.
+                    if (_released && _position >= _line.Length)
+                    {
+                        _lineCollected.TrySetResult(true);
+                    }
+
                     if (_released && _position < _line.Length)
                     {
                         var toCopy = Math.Min(count, _line.Length - _position);
