@@ -96,6 +96,8 @@ Two things to know:
   can only report a member the baseline package actually contains, so everything added since
   the pinned version falls outside the comparison and could be removed with nothing to report.
   CI fails when the baseline drifts behind nuget.org, so forgetting is loud rather than silent.
+  The baseline is always the newest *stable* release: a prerelease can be published, but it is
+  not what a consumer restores by default, so CI skips prereleases when deciding what is newest.
 
 An intentional break needs the entry removed from `PublicAPI.Shipped.txt` *and* an ApiCompat
 suppression (`dotnet pack src/Daqifi.Core/Daqifi.Core.csproj -p:ApiCompatGenerateSuppressionFile=true`),

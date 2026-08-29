@@ -85,14 +85,26 @@ jobs:
     # Deliberately a failure, not a warning: after a release is published this
     # goes red until the bump lands, which is the point. It costs one unauthenticated
     # HTTP request to the index the pack step already downloads from.
+    #
+    # Stable versions only. release.yml accepts prerelease tags (`1.8.0-beta.1`),
+    # and the flat-container index lists them alongside the rest - but a prerelease
+    # is not what a consumer restores by default, so it must not become the
+    # baseline every other PR is then required to match. Filtering them here is
+    # also what keeps the baseline parseable as a plain three-part version, which
+    # PublicApiTrackingTests asserts.
     - name: Check the package validation baseline is the latest published version
       if: matrix.os == 'ubuntu-latest'
       shell: bash
       run: |
         baseline=$(dotnet msbuild src/Daqifi.Core/Daqifi.Core.csproj \
           -getProperty:PackageValidationBaselineVersion -p:TargetFramework=net10.0 | tr -d '[:space:]')
-        latest=$(curl -sSf https://api.nuget.org/v3-flatcontainer/daqifi.core/index.json | jq -r '.versions[-1]')
+        latest=$(curl -sSf https://api.nuget.org/v3-flatcontainer/daqifi.core/index.json \
+          | jq -r '[.versions[] | select(contains("-") | not)] | last')
         echo "baseline=$baseline latest=$latest"
+        if [ -z "$latest" ] || [ "$latest" = "null" ]; then
+          echo "::error::Could not resolve a stable published version of Daqifi.Core from nuget.org."
+          exit 1
+        fi
         if [ "$baseline" != "$latest" ]; then
           echo "::error::PackageValidationBaselineVersion is $baseline but Daqifi.Core $latest is published." \
                "Everything added since $baseline is outside the ApiCompat comparison." \

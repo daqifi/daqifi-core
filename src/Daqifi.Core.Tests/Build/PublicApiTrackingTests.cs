@@ -126,12 +126,15 @@ public class PublicApiTrackingTests
         // all: with EnablePackageValidation on but no baseline, validation still runs and still
         // passes, checking the package against nothing but itself.
         //
-        // Whether the pinned version is still the *newest* published one is a question about
-        // nuget.org, so it is asked in CI rather than here - see the test below.
+        // Version.TryParse rejects a SemVer prerelease such as `1.8.0-beta.1`, which is
+        // deliberate and matches CI: release.yml can publish a prerelease, but the baseline is
+        // always the newest *stable* release, so the CI check filters prereleases out of the
+        // nuget.org query. Whether the pinned version is still the newest one is a question
+        // about nuget.org, so it is asked there rather than here - see the test below.
         Assert.True(
             baseline is not null && Version.TryParse(baseline, out _),
-            "Daqifi.Core.csproj must pin PackageValidationBaselineVersion to a published version; "
-            + $"found {baseline ?? "<none>"}.");
+            "Daqifi.Core.csproj must pin PackageValidationBaselineVersion to a stable published "
+            + $"version; found {baseline ?? "<none>"}.");
     }
 
     [Fact]
@@ -142,14 +145,50 @@ public class PublicApiTrackingTests
         // version is outside the comparison and could be removed with nothing to report - while
         // the pack step keeps passing. Nothing in the repo records which version is current, so
         // CI asks nuget.org, and this asserts it still does.
-        Assert.Contains(
-            "PackageValidationBaselineVersion",
-            CiWorkflowText,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "api.nuget.org/v3-flatcontainer/daqifi.core/index.json",
-            CiWorkflowText,
-            StringComparison.Ordinal);
+        //
+        // Asserted against the step's own `run:` block rather than the whole file, and against
+        // each part the enforcement actually rests on. Checking only that the property name and
+        // the URL appear somewhere would stay green with the comparison or the `exit 1` deleted,
+        // which is precisely the silent disablement this is here to catch.
+        var step = RunBlockOfCiStep("Check the package validation baseline");
+
+        Assert.Contains("PackageValidationBaselineVersion", step, StringComparison.Ordinal);
+        Assert.Contains("api.nuget.org/v3-flatcontainer/daqifi.core/index.json", step, StringComparison.Ordinal);
+
+        // Prereleases are filtered out of the query: release.yml can publish them, and one must
+        // not become the baseline that every other PR is then required to match.
+        Assert.Contains("""select(contains("-") | not)""", step, StringComparison.Ordinal);
+
+        // The comparison itself, and a non-zero exit when it fails. Without both, the step can
+        // report the drift and pass anyway.
+        Assert.Contains("\"$baseline\" != \"$latest\"", step, StringComparison.Ordinal);
+        Assert.Contains("exit 1", step, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The <c>run:</c> block of the first <c>ci.yml</c> step whose name contains
+    /// <paramref name="stepNameFragment"/> - everything from <c>run:</c> to the next step.
+    /// </summary>
+    private static string RunBlockOfCiStep(string stepNameFragment)
+    {
+        var lines = CiWorkflowText.Split('\n');
+
+        var start = Array.FindIndex(
+            lines,
+            line => line.TrimStart().StartsWith("- name:", StringComparison.Ordinal)
+                && line.Contains(stepNameFragment, StringComparison.Ordinal));
+
+        Assert.True(start >= 0, $"ci.yml has no step named like '{stepNameFragment}'.");
+
+        var body = lines
+            .Skip(start + 1)
+            .TakeWhile(line => !line.TrimStart().StartsWith("- name:", StringComparison.Ordinal))
+            .ToList();
+
+        var runAt = body.FindIndex(line => line.TrimStart().StartsWith("run:", StringComparison.Ordinal));
+        Assert.True(runAt >= 0, $"The '{stepNameFragment}' step in ci.yml no longer runs anything.");
+
+        return string.Join("\n", body.Skip(runAt));
     }
 
     [Fact]
