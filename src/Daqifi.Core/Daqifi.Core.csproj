@@ -14,6 +14,30 @@
 
     <!-- Build Configuration -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Binary-shape tracking against the last published package (issue #636).
+         The PublicApiAnalyzers reference below guards the *source* surface as it
+         is written; this guards the *packaged* shape as a consumer restores it -
+         the assemblies actually in the .nupkg, for every target framework it
+         claims to support. It is what reports a framework silently disappearing
+         from the package, or a type that compiles but no longer exists for one
+         of the two TFMs. Runs during `dotnet pack` and fails it (CP0002 and
+         friends) when this build removes something 1.7.0 shipped. Bump the
+         baseline when a release goes out; leaving it behind only makes the
+         check stricter. See CONTRIBUTING.md. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>1.7.0</PackageValidationBaselineVersion>
+    <!-- CP0003 compares assembly *versions*, and this repo carries none: the
+         version is stamped only by release.yml, from the git tag. Every other
+         build - CI, a developer's `dotnet pack` - therefore ships the SDK's
+         1.0.0 placeholder, which CP0003 reports as "lower than the 1.7.0
+         baseline" on a build that has changed no API at all. Suppressed so the
+         rules that do carry signal here (CP0002 for a member the baseline had,
+         CP1002 for a target framework the package no longer offers) are not
+         drowned by a diagnostic that is never about this change. Version
+         ordering is already decided upstream, by which tag the release is cut
+         from. -->
+    <NoWarn>$(NoWarn);CP0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

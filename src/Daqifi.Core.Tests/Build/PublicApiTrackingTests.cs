@@ -6,8 +6,9 @@ namespace Daqifi.Core.Tests.Build;
 
 /// <summary>
 /// Guards the public API surface tracking added for issue #636: the
-/// <c>Microsoft.CodeAnalysis.PublicApiAnalyzers</c> wiring in <c>Daqifi.Core.csproj</c> and the
-/// two <c>PublicAPI.*.txt</c> files it reads.
+/// <c>Microsoft.CodeAnalysis.PublicApiAnalyzers</c> wiring in <c>Daqifi.Core.csproj</c>, the
+/// two <c>PublicAPI.*.txt</c> files it reads, and the package validation that checks the same
+/// surface against the release already on nuget.org.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -91,6 +92,63 @@ public class PublicApiTrackingTests
             .ToList();
 
         Assert.Contains(fileName, additionalFiles);
+    }
+
+    /// <summary>
+    /// The second half of the issue #636 guard: ApiCompat against the package actually on
+    /// nuget.org. RS0016/RS0017 only compare the code to <c>PublicAPI.*.txt</c>, and both live in
+    /// the PR - remove a public member and its entry together and the build is green. Package
+    /// validation compares against a published artifact no PR can edit.
+    /// </summary>
+    [Fact]
+    public void CoreProject_ValidatesThePackageAgainstItsBaseline()
+    {
+        var value = XDocument.Load(CoreProjectPath)
+            .Descendants("EnablePackageValidation")
+            .Select(e => e.Value.Trim())
+            .SingleOrDefault();
+
+        Assert.Equal("true", value);
+    }
+
+    [Fact]
+    public void CoreProject_PinsThePackageValidationBaselineToAPublishedVersion()
+    {
+        var baseline = XDocument.Load(CoreProjectPath)
+            .Descendants("PackageValidationBaselineVersion")
+            .Select(e => e.Value.Trim())
+            .SingleOrDefault();
+
+        // Not a specific version - that has to move with every release. Only that one is pinned:
+        // with EnablePackageValidation on but no baseline, validation still runs and still
+        // passes, checking the package against nothing but itself.
+        Assert.True(
+            baseline is not null && Version.TryParse(baseline, out _),
+            "Daqifi.Core.csproj must pin PackageValidationBaselineVersion to a published version; "
+            + $"found {baseline ?? "<none>"}.");
+    }
+
+    [Fact]
+    public void Ci_PacksTheLibrarySoPackageValidationActuallyRuns()
+    {
+        // The trap this exists for: `dotnet pack --no-build` skips the ApiCompat targets
+        // outright. A pack step carrying that flag succeeds without comparing anything, so the
+        // csproj wiring above would still be present and still be checking nothing. Verified by
+        // running both forms locally against a removed public member: without --no-build it is
+        // CP0002 on both target frameworks, with it the pack is silent.
+        var workflow = File.ReadAllLines(
+            Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
+
+        var packSteps = workflow
+            .Select(line => line.Trim())
+            .Where(line =>
+                line.StartsWith("run:", StringComparison.Ordinal)
+                && line.Contains("dotnet pack", StringComparison.Ordinal)
+                && line.Contains("Daqifi.Core.csproj", StringComparison.Ordinal))
+            .ToList();
+
+        var packStep = Assert.Single(packSteps);
+        Assert.DoesNotContain("--no-build", packStep, StringComparison.Ordinal);
     }
 
     [Theory]
