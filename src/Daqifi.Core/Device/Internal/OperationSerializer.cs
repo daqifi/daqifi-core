@@ -30,6 +30,13 @@ namespace Daqifi.Core.Device.Internal
     /// </remarks>
     internal sealed class OperationSerializer : IDisposable
     {
+        /// <summary>
+        /// How often <see cref="DrainOutboundQueueAsync"/> re-asks the producer whether it has gone
+        /// idle. Was an unnamed <c>10</c>; named because it is now driven by
+        /// <see cref="IOperationSerializationHost.TimeProvider"/> (issue #637). Unchanged in length.
+        /// </summary>
+        private static readonly TimeSpan DrainPollInterval = TimeSpan.FromMilliseconds(10);
+
         private readonly IOperationSerializationHost _host;
 
         // THE device operation lock. Originally introduced to serialize ExecuteTextCommandAsync
@@ -639,10 +646,16 @@ namespace Daqifi.Core.Device.Internal
                 return;
             }
 
-            var deadline = DateTime.UtcNow + _host.OutboundDrainWait;
-            while (!producer.IsIdle && DateTime.UtcNow < deadline)
+            // Measured on the host's clock (issue #637), and on its monotonic timestamp rather
+            // than a wall clock: DateTime.UtcNow stepping mid-drain — NTP, a correction — would
+            // either cut this barrier short or hang it well past its budget, and the barrier is
+            // what keeps an earlier command's reply out of the next exchange (issue #342).
+            var clock = _host.TimeProvider;
+            var startedAt = clock.GetTimestamp();
+            var budget = _host.OutboundDrainWait;
+            while (!producer.IsIdle && clock.GetElapsedTime(startedAt) < budget)
             {
-                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(DrainPollInterval, clock, cancellationToken).ConfigureAwait(false);
             }
         }
 

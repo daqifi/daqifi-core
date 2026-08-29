@@ -11,7 +11,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Threading;
@@ -848,6 +847,49 @@ namespace Daqifi.Core.Device
         {
             _errorThrottle = throttle ?? throw new ArgumentNullException(nameof(throttle));
         }
+
+        /// <summary>
+        /// The clock every time-dependent internal on this device reads: the text exchange's
+        /// deadlines, the outbound drain barrier, the reconnect backoff ladder, the channel
+        /// population wait and the SD card operations (issue #637).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Defaults to <see cref="TimeProvider.System"/>, so production behaviour is exactly what
+        /// it was: <c>TimeProvider.System.GetTimestamp()</c> is <c>Stopwatch.GetTimestamp()</c> and
+        /// <c>Task.Delay(d, TimeProvider.System, ct)</c> is <c>Task.Delay(d, ct)</c>. Nothing here
+        /// changes a timeout, a delay or an ordering.
+        /// </para>
+        /// <para>
+        /// Deliberately internal rather than a constructor parameter. Exposing a
+        /// <see cref="TimeProvider"/> on the public surface — on <c>DeviceConnectionOptions</c> or
+        /// <c>ReconnectOptions</c> — is a separate decision with a real API cost now that the
+        /// surface is tracked (issue #636), and #637 defers it. This seam is what the tests need
+        /// and nothing more.
+        /// </para>
+        /// </remarks>
+        private TimeProvider _timeProvider = TimeProvider.System;
+
+        /// <summary>
+        /// Test seam: replaces the clock the device's time-dependent internals read, so a test can
+        /// drive a multi-second deadline with <c>FakeTimeProvider.Advance</c> instead of waiting
+        /// for it. Never called in production.
+        /// </summary>
+        /// <remarks>
+        /// Call before connecting. The field is read from background threads (the reconnect loop,
+        /// the text exchange's wait loop), and swapping it under a live session would move
+        /// deadlines that are already in flight.
+        /// </remarks>
+        /// <param name="timeProvider">The clock to use.</param>
+        internal void SetTimeProviderForTesting(TimeProvider timeProvider)
+        {
+            _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        }
+
+        /// <summary>
+        /// The clock this device's collaborators read; see <see cref="_timeProvider"/>.
+        /// </summary>
+        internal TimeProvider Clock => _timeProvider;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DaqifiDevice"/> class.
@@ -2169,6 +2211,9 @@ namespace Daqifi.Core.Device
         ILogger ITextExchangeHost.Logger => _logger;
 
         /// <inheritdoc />
+        TimeProvider ITextExchangeHost.TimeProvider => _timeProvider;
+
+        /// <inheritdoc />
         void ITextExchangeHost.OnStaleLineBoundaryCaptured() => OnStaleLineBoundaryCaptured();
 
         /// <summary>
@@ -2209,6 +2254,9 @@ namespace Daqifi.Core.Device
 
         /// <inheritdoc />
         ILogger IOperationSerializationHost.Logger => _logger;
+
+        /// <inheritdoc />
+        TimeProvider IOperationSerializationHost.TimeProvider => _timeProvider;
 
         /// <inheritdoc />
         int IOperationSerializationHost.MaxDeferredSends => MaxDeferredSends;
@@ -2422,7 +2470,7 @@ namespace Daqifi.Core.Device
                 async token =>
                 {
                     Send(ScpiMessageProducer.GetCapabilitiesApiVersion);
-                    await Task.Delay(CapabilityQuerySpacingMs, token).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(CapabilityQuerySpacingMs), _timeProvider, token).ConfigureAwait(false);
                     Send(ScpiMessageProducer.GetCapabilitiesJson);
                 },
                 responseTimeoutMs: CapabilityDocumentResponseTimeoutMs,
@@ -2803,7 +2851,11 @@ namespace Daqifi.Core.Device
             int epoch,
             CancellationToken cancellationToken)
         {
-            var startedAt = DateTime.UtcNow;
+            // Elapsed on the device's clock (issue #637): this is a duration reported to the
+            // caller on ReconnectedEventArgs, and the backoff ladder below is counted in seconds,
+            // so a test can walk a full ladder with a fake clock instead of waiting one out.
+            var clock = _timeProvider;
+            var startedAt = clock.GetTimestamp();
             Exception? lastError = null;
             var attempt = 0;
 
@@ -2836,7 +2888,7 @@ namespace Daqifi.Core.Device
 
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(delay, clock, cancellationToken).ConfigureAwait(false);
                     }
 
                     if (IsSessionStale(epoch))
@@ -2876,7 +2928,7 @@ namespace Daqifi.Core.Device
                         "[Reconnect] Device '{DeviceName}' reconnected on attempt {Attempt}.", Name, attempt));
 
                     RaiseReconnectEvent(Reconnected, new ReconnectedEventArgs(
-                        attempt, DateTime.UtcNow - startedAt, streamingResumed), nameof(Reconnected));
+                        attempt, clock.GetElapsedTime(startedAt), streamingResumed), nameof(Reconnected));
                     return;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -3418,7 +3470,7 @@ namespace Daqifi.Core.Device
                 {
                     if (attempt > 0)
                     {
-                        await Task.Delay(InitScpiErrorRetryDelayMs, cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(InitScpiErrorRetryDelayMs), _timeProvider, cancellationToken).ConfigureAwait(false);
                     }
 
                     // Scoped to this exchange alone, not to InitializeAsync as a whole: the
@@ -3462,15 +3514,15 @@ namespace Daqifi.Core.Device
                             return;
                         }
 
-                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(InitScpiSettleDelayMs), _timeProvider, token).ConfigureAwait(false);
                         token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.StopStreaming);
-                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(InitScpiSettleDelayMs), _timeProvider, token).ConfigureAwait(false);
                         token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.TurnDeviceOn);
-                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(InitScpiSettleDelayMs), _timeProvider, token).ConfigureAwait(false);
                         token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.SetProtobufStreamFormat);
@@ -3486,7 +3538,7 @@ namespace Daqifi.Core.Device
                         // mean something: the firmware has to have acted on SetProtobufStreamFormat
                         // and queued any complaint about it before we ask, or a command that failed
                         // would be reported as "0, No error" and the retry below would never run.
-                        await Task.Delay(InitScpiSettleDelayMs, token).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromMilliseconds(InitScpiSettleDelayMs), _timeProvider, token).ConfigureAwait(false);
                         token.ThrowIfCancellationRequested();
 
                         Send(ScpiMessageProducer.GetSystemError);
@@ -3788,7 +3840,11 @@ namespace Daqifi.Core.Device
             ChannelsPopulated += OnChannelsPopulated;
             try
             {
-                var stopwatch = Stopwatch.StartNew();
+                // On the device's clock (issue #637). This wait is bounded by the caller's
+                // timeout, which is counted in seconds, so a fake clock is what lets a test reach
+                // the give-up branch without spending them.
+                var clock = _timeProvider;
+                var startedAt = clock.GetTimestamp();
 
                 // Query device info – expects a protobuf response, so use plain Send()
                 // now that the protobuf consumer is running again.
@@ -3807,7 +3863,7 @@ namespace Daqifi.Core.Device
 
                 while (true)
                 {
-                    var remaining = timeout - stopwatch.Elapsed;
+                    var remaining = timeout - clock.GetElapsedTime(startedAt);
                     if (remaining <= TimeSpan.Zero)
                     {
                         break;
@@ -3819,7 +3875,7 @@ namespace Daqifi.Core.Device
 
                     var completed = await Task.WhenAny(
                         populatedTcs.Task,
-                        Task.Delay(pollDelay, cancellationToken)).ConfigureAwait(false);
+                        Task.Delay(pollDelay, clock, cancellationToken)).ConfigureAwait(false);
 
                     if (completed == populatedTcs.Task)
                     {

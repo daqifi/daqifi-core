@@ -4,6 +4,8 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Google.Protobuf;
+using Daqifi.Core.Tests.TestSupport;
+using Microsoft.Extensions.Time.Testing;
 using System.Diagnostics;
 
 namespace Daqifi.Core.Tests.Device;
@@ -1225,6 +1227,145 @@ public class DeviceReconnectTests
         device.CancelReconnect();
 
         Assert.False(device.IsReconnecting);
+    }
+
+    #endregion
+
+    #region The backoff ladder, on a stepped clock (issue #637)
+
+    /// <summary>
+    /// The policy this repo actually ships, extended by two attempts so the ladder runs past its
+    /// own ceiling. Every other reconnect test here uses <see cref="FastPolicy"/> — 10 ms rising to
+    /// 60 ms — because the real one costs 91 seconds to walk, and that is the whole reason the cap
+    /// had never been exercised.
+    /// </summary>
+    private static ReconnectOptions ShippingLadder() => new()
+    {
+        Enabled = true,
+        MaxAttempts = 7,
+        InitialDelay = TimeSpan.FromSeconds(1),
+        MaxDelay = TimeSpan.FromSeconds(30),
+        BackoffMultiplier = 2.0
+    };
+
+    /// <summary>The delays <see cref="ShippingLadder"/> should produce, saturating at MaxDelay.</summary>
+    private static readonly TimeSpan[] ExpectedLadder =
+    {
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(4),
+        TimeSpan.FromSeconds(8),
+        TimeSpan.FromSeconds(16),
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromSeconds(30),
+    };
+
+    [Fact]
+    public async Task TheShippingBackoffLadder_IsWalkedInFullIncludingItsCeiling()
+    {
+        // 91 seconds of device time in a few milliseconds of real time. The ladder's saturation at
+        // MaxDelay — attempts 6 and 7, where 32s and 64s are both clamped to 30s — is the part no
+        // existing test reaches: every other reconnect test runs a millisecond-scale stand-in
+        // policy and asserts only that each wait is longer than the last, which a ladder that
+        // never capped would satisfy just as well.
+        var clock = new FakeTimeProvider();
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Laddered Device", transport)
+        {
+            ReconnectOptions = ShippingLadder()
+        };
+
+        // After the initial connect, so the fake clock only governs the reconnect loop. This
+        // device's InitializeAsync is scripted and takes no delays, but setting it late keeps the
+        // test honest about which phase is on the stepped clock.
+        ConnectAndInitialize(device);
+        device.SetTimeProviderForTesting(clock);
+
+        var attempts = new List<ReconnectAttemptEventArgs>();
+        device.ReconnectAttempt += (_, e) =>
+        {
+            lock (attempts)
+            {
+                attempts.Add(e);
+            }
+        };
+
+        var failed = WaitFor<ReconnectFailedEventArgs>(h => device.ReconnectFailed += h);
+
+        transport.FailNextConnects(int.MaxValue);
+        transport.SimulateDrop();
+
+        await FakeClockPump.UntilAsync(
+            clock,
+            failed,
+            TimeSpan.FromSeconds(30),
+            "the reconnect loop never reached its give-up report.",
+            GateTimeout);
+
+        var result = await failed;
+
+        Assert.Equal(7, result.AttemptsMade);
+        Assert.False(result.WasCanceled);
+
+        lock (attempts)
+        {
+            Assert.Equal(ExpectedLadder, attempts.Select(a => a.Delay));
+            Assert.Equal(Enumerable.Range(1, 7), attempts.Select(a => a.AttemptNumber));
+            Assert.All(attempts, a => Assert.Equal(7, a.MaxAttempts));
+        }
+    }
+
+    [Fact]
+    public async Task ASuccessfulReconnect_ReportsAnOutageThatCoversTheWholeBackoff()
+    {
+        // ReconnectedEventArgs.Outage is a public fact about the reconnect, and until the clock
+        // was injectable the only way to check it covered the backoff was to spend the backoff.
+        // Four refused connects put the fifth attempt on the far side of 1+2+4+8+16 = 31 seconds
+        // of device time, so the reported duration has to be at least that.
+        var clock = new FakeTimeProvider();
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Slow Comeback Device", transport)
+        {
+            ReconnectOptions = ShippingLadder()
+        };
+
+        ConnectAndInitialize(device);
+        device.SetTimeProviderForTesting(clock);
+
+        var reconnected = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
+
+        transport.FailNextConnects(4);
+        transport.SimulateDrop();
+
+        var wallClock = Stopwatch.StartNew();
+        await FakeClockPump.UntilAsync(
+            clock,
+            reconnected,
+            TimeSpan.FromSeconds(30),
+            "the reconnect loop never got back up.",
+            GateTimeout);
+        var result = await reconnected;
+        wallClock.Stop();
+
+        Assert.Equal(5, result.AttemptNumber);
+
+        // At least the ladder it had to sit through. Not exactly it: the pump below steps the
+        // clock in fixed jumps rather than landing on each delay's due instant, so the device sees
+        // somewhat more time than the ladder alone. The direction is what matters — a loop that
+        // skipped or shortened a wait could not report this much.
+        var ladderTotal = ExpectedLadder.Take(4).Aggregate(TimeSpan.Zero, (a, b) => a + b)
+            + ExpectedLadder[4];
+        Assert.True(
+            result.Outage >= ladderTotal,
+            $"reported {result.Outage}, which is less than the {ladderTotal} of backoff it waited out.");
+
+        // And none of it was real. This is the assertion the seam exists for: the same coverage
+        // used to cost 31 seconds of the suite's wall time, per test. The bound is deliberately
+        // loose — it is here to catch a regression back onto the system clock, not to measure the
+        // runner.
+        Assert.True(
+            wallClock.Elapsed < TimeSpan.FromSeconds(15),
+            $"the reconnect took {wallClock.Elapsed} of real time, so it was not on the stepped clock.");
     }
 
     #endregion

@@ -52,5 +52,15 @@ namespace Daqifi.Core.Device.Internal
         /// replayed through once the operation that parked it has finished.
         /// </summary>
         void SendNow<T>(IOutboundMessage<T> message);
+
+        /// <summary>
+        /// The clock the outbound drain barrier measures its bounded wait on (issue #637).
+        /// </summary>
+        /// <remarks>
+        /// <see cref="TimeProvider.System"/> on the real device, so the barrier waits exactly as long
+        /// as it always has. A test can substitute a fake one and step <see cref="OutboundDrainWait"/>
+        /// forward instead of sleeping through it.
+        /// </remarks>
+        TimeProvider TimeProvider { get; }
     }
 }

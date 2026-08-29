@@ -51,6 +51,19 @@ namespace Daqifi.Core.Device.SdCard
         TimeSpan SdCardTransferIdleTimeout { get; }
 
         /// <summary>
+        /// The clock the SD operations measure their budgets and settle delays on (issue #637).
+        /// </summary>
+        /// <remarks>
+        /// <see cref="TimeProvider.System"/> on the real device, so every settle delay and every
+        /// deadline is what it has always been. It is the seam that makes the two budgets above
+        /// testable: <see cref="SdCardDownloadTimeout"/> and
+        /// <see cref="SdCardTransferIdleTimeout"/> are counted in seconds, so the watchdog they
+        /// arm (issue #399) could previously only be exercised by actually waiting for it — which
+        /// is why it was asserted at its short-timeout edges and the real budget went untested.
+        /// </remarks>
+        TimeProvider TimeProvider { get; }
+
+        /// <summary>
         /// Raises the device's <see cref="DaqifiStreamingDevice.LowSdSpaceWarning"/> event.
         /// </summary>
         /// <remarks>
