@@ -139,19 +139,43 @@ public class ReconnectOptionsTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
+    [InlineData(int.MinValue)]
     public void APolicyThatWouldNeverTry_IsRejected(int maxAttempts)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => new ReconnectOptions { MaxAttempts = maxAttempts });
+        var options = new ReconnectOptions();
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxAttempts = maxAttempts);
+
+        // Pinned in full — the guard's job is to name the property the caller actually wrote and
+        // hand back the value it rejected, not merely to throw something. The sibling policy
+        // Communication.Transport.ConnectionRetryOptions is already held to this standard.
+        Assert.Equal(nameof(ReconnectOptions.MaxAttempts), ex.ParamName);
+        Assert.Equal(maxAttempts, ex.ActualValue);
+        Assert.StartsWith("At least one reconnect attempt must be allowed.", ex.Message);
+        Assert.Equal(5, options.MaxAttempts); // unchanged by the rejected write
     }
 
     [Fact]
     public void NegativeDelaysAreRejected()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => new ReconnectOptions { InitialDelay = TimeSpan.FromSeconds(-1) });
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => new ReconnectOptions { MaxDelay = TimeSpan.FromSeconds(-1) });
+        var options = new ReconnectOptions();
+
+        var initial = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.InitialDelay = TimeSpan.FromSeconds(-1));
+        var max = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.MaxDelay = TimeSpan.FromSeconds(-1));
+
+        Assert.Equal(nameof(ReconnectOptions.InitialDelay), initial.ParamName);
+        Assert.Equal(TimeSpan.FromSeconds(-1), initial.ActualValue);
+        Assert.StartsWith("The delay cannot be negative.", initial.Message);
+
+        Assert.Equal(nameof(ReconnectOptions.MaxDelay), max.ParamName);
+        Assert.Equal(TimeSpan.FromSeconds(-1), max.ActualValue);
+        Assert.StartsWith("The delay cannot be negative.", max.Message);
+
+        // Both writes were refused outright, not clamped to zero.
+        Assert.Equal(TimeSpan.FromSeconds(1), options.InitialDelay);
+        Assert.Equal(TimeSpan.FromSeconds(30), options.MaxDelay);
     }
 
     [Theory]
@@ -160,7 +184,32 @@ public class ReconnectOptionsTests
     [InlineData(double.NaN)]
     public void ABackoffThatShrinksOrIsNotANumber_IsRejected(double multiplier)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => new ReconnectOptions { BackoffMultiplier = multiplier });
+        var options = new ReconnectOptions();
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.BackoffMultiplier = multiplier);
+
+        Assert.Equal(nameof(ReconnectOptions.BackoffMultiplier), ex.ParamName);
+        Assert.Equal(multiplier, ex.ActualValue);
+        Assert.StartsWith("The backoff multiplier must be at least 1.0.", ex.Message);
+        Assert.Equal(2.0, options.BackoffMultiplier); // unchanged by the rejected write
+    }
+
+    [Fact]
+    public void ThePresetPoliciesSatisfyTheirOwnGuards()
+    {
+        // Every preset is built through the same validating setters, so a preset that drifted
+        // outside the accepted range would throw before these assertions ever ran.
+        foreach (var options in new[]
+                 {
+                     ReconnectOptions.Disabled, ReconnectOptions.Default,
+                     ReconnectOptions.Fast, ReconnectOptions.Resilient
+                 })
+        {
+            Assert.True(options.MaxAttempts >= 1);
+            Assert.True(options.InitialDelay >= TimeSpan.Zero);
+            Assert.True(options.MaxDelay >= TimeSpan.Zero);
+            Assert.True(options.BackoffMultiplier >= 1.0);
+        }
     }
 }
