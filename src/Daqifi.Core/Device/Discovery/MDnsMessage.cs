@@ -467,9 +467,14 @@ internal static class MDnsMessage
                 // move the caller's cursor.
                 resumeAt ??= cursor + 2;
 
-                if (++jumps > MaxPointerJumps || pointer >= length)
+                // RFC 1035 §4.1.4: a pointer must reference a *prior* occurrence of the name.
+                // A forward pointer would let a name be assembled out of bytes belonging to
+                // records that have not been parsed yet. Requiring the target to strictly
+                // precede the pointer also makes a pointer cycle unrepresentable; the jump cap
+                // stays as a second line of defence.
+                if (++jumps > MaxPointerJumps || pointer >= cursor || pointer >= length)
                 {
-                    return false; // malformed, or a pointer loop
+                    return false;
                 }
 
                 cursor = pointer;

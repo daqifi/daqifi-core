@@ -243,6 +243,27 @@ public class MDnsMessageTests
     }
 
     [Fact]
+    public void TryParseResponse_RejectsAForwardCompressionPointer()
+    {
+        // One PTR whose owner name is a pointer to offset 24 — a name that lives *after* the
+        // pointer, inside this record's own RDATA. RFC 1035 §4.1.4 allows a pointer to reference
+        // a prior occurrence only; accepting a forward one lets a name be assembled from bytes
+        // belonging to records that have not been parsed yet.
+        var packet = new byte[]
+        {
+            0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0xC0, 0x18,             // owner name = pointer to offset 24 (forward)
+            0x00, 0x0C,             // TYPE  = PTR
+            0x00, 0x01,             // CLASS = IN
+            0x00, 0x00, 0x11, 0x94, // TTL
+            0x00, 0x03,             // RDLENGTH
+            0x01, 0x61, 0x00        // RDATA = the name "a."
+        };
+
+        Assert.False(MDnsMessage.TryParseResponse(packet, packet.Length, out _));
+    }
+
+    [Fact]
     public void TryParseResponse_RejectsPointerPastEndOfMessage()
     {
         var packet = new byte[]
