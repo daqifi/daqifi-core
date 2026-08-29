@@ -42,22 +42,27 @@ namespace Daqifi.Core.Communication.Transport;
 /// <b>Idle CPU on Unix.</b> A connected but completely silent device is not free on macOS or Linux.
 /// .NET's Unix <c>SerialStream</c> services a pending read from a helper thread that alternates a
 /// 1 ms sleep with <c>TIOCMGET</c>/<c>FIONREAD</c> ioctls, so it costs roughly <b>2% of one core
-/// for as long as a read is outstanding</b> — and a stream transport keeps exactly one outstanding
-/// at all times, by design. Measured over a 30 s idle window on <c>System.IO.Ports</c> 10.0.11
-/// (issue #673): 0.0% with the port merely open, 2.0% on macOS and 2.3% on Linux with a blocking
-/// read pending, and about 3% for a whole connected <see cref="Device.DaqifiStreamingDevice"/>.
+/// for as long as a read is outstanding</b>. This transport does not read on its own — an open port
+/// with nobody reading it measures 0.0%. The cost arrives with whoever reads <see cref="Stream"/>:
+/// a <see cref="Consumers.StreamMessageConsumer{T}"/> keeps a blocking read pending the whole time
+/// it is running, which for a connected <see cref="Device.DaqifiStreamingDevice"/> is all of the
+/// time except the brief windows a text exchange suspends it for. Measured over a 30 s idle window
+/// on <c>System.IO.Ports</c> 10.0.11 (issue #673): 0.0% with the port merely open, 2.0% on macOS
+/// and 2.3% on Linux with a blocking read pending, and about 3% for a whole connected device.
 /// Callers holding many devices open for hours should budget for it. Windows drives reads through
 /// overlapped I/O rather than a poll loop and so is not expected to pay it, but that has not been
 /// measured.
 /// </para>
 /// <para>
-/// Nothing above <see cref="SerialPort"/> reaches that cost: it is unaffected by
+/// Because the helper thread polls for the read's <i>duration</i>, the cost follows time spent
+/// inside a read rather than the number of reads. So it is unaffected by
 /// <see cref="OperationalReadTimeoutMs"/> (an infinite read timeout measured slightly worse, not
-/// better) and by the shape of the consumer's read loop. The only lever that does reach it is not
-/// having a read outstanding — gating each read on <see cref="SerialPort.BytesToRead"/>, which is a
-/// bare <c>FIONREAD</c> ioctl that does not start the helper thread, measures about 0.1%. That
-/// trade has deliberately not been taken, because it buys the saving with added first-byte latency
-/// after an idle gap on a path whose timing the SCPI exchanges depend on.
+/// better), and unaffected by any reshaping of the consumer's loop that still leaves a blocking
+/// read continuously pending. The one lever that does reach it is having no read pending while the
+/// line is quiet: gating each read on <see cref="SerialPort.BytesToRead"/> — a bare <c>FIONREAD</c>
+/// ioctl that does not start the helper thread — measures about 0.1%. That trade has deliberately
+/// not been taken, because it buys the saving with added first-byte latency after an idle gap on a
+/// path whose timing the SCPI exchanges depend on.
 /// </para>
 /// </remarks>
 public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
