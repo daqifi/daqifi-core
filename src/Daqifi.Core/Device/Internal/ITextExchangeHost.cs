@@ -187,6 +187,20 @@ internal interface ITextExchangeHost
     ILogger Logger { get; }
 
     /// <summary>
+    /// The clock the exchange measures its deadlines and settle delay on (issue #637).
+    /// </summary>
+    /// <remarks>
+    /// The engine reads elapsed time through this rather than <see cref="System.Diagnostics.Stopwatch"/>
+    /// so a test can drive the first-response timeout — seconds of real waiting, and the one
+    /// path this engine has that a test could otherwise only buy by waiting it out — with a
+    /// fake clock. On the real device this is <see cref="TimeProvider.System"/>, whose
+    /// <c>GetTimestamp</c> IS <c>Stopwatch.GetTimestamp</c>, so nothing about the timing
+    /// changes. It remains a monotonic elapsed-time source either way: a wall clock that steps
+    /// (NTP, a clock correction) must not move a deadline under a request already in flight.
+    /// </remarks>
+    TimeProvider TimeProvider { get; }
+
+    /// <summary>
     /// Called the instant the exchange has captured its stale-line boundary, before
     /// <c>setupActionAsync</c> runs. A no-op on the real device; it exists so a test double can
     /// release a line into the transport at precisely this point — the capture-to-send window

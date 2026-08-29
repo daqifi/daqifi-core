@@ -1,4 +1,5 @@
 using Daqifi.Core.Device;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Daqifi.Core.Tests.Device;
 
@@ -36,7 +37,13 @@ public class DeviceErrorThrottleTests
     [Fact]
     public void TheNextRaiseAfterTheInterval_ReportsHowManyWereCollapsed()
     {
-        var throttle = new DeviceErrorThrottle(ShortInterval);
+        // On a stepped clock (issue #637). This used to sleep twice for twice ShortInterval — and
+        // ShortInterval itself was a compromise: long enough that a loaded runner could not
+        // overshoot it between two calls, short enough that the test was not a visible pause. The
+        // clock removes the compromise, so this can now assert the interval the device actually
+        // ships with rather than a 150 ms stand-in for it.
+        var clock = new FakeTimeProvider();
+        var throttle = new DeviceErrorThrottle(DeviceErrorThrottle.DefaultInterval, clock);
 
         Assert.True(throttle.ShouldRaise(DeviceErrorSource.MessageConsumer, new IOException(), out _));
 
@@ -46,15 +53,83 @@ public class DeviceErrorThrottleTests
             Assert.False(throttle.ShouldRaise(DeviceErrorSource.MessageConsumer, new IOException(), out _));
         }
 
-        Thread.Sleep(ShortInterval + ShortInterval);
+        clock.Advance(DeviceErrorThrottle.DefaultInterval);
 
         Assert.True(throttle.ShouldRaise(DeviceErrorSource.MessageConsumer, new IOException(), out var suppressed));
         Assert.Equal(collapsed, suppressed);
 
         // The count is consumed by the raise that reports it, not carried forward.
-        Thread.Sleep(ShortInterval + ShortInterval);
+        clock.Advance(DeviceErrorThrottle.DefaultInterval);
         Assert.True(throttle.ShouldRaise(DeviceErrorSource.MessageConsumer, new IOException(), out var afterReport));
         Assert.Equal(0, afterReport);
+    }
+
+    [Fact]
+    public void TheIntervalBoundary_CollapsesUpToItAndRaisesOnIt()
+    {
+        // The assertion a wall clock cannot make. "At most once every five seconds" has an edge,
+        // and testing where that edge actually is means landing a call an instant before it and an
+        // instant after it — which on a real clock is a race with the scheduler, and is why the
+        // sleeping tests above settled for "well past the interval" instead. Stepping the clock
+        // makes the boundary exact.
+        var clock = new FakeTimeProvider();
+        var throttle = new DeviceErrorThrottle(DeviceErrorThrottle.DefaultInterval, clock);
+
+        Assert.True(throttle.ShouldRaise(DeviceErrorSource.StreamDecode, new IOException(), out _));
+
+        // One tick short of the interval is still inside it.
+        clock.Advance(DeviceErrorThrottle.DefaultInterval - TimeSpan.FromTicks(1));
+        Assert.False(throttle.ShouldRaise(DeviceErrorSource.StreamDecode, new IOException(), out _));
+
+        // The tick that completes the interval lets the next one through, reporting the one
+        // collapsed above.
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.True(throttle.ShouldRaise(DeviceErrorSource.StreamDecode, new IOException(), out var suppressed));
+        Assert.Equal(1, suppressed);
+    }
+
+    [Fact]
+    public void ASustainedStorm_RaisesOncePerIntervalAndAccountsForEveryOccurrence()
+    {
+        // A minute of a frame-rate failure, which is the scenario #378 was filed for, asserted
+        // end to end without spending a minute. Two properties matter and neither was reachable
+        // before: the raise RATE is one per interval, and nothing is lost — every occurrence is
+        // either raised or counted into a SuppressedCount that a later raise reports.
+        var clock = new FakeTimeProvider();
+        var throttle = new DeviceErrorThrottle(DeviceErrorThrottle.DefaultInterval, clock);
+
+        const int occurrencesPerInterval = 500;
+        var intervals = (int)(TimeSpan.FromMinutes(1).Ticks / DeviceErrorThrottle.DefaultInterval.Ticks);
+
+        var raised = 0;
+        var accountedFor = 0;
+        var step = DeviceErrorThrottle.DefaultInterval / occurrencesPerInterval;
+
+        for (var i = 0; i < intervals * occurrencesPerInterval; i++)
+        {
+            if (throttle.ShouldRaise(DeviceErrorSource.StreamDecode, new IOException(), out var suppressed))
+            {
+                raised++;
+                accountedFor += suppressed + 1;
+            }
+
+            clock.Advance(step);
+        }
+
+        // One raise for the first occurrence, then one per elapsed interval.
+        Assert.Equal(intervals, raised);
+
+        // Everything except the occurrences collapsed since the LAST raise has been reported —
+        // those are still pending in the bucket, awaiting a raise that has not happened yet.
+        Assert.True(
+            accountedFor > 0 && accountedFor <= intervals * occurrencesPerInterval,
+            $"{accountedFor} occurrences accounted for, out of {intervals * occurrencesPerInterval}.");
+
+        // Nothing is dropped: the outstanding remainder is exactly what one interval collapses.
+        var outstanding = (intervals * occurrencesPerInterval) - accountedFor;
+        Assert.True(
+            outstanding < occurrencesPerInterval,
+            $"{outstanding} occurrences went unaccounted for, which is more than one interval's worth.");
     }
 
     [Fact]

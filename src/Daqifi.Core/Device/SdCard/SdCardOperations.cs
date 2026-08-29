@@ -4,7 +4,6 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device.Internal;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -36,6 +35,16 @@ internal sealed class SdCardOperations
     /// firmware to complete the interface switch before sending further commands.
     /// </summary>
     private const int SD_INTERFACE_SETTLE_DELAY_MS = 100;
+
+    /// <summary>
+    /// Spacing between the SCPI commands that start an SD logging session. Was an unnamed
+    /// <c>100</c> repeated six times; named because these are now driven by
+    /// <see cref="ISdCardOperationHost.TimeProvider"/> (issue #637). The duration is unchanged,
+    /// and it is deliberately its own constant rather than a reuse of
+    /// <see cref="SD_INTERFACE_SETTLE_DELAY_MS"/>: that one is the SPI-bus interface switch
+    /// settling, this one is command spacing, and they happen to agree today.
+    /// </summary>
+    private static readonly TimeSpan SdLogStartCommandSpacing = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
     /// Maximum number of retry attempts for SD card list operations that receive transient
@@ -90,6 +99,16 @@ internal sealed class SdCardOperations
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
     }
+
+    /// <summary>
+    /// The clock every settle delay, budget and deadline here is measured on (issue #637).
+    /// </summary>
+    /// <remarks>
+    /// Read through the host on each access rather than captured in the constructor, for the
+    /// same reason the two SD timeouts are: the device owns it, and a test that swaps it must
+    /// reach a collaborator that was built during the device's own construction.
+    /// </remarks>
+    private TimeProvider Clock => _host.TimeProvider;
 
     /// <inheritdoc cref="ISdCardOperations.IsLoggingToSdCard" />
     internal bool IsLoggingToSdCard => _isLoggingToSdCard;
@@ -233,7 +252,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
                 }
 
                 // The SPI bus switch and its settle wait run as the exchange's prepare phase, and
@@ -327,7 +346,7 @@ internal sealed class SdCardOperations
 
         // Querying the card too soon after the switch makes the device answer -200
         // (Execution error), so this wait is not optional.
-        await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -550,7 +569,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
 
                     lines = await _host.ExecuteTextCommandAsync(
                         () => _host.Send(ScpiMessageProducer.GetSdSpace),
@@ -707,7 +726,11 @@ internal sealed class SdCardOperations
 
         var logFileName = !string.IsNullOrWhiteSpace(fileName)
             ? fileName!
-            : $"log_{DateTime.Now:yyyyMMdd_HHmmss}{extension}";
+            // Local wall clock, read through the device's clock (issue #637): the name a
+            // user sees on the card should match the clock on the wall where the device is,
+            // and reading it through the provider is what makes the generated name
+            // deterministic in a test instead of whatever second the run landed on.
+            : $"log_{Clock.GetLocalNow().DateTime:yyyyMMdd_HHmmss}{extension}";
 
         ValidateSdCardFileName(logFileName);
 
@@ -717,25 +740,25 @@ internal sealed class SdCardOperations
         // SD card and LAN share the SPI bus on the hardware, so LAN must be
         // disabled before the SD card can be used.
         _host.Send(ScpiMessageProducer.DisableNetworkLan);
-        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
 
         _host.Send(ScpiMessageProducer.EnableStorageSd);
-        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
 
         // Route the data stream to the SD card interface.
         _host.Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
-        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
 
         _host.Send(ScpiMessageProducer.SetSdLoggingFileName(logFileName));
-        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
 
         _host.Send(formatCommand);
-        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
 
         if (!string.IsNullOrWhiteSpace(channelMask))
         {
             _host.Send(ScpiMessageProducer.EnableAdcChannels(channelMask));
-            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(SdLogStartCommandSpacing, Clock, cancellationToken).ConfigureAwait(false);
         }
 
         _host.Send(ScpiMessageProducer.StartStreaming(_host.StreamingFrequency));
@@ -861,7 +884,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
 
                     lines = await _host.ExecuteTextCommandAsync(
                         () =>
@@ -921,7 +944,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
 
                     lines = await _host.ExecuteTextCommandAsync(
                         () =>
@@ -1176,7 +1199,11 @@ internal sealed class SdCardOperations
 
         var wasStreaming = PauseStreamingForSdOperation();
 
-        var stopwatch = Stopwatch.StartNew();
+        // The download's own elapsed clock (issue #637): it feeds the receiver's remaining
+        // budget below and the duration reported on the result, and both are counted in the
+        // seconds-to-minutes range SdCardDownloadTimeout allows.
+        var clock = Clock;
+        var startedAt = clock.GetTimestamp();
         long fileSize = 0;
         var budget = _host.SdCardDownloadTimeout;
 
@@ -1197,7 +1224,7 @@ internal sealed class SdCardOperations
 
                     // Let the interface switch settle before the card is asked for anything —
                     // the same wait the LIST/DELETE/space exchanges take for the same reason.
-                    await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, ct).ConfigureAwait(false);
 
                     // Send the SCPI command to request the file
                     _host.Send(ScpiMessageProducer.GetSdFile(fileName));
@@ -1234,7 +1261,7 @@ internal sealed class SdCardOperations
                                 destinationStream,
                                 fileName,
                                 progress,
-                                timeout: RemainingBudget(budget, stopwatch),
+                                timeout: RemainingBudget(budget, clock.GetElapsedTime(startedAt)),
                                 cancellationToken: ct,
                                 listedFileSizeBytes: listedFileSizeBytes).ConfigureAwait(false);
                             break;
@@ -1250,7 +1277,7 @@ internal sealed class SdCardOperations
                         catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
                         {
                             attempt++;
-                            await Task.Delay(SD_INTERFACE_SETTLE_DELAY_MS, ct).ConfigureAwait(false);
+                            await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, ct).ConfigureAwait(false);
                             _host.Send(ScpiMessageProducer.GetSdFile(fileName));
                         }
                     }
@@ -1289,8 +1316,7 @@ internal sealed class SdCardOperations
             }
         }
 
-        stopwatch.Stop();
-        return new SdCardDownloadResult(fileName, fileSize, stopwatch.Elapsed);
+        return new SdCardDownloadResult(fileName, fileSize, clock.GetElapsedTime(startedAt));
     }
 
     /// <summary>
@@ -1380,9 +1406,9 @@ internal sealed class SdCardOperations
     /// The part of <paramref name="budget"/> not yet consumed, floored at zero (a negative
     /// timeout is not a legal <see cref="CancellationTokenSource"/> delay).
     /// </summary>
-    private static TimeSpan RemainingBudget(TimeSpan budget, Stopwatch stopwatch)
+    private static TimeSpan RemainingBudget(TimeSpan budget, TimeSpan elapsed)
     {
-        var remaining = budget - stopwatch.Elapsed;
+        var remaining = budget - elapsed;
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
@@ -1469,7 +1495,7 @@ internal sealed class SdCardOperations
         // hardDeadlineCts runs on its own timer, independent of the Task.Delay race below, so
         // it still reaches the worker if the worker only returns long after the race was
         // decided. linkedCts is what the worker observes: caller cancellation OR the deadline.
-        var hardDeadlineCts = new CancellationTokenSource(hardDeadline);
+        var hardDeadlineCts = new CancellationTokenSource(hardDeadline, Clock);
         var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hardDeadlineCts.Token);
 
         // Stops the racing delay the moment the outcome is decided — without it, a download
@@ -1494,7 +1520,7 @@ internal sealed class SdCardOperations
         {
             var winner = await Task.WhenAny(
                 workerTask,
-                Task.Delay(hardDeadline, raceCts.Token)).ConfigureAwait(false);
+                Task.Delay(hardDeadline, Clock, raceCts.Token)).ConfigureAwait(false);
 
             // Only abandon when the worker is genuinely still running: WhenAny can hand back
             // the delay even though the worker completed at that same boundary, and awaiting

@@ -1347,6 +1347,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     TimeSpan ISdCardOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
 
+    /// <inheritdoc />
+    TimeProvider ISdCardOperationHost.TimeProvider => Clock;
+
     void ISdCardOperationHost.RaiseLowSdSpaceWarning(LowSdSpaceWarningEventArgs e) => OnLowSdSpaceWarning(e);
 
     void IDeviceOperationHost.RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e)
