@@ -4,6 +4,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Logging.Export;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Logging.Export;
 
@@ -203,23 +204,11 @@ public class ExportGuardCensusTests
         // Read from the source rather than from the census, so a guard added to the folder with no
         // entry in the table turns this red instead of being silently uncovered. Without this the
         // census could only ever check the guards it already knows about.
-        var found = ThrowSitesInExportSource();
-
-        var expected = Census()
-            .GroupBy(s => s.SourceFile, StringComparer.Ordinal)
-            .Select(g => $"{g.Key}: {g.Count()}")
-            .OrderBy(s => s, StringComparer.Ordinal)
-            .ToList();
-
-        var actual = found
-            .GroupBy(s => s.File, StringComparer.Ordinal)
-            .Select(g => $"{g.Key}: {g.Count()}")
-            .OrderBy(s => s, StringComparer.Ordinal)
-            .ToList();
+        var found = RangeGuardSourceScanner.ThrowSitesIn(ExportSourceDirectory);
 
         Assert.Equal(
-            string.Join("; ", expected),
-            string.Join("; ", actual));
+            RangeGuardSourceScanner.SummarizeByFile(Census().Select(s => s.SourceFile)),
+            RangeGuardSourceScanner.SummarizeByFile(found.Select(s => s.File)));
     }
 
     [Fact]
@@ -236,7 +225,7 @@ public class ExportGuardCensusTests
         Assert.Contains("LiveCsvRecording.cs", files);
         Assert.Contains("SdCardLogSampleSource.cs", files);
 
-        Assert.NotEmpty(ThrowSitesInExportSource());
+        Assert.NotEmpty(RangeGuardSourceScanner.ThrowSitesIn(ExportSourceDirectory));
     }
 
     /// <summary>
@@ -284,93 +273,8 @@ public class ExportGuardCensusTests
         yield break;
     }
 
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(ExportGuardCensusTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
     private static string ExportSourceDirectory =>
-        Path.Combine(RepositoryRoot, "src", "Daqifi.Core", "Logging", "Export");
-
-    /// <summary>
-    /// Every line in the export source that actually raises an
-    /// <see cref="ArgumentOutOfRangeException"/> — the <c>throw new</c> form and the
-    /// <c>ArgumentOutOfRangeException.ThrowIf*</c> helpers alike, so switching to a helper does not
-    /// slip a guard past the census.
-    /// </summary>
-    /// <remarks>
-    /// Matched narrowly on purpose. A mere mention of the type — <c>catch</c>, <c>typeof</c>, an
-    /// XML-doc <c>&lt;exception&gt;</c> tag — is not a guard, and counting one would fail the census
-    /// for a change that added no guard at all. A drift test that cries wolf is a drift test people
-    /// switch off. Line and block comments are skipped for the same reason.
-    /// </remarks>
-    private static IReadOnlyList<(string File, int Line)> ThrowSitesInExportSource()
-    {
-        var sites = new List<(string File, int Line)>();
-
-        foreach (var path in Directory.GetFiles(ExportSourceDirectory, "*.cs").OrderBy(p => p, StringComparer.Ordinal))
-        {
-            var lines = File.ReadAllLines(path);
-            var inBlockComment = false;
-
-            for (var i = 0; i < lines.Length; i++)
-            {
-                var code = StripComments(lines[i], ref inBlockComment);
-
-                if (code.Contains($"throw new {nameof(ArgumentOutOfRangeException)}", StringComparison.Ordinal)
-                    || code.Contains($"{nameof(ArgumentOutOfRangeException)}.ThrowIf", StringComparison.Ordinal))
-                {
-                    sites.Add((Path.GetFileName(path), i + 1));
-                }
-            }
-        }
-
-        return sites;
-    }
-
-    /// <summary>
-    /// Returns the code on <paramref name="line"/> with its comments removed, carrying
-    /// <paramref name="inBlockComment"/> across lines. Deliberately naive — it does not understand
-    /// string literals containing comment markers — which is safe here because the only thing done
-    /// with the result is looking for a <c>throw</c>, and a literal spelling one out would be a
-    /// stranger thing than this missing it.
-    /// </summary>
-    private static string StripComments(string line, ref bool inBlockComment)
-    {
-        var code = new System.Text.StringBuilder();
-
-        for (var i = 0; i < line.Length; i++)
-        {
-            if (inBlockComment)
-            {
-                if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
-                {
-                    inBlockComment = false;
-                    i++;
-                }
-
-                continue;
-            }
-
-            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
-            {
-                break;
-            }
-
-            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
-            {
-                inBlockComment = true;
-                i++;
-                continue;
-            }
-
-            code.Append(line[i]);
-        }
-
-        return code.ToString();
-    }
+        RangeGuardSourceScanner.SourceDirectory("Logging", "Export");
 
     /// <summary>
     /// A live-sample device that exists only to get past the null and capability checks so the
