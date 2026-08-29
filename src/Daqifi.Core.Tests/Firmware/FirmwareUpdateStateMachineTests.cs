@@ -17,8 +17,10 @@ namespace Daqifi.Core.Tests.Firmware;
 /// not already make. <c>ResetIfTerminalState</c> has the same shape: the flows only call it when
 /// the machine is already terminal, so its guard could vanish and every suite would stay green.
 /// <para>
-/// These tests therefore assert properties of the machine (every phase can report failure; the
-/// machine can always get back to Idle) and the specific edges that must NOT exist, rather than
+/// These tests therefore assert properties of the machine (every declared state is reachable;
+/// every phase can report failure; the machine can always get back to Idle) — over the declared
+/// enum, so a state cannot escape a property by falling out of the discovered graph — and the
+/// specific edges that must NOT exist, rather than
 /// restating the table row by row. The graph is discovered by probing the machine itself rather
 /// than read out of the production dictionary, so a test cannot agree with a mutated table.
 /// </para>
@@ -36,6 +38,18 @@ public class FirmwareUpdateStateMachineTests
     ];
 
     [Fact]
+    public void EveryDeclaredState_IsReachableFromIdle()
+    {
+        // The two properties below walk every declared state, and both need a route to each one
+        // in order to get a context there. A state that lost all its inbound edges is also dead
+        // production code — no flow could ever report it — so it has to fail here loudly rather
+        // than quietly drop out of the discovered graph and take its own coverage with it.
+        var paths = DiscoverShortestPaths();
+
+        Assert.Empty(AllStates.Except(paths.Keys));
+    }
+
+    [Fact]
     public void EveryPhaseOfAnUpdate_CanStillReportFailure()
     {
         // A consumer only ever learns an update died through the machine reaching Failed. If any
@@ -44,9 +58,9 @@ public class FirmwareUpdateStateMachineTests
         // error rather than a FirmwareUpdateException carrying recovery guidance.
         var paths = DiscoverShortestPaths();
 
-        var cannotFail = paths.Keys
+        var cannotFail = AllStates
             .Where(state => !TerminalStates.Contains(state))
-            .Where(state => !CanTransition(paths[state], FirmwareUpdateState.Failed))
+            .Where(state => !CanTransition(PathTo(paths, state), FirmwareUpdateState.Failed))
             .ToList();
 
         Assert.Empty(cannotFail);
@@ -62,7 +76,7 @@ public class FirmwareUpdateStateMachineTests
         var paths = DiscoverShortestPaths();
         var edges = DiscoverEdges(paths);
 
-        var stranded = paths.Keys
+        var stranded = AllStates
             .Where(state => !CanReach(edges, state, FirmwareUpdateState.Idle))
             .ToList();
 
@@ -88,7 +102,7 @@ public class FirmwareUpdateStateMachineTests
         var paths = DiscoverShortestPaths();
 
         Assert.False(
-            CanTransition(paths[from], to),
+            CanTransition(PathTo(paths, from), to),
             $"{from} -> {to} must not be a legal transition.");
     }
 
@@ -105,7 +119,7 @@ public class FirmwareUpdateStateMachineTests
 
         var reachable = AllStates
             .Where(target => target != terminal)
-            .Where(target => CanTransition(paths[terminal], target))
+            .Where(target => CanTransition(PathTo(paths, terminal), target))
             .ToList();
 
         Assert.Equal(new[] { FirmwareUpdateState.Idle }, reachable);
@@ -183,9 +197,12 @@ public class FirmwareUpdateStateMachineTests
     [Theory]
     [InlineData(FirmwareUpdateState.PreparingDevice)]
     [InlineData(FirmwareUpdateState.WaitingForBootloader)]
+    [InlineData(FirmwareUpdateState.Connecting)]
     [InlineData(FirmwareUpdateState.ErasingFlash)]
     [InlineData(FirmwareUpdateState.Programming)]
     [InlineData(FirmwareUpdateState.Verifying)]
+    [InlineData(FirmwareUpdateState.JumpingToApp)]
+    [InlineData(FirmwareUpdateState.ReconnectingAfterFlash)]
     [InlineData(FirmwareUpdateState.CleaningUp)]
     public void ResetIfTerminalState_LeavesAnUpdateThatIsStillRunningAlone(
         FirmwareUpdateState inFlight)
@@ -226,11 +243,21 @@ public class FirmwareUpdateStateMachineTests
         return context;
     }
 
+    /// <summary>
+    /// The route the machine accepts to <paramref name="state"/>, failing loudly rather than
+    /// throwing a bare KeyNotFoundException if the state turned out to be unreachable.
+    /// </summary>
+    private static IReadOnlyList<FirmwareUpdateState> PathTo(
+        IReadOnlyDictionary<FirmwareUpdateState, IReadOnlyList<FirmwareUpdateState>> paths,
+        FirmwareUpdateState state)
+    {
+        Assert.True(paths.ContainsKey(state), $"{state} is not reachable from Idle.");
+        return paths[state];
+    }
+
     private static FirmwareUpdateContext ContextAt(FirmwareUpdateState state)
     {
-        var paths = DiscoverShortestPaths();
-        Assert.True(paths.ContainsKey(state), $"{state} is not reachable from Idle.");
-        return ContextAlong(paths[state]);
+        return ContextAlong(PathTo(DiscoverShortestPaths(), state));
     }
 
     private static bool CanTransition(
