@@ -47,7 +47,7 @@ namespace Daqifi.Core.Device;
 /// remaining known-cost rather than reworking it.
 /// </para>
 /// </remarks>
-public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost
+public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost
 {
     /// <summary>
     /// Gets the name of the device.
@@ -714,7 +714,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <remarks>
     /// The drop path is what makes this load-bearing (issue #494). A drop runs
     /// <c>transport.HandleConnectionLost</c> → <see cref="OnTransportStatusChanged"/> →
-    /// <c>Status = Lost</c> → this event → <c>BeginReconnectIfEnabled</c>, all on one thread.
+    /// <c>Status = Lost</c> → this event → <c>ReconnectSupervisor.BeginIfEnabled</c>, all on one
+    /// thread.
     /// An escaping subscriber exception used to skip the reconnect start entirely (so
     /// <see cref="ReconnectOptions.Enabled"/> silently did nothing) and unwind back into the
     /// transport before it had released the port handle, leaving the OS port claimed until the
@@ -911,6 +912,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             () => TeardownLockTimeout);
         _textExchange = new TextExchangeEngine(this);
         _operations = new OperationSerializer(this);
+        _reconnect = new ReconnectSupervisor(this);
     }
 
     /// <summary>
@@ -934,6 +936,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             () => TeardownLockTimeout);
         _textExchange = new TextExchangeEngine(this);
         _operations = new OperationSerializer(this);
+        _reconnect = new ReconnectSupervisor(this);
         _messageProducer = new MessageProducer<string>(stream);
         _messageProducer.SendFailed += OnMessageSendFailed;
         _directStream = stream;
@@ -958,6 +961,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             () => TeardownLockTimeout);
         _textExchange = new TextExchangeEngine(this);
         _operations = new OperationSerializer(this);
+        _reconnect = new ReconnectSupervisor(this);
         _transport = transport;
 
         // Subscribe to transport status changes
@@ -993,6 +997,22 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// that did not happen. Overridable for tests, mirroring <c>SdCardDownloadTimeout</c>.
     /// </summary>
     internal virtual TimeSpan TeardownLockTimeout => TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Which way the caller last pointed the device.
+    /// </summary>
+    /// <remarks>
+    /// The session epoch that <see cref="ReconnectSupervisor"/> owns says <i>that</i> a caller
+    /// superseded the reconnect loop; this says <i>what they wanted</i>, which is what decides
+    /// how the loop unwinds. <see cref="Connect"/> is a blocking, multi-second operation, so a
+    /// caller can always land in the middle of one — no amount of checking beforehand avoids
+    /// that, and by the time the loop looks again it may be holding a session it has just
+    /// brought up. If the caller wants the device down, that session is the loop's own doing and
+    /// has to go back down with it; if the caller wants it up, it is theirs and must be left
+    /// strictly alone. Read on the connect paths too, by
+    /// <see cref="HonourTeardownRaisedDuringConnect"/>.
+    /// </remarks>
+    private volatile bool _callerWantsDisconnected;
 
     #endregion
 
@@ -1136,7 +1156,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     public void Connect()
     {
         _callerWantsDisconnected = false;
-        SupersedeReconnect();
+        _reconnect.Supersede();
         ConnectCore();
     }
 
@@ -1174,8 +1194,8 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </para>
     /// <para>
     /// Shared by both connect entry points rather than living in the reconnect loop:
-    /// <see cref="AbandonIfSuperseded"/> covers the same ground for a reconnect attempt, but it
-    /// is part of the loop and never runs for a caller's own connect.
+    /// <c>ReconnectSupervisor.AbandonIfSuperseded</c> covers the same ground for a reconnect
+    /// attempt, but it is part of the loop and never runs for a caller's own connect.
     /// </para>
     /// <para>
     /// The ordering is not a race: <see cref="Disconnect"/> sets the flag <i>before</i> it
@@ -1242,7 +1262,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
         _callerWantsDisconnected = false;
-        SupersedeReconnect();
+        _reconnect.Supersede();
         await ConnectCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1423,7 +1443,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         // what tells it to put the session straight back down instead of leaving the device
         // quietly alive behind the caller's back.
         _callerWantsDisconnected = true;
-        SupersedeReconnect();
+        _reconnect.Supersede();
         DisconnectCore(ConnectionStatus.Disconnected);
     }
 
@@ -1472,7 +1492,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// which releases it once it unwedges, because <see cref="_callerWantsDisconnected"/> was
     /// set before this wait began and every connect path re-reads it after dropping the lock:
     /// <see cref="HonourTeardownRaisedDuringConnect"/> for a caller's own connect,
-    /// <see cref="AbandonIfSuperseded"/> for a reconnect attempt.
+    /// <c>ReconnectSupervisor.AbandonIfSuperseded</c> for a reconnect attempt.
     /// <para>
     /// What can still be done safely is record the caller's intent at the device level. These
     /// are this class's own fields, not the transport, so setting them cannot corrupt anything
@@ -1536,7 +1556,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     {
         // Same intent-first ordering as Disconnect: see the comment there.
         _callerWantsDisconnected = true;
-        SupersedeReconnect();
+        _reconnect.Supersede();
         await DisconnectCoreAsync(ConnectionStatus.Disconnected, cancellationToken).ConfigureAwait(false);
     }
 
@@ -2590,41 +2610,27 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             return;
         }
 
-        // Read before raising Lost: a handler is free to call Connect or Disconnect
-        // synchronously from inside it, and if it does, this drop must not start a
-        // reconnect for a session the caller has already moved on from.
-        var epochAtDrop = Volatile.Read(ref _sessionEpoch);
-
-        // Snapshot the session BEFORE anything observes the drop. Raising Lost runs
-        // consumer handlers synchronously on this thread, and a handler is entirely
-        // entitled to start tearing the device down — by which point what the session
-        // looked like is no longer recoverable. No-op unless reconnect is enabled, so
-        // the default path does exactly what it did before (issue #379).
-        //
-        // Skipped while a reconnect is already running: a drop during an attempt would
-        // otherwise overwrite the snapshot of the session being restored with the empty
-        // half-built one, and the loop would go on to restore nothing.
-        if (ReconnectOptions.Enabled && !IsReconnecting)
-        {
-            try
-            {
-                CaptureSessionSnapshot();
-            }
-            catch (Exception ex)
-            {
-                SafeLog(() => _logger.LogWarning(
-                    ex, "[Reconnect] Capturing the session state after a drop failed; the session cannot be restored."));
-            }
-        }
+        // Reads the session epoch and snapshots the session, both BEFORE anything observes the
+        // drop: raising Lost runs consumer handlers synchronously on this thread, and a handler
+        // is free to tear the device down from inside it. ReconnectSupervisor.PrepareForDrop
+        // carries the full reasoning.
+        var epochAtDrop = _reconnect.PrepareForDrop();
 
         Status = ConnectionStatus.Lost;
 
-        BeginReconnectIfEnabled(epochAtDrop);
+        _reconnect.BeginIfEnabled(epochAtDrop);
     }
 
     #region Automatic reconnection (issue #379)
 
-    private ReconnectOptions _reconnectOptions = new();
+    /// <summary>
+    /// The reconnect loop, extracted whole (issue #480). This class keeps the public surface
+    /// below — the policy, the three events, <see cref="IsReconnecting"/> and
+    /// <see cref="CancelReconnect"/> — and the supervisor owns the mechanism: the single-flight
+    /// guard, the session epoch, the backoff ladder, the supersede/unwind protocol and the
+    /// give-up report.
+    /// </summary>
+    private readonly ReconnectSupervisor _reconnect;
 
     /// <summary>
     /// Gets or sets the policy for re-establishing a session after
@@ -2656,11 +2662,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <exception cref="ArgumentNullException">Thrown when set to null.</exception>
     public ReconnectOptions ReconnectOptions
     {
-        get => _reconnectOptions;
+        get => _reconnect.Options;
         set
         {
             ArgumentNullException.ThrowIfNull(value);
-            _reconnectOptions = value;
+            _reconnect.Options = value;
         }
     }
 
@@ -2693,36 +2699,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </remarks>
     public event EventHandler<ReconnectFailedEventArgs>? ReconnectFailed;
 
-    // 0 = idle, 1 = a reconnect loop is running. Guards against a second loop being started by
-    // the Lost that a failing attempt's own teardown can produce.
-    private int _reconnectRunning;
-
-    // Volatile: written by the thread that starts a loop and by the loop's own cleanup, read by
-    // CancelReconnect from any thread. A stale read only ever delays a cancellation, never
-    // corrupts one — the epoch check is what actually stops the loop — but there is no reason
-    // to leave even that on the table.
-    private volatile CancellationTokenSource? _reconnectCts;
-
-    // Bumped by every caller-issued Connect/Disconnect/Dispose. The reconnect loop captures it
-    // when it starts and re-checks before each step that touches device state; a change means
-    // the caller has moved on and the loop must unwind. This is what keeps the loop from
-    // re-opening a transport the caller just closed, without Disconnect() having to block on a
-    // loop that may be calling back into it.
-    private int _sessionEpoch;
-
-    // Which way the caller last pointed the device. The epoch says *that* a caller superseded
-    // the loop; this says *what they wanted*, which is what decides how the loop unwinds.
-    // Connect() is a blocking, multi-second operation, so a caller can always land in the
-    // middle of one — no amount of checking beforehand avoids that, and by the time the loop
-    // looks again it may be holding a session it has just brought up. If the caller wants the
-    // device down, that session is the loop's own doing and has to go back down with it;
-    // if the caller wants it up, it is theirs and must be left strictly alone.
-    private volatile bool _callerWantsDisconnected;
-
     /// <summary>
     /// Gets a value indicating whether an automatic reconnect is currently in progress.
     /// </summary>
-    public bool IsReconnecting => Volatile.Read(ref _reconnectRunning) != 0;
+    public bool IsReconnecting => _reconnect.IsRunning;
 
     /// <summary>
     /// Stops any automatic reconnect in progress. Safe to call at any time, including when
@@ -2736,348 +2716,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// trying to bring it back. This returns immediately rather than waiting for the loop, so
     /// it is safe to call from a device event handler.
     /// </remarks>
-    public void CancelReconnect()
-    {
-        try
-        {
-            _reconnectCts?.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // The loop finished and disposed its own token source. Nothing to cancel.
-        }
-    }
-
-    /// <summary>
-    /// Cancels any reconnect in progress <i>and</i> declares the session it was rebuilding
-    /// obsolete, so the unwinding loop leaves the caller's new session strictly alone.
-    /// </summary>
-    private void SupersedeReconnect()
-    {
-        Interlocked.Increment(ref _sessionEpoch);
-        CancelReconnect();
-    }
-
-    /// <summary>
-    /// Starts the reconnect loop on a background thread, if the policy allows one and none is
-    /// already running.
-    /// </summary>
-    /// <remarks>
-    /// Called from the transport's status callback, which runs on the reader loop or the
-    /// liveness timer — so the work is handed to the thread pool rather than done inline.
-    /// </remarks>
-    /// <param name="expectedEpoch">
-    /// The session epoch observed before the drop was announced. A mismatch means a caller
-    /// connected or disconnected in the meantime — including from inside their own
-    /// <see cref="StatusChanged"/> handler — and this drop is no longer theirs to recover from.
-    /// </param>
-    private void BeginReconnectIfEnabled(int expectedEpoch)
-    {
-        if (!ReconnectOptions.Enabled || _transport == null || _disposed || _isDisconnecting)
-        {
-            return;
-        }
-
-        // Only ever start from a device that is actually sitting on a lost connection with the
-        // session it was lost from still current.
-        if (Status != ConnectionStatus.Lost || Volatile.Read(ref _sessionEpoch) != expectedEpoch)
-        {
-            return;
-        }
-
-        // One loop at a time. A failing attempt tears the transport down again, which can
-        // produce another Lost; without this that would fork a second loop racing the first.
-        if (Interlocked.CompareExchange(ref _reconnectRunning, 1, 0) != 0)
-        {
-            return;
-        }
-
-        var cts = new CancellationTokenSource();
-        _reconnectCts = cts;
-
-        var epoch = Volatile.Read(ref _sessionEpoch);
-        var options = ReconnectOptions;
-
-        _ = Task.Run(async () =>
-        {
-            var wasCanceled = false;
-
-            try
-            {
-                await RunReconnectLoopAsync(options, epoch, cts.Token).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                // The loop handles its own failures; anything escaping is a bug in it, and must
-                // not become an unobserved task exception.
-                SafeLog(() => _logger.LogError(ex, "[Reconnect] The reconnect loop terminated unexpectedly."));
-            }
-            finally
-            {
-                wasCanceled = cts.IsCancellationRequested;
-
-                // Clear the token source before releasing the running flag, so a loop started
-                // by the next drop cannot have its own source nulled out from under it.
-                _reconnectCts = null;
-                cts.Dispose();
-                Interlocked.Exchange(ref _reconnectRunning, 0);
-            }
-
-            // A drop that landed in the moments between this loop finishing its work and
-            // releasing the running flag would have been skipped by the single-flight guard,
-            // stranding the device on Lost with nothing trying to bring it back. Pick it up.
-            // Exhausting the attempts settles on Failed, and cancellation is excluded here, so
-            // neither can retrigger.
-            if (!wasCanceled)
-            {
-                BeginReconnectIfEnabled(Volatile.Read(ref _sessionEpoch));
-            }
-        });
-    }
-
-    /// <summary>
-    /// Attempts, with backoff, to rebuild the session that was just lost.
-    /// </summary>
-    /// <param name="options">
-    /// The policy as it stood when the drop was detected. Assigning a new
-    /// <see cref="ReconnectOptions"/> mid-flight therefore leaves this loop on the terms it
-    /// started under and applies from the next drop; mutating the instance already assigned
-    /// does reach it, since the loop holds that same object.
-    /// </param>
-    /// <param name="epoch">The session epoch at the time of the drop.</param>
-    /// <param name="cancellationToken">Cancelled by <see cref="CancelReconnect"/>.</param>
-    private async Task RunReconnectLoopAsync(
-        ReconnectOptions options,
-        int epoch,
-        CancellationToken cancellationToken)
-    {
-        // Elapsed on the device's clock (issue #637): this is a duration reported to the
-        // caller on ReconnectedEventArgs, and the backoff ladder below is counted in seconds,
-        // so a test can walk a full ladder with a fake clock instead of waiting one out.
-        var clock = _timeProvider;
-        var startedAt = clock.GetTimestamp();
-        Exception? lastError = null;
-        var attempt = 0;
-
-        SafeLog(() => _logger.LogInformation(
-            "[Reconnect] Device '{DeviceName}' lost its connection; reconnecting (up to {MaxAttempts} attempt(s)).",
-            Name,
-            options.MaxAttempts));
-
-        while (attempt < options.MaxAttempts)
-        {
-            attempt++;
-
-            if (IsSessionStale(epoch) || cancellationToken.IsCancellationRequested)
-            {
-                ReportReconnectStopped(epoch, attempt - 1, lastError, wasCanceled: true);
-                return;
-            }
-
-            var delay = options.CalculateDelay(attempt);
-            RaiseReconnectEvent(ReconnectAttempt, new ReconnectAttemptEventArgs(
-                attempt, options.MaxAttempts, delay, lastError), nameof(ReconnectAttempt));
-
-            try
-            {
-                // Tear down what is left of the dead session first: the producer and consumer
-                // are still bound to a stream that is gone, and Connect() only rebuilds them
-                // once they have been nulled. Reported as Retrying, not Disconnected — nobody
-                // asked for this teardown.
-                DisconnectCore(ConnectionStatus.Retrying);
-
-                if (delay > TimeSpan.Zero)
-                {
-                    await Task.Delay(delay, clock, cancellationToken).ConfigureAwait(false);
-                }
-
-                if (IsSessionStale(epoch))
-                {
-                    ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
-                    return;
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-
-                ConnectCore();
-
-                // Connect() blocks for as long as opening the port takes, so a caller can — and
-                // on a slow serial open, will — land squarely in the middle of it. There is now
-                // a live transport and a running reader that this loop built, so bailing out
-                // here is not enough on its own: if the caller wants the device down, the
-                // session has to be taken back down with it.
-                if (AbandonIfSuperseded(epoch, attempt, lastError))
-                {
-                    return;
-                }
-
-                await InitializeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                var streamingResumed = await RestoreSessionSnapshotAsync(
-                    options, cancellationToken).ConfigureAwait(false);
-
-                // Same again before declaring victory: initialization and restore are several
-                // seconds of SCPI round-trips, and a session the caller has since disowned must
-                // not be handed to them as a successful reconnect.
-                if (AbandonIfSuperseded(epoch, attempt, lastError))
-                {
-                    return;
-                }
-
-                SafeLog(() => _logger.LogInformation(
-                    "[Reconnect] Device '{DeviceName}' reconnected on attempt {Attempt}.", Name, attempt));
-
-                RaiseReconnectEvent(Reconnected, new ReconnectedEventArgs(
-                    attempt, clock.GetElapsedTime(startedAt), streamingResumed), nameof(Reconnected));
-                return;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
-                return;
-            }
-            catch (Exception ex)
-            {
-                lastError = ex;
-                SafeLog(() => _logger.LogWarning(
-                    ex,
-                    "[Reconnect] Attempt {Attempt} of {MaxAttempts} to reconnect device '{DeviceName}' failed.",
-                    attempt,
-                    options.MaxAttempts,
-                    Name));
-            }
-        }
-
-        ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: false);
-    }
-
-    /// <summary>
-    /// Checks whether a caller has superseded the session this loop is rebuilding and, if so,
-    /// unwinds whatever the loop has already brought up before reporting that it stopped.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Called at the points where the loop is holding a live session of its own making — after
-    /// <see cref="ConnectCore"/>, and again once initialization and restore are done. Both are
-    /// preceded by long blocking work, which is exactly when a caller's
-    /// <see cref="Disconnect"/> lands, so a check beforehand cannot substitute for this one.
-    /// </para>
-    /// <para>
-    /// What "unwind" means depends on what the caller wanted, which is why the epoch alone is
-    /// not enough to decide it. After a <see cref="Disconnect"/> or a disposal the live session
-    /// is the loop's own doing and is torn straight back down — leaving it up is a device the
-    /// caller closed quietly coming back to life. After a caller's own <see cref="Connect"/>
-    /// the session belongs to them, and tearing it down would be the same bug in reverse, so it
-    /// is left alone and only logged.
-    /// </para>
-    /// </remarks>
-    /// <returns><c>true</c> if the loop must stop.</returns>
-    private bool AbandonIfSuperseded(int epoch, int attempt, Exception? lastError)
-    {
-        if (!IsSessionStale(epoch))
-        {
-            return false;
-        }
-
-        if (_callerWantsDisconnected || _disposed)
-        {
-            SafeLog(() => _logger.LogInformation(
-                "[Reconnect] Device '{DeviceName}' was disconnected while a reconnect attempt was in flight; "
-                + "closing the connection the attempt had established.",
-                Name));
-
-            try
-            {
-                DisconnectCore(ConnectionStatus.Disconnected);
-            }
-            catch (Exception ex)
-            {
-                // Best-effort unwind of an abandoned attempt. A transport already disposed out
-                // from under us can throw here, and there is nothing left to salvage by
-                // letting that escape into the loop's retry logic.
-                SafeLog(() => _logger.LogDebug(
-                    ex, "[Reconnect] Closing the abandoned reconnect attempt's connection failed."));
-            }
-        }
-        else
-        {
-            SafeLog(() => _logger.LogWarning(
-                "[Reconnect] Device '{DeviceName}' was reconnected by its caller while an automatic "
-                + "reconnect attempt was in flight; leaving the caller's connection alone.",
-                Name));
-        }
-
-        ReportReconnectStopped(epoch, attempt, lastError, wasCanceled: true);
-        return true;
-    }
-
-    /// <summary>
-    /// True once a caller-issued connect, disconnect or disposal has superseded the session the
-    /// reconnect loop was started for.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately does not consult <c>_isDisconnecting</c>: the loop's own teardown between
-    /// attempts sets that flag, so reading it here would make the loop consider itself stale.
-    /// A caller-issued <see cref="Disconnect"/> bumps the epoch before it sets the flag, which
-    /// is what this actually needs to see.
-    /// </remarks>
-    private bool IsSessionStale(int epoch) =>
-        _disposed || Volatile.Read(ref _sessionEpoch) != epoch;
-
-    /// <summary>
-    /// Settles the device after a reconnect loop that did not restore the session, and reports
-    /// why.
-    /// </summary>
-    /// <remarks>
-    /// Exhausting the attempts is terminal and loud: <see cref="ConnectionStatus.Failed"/>, a
-    /// logged error, and an <see cref="ErrorOccurred"/> raise. Being cancelled is neither — the
-    /// caller asked for it — so the device is simply left reporting
-    /// <see cref="ConnectionStatus.Lost"/>, which is the truth. Neither touches
-    /// <see cref="Status"/> at all once the session is stale, since by then the status belongs
-    /// to whatever the caller did next.
-    /// </remarks>
-    private void ReportReconnectStopped(int epoch, int attemptsMade, Exception? lastError, bool wasCanceled)
-    {
-        if (!IsSessionStale(epoch))
-        {
-            // An attempt can fail after the transport is back up (a re-initialization that
-            // times out, say), so tear the half-built session down rather than leaving a live
-            // handle and a running reader behind a terminal status.
-            DisconnectCore(wasCanceled ? ConnectionStatus.Lost : ConnectionStatus.Failed);
-        }
-
-        if (wasCanceled)
-        {
-            SafeLog(() => _logger.LogInformation(
-                "[Reconnect] Reconnection of device '{DeviceName}' was cancelled after {AttemptsMade} attempt(s).",
-                Name,
-                attemptsMade));
-        }
-        else
-        {
-            SafeLog(() => _logger.LogError(
-                lastError,
-                "[Reconnect] Device '{DeviceName}' could not be reconnected after {AttemptsMade} attempt(s); giving up.",
-                Name,
-                attemptsMade));
-
-            // Terminal failure has to be impossible to miss, so it goes to the device error
-            // surface as well as to this group's own event (issue #379 / #378).
-            RaiseDeviceError(
-                DeviceErrorSource.Reconnect,
-                new DeviceReconnectFailedException(Name, attemptsMade, lastError));
-        }
-
-        RaiseReconnectEvent(
-            ReconnectFailed,
-            new ReconnectFailedEventArgs(attemptsMade, lastError, wasCanceled),
-            nameof(ReconnectFailed));
-    }
+    public void CancelReconnect() => _reconnect.Cancel();
 
     /// <summary>
     /// Raises one of the reconnect events, isolating the loop from a subscriber that throws —
     /// the same guarantee <see cref="RaiseDeviceError"/> and <c>SendFailed</c> give.
     /// </summary>
+    /// <remarks>
+    /// Stays on the device rather than moving into <see cref="ReconnectSupervisor"/> because the
+    /// <c>sender</c> a subscriber sees has to be the device that declares the event, not the
+    /// collaborator that decided to raise it.
+    /// </remarks>
     private void RaiseReconnectEvent<TArgs>(
         EventHandler<TArgs>? handler,
         TArgs args,
@@ -3125,6 +2774,68 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     protected virtual Task<bool> RestoreSessionSnapshotAsync(
         ReconnectOptions options,
         CancellationToken cancellationToken) => Task.FromResult(false);
+
+    #endregion
+
+    #region IReconnectHost — the supervisor's view of this device
+
+    /// <inheritdoc />
+    ILogger IReconnectHost.Logger => _logger;
+
+    /// <inheritdoc />
+    string IReconnectHost.Name => Name;
+
+    /// <inheritdoc />
+    TimeProvider IReconnectHost.TimeProvider => _timeProvider;
+
+    /// <inheritdoc />
+    ConnectionStatus IReconnectHost.Status => Status;
+
+    /// <inheritdoc />
+    bool IReconnectHost.IsDisposed => _disposed;
+
+    /// <inheritdoc />
+    bool IReconnectHost.IsDisconnecting => _isDisconnecting;
+
+    /// <inheritdoc />
+    bool IReconnectHost.HasTransport => _transport != null;
+
+    /// <inheritdoc />
+    bool IReconnectHost.CallerWantsDisconnected => _callerWantsDisconnected;
+
+    /// <inheritdoc />
+    void IReconnectHost.ConnectCore() => ConnectCore();
+
+    /// <inheritdoc />
+    void IReconnectHost.DisconnectCore(ConnectionStatus finalStatus) => DisconnectCore(finalStatus);
+
+    /// <inheritdoc />
+    Task IReconnectHost.InitializeAsync(CancellationToken cancellationToken) =>
+        InitializeAsync(cancellationToken: cancellationToken);
+
+    /// <inheritdoc />
+    void IReconnectHost.CaptureSessionSnapshot() => CaptureSessionSnapshot();
+
+    /// <inheritdoc />
+    Task<bool> IReconnectHost.RestoreSessionSnapshotAsync(
+        ReconnectOptions options,
+        CancellationToken cancellationToken) => RestoreSessionSnapshotAsync(options, cancellationToken);
+
+    /// <inheritdoc />
+    void IReconnectHost.RaiseReconnectAttempt(ReconnectAttemptEventArgs args) =>
+        RaiseReconnectEvent(ReconnectAttempt, args, nameof(ReconnectAttempt));
+
+    /// <inheritdoc />
+    void IReconnectHost.RaiseReconnected(ReconnectedEventArgs args) =>
+        RaiseReconnectEvent(Reconnected, args, nameof(Reconnected));
+
+    /// <inheritdoc />
+    void IReconnectHost.RaiseReconnectFailed(ReconnectFailedEventArgs args) =>
+        RaiseReconnectEvent(ReconnectFailed, args, nameof(ReconnectFailed));
+
+    /// <inheritdoc />
+    void IReconnectHost.RaiseDeviceError(DeviceErrorSource source, Exception error) =>
+        RaiseDeviceError(source, error);
 
     #endregion
 

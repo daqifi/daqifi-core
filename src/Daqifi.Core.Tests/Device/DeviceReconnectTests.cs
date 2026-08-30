@@ -1214,7 +1214,11 @@ public class DeviceReconnectTests
         using var transport = new ScriptedReconnectTransport();
         using var device = new ScriptedStreamingDevice("Picky Device", transport);
 
-        Assert.Throws<ArgumentNullException>(() => device.ReconnectOptions = null!);
+        var error = Assert.Throws<ArgumentNullException>(() => device.ReconnectOptions = null!);
+
+        // The parameter name is part of what a caller sees; asserting only the type would let a
+        // rewrite of this guard silently start blaming something else.
+        Assert.Equal("value", error.ParamName);
     }
 
     [Fact]
@@ -1227,6 +1231,73 @@ public class DeviceReconnectTests
         device.CancelReconnect();
 
         Assert.False(device.IsReconnecting);
+    }
+
+    #endregion
+
+    #region Who the reconnect events say they came from
+
+    // Every other test here subscribes as (_, e) => ..., so the sender argument of the three
+    // reconnect events is asserted nowhere in the suite. It is nonetheless a public fact — a
+    // consumer that multiplexes several devices onto one handler reads it to tell them apart —
+    // and it is exactly the kind of guarantee that quietly changes when the code raising an
+    // event moves off the class that declares it. Pinned here so that it cannot.
+
+    [Fact]
+    public async Task ASuccessfulReconnect_RaisesItsEventsWithTheDeviceAsTheirSender()
+    {
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Attributable Device", transport);
+        device.ReconnectOptions = FastPolicy();
+
+        ConnectAndInitialize(device);
+
+        object? attemptSender = null;
+        device.ReconnectAttempt += (sender, _) =>
+            Interlocked.CompareExchange(ref attemptSender, sender, null);
+
+        var reconnectedSender = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        device.Reconnected += (sender, _) => reconnectedSender.TrySetResult(sender);
+
+        // One refusal, so ReconnectAttempt is raised at least twice and the sender is checked on a
+        // retry as well as on the first pass.
+        transport.FailNextConnects(1);
+        transport.SimulateDrop();
+
+        Assert.Same(device, await WaitWithTimeoutAsync(reconnectedSender.Task));
+        Assert.Same(device, Volatile.Read(ref attemptSender));
+    }
+
+    [Fact]
+    public async Task AReconnectThatGivesUp_RaisesItsEventsWithTheDeviceAsTheirSender()
+    {
+        using var transport = new ScriptedReconnectTransport();
+        using var device = new ScriptedStreamingDevice("Attributable Lost Device", transport);
+        device.ReconnectOptions = FastPolicy(maxAttempts: 2);
+
+        ConnectAndInitialize(device);
+
+        object? attemptSender = null;
+        device.ReconnectAttempt += (sender, _) =>
+            Interlocked.CompareExchange(ref attemptSender, sender, null);
+
+        object? errorSender = null;
+        device.ErrorOccurred += (sender, _) =>
+            Interlocked.CompareExchange(ref errorSender, sender, null);
+
+        var failedSender = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        device.ReconnectFailed += (sender, _) => failedSender.TrySetResult(sender);
+
+        transport.FailNextConnects(int.MaxValue);
+        transport.SimulateDrop();
+
+        Assert.Same(device, await WaitWithTimeoutAsync(failedSender.Task));
+        Assert.Same(device, Volatile.Read(ref attemptSender));
+
+        // Giving up also reaches the general device-error surface, which carries the same promise.
+        Assert.Same(device, Volatile.Read(ref errorSender));
     }
 
     #endregion
