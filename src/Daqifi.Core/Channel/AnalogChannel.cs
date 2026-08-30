@@ -65,8 +65,8 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <inheritdoc />
     event Action? IChannelEnablementNotifier.EnablementChanged
     {
-        add { lock (_lock) { _enablementChanged += value; } }
-        remove { lock (_lock) { _enablementChanged -= value; } }
+        add => Internal.ChannelEnablementNotification.AddHandler(_lock, ref _enablementChanged, value);
+        remove => Internal.ChannelEnablementNotification.RemoveHandler(_lock, ref _enablementChanged, value);
     }
 
     /// <summary>
@@ -75,26 +75,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     public bool IsEnabled
     {
         get { lock (_lock) { return _isEnabled; } }
-        set
-        {
-            Action? subscribers;
-            lock (_lock)
-            {
-                if (_isEnabled == value)
-                {
-                    return;
-                }
-
-                _isEnabled = value;
-                subscribers = _enablementChanged;
-            }
-
-            // Raised outside the lock: the owning device's handler is free to read back from this
-            // channel, and holding _lock across it would make that a self-deadlock waiting to
-            // happen. The subscriber list was captured inside, so a concurrent unsubscribe cannot
-            // tear it.
-            subscribers?.Invoke();
-        }
+        set => Internal.ChannelEnablementNotification.SetAndNotify(_lock, value, ref _isEnabled, ref _enablementChanged);
     }
 
     /// <summary>
