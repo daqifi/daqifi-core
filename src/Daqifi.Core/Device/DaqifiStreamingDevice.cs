@@ -27,7 +27,7 @@ namespace Daqifi.Core.Device;
 /// Represents a DAQiFi device that supports data streaming functionality.
 /// Extends the base DaqifiDevice with streaming-specific operations.
 /// </summary>
-public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost
+public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
 {
     /// <summary>
     /// Response window allowed for the USB stream-interface command sent during
@@ -96,9 +96,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <summary>
     /// Gets a value indicating whether the device is currently streaming data.
     /// </summary>
-    public bool IsStreaming { get; private set; }
-
-    private int _streamingFrequency;
+    public bool IsStreaming => _session.IsStreaming;
 
     /// <summary>
     /// Gets or sets the streaming frequency in Hz (samples per second). The value is
@@ -112,23 +110,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// </exception>
     public int StreamingFrequency
     {
-        get => _streamingFrequency;
-        set
-        {
-            // MaxSamplingRate is a mutable, unvalidated public property; sanitize the ceiling so
-            // an uninitialized/invalid capabilities value (0 or negative) can't produce an
-            // impossible range like "1..0" that rejects every valid frequency.
-            var maxSamplingRate = Math.Max(1, Metadata.Capabilities.MaxSamplingRate);
-            if (value < 1 || value > maxSamplingRate)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(StreamingFrequency),
-                    value,
-                    $"Streaming frequency must be between 1 and {maxSamplingRate} Hz (the device's maximum sampling rate).");
-            }
-
-            _streamingFrequency = value;
-        }
+        get => _session.StreamingFrequency;
+        set => _session.StreamingFrequency = value;
     }
 
     /// <summary>
@@ -205,6 +188,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // Built here rather than in field initializers because each needs `this` as its host,
         // which a field initializer cannot reference. Every constructor routes through this
         // method, so they are always in place before the device is handed to a caller.
+        //
+        // The session controller is built first because IsStreaming and StreamingFrequency now
+        // read through it, and both the StreamingFrequency assignment at the bottom of this
+        // method and anything a collaborator's constructor might read would otherwise find it
+        // null.
+        _session = new StreamingSessionController(this);
+
         _frameDecoder = new StreamFrameDecoder(this);
         _liveSampleStream = new LiveSampleStream(this);
         _channelControl = new ChannelControlOperations(this);
@@ -276,45 +266,13 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Starts streaming data from the device at the configured frequency.
     /// </summary>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    public void StartStreaming()
-    {
-        EnsureConnected();
-
-        if (IsStreaming) return;
-
-        BeginStreamingSession();
-
-        IsStreaming = true;
-        Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
-    }
-
-    /// <summary>
-    /// Resets everything that is scoped to one streaming session, so the frames that follow are
-    /// decoded against this session rather than the last one.
-    /// </summary>
-    /// <remarks>
-    /// Shared by <see cref="StartStreaming"/> and by the tracking of a start-streaming command
-    /// sent directly through <see cref="Send{T}"/>. It is one method precisely so the two cannot
-    /// drift: a raw-started stream that skipped this would reconstruct timestamps from the
-    /// previous session's anchor and re-use its gap detector, producing samples stamped with
-    /// times that never happened — silently.
-    /// </remarks>
-    private void BeginStreamingSession() =>
-        _frameDecoder.BeginSession(TimestampFrequency, StreamingFrequency);
+    public void StartStreaming() => _session.StartStreaming();
 
     /// <summary>
     /// Stops streaming data from the device.
     /// </summary>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
-    public void StopStreaming()
-    {
-        EnsureConnected();
-
-        if (!IsStreaming) return;
-
-        IsStreaming = false;
-        Send(ScpiMessageProducer.StopStreaming);
-    }
+    public void StopStreaming() => _session.StopStreaming();
 
     /// <inheritdoc cref="IStreamingDevice.StartStreamingAsync" />
     public Task StartStreamingAsync(CancellationToken cancellationToken = default)
@@ -344,44 +302,14 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// completely invisible to this class: <see cref="IsStreaming"/> stayed <c>false</c> while
     /// data poured in, and the enabled-channel set stayed empty. That mattered once reconnect
     /// arrived (issue #379). <see cref="SessionCommandInterpreter"/> reads the commands that
-    /// define a session; this method applies what they imply, so the same state is updated that
-    /// <see cref="StartStreaming"/> / <see cref="StopStreaming"/> and <see cref="EnableChannel"/>
-    /// would have set.
+    /// define a session, and <see cref="StreamingSessionController.TrackSessionCommand"/>
+    /// applies what they imply — the same state <see cref="StartStreaming"/> /
+    /// <see cref="StopStreaming"/> and <see cref="EnableChannel"/> would have set. See that
+    /// method for exactly what equivalence with the typed API covers.
     /// </para>
     /// <para>
     /// Only those commands are interpreted, and only after the send itself has succeeded.
     /// Everything else passes through untouched.
-    /// </para>
-    /// <para>
-    /// <b>What equivalence with the typed API covers.</b> Each typed method was walked and every
-    /// effect beyond setting a flag accounted for, so this is a stated scope rather than a
-    /// hopeful one:
-    /// </para>
-    /// <list type="bullet">
-    /// <item><description>
-    /// <see cref="StartStreaming"/> — the whole per-session reset (timestamp anchor and tick
-    /// frequency, gap detector, warmup guard and its counter, decode-failure count) is shared
-    /// through <see cref="BeginStreamingSession"/> and runs here too. Skipping it was a real
-    /// defect: frames decoded against a previous session's anchor carry times that never
-    /// happened.
-    /// </description></item>
-    /// <item><description>
-    /// <see cref="StopStreaming"/> — does nothing beyond clearing the flag, so clearing it here
-    /// is complete.
-    /// </description></item>
-    /// <item><description>
-    /// <see cref="EnableChannels"/> — assigns <see cref="IChannel.IsEnabled"/> under the
-    /// channels lock and derives the outbound mask from it. The mask has already been sent by
-    /// the time this runs, so only the assignment is replayed, and it is applied to every
-    /// analog channel because the firmware treats the mask as a set-replace.
-    /// </description></item>
-    /// </list>
-    /// <para>
-    /// Running after the send is safe rather than merely convenient. A string command is handed
-    /// to the background producer, so it has not reached the wire when this runs, and the device
-    /// cannot answer a command it has not received; on the producer-less path that writes
-    /// synchronously there is no message consumer decoding frames at all. Either way no frame
-    /// can be decoded between the send and the state it should be decoded against.
     /// </para>
     /// </remarks>
     /// <typeparam name="T">The type of the message data payload.</typeparam>
@@ -394,104 +322,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         // the device and must not move this device's idea of the session.
         if (message is IOutboundMessage<string> textCommand)
         {
-            TrackSessionCommand(textCommand.Data);
+            _session.TrackSessionCommand(textCommand.Data);
         }
-    }
-
-    /// <summary>
-    /// Updates the streaming-session view from a command that has just been sent.
-    /// </summary>
-    /// <remarks>
-    /// The sampling ceiling is read exactly once and handed to the interpreter, which validates
-    /// the rate against it; the value that comes back is then assigned to the backing field
-    /// rather than through the validating <see cref="StreamingFrequency"/> setter. That setter
-    /// re-reads <see cref="DeviceCapabilities.MaxSamplingRate"/>, which is a mutable public
-    /// property — so validating against one read and assigning through a setter that takes
-    /// another would let a concurrent capabilities update throw out of a <see cref="Send{T}"/>
-    /// whose command has already gone to the device. Tracking a command must never be able to
-    /// fail the send that carried it.
-    /// </remarks>
-    private void TrackSessionCommand(string? command)
-    {
-        var effect = SessionCommandInterpreter.Interpret(command, Metadata.Capabilities.MaxSamplingRate);
-
-        switch (effect.Kind)
-        {
-            case SessionCommandEffectKind.StopStreaming:
-                IsStreaming = false;
-                break;
-
-            case SessionCommandEffectKind.StartStreaming:
-                // Frequency first: anything observing IsStreaming must never catch it true next
-                // to a rate belonging to a previous session.
-                _streamingFrequency = effect.StreamingFrequency;
-
-                // A restart while already streaming is not a session boundary — the typed API
-                // cannot even express it (StartStreaming returns early) — so there is nothing to
-                // re-anchor and recording the new rate is all that is warranted.
-                if (!IsStreaming)
-                {
-                    // A session is beginning, so it gets exactly the preparation StartStreaming
-                    // would have given it. Ordering matches too: the state is ready before the
-                    // flag flips.
-                    BeginStreamingSession();
-                    IsStreaming = true;
-                }
-
-                break;
-
-            case SessionCommandEffectKind.UnusableStreamingStart:
-                SafeTrace(
-                    $"[{nameof(TrackSessionCommand)}] Ignoring a start-streaming command with an unusable rate "
-                    + $"('{effect.RejectedRate}'); the session state is unchanged.");
-                break;
-
-            case SessionCommandEffectKind.SetAdcEnableMask:
-                ApplyAdcEnableMask(effect.AdcEnableMask);
-                break;
-        }
-    }
-
-    /// <summary>
-    /// Applies a sent ADC enable bitmask to this device's analog channels, so a caller who
-    /// enabled channels with a raw command has the same restorable session as one who used
-    /// <see cref="EnableChannels"/>.
-    /// </summary>
-    /// <remarks>
-    /// The mask is a set-replace, exactly as the firmware treats it, so every analog channel is
-    /// assigned from it rather than only the set bits. A device-reported mask still wins on the
-    /// next status frame (#409) — that is the device's own view, and it outranks what was asked
-    /// for.
-    /// </remarks>
-    private void ApplyAdcEnableMask(uint mask)
-    {
-        WithChannelsLock(() =>
-        {
-            foreach (var channel in SnapshotChannels())
-            {
-                if (channel.Type != ChannelType.Analog || channel.ChannelNumber > ChannelControlOperations.MaxAdcBitmaskChannel)
-                {
-                    continue;
-                }
-
-                channel.IsEnabled = (mask & (1u << channel.ChannelNumber)) != 0;
-            }
-        });
     }
 
     #endregion
 
     #region Session restore after an automatic reconnect (issue #379)
 
-    /// <summary>
-    /// What the streaming session looked like at the instant the connection dropped. Null until
-    /// a drop is detected with reconnect enabled.
-    /// </summary>
-    private volatile StreamingSessionSnapshot? _sessionSnapshot;
-
     /// <inheritdoc />
-    protected override void CaptureSessionSnapshot() =>
-        _sessionSnapshot = StreamingSessionSnapshot.Capture(GetChannelsSnapshot(), IsStreaming);
+    protected override void CaptureSessionSnapshot() => _session.CaptureSessionSnapshot();
 
     /// <summary>
     /// Re-applies the enabled-channel set recorded at the drop and, if the policy says so,
@@ -514,43 +354,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     protected override Task<bool> RestoreSessionSnapshotAsync(
         ReconnectOptions options,
         CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        // A reconnected device is never streaming: re-initialization has just sent it
-        // StopStreamData. The flag, though, is still set from before the drop — nothing stopped
-        // the stream, the connection simply ended — and leaving it that way would report a
-        // device as streaming while it sits idle, and make StartStreaming() a silent no-op.
-        IsStreaming = false;
-
-        var snapshot = _sessionSnapshot;
-        if (snapshot == null)
-        {
-            return Task.FromResult(false);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Normalize to a known state before re-applying: whatever the device came back with is
-        // not necessarily what it had, and the enable commands are set-replace anyway. The
-        // channel list is read afterwards so the plan is built against the post-reset objects.
-        DisableAllChannels();
-
-        var plan = snapshot.PlanRestore(GetChannelsSnapshot(), options);
-        if (plan.ChannelsToEnable.Count > 0)
-        {
-            EnableChannels(plan.ChannelsToEnable);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (plan.ResumeStreaming)
-        {
-            StartStreaming();
-        }
-
-        return Task.FromResult(plan.ResumeStreaming);
-    }
+        => _session.RestoreSessionSnapshotAsync(options, cancellationToken);
 
     #endregion
 
@@ -1096,6 +900,9 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     // virtual members and any subclass override of them.
     // -----------------------------------------------------------------
 
+    /// <summary>The streaming session: the flag, the rate, start/stop, raw-command tracking and reconnect restore.</summary>
+    private StreamingSessionController _session = null!;
+
     /// <summary>The streaming hot path: frame screening, timestamps, gaps, per-channel decode.</summary>
     private StreamFrameDecoder _frameDecoder = null!;
 
@@ -1290,7 +1097,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     bool IDeviceOperationHost.IsStreaming
     {
         get => IsStreaming;
-        set => IsStreaming = value;
+        set => _session.IsStreaming = value;
     }
 
     int IDeviceOperationHost.StreamingFrequency => StreamingFrequency;
@@ -1365,6 +1172,34 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
 
     void IDeviceOperationHost.RaiseStreamDecodeFailure(Exception error)
         => RaiseDeviceError(DeviceErrorSource.StreamDecode, error);
+
+    #endregion
+
+    #region IStreamingSessionHost
+
+    // The seam the streaming-session controller reaches the device through. Same arrangement as
+    // the block above and for the same reason: every member forwards to the member it names, so
+    // a subclass override of Send{T} still intercepts every command the session issues.
+
+    void IStreamingSessionHost.EnsureConnected() => EnsureConnected();
+
+    void IStreamingSessionHost.Send<T>(IOutboundMessage<T> message) => Send(message);
+
+    int IStreamingSessionHost.MaxSamplingRate => Metadata.Capabilities.MaxSamplingRate;
+
+    // TimestampFrequency is supplied here rather than exposed on the seam: it is the device's
+    // own report of its tick rate, read at exactly the moment the old BeginStreamingSession
+    // read it.
+    void IStreamingSessionHost.BeginDecoderSession(int streamingFrequencyHz)
+        => _frameDecoder.BeginSession(TimestampFrequency, streamingFrequencyHz);
+
+    void IStreamingSessionHost.WithChannelsLock(Action action) => WithChannelsLock(action);
+
+    IReadOnlyList<IChannel> IStreamingSessionHost.SnapshotChannels() => GetChannelsSnapshot();
+
+    void IStreamingSessionHost.DisableAllChannels() => DisableAllChannels();
+
+    void IStreamingSessionHost.EnableChannels(IEnumerable<IChannel> channels) => EnableChannels(channels);
 
     #endregion
 }
