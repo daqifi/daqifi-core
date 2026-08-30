@@ -1,4 +1,8 @@
 #nullable enable
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException.BytesReceived.get -> long
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException.FileName.get -> string!
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException.SdCardTransferErrorException(string! fileName, long bytesReceived) -> void
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Compare(Daqifi.Core.Logging.Export.ChannelDescriptor? x, Daqifi.Core.Logging.Export.ChannelDescriptor? y) -> int
 Daqifi.Core.Logging.Export.ChannelNameComparer
