@@ -3,17 +3,29 @@
   <PropertyGroup>
     <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
     <IsPackable>false</IsPackable>
-    <CollectCoverage>true</CollectCoverage>
-    <CoverletOutputFormat>cobertura</CoverletOutputFormat>
-    <CoverletOutput>$(MSBuildThisFileDirectory)../coverage/</CoverletOutput>
-    <ExcludeByAttribute>GeneratedCodeAttribute</ExcludeByAttribute>
+
+    <!-- Coverage is collected in-process by coverlet.collector, not by coverlet.msbuild's
+         post-test MSBuild target (issue #689). That target ran after every test had already
+         passed and could still fail the whole job on an intermittent truncated read of its own
+         hit file, which on a merge-queue run dequeues the PR that is merging. The collector has
+         no post-test step: if it fails, the report is missing and the summary step says so,
+         which is the right blast radius for something that deliberately has no build-failing
+         threshold (issue #641).
+
+         Configured here rather than on CI's command line so a local `dotnet test` collects the
+         same way, and so collection is not requested for Daqifi.Mcp.Tests, which has no
+         collector and would only log "Could not find data collector" for it. -->
+    <VSTestCollect>XPlat Code Coverage</VSTestCollect>
+    <!-- $(TargetFramework) expands once per inner build, so each framework lands in its own
+         directory. That is what lets the solution stay a single `dotnet test` invocation - both
+         frameworks still run in parallel - while keeping the two reports apart and labelled;
+         the collector, unlike coverlet.msbuild, puts no framework in the file name. CI's
+         coverage step reads the framework back out of this layout. -->
+    <VSTestResultsDirectory>$(MSBuildThisFileDirectory)../coverage/$(TargetFramework)</VSTestResultsDirectory>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)coverlet.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.msbuild" Version="10.0.1">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
     <PackageReference Include="coverlet.collector" Version="10.0.1" />
     <!-- FakeTimeProvider, for the deadlines the production code now reads through
          TimeProvider (issue #637): it makes a multi-second timeout a stepped clock rather than a

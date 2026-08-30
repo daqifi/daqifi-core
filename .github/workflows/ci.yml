@@ -70,14 +70,16 @@ jobs:
 
     # --no-build because the step above already built it. Without that flag every
     # leg compiled the solution a second time, which the matrix would have tripled.
-    # Verified locally that coverlet still writes both cobertura reports under
-    # --no-build: it instruments through its own no-build target.
+    # Coverage rides along with this run: Daqifi.Core.Tests.csproj asks for the
+    # in-process collector, which instruments at load time and so is unaffected by
+    # --no-build. This step can now only fail on a test failure — the post-test
+    # MSBuild step that used to fail it after a fully green run is gone (#689).
     - name: Test
       run: dotnet test --no-build --no-restore Daqifi.Core.sln
 
     # Daqifi.Core.Tests.csproj collects coverage on every run, so the cobertura
-    # report already exists by this point; the next two steps are only about not
-    # throwing it away when the job ends. Reporting only — deliberately no
+    # reports already exist by this point; the next two steps are only about not
+    # throwing them away when the job ends. Reporting only — deliberately no
     # threshold that can fail the build (#641). `always()` so a red test run still
     # publishes whatever coverage was written before the failure.
     - name: Coverage summary
@@ -85,6 +87,30 @@ jobs:
       shell: bash
       run: |
         shopt -s nullglob
+        # The collector names every report coverage.cobertura.xml and buries it under a
+        # per-run GUID directory, so the framework it belongs to is only knowable from the
+        # path: src/coverage/<tfm>/<run guid>/coverage.cobertura.xml (see the results
+        # directory Daqifi.Core.Tests.csproj sets). Flatten to the framework-labelled names
+        # the summary and the uploaded artifact have always used.
+        #
+        # A failed move degrades to a warning and a report missing from the summary. This step
+        # runs under `set -e`, so letting one abort the step would put coverage back in a
+        # position to fail an otherwise green leg — the whole point of #689.
+        for report in src/coverage/*/*/coverage.cobertura.xml; do
+          framework=$(basename "$(dirname "$(dirname "$report")")")
+          mv -f "$report" "src/coverage/coverage.$framework.cobertura.xml" \
+            || echo "::warning::Could not move $report into place; $framework will be missing from the coverage summary."
+        done
+
+        # Losing one framework's report and not the other's is otherwise invisible: the table
+        # simply renders a row short. The expected list is read from the test project rather
+        # than repeated here, so it cannot drift from the frameworks the tests actually run on.
+        expected=$(sed -n 's:.*<TargetFrameworks>\(.*\)</TargetFrameworks>.*:\1:p' src/Daqifi.Core.Tests/Daqifi.Core.Tests.csproj | tr ';' ' ' || true)
+        for framework in $expected; do
+          test -f "src/coverage/coverage.$framework.cobertura.xml" \
+            || echo "::warning::No coverage report was produced for $framework."
+        done
+
         reports=(src/coverage/*.cobertura.xml)
         if [ ${#reports[@]} -eq 0 ]; then
           echo "No coverage reports were produced by this run." >> "$GITHUB_STEP_SUMMARY"
