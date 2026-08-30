@@ -1,3 +1,5 @@
+using Daqifi.Core.Internal;
+
 namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
@@ -29,12 +31,8 @@ public class ConnectionRetryOptions
         get => _maxAttempts;
         set
         {
-            if (value < 1)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(MaxAttempts), value, "At least one connection attempt must be allowed.");
-            }
-
+            RetryPolicyGuard.RequireAtLeastOneAttempt(
+                value, nameof(MaxAttempts), "At least one connection attempt must be allowed.");
             _maxAttempts = value;
         }
     }
@@ -49,12 +47,7 @@ public class ConnectionRetryOptions
         get => _initialDelay;
         set
         {
-            if (value < TimeSpan.Zero)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(InitialDelay), value, "The delay cannot be negative.");
-            }
-
+            RetryPolicyGuard.RequireNonNegativeDelay(value, nameof(InitialDelay));
             _initialDelay = value;
         }
     }
@@ -68,12 +61,7 @@ public class ConnectionRetryOptions
         get => _maxDelay;
         set
         {
-            if (value < TimeSpan.Zero)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(MaxDelay), value, "The delay cannot be negative.");
-            }
-
+            RetryPolicyGuard.RequireNonNegativeDelay(value, nameof(MaxDelay));
             _maxDelay = value;
         }
     }
@@ -88,14 +76,7 @@ public class ConnectionRetryOptions
         get => _backoffMultiplier;
         set
         {
-            // Negated rather than `value < 1.0` so NaN — which compares false against everything —
-            // is rejected too, instead of turning every backoff into NaN milliseconds.
-            if (!(value >= 1.0))
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(BackoffMultiplier), value, "The backoff multiplier must be at least 1.0.");
-            }
-
+            RetryPolicyGuard.RequireGrowingBackoffMultiplier(value, nameof(BackoffMultiplier));
             _backoffMultiplier = value;
         }
     }
