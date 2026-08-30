@@ -24,6 +24,9 @@ public sealed class SdCardJsonFileParser
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="SdCardParseOptions.BufferSize"/> is not greater than zero.
+    /// </exception>
     /// <remarks>
     /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
     /// read from it yourself until you have finished enumerating
@@ -41,6 +44,7 @@ public sealed class SdCardJsonFileParser
         ArgumentNullException.ThrowIfNull(fileName);
 
         options ??= new SdCardParseOptions();
+        SdCardParseOptions.ThrowIfInvalid(options);
 
         return await SdCardTextFileSource.ParseAsync(
             fileStream,
@@ -56,6 +60,9 @@ public sealed class SdCardJsonFileParser
     /// <param name="options">Optional parse options.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="SdCardParseOptions.BufferSize"/> is not greater than zero.
+    /// </exception>
     /// <remarks>
     /// The returned session opens its own read of the file each time
     /// <see cref="SdCardLogSession.Samples"/> is enumerated, so the file must still exist then.
@@ -68,6 +75,7 @@ public sealed class SdCardJsonFileParser
         ArgumentNullException.ThrowIfNull(filePath);
 
         options ??= new SdCardParseOptions();
+        SdCardParseOptions.ThrowIfInvalid(options);
 
         return await SdCardTextFileSource.ParseFileAsync(
             filePath,
