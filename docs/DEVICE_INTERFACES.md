@@ -270,6 +270,58 @@ other transports still return. Deduplication reuses `ContinuousDeviceFinder`'s p
 identity, so the same physical unit reachable over both WiFi and USB appears as two connection
 options; pass a custom `identitySelector` (e.g. by serial number) to collapse them.
 
+### Network Discovery: UDP Broadcast and mDNS
+
+There are two ways to find a device over the network, and on a real home network you want both.
+
+`WiFiDeviceFinder` sends the legacy `DAQiFi?\r\n` query to the subnet broadcast address on UDP
+30303. It works, and it is the only path for devices on older firmware — but subnet-directed
+broadcast is unreliable the moment more than one access point is involved. On a single-SSID,
+two-AP network with the host on 5 GHz at one AP and the device on 2.4 GHz at the other, enough
+broadcast frames are dropped crossing the AP boundary that ARP itself fails to resolve; discovery
+then returns zero devices while the device is associated, healthy and holding a DHCP lease
+([#183](https://github.com/daqifi/daqifi-core/issues/183)). Nothing the library does with sockets
+can fix that, because the frames never survive the radio.
+
+`MDnsDeviceFinder` browses for the `_daqifi._tcp.local.` service on the mDNS multicast group
+(224.0.0.251:5353) instead. That is the one multicast group every prosumer router already reflects
+across APs, SSIDs and VLANs, and it is the path that also survives WSL2 (whose NAT bridge drops
+outbound broadcast) and client-isolated guest networks. The device advertises PTR + SRV + TXT + A
+in a single reply; the finder parses the SRV port and A address, reads `sn` / `pn` / `fw` /
+`friendly` out of the TXT record, and returns the same `IDeviceInfo` shape with
+`ConnectionType.WiFi` — so it is a drop-in for anything already consuming discovery results.
+
+```csharp
+using Daqifi.Core.Device.Discovery;
+
+using var finder = new AllTransportsDeviceFinder(
+    [new WiFiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()]);
+
+var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
+```
+
+Running both network finders is additive, not redundant: a device on firmware without an mDNS
+responder is still found by broadcast, and a device the broadcast cannot reach is still found by
+mDNS. The same unit answering on both paths is deduplicated by the aggregator only if you pass an
+`identitySelector` that collapses them (e.g. by serial number) — the default per-transport identity
+keeps them as two entries, both of which are genuinely connectable.
+
+Practical notes:
+
+- **Firmware.** The device-side responder is
+  [daqifi-nyquist-firmware#345](https://github.com/daqifi/daqifi-nyquist-firmware/issues/345).
+  On firmware without it, this finder simply returns nothing — use the broadcast path.
+- **The mDNS port is shared, not seized.** The finder binds UDP 5353 with `SO_REUSEADDR` (plus
+  `SO_REUSEPORT` on Linux/macOS, which BSD-derived stacks require) and joins the group on every
+  eligible NIC. Multicast datagrams are delivered to *every* socket joined to the group, so
+  running alongside the host's own mDNS daemon (mDNSResponder, Avahi) takes no traffic from it.
+  If the port cannot be shared at all, the pass returns empty rather than throwing.
+- **Multicast-filtered networks.** Some corporate and hardened guest networks drop multicast
+  outright. Connect by IP address directly (`DaqifiDeviceFactory.ConnectTcpAsync`) when they do.
+- **`LocalInterfaceAddress`** is resolved by matching the device's address against each local
+  interface's subnet, rather than read off the socket as the broadcast finder does — a multicast
+  listener has to be bound to the wildcard address to receive anything on Linux and macOS.
+
 ### Continuous Discovery (Live Device Set)
 
 `IDeviceFinder.DiscoverAsync` is a single pass. For a UI that shows a live, self-updating
