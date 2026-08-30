@@ -6,8 +6,9 @@ namespace Daqifi.Core.Tests.Build;
 
 /// <summary>
 /// Guards the public API surface tracking added for issue #636: the
-/// <c>Microsoft.CodeAnalysis.PublicApiAnalyzers</c> wiring in <c>Daqifi.Core.csproj</c> and the
-/// two <c>PublicAPI.*.txt</c> files it reads.
+/// <c>Microsoft.CodeAnalysis.PublicApiAnalyzers</c> wiring in <c>Daqifi.Core.csproj</c>, the
+/// two <c>PublicAPI.*.txt</c> files it reads, and the package validation that checks the same
+/// surface against the release already on nuget.org.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -50,6 +51,9 @@ public class PublicApiTrackingTests
     private static string ApiFilePath(string fileName) =>
         Path.Combine(RepositoryRoot, "src", "Daqifi.Core", fileName);
 
+    private static string CiWorkflowText =>
+        File.ReadAllText(Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
+
     private const string ShippedFileName = "PublicAPI.Shipped.txt";
     private const string UnshippedFileName = "PublicAPI.Unshipped.txt";
 
@@ -91,6 +95,121 @@ public class PublicApiTrackingTests
             .ToList();
 
         Assert.Contains(fileName, additionalFiles);
+    }
+
+    /// <summary>
+    /// The second half of the issue #636 guard: ApiCompat against the package actually on
+    /// nuget.org. RS0016/RS0017 only compare the code to <c>PublicAPI.*.txt</c>, and both live in
+    /// the PR - remove a public member and its entry together and the build is green. Package
+    /// validation compares against a published artifact no PR can edit.
+    /// </summary>
+    [Fact]
+    public void CoreProject_ValidatesThePackageAgainstItsBaseline()
+    {
+        var value = XDocument.Load(CoreProjectPath)
+            .Descendants("EnablePackageValidation")
+            .Select(e => e.Value.Trim())
+            .SingleOrDefault();
+
+        Assert.Equal("true", value);
+    }
+
+    [Fact]
+    public void CoreProject_PinsThePackageValidationBaselineToAPublishedVersion()
+    {
+        var baseline = XDocument.Load(CoreProjectPath)
+            .Descendants("PackageValidationBaselineVersion")
+            .Select(e => e.Value.Trim())
+            .SingleOrDefault();
+
+        // Not a specific version - that moves with every release. Only that one is pinned at
+        // all: with EnablePackageValidation on but no baseline, validation still runs and still
+        // passes, checking the package against nothing but itself.
+        //
+        // Version.TryParse rejects a SemVer prerelease such as `1.8.0-beta.1`, which is
+        // deliberate and matches CI: release.yml can publish a prerelease, but the baseline is
+        // always the newest *stable* release, so the CI check filters prereleases out of the
+        // nuget.org query. Whether the pinned version is still the newest one is a question
+        // about nuget.org, so it is asked there rather than here - see the test below.
+        Assert.True(
+            baseline is not null && Version.TryParse(baseline, out _),
+            "Daqifi.Core.csproj must pin PackageValidationBaselineVersion to a stable published "
+            + $"version; found {baseline ?? "<none>"}.");
+    }
+
+    [Fact]
+    public void Ci_FailsWhenTheBaselineHasFallenBehindTheLatestRelease()
+    {
+        // An out-of-date baseline is a narrower check, not a stricter one: ApiCompat can only
+        // report a member the baseline package contains, so everything added since the pinned
+        // version is outside the comparison and could be removed with nothing to report - while
+        // the pack step keeps passing. Nothing in the repo records which version is current, so
+        // CI asks nuget.org, and this asserts it still does.
+        //
+        // Asserted against the step's own `run:` block rather than the whole file, and against
+        // each part the enforcement actually rests on. Checking only that the property name and
+        // the URL appear somewhere would stay green with the comparison or the `exit 1` deleted,
+        // which is precisely the silent disablement this is here to catch.
+        var step = RunBlockOfCiStep("Check the package validation baseline");
+
+        Assert.Contains("PackageValidationBaselineVersion", step, StringComparison.Ordinal);
+        Assert.Contains("api.nuget.org/v3-flatcontainer/daqifi.core/index.json", step, StringComparison.Ordinal);
+
+        // Prereleases are filtered out of the query: release.yml can publish them, and one must
+        // not become the baseline that every other PR is then required to match.
+        Assert.Contains("""select(contains("-") | not)""", step, StringComparison.Ordinal);
+
+        // The comparison itself, and a non-zero exit when it fails. Without both, the step can
+        // report the drift and pass anyway.
+        Assert.Contains("\"$baseline\" != \"$latest\"", step, StringComparison.Ordinal);
+        Assert.Contains("exit 1", step, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The <c>run:</c> block of the first <c>ci.yml</c> step whose name contains
+    /// <paramref name="stepNameFragment"/> - everything from <c>run:</c> to the next step.
+    /// </summary>
+    private static string RunBlockOfCiStep(string stepNameFragment)
+    {
+        var lines = CiWorkflowText.Split('\n');
+
+        var start = Array.FindIndex(
+            lines,
+            line => line.TrimStart().StartsWith("- name:", StringComparison.Ordinal)
+                && line.Contains(stepNameFragment, StringComparison.Ordinal));
+
+        Assert.True(start >= 0, $"ci.yml has no step named like '{stepNameFragment}'.");
+
+        var body = lines
+            .Skip(start + 1)
+            .TakeWhile(line => !line.TrimStart().StartsWith("- name:", StringComparison.Ordinal))
+            .ToList();
+
+        var runAt = body.FindIndex(line => line.TrimStart().StartsWith("run:", StringComparison.Ordinal));
+        Assert.True(runAt >= 0, $"The '{stepNameFragment}' step in ci.yml no longer runs anything.");
+
+        return string.Join("\n", body.Skip(runAt));
+    }
+
+    [Fact]
+    public void Ci_PacksTheLibrarySoPackageValidationActuallyRuns()
+    {
+        // The trap this exists for: `dotnet pack --no-build` skips the ApiCompat targets
+        // outright. A pack step carrying that flag succeeds without comparing anything, so the
+        // csproj wiring above would still be present and still be checking nothing. Verified by
+        // running both forms locally against a removed public member: without --no-build it is
+        // CP0002 on both target frameworks, with it the pack is silent.
+        var packSteps = CiWorkflowText
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line =>
+                line.StartsWith("run:", StringComparison.Ordinal)
+                && line.Contains("dotnet pack", StringComparison.Ordinal)
+                && line.Contains("Daqifi.Core.csproj", StringComparison.Ordinal))
+            .ToList();
+
+        var packStep = Assert.Single(packSteps);
+        Assert.DoesNotContain("--no-build", packStep, StringComparison.Ordinal);
     }
 
     [Theory]

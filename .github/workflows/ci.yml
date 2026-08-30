@@ -77,6 +77,66 @@ jobs:
     - name: Test
       run: dotnet test --no-build --no-restore Daqifi.Core.sln
 
+    # The baseline is only as good as it is current. ApiCompat can only report a
+    # member the baseline package actually contains, so every API added since the
+    # pinned version sits outside the comparison - an out-of-date baseline is a
+    # narrower check, not a stricter one, and the step below would keep passing
+    # while covering less and less. Bumping it is part of cutting a release
+    # (CONTRIBUTING.md); this is what makes forgetting visible instead of silent.
+    #
+    # Deliberately a failure, not a warning: after a release is published this
+    # goes red until the bump lands, which is the point. It costs one unauthenticated
+    # HTTP request to the index the pack step already downloads from.
+    #
+    # Stable versions only. release.yml accepts prerelease tags (`1.8.0-beta.1`),
+    # and the flat-container index lists them alongside the rest - but a prerelease
+    # is not what a consumer restores by default, so it must not become the
+    # baseline every other PR is then required to match. Filtering them here is
+    # also what keeps the baseline parseable as a plain three-part version, which
+    # PublicApiTrackingTests asserts.
+    - name: Check the package validation baseline is the latest published version
+      if: matrix.os == 'ubuntu-latest'
+      shell: bash
+      run: |
+        baseline=$(dotnet msbuild src/Daqifi.Core/Daqifi.Core.csproj \
+          -getProperty:PackageValidationBaselineVersion -p:TargetFramework=net10.0 | tr -d '[:space:]')
+        latest=$(curl -sSf https://api.nuget.org/v3-flatcontainer/daqifi.core/index.json \
+          | jq -r '[.versions[] | select(contains("-") | not)] | last')
+        echo "baseline=$baseline latest=$latest"
+        if [ -z "$latest" ] || [ "$latest" = "null" ]; then
+          echo "::error::Could not resolve a stable published version of Daqifi.Core from nuget.org."
+          exit 1
+        fi
+        if [ "$baseline" != "$latest" ]; then
+          echo "::error::PackageValidationBaselineVersion is $baseline but Daqifi.Core $latest is published." \
+               "Everything added since $baseline is outside the ApiCompat comparison." \
+               "Bump it in src/Daqifi.Core/Daqifi.Core.csproj."
+          exit 1
+        fi
+
+    # The public API surface is guarded twice (issue #636). RS0016/RS0017 guard it
+    # at compile time against the checked-in PublicAPI.*.txt, which the Build step
+    # above already covers - but those files are part of the PR, so a PR that
+    # deletes an entry and the member together compiles clean. This step is the
+    # second half: it compares the packaged assemblies against what Daqifi.Core
+    # actually published to nuget.org (the baseline version in Daqifi.Core.csproj),
+    # which a PR cannot edit, and fails on a member the baseline had.
+    #
+    # `--no-build` is deliberately absent: it skips the ApiCompat targets outright,
+    # so a pack that uses it validates nothing. That is also why release.yml's pack
+    # is not the gate - it packs `--no-build` so the assemblies keep the version
+    # stamped from the git tag. Everything reaching a release tag has passed this
+    # step first, on the PR and again on main.
+    #
+    # Ubuntu only: the packaged shape is identical on all three legs, so the other
+    # two would pay to compute the same answer. `dotnet pack` defaults to Release,
+    # so this does compile Daqifi.Core once more rather than reusing the Debug
+    # output above - one project, a few seconds, on one leg. The package itself is
+    # thrown away; only the validation result matters.
+    - name: Validate packaged API against the last published release
+      if: matrix.os == 'ubuntu-latest'
+      run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --no-restore --output "${{ runner.temp }}/api-validation"
+
     # Daqifi.Core.Tests.csproj collects coverage on every run, so the cobertura
     # reports already exist by this point; the next two steps are only about not
     # throwing them away when the job ends. Reporting only — deliberately no

@@ -75,6 +75,35 @@ name in the message is already the exact line to add - those types sit in the gl
 And a *removal* is never automatic: deleting the entry is the deliberate act of declaring a
 breaking change, and ADR 0002 says what that costs.
 
+### The published package is the second opinion
+
+`PublicAPI.*.txt` lives in the repo, so a PR that removes a public member *and* its entry
+compiles clean - the deliberate act above looks identical to an accidental one. So
+`Daqifi.Core` also sets `EnablePackageValidation` with `PackageValidationBaselineVersion`
+pinned to the last version on nuget.org. CI packs the project (`Validate packaged API against
+the last published release` in `ci.yml`) and ApiCompat compares the packaged assemblies, for
+both target frameworks, against that published package - which no PR can edit. A member the
+baseline shipped and this build does not is `CP0002`.
+
+Two things to know:
+
+- Run it locally with `dotnet pack src/Daqifi.Core/Daqifi.Core.csproj`. **Do not** add
+  `--no-build`; it skips the validation targets entirely and the pack passes without checking
+  anything.
+- After a release, bump `PackageValidationBaselineVersion` to the version just published, in
+  the same change that moves `Unshipped` entries into `Shipped`. This is required, not
+  housekeeping. An out-of-date baseline is a *narrower* check, not a stricter one: ApiCompat
+  can only report a member the baseline package actually contains, so everything added since
+  the pinned version falls outside the comparison and could be removed with nothing to report.
+  CI fails when the baseline drifts behind nuget.org, so forgetting is loud rather than silent.
+  The baseline is always the newest *stable* release: a prerelease can be published, but it is
+  not what a consumer restores by default, so CI skips prereleases when deciding what is newest.
+
+An intentional break needs the entry removed from `PublicAPI.Shipped.txt` *and* an ApiCompat
+suppression (`dotnet pack src/Daqifi.Core/Daqifi.Core.csproj -p:ApiCompatGenerateSuppressionFile=true`),
+which checks in a `CompatibilitySuppressions.xml` naming exactly what was broken. That file
+appearing in a diff is the signal ADR 0002 wants a reviewer to see.
+
 ## Security: how we do and don't accept code
 
 **We only ever accept code changes as pull requests against this repository.** A PR gives
