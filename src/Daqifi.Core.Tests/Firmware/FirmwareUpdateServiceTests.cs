@@ -4514,6 +4514,13 @@ public class FirmwareUpdateServiceTests
             () => service.CheckBootloaderHealthAsync());
 
         Assert.Equal(FirmwareUpdateState.Connecting, ex.FailedState);
+        // The phase label is what a recovery dialog shows the operator, so pin it, not
+        // just the state: "Connecting" alone cannot distinguish a transport that never
+        // opened from one that opened and then answered the version query with garbage.
+        Assert.Equal("request bootloader version", ex.Operation);
+        Assert.Equal(
+            "Bootloader health check failed in state 'Connecting' while request bootloader version.",
+            ex.Message);
         Assert.False(string.IsNullOrWhiteSpace(ex.RecoveryGuidance));
         // Failed diagnostics must still leave the transport released and the service Idle.
         Assert.False(hidTransport.IsConnected);
@@ -4536,6 +4543,7 @@ public class FirmwareUpdateServiceTests
             () => service.CheckBootloaderHealthAsync());
 
         Assert.Equal(FirmwareUpdateState.WaitingForBootloader, ex.FailedState);
+        Assert.Equal("wait for HID bootloader enumeration", ex.Operation);
         Assert.IsType<TimeoutException>(ex.InnerException);
     }
 
@@ -4604,6 +4612,58 @@ public class FirmwareUpdateServiceTests
             () => service.ResetBootloaderAsync());
 
         Assert.Equal(FirmwareUpdateState.WaitingForBootloader, ex.FailedState);
+        // Same phase label as the health check's wait step — the two diagnostics share
+        // this preamble and must keep reporting it identically.
+        Assert.Equal("wait for HID bootloader enumeration", ex.Operation);
+        Assert.Empty(hidTransport.Writes);
+    }
+
+    [Fact]
+    public async Task CheckBootloaderHealthAsync_WhenTheHidConnectFails_ReportsTheConnectPhase()
+    {
+        // The bootloader enumerates but the HID handle cannot be opened. Neither
+        // diagnostic covered this middle phase, yet it is the one both of them share:
+        // the state/operation pair reported here is the only thing distinguishing
+        // "no bootloader present" from "bootloader present but unopenable".
+        var hidTransport = new FakeHidTransport();
+        hidTransport.ConnectFailures.Enqueue(new UnauthorizedAccessException("handle in use"));
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator());
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.CheckBootloaderHealthAsync());
+
+        Assert.Equal(FirmwareUpdateState.Connecting, ex.FailedState);
+        Assert.Equal("connect HID transport", ex.Operation);
+        Assert.Equal(
+            "Bootloader health check failed in state 'Connecting' while connect HID transport.",
+            ex.Message);
+        Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
+        // A connect that never opened must not have produced a version query.
+        Assert.Empty(hidTransport.Writes);
+    }
+
+    [Fact]
+    public async Task ResetBootloaderAsync_WhenTheHidConnectFails_ReportsTheConnectPhase()
+    {
+        // Symmetry with the health check above: same shared phase, same labels, only
+        // the failure subject differs.
+        var hidTransport = new FakeHidTransport();
+        hidTransport.ConnectFailures.Enqueue(new UnauthorizedAccessException("handle in use"));
+
+        var service = CreateDiagnosticsService(hidTransport, SingleBootloaderEnumerator());
+
+        var ex = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => service.ResetBootloaderAsync());
+
+        Assert.Equal(FirmwareUpdateState.Connecting, ex.FailedState);
+        Assert.Equal("connect HID transport", ex.Operation);
+        Assert.Equal(
+            "Bootloader soft reset failed in state 'Connecting' while connect HID transport.",
+            ex.Message);
+        Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
+        // Nothing may reach the wire when the transport never opened — in particular
+        // no JMP_TO_APP.
         Assert.Empty(hidTransport.Writes);
     }
 
@@ -4636,6 +4696,7 @@ public class FirmwareUpdateServiceTests
             () => service.ResetBootloaderAsync());
 
         Assert.Equal(FirmwareUpdateState.JumpingToApp, ex.FailedState);
+        Assert.Equal("issue JMP_TO_APP soft reset", ex.Operation);
         Assert.IsType<TimeoutException>(ex.InnerException);
         // The hung write never completed, so nothing was recorded, and the HID
         // transport is still disconnected on the way out.
