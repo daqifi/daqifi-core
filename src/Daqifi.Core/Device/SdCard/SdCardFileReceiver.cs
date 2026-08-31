@@ -8,9 +8,15 @@ namespace Daqifi.Core.Device.SdCard;
 
 /// <summary>
 /// Receives raw bytes from a transport stream during an SD card file download.
-/// Accumulates data and writes it to a destination stream, detecting the
-/// <c>__END_OF_FILE__</c> marker that signals transfer completion.
+/// Accumulates data and writes it to a destination stream, detecting the terminal markers that
+/// end the transfer: <c>__END_OF_FILE__</c> for a complete file, and — from firmware v3.7.3 —
+/// <c>__TRANSFER_ERROR__</c> for a device-side read error part-way through.
 /// </summary>
+/// <remarks>
+/// A third ending has no marker at all: firmware v3.7.3 still abandons a stalled peer after
+/// partial data without sending a terminator, by design, so the inactivity window below remains
+/// the only thing that ends such a transfer.
+/// </remarks>
 public sealed class SdCardFileReceiver
 {
     /// <summary>
@@ -18,6 +24,23 @@ public sealed class SdCardFileReceiver
     /// </summary>
     internal static readonly byte[] EndOfFileMarker =
         Encoding.ASCII.GetBytes("__END_OF_FILE__");
+
+    /// <summary>
+    /// The ASCII marker appended by firmware v3.7.3 and later when a read from the card fails
+    /// part-way through a transfer. Whatever preceded it is genuine but partial file content.
+    /// </summary>
+    internal static readonly byte[] TransferErrorMarker =
+        Encoding.ASCII.GetBytes("__TRANSFER_ERROR__");
+
+    /// <summary>
+    /// The number of bytes held back from the destination stream while a marker could still be
+    /// completing. It has to be the length of the LONGEST marker, not of whichever one is being
+    /// looked for: a window sized for <see cref="EndOfFileMarker"/> would let the first bytes of
+    /// a longer marker escape into the file before the rest of it arrived, and the tail of the
+    /// download would be silently corrupted by a marker that was then never matched.
+    /// </summary>
+    internal static readonly int MaxMarkerLength =
+        Math.Max(EndOfFileMarker.Length, TransferErrorMarker.Length);
 
     /// <summary>
     /// How long the transfer may go without receiving a single byte before it is declared stalled,
@@ -135,8 +158,10 @@ public sealed class SdCardFileReceiver
     }
 
     /// <summary>
-    /// Reads bytes from the source stream until the <c>__END_OF_FILE__</c> marker is detected,
-    /// writing all file content (minus the marker) to the destination stream.
+    /// Reads bytes from the source stream until a terminal marker is detected, writing all file
+    /// content (minus the marker) to the destination stream. <c>__END_OF_FILE__</c> completes the
+    /// download; <c>__TRANSFER_ERROR__</c> ends it with
+    /// <see cref="SdCardTransferErrorException"/>.
     /// </summary>
     /// <param name="destinationStream">The stream to write file data to.</param>
     /// <param name="fileName">The file name, used for progress reporting.</param>
@@ -169,6 +194,12 @@ public sealed class SdCardFileReceiver
     /// Thrown when the EOF marker arrives with zero preceding file bytes for a file that
     /// <paramref name="listedFileSizeBytes"/> reports as non-empty (or whose listed size is
     /// unknown), meaning the device opened the file but sent no content before closing it.
+    /// </exception>
+    /// <exception cref="SdCardTransferErrorException">
+    /// Thrown when the device ends the transfer with the <c>__TRANSFER_ERROR__</c> marker,
+    /// meaning it failed to read the rest of the file off the card. Whatever arrived before the
+    /// marker has been written to <paramref name="destinationStream"/> and is genuine, partial
+    /// file content.
     /// </exception>
     /// <exception cref="SdCardTruncatedTransferException">
     /// Thrown when the EOF marker arrives after fewer content bytes than
@@ -215,9 +246,9 @@ public sealed class SdCardFileReceiver
         var buffer = new byte[_bufferSize];
         long totalBytesReceived = 0;
 
-        // We keep a trailing window of the last N bytes to detect the EOF marker
+        // We keep a trailing window of the last N bytes to detect a terminal marker
         // even when it's split across chunk boundaries.
-        var trailingBytes = new byte[EndOfFileMarker.Length];
+        var trailingBytes = new byte[MaxMarkerLength];
         var trailingCount = 0;
 
         try
@@ -288,23 +319,23 @@ public sealed class SdCardFileReceiver
                     throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason);
                 }
 
-                // Check if the EOF marker is contained in or spans the new data
-                var (foundEof, eofPosition) = FindEndOfFileMarker(
+                // Check if a terminal marker is contained in or spans the new data
+                var (foundMarker, markerPosition, isTransferError) = FindTerminalMarker(
                     trailingBytes, trailingCount, buffer, bytesRead);
 
-                if (foundEof)
+                if (foundMarker)
                 {
                     // Write only the data bytes before the marker
-                    // eofPosition is relative to the combined [trailing + new] buffer.
+                    // markerPosition is relative to the combined [trailing + new] buffer.
                     // The data we haven't written yet from trailing is trailingCount bytes,
                     // so we need to figure out how much of the new data is actual file content.
-                    var newDataFileBytes = eofPosition - trailingCount;
+                    var newDataFileBytes = markerPosition - trailingCount;
 
                     if (newDataFileBytes < 0)
                     {
                         // The marker started within the trailing bytes. We only need to
                         // write the portion of the trailing buffer before the marker.
-                        var trailingToWrite = eofPosition;
+                        var trailingToWrite = markerPosition;
                         if (trailingToWrite > 0)
                         {
                             await destinationStream.WriteAsync(trailingBytes, 0, trailingToWrite, token)
@@ -329,6 +360,17 @@ public sealed class SdCardFileReceiver
                                 .ConfigureAwait(false);
                             totalBytesReceived += newDataFileBytes;
                         }
+                    }
+
+                    if (isTransferError)
+                    {
+                        // The device gave up reading the card mid-file. Everything written so far
+                        // is real content, so it is left in the destination stream for a caller
+                        // that can use a partial log — but the download is over and incomplete,
+                        // and saying so is the whole point of the marker: before firmware v3.7.3
+                        // this path sent nothing and surfaced as a NoDataReceived stall, blaming
+                        // the transport for a card read error (#720).
+                        throw new SdCardTransferErrorException(fileName, totalBytesReceived);
                     }
 
                     if (totalBytesReceived == 0 && listedFileSizeBytes != 0)
@@ -367,14 +409,14 @@ public sealed class SdCardFileReceiver
                     return totalBytesReceived;
                 }
 
-                // No EOF marker found — combine trailing + new data, write
-                // everything except the last markerLength bytes (the new trailing window).
+                // No terminal marker found — combine trailing + new data, write
+                // everything except the last MaxMarkerLength bytes (the new trailing window).
                 var combinedLen = trailingCount + bytesRead;
 
-                if (combinedLen >= EndOfFileMarker.Length)
+                if (combinedLen >= MaxMarkerLength)
                 {
                     // How many bytes can we safely write (not part of potential marker)?
-                    var safeCount = combinedLen - EndOfFileMarker.Length;
+                    var safeCount = combinedLen - MaxMarkerLength;
 
                     if (safeCount > 0)
                     {
@@ -397,8 +439,8 @@ public sealed class SdCardFileReceiver
                         }
                     }
 
-                    // Build the new trailing window from the last markerLength bytes of [trailing + new]
-                    var newTrailingCount = EndOfFileMarker.Length;
+                    // Build the new trailing window from the last MaxMarkerLength bytes of [trailing + new]
+                    var newTrailingCount = MaxMarkerLength;
                     var fromNewData = Math.Min(bytesRead, newTrailingCount);
                     var fromTrailingData = newTrailingCount - fromNewData;
 
@@ -436,17 +478,49 @@ public sealed class SdCardFileReceiver
     }
 
     /// <summary>
-    /// Searches for the EOF marker in the combined view of trailing bytes and new data.
-    /// The marker could span the boundary between the two buffers.
+    /// Searches for a terminal marker in the combined view of trailing bytes and new data.
+    /// A marker could span the boundary between the two buffers.
+    /// </summary>
+    /// <returns>
+    /// A tuple of (found, position, isTransferError) where position is the start index of the
+    /// marker in the virtual combined buffer [trailing..new], and isTransferError says which
+    /// marker matched. When both markers match, the earlier one wins — the two cannot start at
+    /// the same position, since they differ from their third byte on.
+    /// </returns>
+    internal static (bool Found, int Position, bool IsTransferError) FindTerminalMarker(
+        byte[] trailing, int trailingCount, byte[] newData, int newDataLength)
+    {
+        var (foundEof, eofPosition) = FindMarker(
+            EndOfFileMarker, trailing, trailingCount, newData, newDataLength);
+        var (foundError, errorPosition) = FindMarker(
+            TransferErrorMarker, trailing, trailingCount, newData, newDataLength);
+
+        if (foundEof && foundError)
+        {
+            return errorPosition < eofPosition
+                ? (true, errorPosition, true)
+                : (true, eofPosition, false);
+        }
+
+        if (foundEof)
+        {
+            return (true, eofPosition, false);
+        }
+
+        return foundError ? (true, errorPosition, true) : (false, -1, false);
+    }
+
+    /// <summary>
+    /// Searches for one specific marker in the combined view of trailing bytes and new data.
     /// </summary>
     /// <returns>
     /// A tuple of (found, position) where position is the start index of the marker
     /// in the virtual combined buffer [trailing..new].
     /// </returns>
-    internal static (bool Found, int Position) FindEndOfFileMarker(
-        byte[] trailing, int trailingCount, byte[] newData, int newDataLength)
+    private static (bool Found, int Position) FindMarker(
+        byte[] marker, byte[] trailing, int trailingCount, byte[] newData, int newDataLength)
     {
-        if (trailingCount + newDataLength < EndOfFileMarker.Length)
+        if (trailingCount + newDataLength < marker.Length)
         {
             return (false, -1);
         }
@@ -455,7 +529,7 @@ public sealed class SdCardFileReceiver
         // The marker can start at any position from (trailingCount - markerLength + 1)
         // to (trailingCount + newDataLength - markerLength).
         // But we only need to scan positions that include new data to avoid re-scanning.
-        var markerLen = EndOfFileMarker.Length;
+        var markerLen = marker.Length;
         var searchStart = Math.Max(0, trailingCount - markerLen + 1);
         var searchEnd = trailingCount + newDataLength - markerLen;
 
@@ -475,7 +549,7 @@ public sealed class SdCardFileReceiver
                     b = newData[idx - trailingCount];
                 }
 
-                if (b != EndOfFileMarker[j])
+                if (b != marker[j])
                 {
                     match = false;
                     break;

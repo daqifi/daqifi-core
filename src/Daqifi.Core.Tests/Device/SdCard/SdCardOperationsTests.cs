@@ -2482,6 +2482,41 @@ public class SdCardOperationsTests
     }
 
     [Fact]
+    public async Task DownloadSdCardFileAsync_DeviceReportsTransferError_ThrowsWithoutRetrying()
+    {
+        // Arrange — firmware v3.7.3 ends a mid-transfer card read failure with __TRANSFER_ERROR__
+        // instead of falling silent. Before this was recognised the marker was written into the
+        // file and the download then died on the 20 s idle timeout, reporting a transport stall
+        // for what was a device read error (#720).
+        var partial = new byte[256];
+        new Random(720).NextBytes(partial);
+        var device = new TestableRetryDownloadDevice(partial)
+        {
+            Terminator = Encoding.ASCII.GetBytes("__TRANSFER_ERROR__"),
+        };
+        device.ListingLines.Add("Daqifi/data.bin 6159");
+        device.Connect();
+        await device.GetSdCardFilesAsync();
+        device.SentMessages.Clear();
+
+        using var destinationStream = new MemoryStream();
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<SdCardTransferErrorException>(
+            () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
+        Assert.Equal("data.bin", ex.FileName);
+        Assert.Equal(partial.Length, ex.BytesReceived);
+
+        // The partial content is genuine and the marker is not part of it.
+        Assert.Equal(partial, destinationStream.ToArray());
+
+        // A single GET: like the short-transfer case this is NOT retried, because those bytes
+        // are already in the caller's stream and a second attempt would append to them.
+        var getCommands = device.SentMessages.Select(m => m.Data).Count(c => c.Contains("SD:GET"));
+        Assert.Equal(1, getCommands);
+    }
+
+    [Fact]
     public async Task DownloadSdCardFileAsync_TransferMatchingListedSize_Succeeds()
     {
         // The companion to the case above: a device that serves the whole file still reports a
@@ -3267,6 +3302,13 @@ public class SdCardOperationsTests
 
         public int AttemptIndex;
 
+        /// <summary>
+        /// The terminal marker the fake device appends after each canned response. Defaults to
+        /// the end-of-file marker; a test simulating a v3.7.3 read failure sets the
+        /// transfer-error one instead.
+        /// </summary>
+        public byte[] Terminator { get; set; } = EofMarker;
+
         public MultiAttemptSdFileStream(params byte[][] fileDataPerAttempt)
         {
             _fileDataPerAttempt = fileDataPerAttempt;
@@ -3280,9 +3322,9 @@ public class SdCardOperationsTests
             var index = Math.Min(AttemptIndex, _fileDataPerAttempt.Length - 1);
             var fileData = _fileDataPerAttempt[index];
 
-            _currentBuffer = new byte[fileData.Length + EofMarker.Length];
+            _currentBuffer = new byte[fileData.Length + Terminator.Length];
             Array.Copy(fileData, 0, _currentBuffer, 0, fileData.Length);
-            Array.Copy(EofMarker, 0, _currentBuffer, fileData.Length, EofMarker.Length);
+            Array.Copy(Terminator, 0, _currentBuffer, fileData.Length, Terminator.Length);
             _position = 0;
         }
 
@@ -3353,6 +3395,15 @@ public class SdCardOperationsTests
             : base("TestDevice")
         {
             _stream = new MultiAttemptSdFileStream(fileDataPerAttempt);
+        }
+
+        /// <summary>
+        /// The terminal marker the fake appends after each canned response.
+        /// </summary>
+        public byte[] Terminator
+        {
+            get => _stream.Terminator;
+            set => _stream.Terminator = value;
         }
 
         public override bool IsUsbConnection => true;
