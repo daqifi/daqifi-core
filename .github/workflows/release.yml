@@ -61,3 +61,51 @@ jobs:
 
     - name: Push MCP server to NuGet
       run: dotnet nuget push nupkgs/Daqifi.Mcp.*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+    # --- Official MCP Registry (issue #726) ---
+    # Daqifi.Mcp has been on NuGet since 1.0.0, but it was not listed in the
+    # official MCP Registry, so the only way to find it was to read this repo's
+    # README. These steps list it as part of the release, so the registry entry
+    # tracks every version instead of being a one-off that goes stale.
+
+    - name: Wait for Daqifi.Mcp to be readable on NuGet
+      # The registry proves package ownership by fetching the README of the exact
+      # version named in the manifest and looking for its `mcp-name:` token, so
+      # the package has to be queryable first. `dotnet nuget push` returns before
+      # nuget.org has finished validating, so publishing straight after it races.
+      run: |
+        lower_version=$(echo "$VERSION" | tr '[:upper:]' '[:lower:]')
+        url="https://api.nuget.org/v3-flatcontainer/daqifi.mcp/${lower_version}/readme"
+        for _ in $(seq 1 60); do
+          if curl -fsS -o /dev/null "$url"; then
+            echo "Daqifi.Mcp $VERSION README is available."
+            exit 0
+          fi
+          echo "Not available yet; retrying in 10s. ($url)"
+          sleep 10
+        done
+        echo "::error::Daqifi.Mcp $VERSION was still not readable on NuGet after 10 minutes."
+        exit 1
+
+    - name: Install mcp-publisher
+      run: |
+        curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+    - name: Stamp the release version into the MCP manifest
+      # The committed manifest carries the last released version so it is valid
+      # to read and to `mcp-publisher validate` locally; the tag is what actually
+      # ships, and both version fields have to name the same package version the
+      # registry will go and verify.
+      run: |
+        jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' \
+          src/Daqifi.Mcp/.mcp/server.json > server.json.tmp
+        mv server.json.tmp src/Daqifi.Mcp/.mcp/server.json
+
+    - name: Authenticate to the MCP Registry
+      # GitHub OIDC rather than a stored token: it needs no secret to rotate, and
+      # it is what grants this workflow the `io.github.daqifi/*` namespace the
+      # manifest's `name` sits in. The job already requests `id-token: write`.
+      run: ./mcp-publisher login github-oidc
+
+    - name: Publish to the MCP Registry
+      run: ./mcp-publisher publish src/Daqifi.Mcp/.mcp/server.json
