@@ -88,8 +88,26 @@ jobs:
         exit 1
 
     - name: Install mcp-publisher
+      # Pinned to a reviewed release and checksum-verified, rather than piping
+      # whatever `releases/latest` currently serves straight into tar. This
+      # binary runs in the same job that holds `id-token: write` for the
+      # io.github.daqifi registry namespace, so a swapped upstream artifact
+      # would be publishing listings under our identity. Bumping the version
+      # means updating the digests with it; they are the ones published in that
+      # release's own registry_<version>_checksums.txt.
+      env:
+        MCP_PUBLISHER_VERSION: v1.8.1
       run: |
-        curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+        case "$(uname -m)" in
+          x86_64)  arch=amd64; sha=a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc ;;
+          aarch64) arch=arm64; sha=8dd75a6cf6845688b5d4e46df58d3ca26d5c8d233bb0626606e1db82c5e883e4 ;;
+          *) echo "::error::No pinned mcp-publisher checksum for $(uname -m)."; exit 1 ;;
+        esac
+        archive="mcp-publisher_linux_${arch}.tar.gz"
+        curl -fsSL --retry 3 -o "$archive" \
+          "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/${archive}"
+        echo "${sha}  ${archive}" | sha256sum -c -
+        tar xzf "$archive" mcp-publisher
 
     - name: Stamp the release version into the MCP manifest
       # The committed manifest carries the last released version so it is valid

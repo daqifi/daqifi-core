@@ -224,6 +224,18 @@ public class McpRegistryManifestTests
     }
 
     [Fact]
+    public void ReleaseWorkflow_InstallsAPinnedChecksummedMcpPublisher()
+    {
+        // The upstream docs' snippet pipes `releases/latest/download` straight into tar, and
+        // copying it back would be an easy tidy-up. That binary runs in the job holding
+        // `id-token: write` for this repository's registry namespace, so whoever controls the
+        // artifact it fetches controls what gets listed as ours.
+        Assert.DoesNotContain("releases/latest/download", ReleaseWorkflowText, StringComparison.Ordinal);
+        Assert.Matches(@"MCP_PUBLISHER_VERSION:\s*v[0-9]+\.[0-9]+\.[0-9]+", ReleaseWorkflowText);
+        Assert.Contains("sha256sum -c", ReleaseWorkflowText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReleaseWorkflow_AuthenticatesWithGitHubOidc()
     {
         // Issue #726 asked for OIDC rather than a long-lived token: no secret to rotate, and the
