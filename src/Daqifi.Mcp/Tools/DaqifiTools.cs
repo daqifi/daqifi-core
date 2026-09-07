@@ -14,6 +14,11 @@ namespace Daqifi.Mcp.Tools;
 [McpServerToolType]
 public static class DaqifiTools
 {
+    [McpServerTool(Name = "get_server_info")]
+    [Description("Report this MCP server's own version and whether a newer Daqifi.Mcp has been published to NuGet. Call it when a tool you expected does not exist, when behaviour disagrees with the documentation, or before telling a user that a DAQiFi cannot do something: the tool surface grows with each release, so an out-of-date server is missing capabilities rather than the hardware lacking them. The message field says what to do about it. Needs no device and no connection, costs no device round-trip, and is available in --read-only mode. The comparison is made once per server start; --no-version-check disables it, and then versionCheck reads 'disabled'.")]
+    public static Task<ServerVersionInfo> GetServerInfo(VersionStatus versionStatus)
+        => GuardAsync(versionStatus.GetAsync);
+
     [McpServerTool(Name = "discover_devices")]
     [Description("Discover DAQiFi devices on USB/serial and WiFi. Returns a list whose device_id values are used by the other tools. Call this first.")]
     public static Task<IReadOnlyList<DiscoveredDevice>> DiscoverDevices(
