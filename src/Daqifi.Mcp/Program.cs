@@ -2,6 +2,7 @@ using Daqifi.Mcp;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
 
 if (args.Contains("--help") || args.Contains("-h"))
 {
@@ -23,9 +24,18 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<DaqifiAgent>();
+builder.Services.AddSingleton<ILatestVersionSource, NuGetLatestVersionSource>();
+builder.Services.AddSingleton<VersionStatus>();
 
 builder.Services
-    .AddMcpServer()
+    // Name the running version in the initialization handshake. Clients log and display it, so
+    // "which daqifi-mcp am I talking to?" has an answer without calling a tool (issue #727).
+    .AddMcpServer(o => o.ServerInfo = new Implementation
+    {
+        Name = "daqifi-mcp",
+        Title = "DAQiFi",
+        Version = ServerVersion.Current,
+    })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
 
@@ -34,6 +44,11 @@ var host = builder.Build();
 // Resolve the agent before RunAsync: RunAsync disposes the host (and its service provider) in
 // its own finally, so the agent must be captured while the provider is still alive.
 var agent = host.Services.GetRequiredService<DaqifiAgent>();
+
+// Fire-and-forget: a stale install is worth a stderr line, but never worth delaying startup or
+// failing it. The check is bounded by its own timeout and swallows its own failures.
+host.Services.GetRequiredService<VersionStatus>().Start();
+
 try
 {
     await host.RunAsync();

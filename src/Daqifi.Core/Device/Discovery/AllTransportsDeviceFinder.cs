@@ -9,9 +9,11 @@ namespace Daqifi.Core.Device.Discovery;
 
 /// <summary>
 /// An <see cref="IDeviceFinder"/> that fans a single discovery out across several transport
-/// finders (WiFi + serial today, mDNS/#183 later) concurrently and returns one deduplicated
-/// device set — so "find any DAQiFi on WiFi or USB" is a single call instead of the manual
-/// instantiate-both / run-both / concatenate / dedupe dance every consumer otherwise repeats.
+/// finders concurrently and returns one deduplicated device set — so "find any DAQiFi on WiFi or
+/// USB" is a single call instead of the manual instantiate-both / run-both / concatenate / dedupe
+/// dance every consumer otherwise repeats. <see cref="CreateDefault"/> covers WiFi broadcast +
+/// serial; pass <see cref="MDnsDeviceFinder"/> to the constructor alongside them to add mDNS
+/// browsing, which reaches devices on networks where broadcast does not (issue #183).
 /// </summary>
 /// <remarks>
 /// Because <see cref="ContinuousDeviceFinder"/> wraps any <see cref="IDeviceFinder"/>, passing an

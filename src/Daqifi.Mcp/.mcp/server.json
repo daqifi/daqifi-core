@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.daqifi/daqifi-mcp",
+  "title": "DAQiFi",
+  "description": "Discover, configure and read DAQiFi Nyquist data-acquisition hardware from an AI agent",
+  "version": "1.7.0",
+  "websiteUrl": "https://github.com/daqifi/daqifi-core/tree/main/src/Daqifi.Mcp",
+  "repository": {
+    "url": "https://github.com/daqifi/daqifi-core",
+    "source": "github",
+    "subfolder": "src/Daqifi.Mcp"
+  },
+  "packages": [
+    {
+      "registryType": "nuget",
+      "registryBaseUrl": "https://api.nuget.org/v3/index.json",
+      "identifier": "Daqifi.Mcp",
+      "version": "1.7.0",
+      "runtimeHint": "dnx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
