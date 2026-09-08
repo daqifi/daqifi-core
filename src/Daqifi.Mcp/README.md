@@ -18,6 +18,7 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 
 | Tool | Purpose |
 |---|---|
+| `get_server_info` | This server's own version, and whether a newer `Daqifi.Mcp` is published. |
 | `discover_devices` | Find devices on USB/serial and WiFi. Call first; returns `device_id`s. |
 | `connect_device` | Connect to a discovered `device_id`. |
 | `list_connected_devices` | List currently-connected devices. |
@@ -95,6 +96,7 @@ dotnet run --project src/Daqifi.Mcp
 ```
 --read-only               Expose discovery/introspection only; block configuration and logging.
 --max-sample-rate-hz <n>  Reject set_sample_rate requests above <n> Hz.
+--no-version-check        Do not ask nuget.org at startup whether a newer release exists.
 -h, --help                Show help.
 ```
 
@@ -108,6 +110,27 @@ which is the only way the data can reach the agent at all).
 The live tools sit on the line: reading a stream that is **already** running changes nothing and is
 allowed, but starting one is a change, so `read_channel_values` and `capture_samples` are refused
 under `--read-only` when the device is idle — and say so.
+
+### Staying current
+
+The tool list grows with each release, so an out-of-date install is not merely behind — it is
+*missing capabilities*. A `Daqifi.Mcp` from before the live-data tools landed, for instance, can
+configure a device and start SD logging but cannot read a single value back, and an agent driving
+it reasonably concludes the hardware cannot measure anything. Nothing about that is visible from
+the inside.
+
+So the server tells you. It reports its version in the MCP handshake, asks nuget.org once at
+startup whether a newer release exists and writes one line to stderr if so, and answers
+`get_server_info` with the same finding — call that whenever a tool you expected is not there.
+
+```bash
+dotnet tool update -g Daqifi.Mcp     # then restart your MCP client
+```
+
+That startup check is the only outbound request the server ever makes: one anonymous GET for a
+static nuget.org version index, no device data, five-second timeout, and a failure is silent.
+`--no-version-check` turns it off, after which `get_server_info` still reports the running version
+and says staleness is unknown.
 
 ## Point your agent at it
 
@@ -149,5 +172,7 @@ Then plug in a DAQiFi over USB (or join its WiFi) and ask, e.g.:
 ## Notes
 
 - **stdout is reserved** for the MCP JSON-RPC stream; all logging goes to **stderr**.
-- The server runs **locally** and talks to the device exactly like `Daqifi.Core` does — nothing
-  is sent to the cloud.
+- The server runs **locally** and talks to the device exactly like `Daqifi.Core` does — no
+  measurement, device or configuration data ever leaves your machine. The one outbound request is
+  the startup version check described above, which sends nothing but a user agent and can be
+  disabled with `--no-version-check`.

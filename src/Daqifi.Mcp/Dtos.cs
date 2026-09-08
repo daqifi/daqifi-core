@@ -451,3 +451,68 @@ public sealed record CaptureResult(
     bool RowLimitReached,
     IReadOnlyList<string> Columns,
     IReadOnlyList<CaptureRow> Rows);
+
+/// <summary>
+/// What version of this MCP server is running and whether a newer one has been published
+/// (issue #727).
+/// </summary>
+/// <remarks>
+/// Worth a tool of its own because the tool surface grows release to release: an install several
+/// versions behind is missing whole capabilities, and an agent has no way to tell that apart from
+/// hardware that cannot do the thing. <see cref="Message"/> says which of those it is, in a
+/// sentence an agent can pass straight on to the user.
+/// </remarks>
+/// <param name="PackageId">The NuGet package this server ships as.</param>
+/// <param name="Version">The running version.</param>
+/// <param name="LatestVersion">
+/// The newest stable version published to nuget.org, or null when the check was disabled or could
+/// not reach it.
+/// </param>
+/// <param name="UpdateAvailable">
+/// Whether <see cref="LatestVersion"/> is newer than <see cref="Version"/>. False whenever
+/// staleness is unknown, so a true here is always a real finding.
+/// </param>
+/// <param name="VersionCheck">
+/// How the comparison went: <c>ok</c> (nuget.org answered), <c>disabled</c> (started with
+/// <c>--no-version-check</c>), or <c>unavailable</c> (nuget.org could not be reached).
+/// </param>
+/// <param name="Message">A one-line summary, including the update command when one is warranted.</param>
+public sealed record ServerVersionInfo(
+    string PackageId,
+    string Version,
+    string? LatestVersion,
+    bool UpdateAvailable,
+    string VersionCheck,
+    string Message)
+{
+    internal static ServerVersionInfo Checked(string current, string latest)
+    {
+        var updateAvailable = ServerVersion.IsNewer(latest, current);
+        var message = updateAvailable
+            ? $"{ServerVersion.PackageId} {current} is running, but {latest} is published. "
+              + "Newer versions expose tools this one does not, so a capability that looks missing may just be out of date. "
+              + $"Update with `{ServerVersion.UpdateCommand}`, then restart your MCP client."
+            : $"{ServerVersion.PackageId} {current} is up to date ({latest} is the newest published version).";
+
+        return new ServerVersionInfo(ServerVersion.PackageId, current, latest, updateAvailable, "ok", message);
+    }
+
+    internal static ServerVersionInfo CheckDisabled(string current) => new(
+        ServerVersion.PackageId,
+        current,
+        LatestVersion: null,
+        UpdateAvailable: false,
+        VersionCheck: "disabled",
+        Message: $"{ServerVersion.PackageId} {current} is running. The version check is disabled "
+            + "(--no-version-check), so whether a newer release exists is unknown.");
+
+    internal static ServerVersionInfo CheckUnavailable(string current) => new(
+        ServerVersion.PackageId,
+        current,
+        LatestVersion: null,
+        UpdateAvailable: false,
+        VersionCheck: "unavailable",
+        Message: $"{ServerVersion.PackageId} {current} is running. nuget.org could not be reached, "
+            + $"so whether a newer release exists is unknown; `{ServerVersion.UpdateCommand}` "
+            + "updates it either way.");
+}
