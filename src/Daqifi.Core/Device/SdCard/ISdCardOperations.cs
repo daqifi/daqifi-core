@@ -194,6 +194,11 @@ public interface ISdCardOperations
     /// listing reported as non-empty (or whose listed size is unknown). A file the listing
     /// reports as 0 bytes downloads successfully as a legitimate empty file.
     /// </exception>
+    /// <exception cref="SdCardTransferErrorException">
+    /// Thrown when the device ends the transfer with the transfer-error marker it gained in
+    /// firmware v3.7.3 — it failed to read the rest of the file off the card. What was written
+    /// to <paramref name="destinationStream"/> is genuine but partial file content.
+    /// </exception>
     /// <exception cref="SdCardTruncatedTransferException">
     /// Thrown when the transfer ends at the end-of-file marker with fewer bytes than the last
     /// listing reported for the file — the device served a short reply, such as a SCPI error

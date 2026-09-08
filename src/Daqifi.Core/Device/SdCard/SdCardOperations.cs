@@ -1111,6 +1111,12 @@ internal sealed class SdCardOperations
     /// whose listed size is unknown), indicating its SD subsystem is not ready. A file the
     /// listing reports as 0 bytes downloads successfully as a legitimate empty file.
     /// </exception>
+    /// <exception cref="SdCardTransferErrorException">
+    /// Thrown when the device ends the transfer with the transfer-error marker it gained in
+    /// firmware v3.7.3 — it hit a read error part-way through the file. What was written to
+    /// <paramref name="destinationStream"/> is genuine but partial file content, and unlike the
+    /// stall it replaces, it names the device rather than the transport as the cause.
+    /// </exception>
     /// <exception cref="SdCardTruncatedTransferException">
     /// Thrown when the transfer ends at the end-of-file marker with fewer bytes than the last
     /// <see cref="GetSdCardFilesAsync"/> listing reported for the file — the device served a
@@ -1273,7 +1279,9 @@ internal sealed class SdCardOperations
                         // this method cannot rewind, so a second attempt would append to the
                         // garbage rather than replace it and could land on the listed size by
                         // sheer accumulation. Letting it out is the honest answer — the caller
-                        // discards the stream and retries the download.
+                        // discards the stream and retries the download. A transfer that ended
+                        // on the device's own read-error marker (SdCardTransferErrorException,
+                        // #720) is left alone for the same reason.
                         catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
                         {
                             attempt++;

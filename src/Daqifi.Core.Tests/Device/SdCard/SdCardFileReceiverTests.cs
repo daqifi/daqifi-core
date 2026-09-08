@@ -13,6 +13,13 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 public class SdCardFileReceiverTests
 {
     private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
+    private static readonly byte[] TransferErrorMarker = Encoding.ASCII.GetBytes("__TRANSFER_ERROR__");
+
+    /// <summary>
+    /// How many bytes the receiver holds back from the destination stream while a marker could
+    /// still be completing — the length of the LONGEST marker, not of the EOF one.
+    /// </summary>
+    private static readonly int TrailingWindow = Math.Max(EofMarker.Length, TransferErrorMarker.Length);
 
     [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
@@ -107,11 +114,11 @@ public class SdCardFileReceiverTests
         var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
             () => receiver.ReceiveAsync(destinationStream, "test.bin", timeout: TimeSpan.FromSeconds(5)));
 
-        // Assert — the last markerLength (15) bytes are still held back in the trailing window
-        // as a possible partial EOF marker, so 5 of the 20 bytes had been written when the
-        // transport closed. The count is the partial-file progress, not the bytes read.
+        // Assert — the last TrailingWindow (18) bytes are still held back in the trailing window
+        // as a possible partial marker, so 2 of the 20 bytes had been written when the transport
+        // closed. The count is the partial-file progress, not the bytes read.
         Assert.Equal(SdCardTransferStallReason.TransportClosed, ex.Reason);
-        Assert.Equal(20 - EofMarker.Length, ex.BytesReceived);
+        Assert.Equal(20 - TrailingWindow, ex.BytesReceived);
     }
 
     [Fact]
@@ -521,25 +528,26 @@ public class SdCardFileReceiverTests
         Assert.Equal(fileData, destinationStream.ToArray());
     }
 
-    #region FindEndOfFileMarker Tests
+    #region FindTerminalMarker Tests
 
     [Fact]
-    public void FindEndOfFileMarker_MarkerInNewData_ReturnsCorrectPosition()
+    public void FindTerminalMarker_MarkerInNewData_ReturnsCorrectPosition()
     {
         // Arrange
         var trailing = new byte[0];
         var newData = Combine(new byte[] { 0x01, 0x02 }, EofMarker);
 
         // Act
-        var (found, position) = SdCardFileReceiver.FindEndOfFileMarker(trailing, 0, newData, newData.Length);
+        var (found, position, isTransferError) = SdCardFileReceiver.FindTerminalMarker(trailing, 0, newData, newData.Length);
 
         // Assert
         Assert.True(found);
         Assert.Equal(2, position);
+        Assert.False(isTransferError);
     }
 
     [Fact]
-    public void FindEndOfFileMarker_MarkerSpanningBoundary_ReturnsCorrectPosition()
+    public void FindTerminalMarker_MarkerSpanningBoundary_ReturnsCorrectPosition()
     {
         // Arrange — first 5 bytes of marker in trailing, rest in new data
         var trailing = new byte[EofMarker.Length];
@@ -550,58 +558,222 @@ public class SdCardFileReceiverTests
         Array.Copy(EofMarker, 5, newData, 0, newData.Length);
 
         // Act
-        var (found, position) = SdCardFileReceiver.FindEndOfFileMarker(trailing, trailingCount, newData, newData.Length);
+        var (found, position, isTransferError) = SdCardFileReceiver.FindTerminalMarker(trailing, trailingCount, newData, newData.Length);
 
         // Assert
         Assert.True(found);
         Assert.Equal(0, position);
+        Assert.False(isTransferError);
     }
 
     [Fact]
-    public void FindEndOfFileMarker_NoMarker_ReturnsFalse()
+    public void FindTerminalMarker_NoMarker_ReturnsFalse()
     {
         // Arrange
         var trailing = new byte[] { 0x01, 0x02, 0x03 };
         var newData = new byte[] { 0x04, 0x05, 0x06 };
 
         // Act
-        var (found, _) = SdCardFileReceiver.FindEndOfFileMarker(trailing, trailing.Length, newData, newData.Length);
+        var (found, _, _) = SdCardFileReceiver.FindTerminalMarker(trailing, trailing.Length, newData, newData.Length);
 
         // Assert
         Assert.False(found);
     }
 
     [Fact]
-    public void FindEndOfFileMarker_DataTooShort_ReturnsFalse()
+    public void FindTerminalMarker_DataTooShort_ReturnsFalse()
     {
         // Arrange
         var trailing = new byte[0];
         var newData = new byte[] { 0x01 };
 
         // Act
-        var (found, _) = SdCardFileReceiver.FindEndOfFileMarker(trailing, 0, newData, newData.Length);
+        var (found, _, _) = SdCardFileReceiver.FindTerminalMarker(trailing, 0, newData, newData.Length);
 
         // Assert
         Assert.False(found);
     }
 
     [Fact]
-    public void FindEndOfFileMarker_MarkerEntirelyInTrailing_NotDetected()
+    public void FindTerminalMarker_MarkerEntirelyInTrailing_NotDetected()
     {
         // The search starts at max(0, trailingCount - markerLen + 1) to avoid
         // re-detecting markers that were already fully in the trailing buffer.
-        // Here the marker is at position 0 but trailing has 16 bytes (14 marker + 2 extra),
-        // so searchStart = max(0, 16 - 14 + 1) = 3, skipping position 0.
+        // Here the marker is at position 0 but trailing has 17 bytes (15 marker + 2 extra),
+        // so searchStart = max(0, 17 - 15 + 1) = 3, skipping position 0.
         var trailing = new byte[EofMarker.Length + 2];
         Array.Copy(EofMarker, 0, trailing, 0, EofMarker.Length);
         trailing[EofMarker.Length] = 0xFF;
         trailing[EofMarker.Length + 1] = 0xFF;
         var newData = new byte[] { 0xAA };
 
-        var (found, _) = SdCardFileReceiver.FindEndOfFileMarker(trailing, trailing.Length, newData, newData.Length);
+        var (found, _, _) = SdCardFileReceiver.FindTerminalMarker(trailing, trailing.Length, newData, newData.Length);
 
         // The marker is entirely in the old trailing data — not found in the new scan
         Assert.False(found);
+    }
+
+    #endregion
+
+    #region Transfer-error marker (#720)
+
+    [Fact]
+    public async Task ReceiveAsync_TransferErrorMarker_ThrowsWithPartialContentWritten()
+    {
+        // Arrange — firmware v3.7.3 ends a mid-transfer card read failure with its own marker
+        // instead of going silent. What preceded it is real file content.
+        var fileData = Encoding.ASCII.GetBytes("partial log content that did arrive");
+        using var sourceStream = new MemoryStream(Combine(fileData, TransferErrorMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardTransferErrorException>(
+            () => receiver.ReceiveAsync(destinationStream, "test.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        // Assert
+        Assert.Equal("test.bin", ex.FileName);
+        Assert.Equal(fileData.Length, ex.BytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransferErrorMarker_IsStrippedFromOutput()
+    {
+        // Arrange — the marker must never reach the destination stream: writing its 18 bytes
+        // would silently corrupt the tail of the partial file (#720).
+        var fileData = Encoding.ASCII.GetBytes("Hello, World!");
+        using var sourceStream = new MemoryStream(Combine(fileData, TransferErrorMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        await Assert.ThrowsAsync<SdCardTransferErrorException>(
+            () => receiver.ReceiveAsync(destinationStream, "test.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        // Assert
+        var output = Encoding.ASCII.GetString(destinationStream.ToArray());
+        Assert.Equal("Hello, World!", output);
+        Assert.DoesNotContain("__TRANSFER_ERROR__", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("__TRANSFER", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransferErrorMarkerSplitAcrossChunks_DetectedCorrectly()
+    {
+        // Arrange — the marker is longer than the EOF one, so a trailing window sized for the
+        // EOF marker would leak its first bytes into the file and then never match the rest.
+        var fileData = new byte[40];
+        for (var i = 0; i < fileData.Length; i++) fileData[i] = (byte)(i + 1);
+
+        using var sourceStream = new ChunkedMemoryStream(
+            Combine(fileData, TransferErrorMarker), chunkSize: 7);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, bufferSize: 7);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardTransferErrorException>(
+            () => receiver.ReceiveAsync(destinationStream, "test.bin", timeout: TimeSpan.FromSeconds(5)));
+
+        // Assert
+        Assert.Equal(fileData.Length, ex.BytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransferErrorMarkerWithNoContent_ThrowsWithZeroBytes()
+    {
+        // Arrange — a read that failed on the very first block. It is still a device read error,
+        // not the wedged-subsystem case SdCardEmptyTransferException describes.
+        using var sourceStream = new MemoryStream(TransferErrorMarker);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardTransferErrorException>(
+            () => receiver.ReceiveAsync(
+                destinationStream,
+                "test.bin",
+                timeout: TimeSpan.FromSeconds(5),
+                listedFileSizeBytes: 4096));
+
+        // Assert
+        Assert.Equal(0, ex.BytesReceived);
+        Assert.Empty(destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_TransferErrorMarkerShortOfListedSize_PrefersTransferError()
+    {
+        // Arrange — the transfer IS short of the listing, but the device said why. Reporting it
+        // as a truncated transfer would hide the actual cause behind the size comparison.
+        var fileData = new byte[64];
+        using var sourceStream = new MemoryStream(Combine(fileData, TransferErrorMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var ex = await Assert.ThrowsAsync<SdCardTransferErrorException>(
+            () => receiver.ReceiveAsync(
+                destinationStream,
+                "test.bin",
+                timeout: TimeSpan.FromSeconds(5),
+                listedFileSizeBytes: 4096));
+
+        // Assert
+        Assert.Equal(fileData.Length, ex.BytesReceived);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_EofMarkerAfterTransferErrorLikeContent_StillCompletes()
+    {
+        // Arrange — content that merely starts like the error marker must not end the transfer.
+        var fileData = Encoding.ASCII.GetBytes("__TRANSFER_ERROR_NOT_REALLY");
+        using var sourceStream = new MemoryStream(Combine(fileData, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        // Act
+        var bytesReceived = await receiver.ReceiveAsync(destinationStream, "test.bin");
+
+        // Assert
+        Assert.Equal(fileData.Length, bytesReceived);
+        Assert.Equal(fileData, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public void FindTerminalMarker_TransferErrorMarkerInNewData_ReportsTransferError()
+    {
+        // Arrange
+        var trailing = new byte[0];
+        var newData = Combine(new byte[] { 0x01, 0x02 }, TransferErrorMarker);
+
+        // Act
+        var (found, position, isTransferError) = SdCardFileReceiver.FindTerminalMarker(
+            trailing, 0, newData, newData.Length);
+
+        // Assert
+        Assert.True(found);
+        Assert.Equal(2, position);
+        Assert.True(isTransferError);
+    }
+
+    [Fact]
+    public void FindTerminalMarker_BothMarkersPresent_ReturnsTheEarlierOne()
+    {
+        // Arrange — a read error that lands in the same chunk as a later EOF marker. The first
+        // terminator is the one that ended the transfer.
+        var trailing = new byte[0];
+        var newData = Combine(new byte[] { 0x01 }, TransferErrorMarker, EofMarker);
+
+        // Act
+        var (found, position, isTransferError) = SdCardFileReceiver.FindTerminalMarker(
+            trailing, 0, newData, newData.Length);
+
+        // Assert
+        Assert.True(found);
+        Assert.Equal(1, position);
+        Assert.True(isTransferError);
     }
 
     #endregion

@@ -3,6 +3,10 @@ Daqifi.Core.Device.Discovery.MDnsDeviceFinder
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder() -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder(string! serviceType) -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.ServiceType.get -> string!
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException.BytesReceived.get -> long
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException.FileName.get -> string!
+Daqifi.Core.Device.SdCard.SdCardTransferErrorException.SdCardTransferErrorException(string! fileName, long bytesReceived) -> void
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Compare(Daqifi.Core.Logging.Export.ChannelDescriptor? x, Daqifi.Core.Logging.Export.ChannelDescriptor? y) -> int
 Daqifi.Core.Logging.Export.ChannelNameComparer
