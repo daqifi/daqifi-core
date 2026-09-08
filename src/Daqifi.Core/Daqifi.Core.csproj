@@ -33,7 +33,7 @@
          `Check the package validation baseline` step in ci.yml, and
          CONTRIBUTING.md. -->
     <EnablePackageValidation>true</EnablePackageValidation>
-    <PackageValidationBaselineVersion>1.7.0</PackageValidationBaselineVersion>
+    <PackageValidationBaselineVersion>1.8.0</PackageValidationBaselineVersion>
     <!-- CP0003 compares assembly *versions*, and this repo carries none: the
          version is stamped only by release.yml, from the git tag. Every other
          build - CI, a developer's `dotnet pack` - therefore ships the SDK's
