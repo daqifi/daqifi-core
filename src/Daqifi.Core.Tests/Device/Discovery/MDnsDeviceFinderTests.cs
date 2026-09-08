@@ -34,7 +34,7 @@ public class MDnsDeviceFinderTests
         var device = Assert.Single(MapAdvertisement(MDnsResponseBuilder.DeviceAdvertisement()));
 
         Assert.Equal("Bench Nyquist", device.Name);                  // TXT friendly=
-        Assert.Equal("9090539562006014104", device.SerialNumber);    // TXT sn=
+        Assert.Equal("9090539562006014104", device.SerialNumber);    // TXT sn= (hex, normalized)
         Assert.Equal("3.7.3", device.FirmwareVersion);               // TXT fw=
         Assert.Equal(DeviceType.Nyquist1, device.Type);              // TXT pn=Nq1
         Assert.Equal(DeviceAddress, device.IPAddress);               // A record
@@ -76,6 +76,8 @@ public class MDnsDeviceFinderTests
 
         Assert.Equal("DAQiFi-95A7-2", device.Name);
         Assert.Equal(IPAddress.Parse("192.168.1.41"), device.IPAddress);
+        // Not the firmware's 16-hex-digit format, so it is passed through rather than being
+        // reinterpreted -- "4321" is also a valid hex literal, and 17185 is not this device.
         Assert.Equal("4321", device.SerialNumber);
     }
 
@@ -344,4 +346,44 @@ public class MDnsDeviceFinderTests
         Assert.True(MDnsMessage.TryParseResponse(packet, packet.Length, out var records));
         return MDnsDeviceFinder.MapDevices(records, DaqifiService, DeviceAddress, Interfaces);
     }
+
+    #region Serial number normalization
+
+    [Fact]
+    public void MapDevices_ReportsTheSerialNumberInTheSameFormAsTheOtherFinders()
+    {
+        // The firmware advertises the board's 64-bit serial as 16 hex digits, while the protobuf
+        // path reports the same integer in decimal. One board must not look like two devices.
+        var packet = MDnsResponseBuilder.DeviceAdvertisement(
+            txtStrings: ["sn=7E2815916200E898", "pn=Nq1"]);
+
+        var device = Assert.Single(MapAdvertisement(packet));
+
+        Assert.Equal("9090539562006014104", device.SerialNumber);
+    }
+
+    [Theory]
+    // The firmware format, upper and lower case, is converted.
+    [InlineData("7E2815916200E898", "9090539562006014104")]
+    [InlineData("7e2815916200e898", "9090539562006014104")]
+    [InlineData("0000000000000001", "1")]
+    [InlineData("FFFFFFFFFFFFFFFF", "18446744073709551615")]
+    // Anything that is not exactly 16 hex digits is left alone: a short value that happens to
+    // parse as hex must not be silently reinterpreted, and neither must a non-hex string.
+    [InlineData("4321", "4321")]
+    [InlineData("9090539562006014104", "9090539562006014104")]
+    [InlineData("7E2815916200E89", "7E2815916200E89")]
+    [InlineData("7E2815916200E8987", "7E2815916200E8987")]
+    [InlineData("ZZZZZZZZZZZZZZZZ", "ZZZZZZZZZZZZZZZZ")]
+    [InlineData("7E28159 6200E898", "7E28159 6200E898")]
+    // Absent or blank stays empty rather than becoming a bogus identity.
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    public void NormalizeSerialNumber_ConvertsOnlyTheFirmwareFormat(string? advertised, string expected)
+    {
+        Assert.Equal(expected, MDnsDeviceFinder.NormalizeSerialNumber(advertised));
+    }
+
+    #endregion
 }

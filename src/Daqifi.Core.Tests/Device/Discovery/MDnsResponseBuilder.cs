@@ -66,11 +66,14 @@ internal sealed class MDnsResponseBuilder
     }
 
     /// <summary>
-    /// The TXT record set the firmware publishes.
+    /// The TXT record set the firmware publishes. Captured from a bench Nyquist on firmware
+    /// 3.8.0 with <c>dns-sd -L</c>, so the values are the real wire format — in particular the
+    /// serial number is the 16 hex digits the firmware's <c>"%08lX%08lX"</c> emits, NOT its
+    /// decimal rendering (0x7E2815916200E898 == 9090539562006014104).
     /// </summary>
     internal static string[] DefaultTxt() =>
     [
-        "sn=9090539562006014104",
+        "sn=7E2815916200E898",
         "pn=Nq1",
         "fw=3.7.3",
         "hw=2.0.0",

@@ -304,7 +304,14 @@ Running both network finders is additive, not redundant: a device on firmware wi
 responder is still found by broadcast, and a device the broadcast cannot reach is still found by
 mDNS. The same unit answering on both paths is deduplicated by the aggregator only if you pass an
 `identitySelector` that collapses them (e.g. by serial number) — the default per-transport identity
+prefers the MAC address, which the broadcast reply carries and the advertisement does not, so it
 keeps them as two entries, both of which are genuinely connectable.
+
+Selecting on the serial number works because this finder reports it in the same form the other
+finders do. The firmware publishes the board's 64-bit serial in TXT as 16 hex digits while the
+protobuf path carries the same integer numerically, so the advertised value is converted to the
+decimal representation the rest of the library uses (`0x7E2815916200E898` is `9090539562006014104`,
+one board, not two).
 
 Practical notes:
 

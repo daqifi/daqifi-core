@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -54,6 +55,12 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     private const string TxtKeyPartNumber = "pn";
     private const string TxtKeyFirmwareVersion = "fw";
     private const string TxtKeyFriendlyName = "friendly";
+
+    /// <summary>
+    /// Length of the serial number the firmware publishes in TXT: it formats the board's
+    /// 64-bit serial as <c>"%08lX%08lX"</c>, so always exactly 16 hex digits.
+    /// </summary>
+    private const int FirmwareSerialNumberLength = 16;
 
     #endregion
 
@@ -488,7 +495,7 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
             devices.Add(new DeviceInfo
             {
                 Name = string.IsNullOrWhiteSpace(friendlyName) ? instance[0] : friendlyName!,
-                SerialNumber = serialNumber ?? string.Empty,
+                SerialNumber = NormalizeSerialNumber(serialNumber),
                 FirmwareVersion = firmwareVersion ?? string.Empty,
                 IPAddress = address,
                 // The advertisement carries no MAC address, and the low two bytes embedded in the
@@ -563,6 +570,54 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
         }
 
         return attributes;
+    }
+
+    /// <summary>
+    /// Converts the serial number as advertised in TXT to the representation the rest of the
+    /// library uses.
+    /// </summary>
+    /// <remarks>
+    /// The board has one 64-bit serial number that reaches us two ways. Over protobuf it is a
+    /// numeric <c>uint64</c> field, which <see cref="WiFiDeviceFinder"/> renders in decimal; in
+    /// the DNS-SD TXT record the firmware formats that same integer as <c>"%08lX%08lX"</c> —
+    /// 16 uppercase hex digits (see <c>wifi_manager.c</c>, issue daqifi-nyquist-firmware#345).
+    /// Both are faithful renderings, but <see cref="IDeviceInfo.SerialNumber"/> is a single
+    /// cross-transport string that callers compare — <see cref="ContinuousDeviceFinder"/>'s
+    /// identity fallback, a caller's identity selector, USB-to-WiFi correlation — so leaving the
+    /// hex form in place would make one board look like two devices that never match. Decimal is
+    /// the established representation, so the hex form is converted to it here.
+    ///
+    /// Only the exact firmware format is converted. A value of any other length is passed through
+    /// untouched, so a serial from some other responder is never silently reinterpreted — note
+    /// that a short decimal string like <c>"4321"</c> is also valid hex, which is exactly why the
+    /// length check rather than a bare parse attempt decides this.
+    /// </remarks>
+    /// <param name="advertisedSerialNumber">The raw TXT <c>sn</c> value, or null when absent.</param>
+    /// <returns>The decimal serial number, or the input unchanged when it is not the firmware format.</returns>
+    internal static string NormalizeSerialNumber(string? advertisedSerialNumber)
+    {
+        if (string.IsNullOrWhiteSpace(advertisedSerialNumber))
+        {
+            return string.Empty;
+        }
+
+        var advertised = advertisedSerialNumber!.Trim();
+        if (advertised.Length != FirmwareSerialNumberLength)
+        {
+            return advertised;
+        }
+
+        foreach (var character in advertised)
+        {
+            if (!char.IsAsciiHexDigit(character))
+            {
+                return advertised;
+            }
+        }
+
+        return ulong.TryParse(advertised, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var serialNumber)
+            ? serialNumber.ToString(CultureInfo.InvariantCulture)
+            : advertised;
     }
 
     /// <summary>
