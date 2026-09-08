@@ -591,6 +591,13 @@ public sealed class MDnsDeviceFinder : DeviceFinderBase
     /// untouched, so a serial from some other responder is never silently reinterpreted — note
     /// that a short decimal string like <c>"4321"</c> is also valid hex, which is exactly why the
     /// length check rather than a bare parse attempt decides this.
+    ///
+    /// A 16-character value made up only of the digits 0-9 is still read as hex, deliberately.
+    /// The firmware's format specifier is unconditional, so such a value IS hex — roughly one
+    /// serial in 1,800 renders that way — and reading it as decimal to hedge would corrupt the
+    /// identity of those real devices in order to accommodate a responder that does not exist.
+    /// The two cases are genuinely indistinguishable from the string alone; the firmware contract
+    /// is what settles it.
     /// </remarks>
     /// <param name="advertisedSerialNumber">The raw TXT <c>sn</c> value, or null when absent.</param>
     /// <returns>The decimal serial number, or the input unchanged when it is not the firmware format.</returns>

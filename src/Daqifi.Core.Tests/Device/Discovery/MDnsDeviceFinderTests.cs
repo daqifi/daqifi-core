@@ -368,6 +368,9 @@ public class MDnsDeviceFinderTests
     [InlineData("7e2815916200e898", "9090539562006014104")]
     [InlineData("0000000000000001", "1")]
     [InlineData("FFFFFFFFFFFFFFFF", "18446744073709551615")]
+    // All-decimal digits at the firmware's length are hex too -- the format specifier is
+    // unconditional, so this is 0x1234567890123456 and not the decimal number it resembles.
+    [InlineData("1234567890123456", "1311768467284833366")]
     // Anything that is not exactly 16 hex digits is left alone: a short value that happens to
     // parse as hex must not be silently reinterpreted, and neither must a non-hex string.
     [InlineData("4321", "4321")]
