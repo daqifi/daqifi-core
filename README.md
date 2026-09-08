@@ -172,15 +172,21 @@ using var mdnsFinder = new MDnsDeviceFinder();
 var mdnsDevices = await mdnsFinder.DiscoverAsync(TimeSpan.FromSeconds(5));
 ```
 
-Run both and let the aggregator merge them — devices on firmware without an mDNS responder are
-still found over UDP broadcast, so the two paths together cover more networks than either alone:
+Run both — devices on firmware without an mDNS responder are still found over UDP broadcast, so the
+two paths together cover more networks than either alone:
 
 ```csharp
 using var finder = new AllTransportsDeviceFinder(
-    [new WiFiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()]);
+    [new WiFiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()],
+    identitySelector: device => device.SerialNumber);
 
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
 ```
+
+The `identitySelector` is what collapses a board that answers on *both* network paths into a single
+entry. Without one, the default per-transport identity prefers the MAC address, which the broadcast
+reply carries and the mDNS advertisement does not, so the same board is reported twice — as two
+entries that are both genuinely connectable, but still two.
 
 Two caveats worth knowing: the device must be on firmware that advertises the service (see
 daqifi-nyquist-firmware#345), and some hardened corporate or guest networks filter multicast
