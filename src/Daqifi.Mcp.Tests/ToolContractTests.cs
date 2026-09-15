@@ -277,6 +277,18 @@ public class DigitalConfigurationToolContractTests
         Assert.Equal(new[] { 0, 1 }, status.EnabledAnalogChannels);
         Assert.Equal(new[] { 4 }, status.EnabledDigitalChannels);
     }
+
+    [Fact]
+    public async Task ConfigureDigitalChannels_DoesNotRefreshTheDeviceCap()
+    {
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        var before = device.CapabilityReads;
+
+        var result = await agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
+
+        Assert.Equal(before, device.CapabilityReads);
+        Assert.Equal(device.StreamingFrequency, result.SampleRateHz);
+    }
 }
 
 public class DigitalPinToolContractTests
