@@ -97,15 +97,7 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     public bool OutputValue
     {
         get { lock (_lock) { return _outputValue; } }
-        set
-        {
-            lock (_lock)
-            {
-                _outputValue = value;
-                // When output value changes, we could trigger an event or callback
-                // to notify the device to update the physical output
-            }
-        }
+        set { lock (_lock) { _outputValue = value; } }
     }
 
     /// <summary>

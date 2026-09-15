@@ -99,7 +99,6 @@ public class ProtobufProtocolHandler : IProtocolHandler
 
             case ProtobufMessageType.Unknown:
             default:
-                // Unknown message type - could log here if needed
                 break;
         }
     }
@@ -111,22 +110,16 @@ public class ProtobufProtocolHandler : IProtocolHandler
     /// <returns>The detected message type.</returns>
     public static ProtobufMessageType DetectMessageType(DaqifiOutMessage message)
     {
-        // Status messages contain device configuration information
         if (IsStatusMessage(message))
         {
             return ProtobufMessageType.Status;
         }
 
-        // Streaming messages contain analog/digital data with timestamps
         if (IsStreamMessage(message))
         {
             return ProtobufMessageType.Stream;
         }
 
-        // SD card messages are typically text-based and handled separately
-        // (This is a placeholder - actual SD card messages come as text responses, not protobuf)
-
-        // Error messages contain error status
         if (message.DeviceStatus != 0)
         {
             return ProtobufMessageType.Error;
@@ -142,7 +135,6 @@ public class ProtobufProtocolHandler : IProtocolHandler
     /// <returns><c>true</c> if the message is a status message; otherwise, <c>false</c>.</returns>
     private static bool IsStatusMessage(DaqifiOutMessage message)
     {
-        // Status messages contain channel configuration information
         return message.DigitalPortNum != 0 ||
                message.AnalogInPortNum != 0 ||
                message.AnalogOutPortNum != 0;
