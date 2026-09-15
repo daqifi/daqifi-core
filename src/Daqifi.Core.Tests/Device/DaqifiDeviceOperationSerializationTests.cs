@@ -1170,10 +1170,7 @@ public class DaqifiDeviceOperationSerializationTests
         var probeRan = false;
         var probe = new Thread(() =>
         {
-            // This wait is 80 delayed writes plus the Task.Run handoff past the 64-message
-            // bound — not an instantaneous phase race. PhaseBoundaryWait (5s) is too tight
-            // when both TFMs run in parallel (macos CI: probeRan false, test duration ~8s).
-            probeRan = deepIntoFlush.Wait(DeadlockBudget);
+            probeRan = deepIntoFlush.Wait(PhaseBoundaryWait);
             if (!probeRan)
             {
                 return;
