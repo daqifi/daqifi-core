@@ -401,43 +401,6 @@ public class SerialStreamTransportTests
         // but we can verify it returns an array without throwing
     }
 
-    // Integration test that would require a real serial port - marked as integration test
-    [Fact(Skip = "Integration test - requires physical serial port")]
-    public async Task SerialStreamTransport_RealConnection_ShouldWorkEndToEnd()
-    {
-        // This test would connect to a real serial port if available
-        // Could be enabled for integration testing scenarios with actual hardware
-        
-        var availablePorts = SerialStreamTransport.GetAvailablePortNames();
-        if (availablePorts.Length == 0)
-            return; // No ports available
-            
-        using var transport = new SerialStreamTransport(availablePorts[0]);
-        TransportStatusEventArgs? connectedArgs = null;
-        TransportStatusEventArgs? disconnectedArgs = null;
-        
-        transport.StatusChanged += (sender, args) =>
-        {
-            if (args.IsConnected)
-                connectedArgs = args;
-            else
-                disconnectedArgs = args;
-        };
-        
-        await transport.ConnectAsync();
-        
-        Assert.True(transport.IsConnected);
-        Assert.NotNull(transport.Stream);
-        Assert.NotNull(connectedArgs);
-        Assert.True(connectedArgs.IsConnected);
-        
-        await transport.DisconnectAsync();
-
-        Assert.False(transport.IsConnected);
-        Assert.NotNull(disconnectedArgs);
-        Assert.False(disconnectedArgs.IsConnected);
-    }
-
     /// <summary>
     /// A <see cref="SerialPort"/> that records whether it has been disposed, so tests can assert
     /// the transport's ownership/disposal contract. Never opened.

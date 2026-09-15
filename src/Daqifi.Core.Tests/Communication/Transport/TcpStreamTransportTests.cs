@@ -282,37 +282,4 @@ public class TcpStreamTransportTests
         Assert.False(capturedArgs.IsConnected);
         Assert.IsType<TimeoutException>(capturedArgs.Error);
     }
-
-    // Integration test that requires a real server - marked as integration test
-    [Fact(Skip = "Integration test - requires external server")]
-    public async Task TcpStreamTransport_RealConnection_ShouldWorkEndToEnd()
-    {
-        // This test would connect to a real TCP server if available
-        // Could be enabled for integration testing scenarios
-        
-        using var transport = new TcpStreamTransport("httpbin.org", 80);
-        TransportStatusEventArgs? connectedArgs = null;
-        TransportStatusEventArgs? disconnectedArgs = null;
-        
-        transport.StatusChanged += (sender, args) =>
-        {
-            if (args.IsConnected)
-                connectedArgs = args;
-            else
-                disconnectedArgs = args;
-        };
-        
-        await transport.ConnectAsync();
-        
-        Assert.True(transport.IsConnected);
-        Assert.NotNull(transport.Stream);
-        Assert.NotNull(connectedArgs);
-        Assert.True(connectedArgs.IsConnected);
-        
-        await transport.DisconnectAsync();
-        
-        Assert.False(transport.IsConnected);
-        Assert.NotNull(disconnectedArgs);
-        Assert.False(disconnectedArgs.IsConnected);
-    }
 }
