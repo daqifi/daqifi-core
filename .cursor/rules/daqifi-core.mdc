@@ -1,0 +1,44 @@
+---
+description: DAQiFi Core agent checklist — TFMs, layout, PublicAPI, analyzers, git
+alwaysApply: true
+---
+
+# DAQiFi Core
+
+.NET SDK + MCP tool for DAQiFi hardware. Git workflow, PublicAPI, CA2007, and IDE0161 live in **CONTRIBUTING.md** — that file is source of truth. Never push `main`. Do not invent a commit-message dialect.
+
+## TFMs
+
+- Library, MCP tool, tests (`Daqifi.Core`, `Daqifi.Mcp`, `Daqifi.Core.Tests`, `Daqifi.Mcp.Tests`): `net9.0;net10.0`
+- Benchmarks (`Daqifi.Core.Benchmarks`): `net10.0` only
+- Not .NET 8. Do not multi-target the benchmark host.
+
+## Layout — types that exist
+
+```
+src/Daqifi.Core/
+  Device/                    IDevice, IStreamingDevice, DaqifiDevice, DaqifiStreamingDevice, ConnectionStatus
+  Device/Discovery/          IDeviceFinder (not IDiscoveryService / DeviceDiscoveryService)
+  Communication/Messages/    IOutboundMessage<T>, IInboundMessage<T>, ScpiMessage, ProtobufMessage
+  Communication/Producers/   ScpiMessageProducer
+  Communication/Consumers/   LineBasedMessageParser, ProtobufMessageParser
+  Communication/Transport/   Tcp / Serial / Hid / Udp
+  Channel/, Firmware/, Logging/
+```
+
+No `src/Daqifi.Core/Discovery/` and no `Connection/` tree. Connection lives on Device + Transport. Do not invent types.
+
+## Messages
+
+First-class parsers: SCPI (line-based) and protobuf. JSON is a device stream-format SCPI option (`ScpiMessageProducer.SetJsonStreamFormat`), not a library `IMessageParser`.
+
+## ConnectionStatus
+
+`Disconnected`, `Connecting`, `Connected`, `Lost`, `Retrying`, `Failed`.
+
+## Build already owns this
+
+- Nullable is on in `Directory.Build.props`. Do not sprinkle `#nullable enable`.
+- Public add/remove/rename → `src/Daqifi.Core/PublicAPI.Unshipped.txt` (RS0016/RS0017).
+- Awaits in `Daqifi.Core` → `ConfigureAwait(false)` (CA2007; tests exempt).
+- File-scoped namespaces (IDE0161).
