@@ -288,6 +288,7 @@ public class DigitalConfigurationToolContractTests
 
         Assert.Equal(before, device.CapabilityReads);
         Assert.Equal(device.StreamingFrequency, result.SampleRateHz);
+        Assert.Null(result.SampleRateAdjustedFromHz);
     }
 }
 

@@ -391,7 +391,11 @@ public sealed class DaqifiAgent
                 streaming.EnableChannels(toEnable);
             }
 
-            return Task.FromResult(new ConfigureDigitalResult(deviceId, EnabledDigital(device), streaming.StreamingFrequency));
+            return Task.FromResult(new ConfigureDigitalResult(
+                deviceId,
+                EnabledDigital(device),
+                streaming.StreamingFrequency,
+                SampleRateAdjustedFromHz: null));
         }).ConfigureAwait(false);
     }
 
