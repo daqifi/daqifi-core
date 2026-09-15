@@ -108,11 +108,10 @@ public class DaqifiDeviceWithMessageProducerTests
         
         // Act
         device.Send(ScpiMessageProducer.GetDeviceInfo);
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => Encoding.UTF8.GetString(stream.ToArray()).Contains("SYSTem:SYSInfoPB?"),
-                TimeSpan.FromSeconds(2)),
-            "Expected GetDeviceInfo to be written to the stream.");
+        device.Disconnect();
+
+        var written = Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Contains("SYSTem:SYSInfoPB?", written);
     }
 
     [Fact]

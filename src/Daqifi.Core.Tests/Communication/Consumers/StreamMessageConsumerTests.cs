@@ -120,18 +120,16 @@ public class StreamMessageConsumerTests
         using var consumer = new StreamMessageConsumer<string>(errorStream, parser);
         
         Exception? capturedError = null;
-        var errorReceived = false;
-        consumer.ErrorOccurred += (sender, args) => 
-        { 
+        using var errorReceived = new ManualResetEventSlim(false);
+        consumer.ErrorOccurred += (sender, args) =>
+        {
             capturedError = args.Error;
-            errorReceived = true;
+            errorReceived.Set();
         };
         
         // Act
         consumer.Start();
-        Assert.True(
-            SpinWait.SpinUntil(() => errorReceived, TimeSpan.FromSeconds(2)),
-            "Error event should have been fired");
+        Assert.True(errorReceived.Wait(TimeSpan.FromSeconds(2)), "Error event should have been fired");
         consumer.Stop();
         Assert.NotNull(capturedError);
         Assert.IsType<InvalidOperationException>(capturedError);
