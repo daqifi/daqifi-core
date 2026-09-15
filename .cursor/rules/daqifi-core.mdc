@@ -5,7 +5,7 @@ alwaysApply: true
 
 # DAQiFi Core
 
-.NET SDK + MCP tool for DAQiFi hardware. Git workflow, PublicAPI, CA2007, and IDE0161 live in **CONTRIBUTING.md** — that file is source of truth. Never push `main`. Do not invent a commit-message dialect.
+.NET SDK + MCP tool for DAQiFi hardware. PublicAPI, CA2007, IDE0161, and the documented Git workflow (branch names, PRs against `main`) live in **CONTRIBUTING.md**. Never push `main`. Do not invent a commit-message dialect.
 
 ## TFMs
 
@@ -38,7 +38,7 @@ First-class parsers: SCPI (line-based) and protobuf. JSON is a device stream-for
 
 ## Build already owns this
 
-- Nullable is on in `Directory.Build.props`. Do not sprinkle `#nullable enable`.
-- Public add/remove/rename → `src/Daqifi.Core/PublicAPI.Unshipped.txt` (RS0016/RS0017).
+- Nullable is on in `Directory.Build.props`. New files normally do not need `#nullable enable`; leave existing file-level directives unless a deliberate cleanup.
+- New public API → `src/Daqifi.Core/PublicAPI.Unshipped.txt` (RS0016/RS0017). Intentional removal of shipped API → delete from `PublicAPI.Shipped.txt` + ApiCompat suppression. Do not send removals/renames only to Unshipped. Details: CONTRIBUTING.md.
 - Awaits in `Daqifi.Core` → `ConfigureAwait(false)` (CA2007; tests exempt).
 - File-scoped namespaces (IDE0161).
