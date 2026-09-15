@@ -5,20 +5,9 @@ namespace Daqifi.Core.Tests.TestSupport;
 /// environment variable is missing or blank, rather than letting it run and assert nothing.
 /// </summary>
 /// <remarks>
-/// <para>
-/// Hardware-in-the-loop tests are meaningless on CI and on ordinary local runs. Handling that
-/// with a bare <c>return</c> after logging SKIPPED makes the test report <em>passed</em> while
-/// asserting nothing, so the run's skip count says nothing about it. A statically skipped
-/// <c>[Fact(Skip = ...)]</c> cannot be turned on by the operator at all.
-/// </para>
-/// <para>
-/// xunit 2.9.3 has no dynamic skip: <c>Assert.Skip</c> arrived in v3, and v2's execution engine
-/// does not honour <c>Xunit.Sdk.SkipException</c>. What v2 does honour is
-/// <see cref="FactAttribute.Skip"/>, which is read off the attribute instance at discovery time —
-/// so the environment check is made in this constructor instead. Discovery and execution happen
-/// in the same process on the same machine, so deciding at discovery is sound: set the variable
-/// and the test runs; leave it unset and xUnit records Skipped.
-/// </para>
+/// A bare <c>return</c> after logging SKIPPED reports Passed while asserting nothing. This
+/// constructor sets <see cref="FactAttribute.Skip"/> when the variable is empty so xUnit
+/// records Skipped instead; set the variable and the test runs.
 /// </remarks>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class EnvFactAttribute : FactAttribute
@@ -41,7 +30,7 @@ public sealed class EnvFactAttribute : FactAttribute
 
         Variable = variable;
 
-        if (ShouldSkip(Environment.GetEnvironmentVariable(variable)))
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable)))
         {
             Skip = because;
         }
@@ -49,14 +38,4 @@ public sealed class EnvFactAttribute : FactAttribute
 
     /// <summary>Gets the environment variable this test requires.</summary>
     public string Variable { get; }
-
-    /// <summary>
-    /// Decides whether a missing or blank <paramref name="value"/> should skip the test.
-    /// </summary>
-    /// <remarks>
-    /// Split out from the constructor so the decision can be tested without mutating process
-    /// environment, and against every empty shape rather than whichever the host happens to have.
-    /// </remarks>
-    internal static bool ShouldSkip(string? value)
-        => string.IsNullOrWhiteSpace(value);
 }
