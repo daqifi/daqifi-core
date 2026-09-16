@@ -12,15 +12,16 @@
     packages lives in the repo-root Directory.Build.targets (issue #644), which
     is imported late enough to see $(IsPackable) and skip the test projects.
 
-    TargetFramework(s) is deliberately NOT centralized, even though all four
-    projects now multi-target net9.0;net10.0 (issue #643 resolved the Daqifi.Mcp
-    asymmetry in favour of matching Daqifi.Core). Which frameworks a project
-    builds for is a fact a reader expects to find in that project's .csproj, and
-    a default here would silently apply to any project added later - a benchmark
-    harness, a sample - whether or not that is right for it. The uniformity that
-    actually matters is guarded by a test instead: Daqifi.Mcp must ship an asset
-    for every framework Daqifi.Core supports, so the tool runs wherever the
-    library does. See Daqifi.Core.Tests/Build/TargetFrameworkTests.cs.
+    TargetFramework(s) is deliberately NOT centralized. Daqifi.Core, the tests,
+    and Daqifi.Mcp multi-target net9.0;net10.0 (issue #643 resolved the Daqifi.Mcp
+    asymmetry in favour of matching Daqifi.Core); Daqifi.Core.Benchmarks is
+    net10.0 only. Which frameworks a project builds for is a fact a reader
+    expects to find in that project's .csproj, and a default here would silently
+    apply to any project added later - a sample, another harness - whether or
+    not that is right for it. The uniformity that actually matters is guarded
+    by a test instead: Daqifi.Mcp must ship an asset for every framework
+    Daqifi.Core supports, so the tool runs wherever the library does. See
+    Daqifi.Core.Tests/Build/TargetFrameworkTests.cs.
   -->
   <PropertyGroup>
     <ImplicitUsings>enable</ImplicitUsings>
