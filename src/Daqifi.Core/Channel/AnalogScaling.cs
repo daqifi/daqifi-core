@@ -32,12 +32,6 @@ internal static class AnalogScaling
     /// <param name="internalScaleM">The board's internal (front-end) scale factor.</param>
     /// <param name="calibrationB">The calibration offset, in volts.</param>
     /// <returns>The scaled value, in volts.</returns>
-    /// <remarks>
-    /// The parameters are ordered to match the formula left-to-right — the multiplicative terms in
-    /// order, then the additive offset last — so a call site reads as the formula does and the two
-    /// easily-transposed factors (<paramref name="internalScaleM"/> and
-    /// <paramref name="calibrationB"/>) are not interchangeable by eye.
-    /// </remarks>
     internal static double Scale(
         double rawValue,
         double resolution,

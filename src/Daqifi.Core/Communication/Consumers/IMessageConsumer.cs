@@ -14,7 +14,7 @@ public interface IMessageConsumer<T> : IDisposable
     bool IsRunning { get; }
 
     /// <summary>
-    /// Gets the number of messages currently in the processing queue.
+    /// Gets the number of buffered unread bytes waiting to be parsed.
     /// </summary>
     int QueuedMessageCount { get; }
 
