@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-06-19)
 - **Issue:** [#251](https://github.com/daqifi/daqifi-core/issues/251)
-- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal), [#256](https://github.com/daqifi/daqifi-core/issues/256) (version table + `Supports()` seam), [#390](https://github.com/daqifi/daqifi-core/issues/390) (capability-document reader)
+- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop, **done**), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal, **done** via [#258](https://github.com/daqifi/daqifi-core/pull/258)), [#256](https://github.com/daqifi/daqifi-core/issues/256) (version table + `Supports()` seam, **done**), [#390](https://github.com/daqifi/daqifi-core/issues/390) (capability-document reader, **done**)
 - **Supersedes:** —
 
 > **Note on the evidence section.** §"Context — firmware audit" below is a *living*
@@ -91,7 +91,7 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → v3.6.1
   streaming before toggling channels.
 - **v3.5.0** — the 1 kHz Type-2 muxed scan-rate cap was **removed**; Type-2 now obeys the
   transport cap ([#528](https://github.com/daqifi/daqifi-nyquist-firmware/pull/528)).
-- **v3.6.1 (pending)** — `CONFigure:CAPabilities:JSON?` bounds were aligned to the actual
+- **v3.6.1** — `CONFigure:CAPabilities:JSON?` bounds were aligned to the actual
   setter bounds ([#548](https://github.com/daqifi/daqifi-nyquist-firmware/pull/548)). Clients
   that parse the capability JSON to infer setter ranges may see different values.
 
@@ -107,7 +107,6 @@ model reality (seed data contributed on [#251](https://github.com/daqifi/daqifi-
 | `StartStreaming` / `StopStreaming` | `SYSTem:StartStreamData` / `StopStreamData` → `STReam:START` / `STOP` | both kept as **aliases** ([#324](https://github.com/daqifi/daqifi-nyquist-firmware/pull/324)) | no — old name works on all fw |
 | `SetUsbTransparencyMode` | `USB:SetTransparentMode` → `USB:TRANSparent:MODE` | both kept as **aliases** | no |
 | `SetSdLoggingFileName` | `STORage:SD:LOGging` → `STORage:SD:FILE` | **hard rename, no alias** ([#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323)) | **yes** — see above |
-| `GetSdLoggingState` | `STORage:SD:LOGging?` | **never existed in firmware** | dead code — remove |
 
 Verified at the v3.5.0 tree: `STReam:START`, `StartStreamData`, `USB:TRANSparent:MODE`,
 `SetTransparentMode`, and `STORage:SD:FILE` are all present, while `STORage:SD:LOGging` is
@@ -346,15 +345,11 @@ their place.**
 **Follow-up implementation issues**
 1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinSupportedFirmware = v3.5.0`
    + `FeatureNotSupportedException` + `-113` backstop** on `GetSdCardStorageAsync` (the guard
-   deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)). *Primary near-term
-   deliverable.*
-2. [#255](https://github.com/daqifi/daqifi-core/issues/255) — **Remove dead code**: the
-   `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?` query never existed in the
-   firmware SCPI table. Public-API removal, separate from the #253 fix.
-3. [#256](https://github.com/daqifi/daqifi-core/issues/256) — `DeviceFeature` version table +
+   deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)): **done**.
+2. [#256](https://github.com/daqifi/daqifi-core/issues/256) — `DeviceFeature` version table +
    lazy `Supports(...)`: **done** (triggered by SD-over-WiFi @ v3.7.0; see the implementation
    note under Decision 2).
-4. [#390](https://github.com/daqifi/daqifi-core/issues/390) — `CONFigure:CAPabilities:JSON?` /
+3. [#390](https://github.com/daqifi/daqifi-core/issues/390) — `CONFigure:CAPabilities:JSON?` /
    `:APIVersion?` reader populating `DeviceCapabilities`: **done** (triggered by
    daqifi-desktop [#118](https://github.com/daqifi/daqifi-desktop/issues/118), which needs a
    per-configuration streaming ceiling the static table cannot express; see the implementation
