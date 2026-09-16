@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
 
@@ -227,15 +228,11 @@ public class SerialPortNameSnapshotTests
         Assert.Throws<ArgumentNullException>(() => new SerialPortNameSnapshot(null!));
     }
 
-    [Fact]
+    [PlatformFact(
+        TestPlatforms.Windows,
+        "A Windows port name is not a path, so the cheap device-node check cannot be observed there.")]
     public void IsPortEnumerated_ForAPresentDeviceNode_DoesNotEnumerateAtAll()
     {
-        // A Windows port name is not a path, so the cheap check does not apply there.
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var calls = 0;
         var snapshot = new SerialPortNameSnapshot(() =>
         {

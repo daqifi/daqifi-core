@@ -1,4 +1,5 @@
 using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Tests.TestSupport;
 using Microsoft.Extensions.Logging;
 
 namespace Daqifi.Core.Tests.Firmware.Winc;
@@ -466,16 +467,13 @@ public class WincFlasherTests
         }
     }
 
-    [Fact]
+    [PlatformFact(
+        TestPlatforms.Windows,
+        "chmod semantics differ on Windows; the UnixFileMode probe can only be observed on Unix.")]
     public void Locator_TryResolve_PropagatesAnUnreadableTree_RatherThanReportingNotFound()
     {
         // "Could not locate the tool - WiFi flashing is Windows-only" is genuinely misleading when
         // the tool is sitting right there behind a permissions problem, so this case must surface.
-        if (OperatingSystem.IsWindows())
-        {
-            return; // chmod semantics differ; the behavior under test is the catch removal itself.
-        }
-
         var root = Path.Combine(Path.GetTempPath(), $"winc_{Guid.NewGuid():N}");
         var locked = Path.Combine(root, "locked");
         Directory.CreateDirectory(locked);
@@ -483,6 +481,7 @@ public class WincFlasherTests
 
         try
         {
+#pragma warning disable CA1416 // UnixFileMode is Unix-gated; PlatformFact skips this test on Windows at discovery.
             File.SetUnixFileMode(locked, UnixFileMode.None);
 
             var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
@@ -495,6 +494,7 @@ public class WincFlasherTests
         finally
         {
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+#pragma warning restore CA1416
             Directory.Delete(root, recursive: true);
         }
     }
