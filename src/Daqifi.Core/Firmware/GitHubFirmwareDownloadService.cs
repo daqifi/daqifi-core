@@ -29,6 +29,14 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     private readonly string _wifiRepoApiUrl;
     private readonly TimeSpan _cacheTtl;
 
+    // Serializes the cache TTL check and the two-field publish. Concurrent
+    // CheckForUpdate / GetFirmwareReleases / GetWifiReleases used to all miss,
+    // double-fetch, and interleave _cachedReleases with a stale _cacheTimestamp
+    // (or the wifi pair). SemaphoreSlim rather than lock because the miss path
+    // awaits the HTTP round-trip. Not disposed: the service does not own a
+    // shutdown path, and we never touch AvailableWaitHandle.
+    private readonly SemaphoreSlim _cacheLock = new(1, 1);
+
     private List<JsonElement>? _cachedReleases;
     private DateTime _cacheTimestamp;
 
@@ -226,34 +234,58 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     /// <inheritdoc />
     public void InvalidateCache()
     {
-        _cachedReleases = null;
-        _cachedWifiReleases = null;
+        _cacheLock.Wait();
+        try
+        {
+            _cachedReleases = null;
+            _cachedWifiReleases = null;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
     }
 
     private async Task<List<JsonElement>> GetFirmwareReleasesAsync(CancellationToken cancellationToken)
     {
-        if (_cachedReleases != null && DateTime.UtcNow - _cacheTimestamp < _cacheTtl)
+        await _cacheLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return _cachedReleases;
-        }
+            if (_cachedReleases != null && DateTime.UtcNow - _cacheTimestamp < _cacheTtl)
+            {
+                return _cachedReleases;
+            }
 
-        var elements = await FetchReleasesFromApiAsync(_firmwareRepoApiUrl, cancellationToken).ConfigureAwait(false);
-        _cachedReleases = elements;
-        _cacheTimestamp = DateTime.UtcNow;
-        return elements;
+            var elements = await FetchReleasesFromApiAsync(_firmwareRepoApiUrl, cancellationToken).ConfigureAwait(false);
+            _cachedReleases = elements;
+            _cacheTimestamp = DateTime.UtcNow;
+            return elements;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
     }
 
     private async Task<List<JsonElement>> GetWifiReleasesAsync(CancellationToken cancellationToken)
     {
-        if (_cachedWifiReleases != null && DateTime.UtcNow - _wifiCacheTimestamp < _cacheTtl)
+        await _cacheLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return _cachedWifiReleases;
-        }
+            if (_cachedWifiReleases != null && DateTime.UtcNow - _wifiCacheTimestamp < _cacheTtl)
+            {
+                return _cachedWifiReleases;
+            }
 
-        var elements = await FetchReleasesFromApiAsync(_wifiRepoApiUrl, cancellationToken).ConfigureAwait(false);
-        _cachedWifiReleases = elements;
-        _wifiCacheTimestamp = DateTime.UtcNow;
-        return elements;
+            var elements = await FetchReleasesFromApiAsync(_wifiRepoApiUrl, cancellationToken).ConfigureAwait(false);
+            _cachedWifiReleases = elements;
+            _wifiCacheTimestamp = DateTime.UtcNow;
+            return elements;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
     }
 
     private async Task<List<JsonElement>> FetchReleasesFromApiAsync(string apiUrl, CancellationToken cancellationToken)

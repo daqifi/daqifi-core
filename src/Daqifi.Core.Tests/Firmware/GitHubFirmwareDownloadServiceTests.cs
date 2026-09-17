@@ -284,6 +284,59 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
         Assert.Equal(2, _handler.RequestCount);
     }
 
+    [Fact]
+    public async Task Cache_ConcurrentRefresh_FetchesOnce()
+    {
+        var releases = BuildReleasesJson(
+            MakeRelease("v3.2.0", draft: false, prerelease: false, hexAsset: "firmware.hex"));
+
+        _handler.SetResponse("https://api.github.com/repos/daqifi/daqifi-nyquist-firmware/releases",
+            HttpStatusCode.OK, releases);
+        // Hold the first HTTP response long enough that every concurrent caller
+        // would have missed the unlocked check-then-assign and double-fetched.
+        _handler.ResponseDelay = TimeSpan.FromMilliseconds(200);
+
+        var service = CreateService();
+
+        var latestTasks = Enumerable.Range(0, 8)
+            .Select(_ => service.GetLatestReleaseAsync())
+            .ToArray();
+        var checkTasks = Enumerable.Range(0, 4)
+            .Select(_ => service.CheckForUpdateAsync("3.1.0"))
+            .ToArray();
+
+        var latest = await Task.WhenAll(latestTasks);
+        var checks = await Task.WhenAll(checkTasks);
+
+        Assert.Equal(1, _handler.RequestCount);
+        Assert.All(latest, result => Assert.Equal("v3.2.0", result?.TagName));
+        Assert.All(checks, result =>
+        {
+            Assert.True(result.UpdateAvailable);
+            Assert.Equal("v3.2.0", result.LatestRelease?.TagName);
+        });
+    }
+
+    [Fact]
+    public async Task Cache_ConcurrentWifiRefresh_FetchesOnce()
+    {
+        var releases = BuildReleasesJson(
+            MakeRelease("v19.5.4", draft: false, prerelease: false, hexAsset: null));
+
+        _handler.SetResponse(
+            "https://api.github.com/repos/daqifi/winc1500-Manual-UART-Firmware-Update/releases",
+            HttpStatusCode.OK, releases);
+        _handler.ResponseDelay = TimeSpan.FromMilliseconds(200);
+
+        var service = CreateService();
+
+        var results = await Task.WhenAll(
+            Enumerable.Range(0, 8).Select(_ => service.GetLatestWifiReleaseAsync()));
+
+        Assert.Equal(1, _handler.RequestCount);
+        Assert.All(results, result => Assert.Equal("v19.5.4", result?.TagName));
+    }
+
     #endregion
 
     #region DownloadLatestFirmwareAsync
@@ -513,8 +566,11 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
 internal class MockHttpMessageHandler : HttpMessageHandler
 {
     private readonly Dictionary<string, (HttpStatusCode StatusCode, string Content, Dictionary<string, string>? Headers)> _responses = new();
+    private int _requestCount;
 
-    public int RequestCount { get; private set; }
+    public int RequestCount => _requestCount;
+
+    public TimeSpan ResponseDelay { get; set; }
 
     public void SetResponse(string url, HttpStatusCode statusCode, string content)
     {
@@ -528,9 +584,15 @@ internal class MockHttpMessageHandler : HttpMessageHandler
             new Dictionary<string, string> { ["X-RateLimit-Reset"] = resetTime });
     }
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        RequestCount++;
+        Interlocked.Increment(ref _requestCount);
+
+        if (ResponseDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(ResponseDelay, cancellationToken);
+        }
+
         var url = request.RequestUri!.ToString();
 
         if (_responses.TryGetValue(url, out var entry))
@@ -548,12 +610,12 @@ internal class MockHttpMessageHandler : HttpMessageHandler
                 }
             }
 
-            return Task.FromResult(response);
+            return response;
         }
 
-        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+        return new HttpResponseMessage(HttpStatusCode.NotFound)
         {
             Content = new StringContent("Not found")
-        });
+        };
     }
 }
