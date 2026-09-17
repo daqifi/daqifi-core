@@ -8,7 +8,7 @@ namespace Daqifi.Core.Logging.Export;
 /// <param name="DeviceName">The name of the device that owns this channel.</param>
 /// <param name="DeviceSerialNo">The serial number of the device that owns this channel.</param>
 /// <param name="ChannelName">The name of the channel.</param>
-/// <param name="ChannelType">The type of the channel. See <see cref="ChannelType"/> (Analog, Digital, or AnalogOutput).</param>
+/// <param name="ChannelType">The type of the channel. See <see cref="Daqifi.Core.Channel.ChannelType"/> (Analog, Digital, or AnalogOutput).</param>
 public record ChannelDescriptor(string DeviceName, string DeviceSerialNo, string ChannelName, ChannelType ChannelType)
 {
     /// <summary>
