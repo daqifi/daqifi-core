@@ -2,8 +2,9 @@ namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
 /// Represents a transport mechanism that provides stream-based communication.
-/// Abstracts the underlying connection type (TCP, UDP, Serial, etc.) and provides
-/// a unified Stream interface for message producers and consumers.
+/// Abstracts the underlying connection type (TCP, serial, or HID) and provides
+/// a unified Stream interface for message producers and consumers. UDP is
+/// <see cref="IUdpTransport"/>, not a stream transport.
 /// </summary>
 public interface IStreamTransport : IDisposable
 {
