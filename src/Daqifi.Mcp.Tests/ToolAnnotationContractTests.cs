@@ -1,5 +1,6 @@
-using System.Reflection;
 using Daqifi.Mcp.Tools;
+using Microsoft.Extensions.DependencyInjection;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Daqifi.Mcp.Tests;
@@ -74,10 +75,10 @@ public class ToolAnnotationContractTests
     public void Tool_AdvertisesTheHintsClientsShouldHonor(
         string name, bool readOnly, bool destructive, bool openWorld)
     {
-        // McpServerTool.Create is what WithToolsFromAssembly uses; ProtocolTool.Annotations is
-        // what a client sees. Attribute getters cannot tell "unset" from "set to the SDK default",
-        // so this is the only way to catch a tool that never set Destructive or OpenWorld at all.
-        var annotations = McpServerTool.Create(Method(name)).ProtocolTool.Annotations;
+        // Read from the registered tool, i.e. what a client sees in tools/list. Attribute getters
+        // cannot tell "unset" from "set to the SDK default", so this is the only way to catch a
+        // tool that never set Destructive or OpenWorld at all.
+        var annotations = Advertised(name).Annotations;
 
         Assert.NotNull(annotations);
         Assert.Equal(readOnly, annotations.ReadOnlyHint);
@@ -88,8 +89,8 @@ public class ToolAnnotationContractTests
     [Fact]
     public void EveryAdvertisedTool_HasARowInTheHintTable()
     {
-        var advertised = ToolMethods()
-            .Select(NameOf)
+        var advertised = AdvertisedTools
+            .Select(t => t.Name)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
         var tabulated = Expected
@@ -100,20 +101,21 @@ public class ToolAnnotationContractTests
         Assert.Equal(tabulated, advertised);
     }
 
-    private static MethodInfo Method(string name) =>
-        ToolMethods().Single(m => NameOf(m) == name);
+    private static Tool Advertised(string name) =>
+        AdvertisedTools.Single(t => t.Name == name);
 
-    // Mirrors WithToolsFromAssembly: every [McpServerToolType] in the server assembly, not just
-    // DaqifiTools, so a tool added in a new class cannot skip this contract.
-    private static IEnumerable<MethodInfo> ToolMethods() =>
-        typeof(DaqifiTools).Assembly.GetTypes()
-            .Where(t => t.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
-            .SelectMany(t => t.GetMethods(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static |
-                BindingFlags.Instance))
-            .Where(m => m.GetCustomAttribute<McpServerToolAttribute>() is not null);
+    /// <summary>
+    /// The tools exactly as the server advertises them: registered through the same
+    /// <c>WithToolsFromAssembly</c> call Program.cs makes, so every tool the server can list is
+    /// covered here — whatever class it lives in — and nothing it would not list is.
+    /// </summary>
+    private static readonly IReadOnlyList<Tool> AdvertisedTools = BuildAdvertisedTools();
 
-    private static string NameOf(MethodInfo method) =>
-        method.GetCustomAttribute<McpServerToolAttribute>()!.Name
-        ?? throw new InvalidOperationException($"{method.Name} has no tool name.");
+    private static IReadOnlyList<Tool> BuildAdvertisedTools()
+    {
+        var services = new ServiceCollection();
+        services.AddMcpServer().WithToolsFromAssembly(typeof(DaqifiTools).Assembly);
+        using var provider = services.BuildServiceProvider();
+        return provider.GetServices<McpServerTool>().Select(t => t.ProtocolTool).ToList();
+    }
 }
