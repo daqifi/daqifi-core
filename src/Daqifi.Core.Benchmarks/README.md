@@ -129,8 +129,8 @@ machines is the shape: the ratios between cases, and the allocation figures.
 
 The protobuf first-sample outlier is gone. #699 closed #697: the reader yields each frame as it
 is decoded instead of parsing a whole 64 KB buffer first, and the configuration pre-scan stops
-once the clock is known. Same machine as the table above, default job — a later invocation, so
-the *before* column here is not the `2a59fd1` run:
+once the clock is known. Figures from #699's own before/after run (default job). That was a
+separate invocation, so its *before* column differs slightly from the `2a59fd1` table above:
 
 | Method | Before | After | |
 | --- | ---: | ---: | --- |
