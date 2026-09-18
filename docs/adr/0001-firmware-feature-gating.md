@@ -107,6 +107,7 @@ model reality (seed data contributed on [#251](https://github.com/daqifi/daqifi-
 | `StartStreaming` / `StopStreaming` | `SYSTem:StartStreamData` / `StopStreamData` → `STReam:START` / `STOP` | both kept as **aliases** ([#324](https://github.com/daqifi/daqifi-nyquist-firmware/pull/324)) | no — old name works on all fw |
 | `SetUsbTransparencyMode` | `USB:SetTransparentMode` → `USB:TRANSparent:MODE` | both kept as **aliases** | no |
 | `SetSdLoggingFileName` | `STORage:SD:LOGging` → `STORage:SD:FILE` | **hard rename, no alias** ([#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323)) | **yes** — see above |
+| `GetSdLoggingState` (removed) | `STORage:SD:LOGging?` | **never existed in firmware** | n/a — removed in [#258](https://github.com/daqifi/daqifi-core/pull/258) |
 
 Verified at the v3.5.0 tree: `STReam:START`, `StartStreamData`, `USB:TRANSparent:MODE`,
 `SetTransparentMode`, and `STORage:SD:FILE` are all present, while `STORage:SD:LOGging` is
@@ -346,10 +347,14 @@ their place.**
 1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinSupportedFirmware = v3.5.0`
    + `FeatureNotSupportedException` + `-113` backstop** on `GetSdCardStorageAsync` (the guard
    deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)): **done**.
-2. [#256](https://github.com/daqifi/daqifi-core/issues/256) — `DeviceFeature` version table +
+2. [#255](https://github.com/daqifi/daqifi-core/issues/255) — **Remove dead code**: the
+   `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?` query never existed in the
+   firmware SCPI table. Public-API removal, separate from the #253 fix: **done** in
+   [#258](https://github.com/daqifi/daqifi-core/pull/258).
+3. [#256](https://github.com/daqifi/daqifi-core/issues/256) — `DeviceFeature` version table +
    lazy `Supports(...)`: **done** (triggered by SD-over-WiFi @ v3.7.0; see the implementation
    note under Decision 2).
-3. [#390](https://github.com/daqifi/daqifi-core/issues/390) — `CONFigure:CAPabilities:JSON?` /
+4. [#390](https://github.com/daqifi/daqifi-core/issues/390) — `CONFigure:CAPabilities:JSON?` /
    `:APIVersion?` reader populating `DeviceCapabilities`: **done** (triggered by
    daqifi-desktop [#118](https://github.com/daqifi/daqifi-desktop/issues/118), which needs a
    per-configuration streaming ceiling the static table cannot express; see the implementation
