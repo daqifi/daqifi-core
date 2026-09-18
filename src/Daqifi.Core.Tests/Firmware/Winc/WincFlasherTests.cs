@@ -1,6 +1,7 @@
 using Daqifi.Core.Firmware.Winc;
 using Daqifi.Core.Tests.TestSupport;
 using Microsoft.Extensions.Logging;
+using System.Runtime.Versioning;
 
 namespace Daqifi.Core.Tests.Firmware.Winc;
 
@@ -470,6 +471,7 @@ public class WincFlasherTests
     [PlatformFact(
         TestPlatforms.Windows,
         "chmod semantics differ on Windows; the UnixFileMode probe can only be observed on Unix.")]
+    [UnsupportedOSPlatform("windows")] // Mirrors the gate for the platform analyzer (CA1416).
     public void Locator_TryResolve_PropagatesAnUnreadableTree_RatherThanReportingNotFound()
     {
         // "Could not locate the tool - WiFi flashing is Windows-only" is genuinely misleading when
@@ -481,7 +483,6 @@ public class WincFlasherTests
 
         try
         {
-#pragma warning disable CA1416 // UnixFileMode is Unix-gated; PlatformFact skips this test on Windows at discovery.
             File.SetUnixFileMode(locked, UnixFileMode.None);
 
             var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
@@ -494,7 +495,6 @@ public class WincFlasherTests
         finally
         {
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-#pragma warning restore CA1416
             Directory.Delete(root, recursive: true);
         }
     }
