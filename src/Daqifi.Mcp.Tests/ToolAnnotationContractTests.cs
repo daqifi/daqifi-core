@@ -110,7 +110,7 @@ public class ToolAnnotationContractTests
             .Where(t => t.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
             .SelectMany(t => t.GetMethods(
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static |
-                BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                BindingFlags.Instance))
             .Where(m => m.GetCustomAttribute<McpServerToolAttribute>() is not null);
 
     private static string NameOf(MethodInfo method) =>
