@@ -26,6 +26,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 jobs:
   # One leg per supported OS (#635). The library branches on the host OS in a dozen
   # files — the macOS IOKit HID transport, the Windows PnP/WMI discovery providers —
@@ -34,6 +37,7 @@ jobs:
   # readable, which is the whole point of having them.
   test:
     name: test
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
