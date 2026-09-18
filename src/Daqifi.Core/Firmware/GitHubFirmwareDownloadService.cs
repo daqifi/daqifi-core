@@ -29,19 +29,9 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     private readonly string _wifiRepoApiUrl;
     private readonly TimeSpan _cacheTtl;
 
-    // Serializes the cache TTL check and the two-field publish. Concurrent
-    // CheckForUpdate / GetFirmwareReleases / GetWifiReleases used to all miss,
-    // double-fetch, and interleave _cachedReleases with a stale _cacheTimestamp
-    // (or the wifi pair). SemaphoreSlim rather than lock because the miss path
-    // awaits the HTTP round-trip. Not disposed: the service does not own a
-    // shutdown path, and we never touch AvailableWaitHandle.
-    private readonly SemaphoreSlim _cacheLock = new(1, 1);
-
-    private List<JsonElement>? _cachedReleases;
-    private DateTime _cacheTimestamp;
-
-    private List<JsonElement>? _cachedWifiReleases;
-    private DateTime _wifiCacheTimestamp;
+    // One cache per repository, so a slow firmware lookup never holds up a WiFi one.
+    private readonly ReleaseCache _firmwareCache = new();
+    private readonly ReleaseCache _wifiCache = new();
 
     /// <summary>
     /// Creates a new firmware download service.
@@ -232,60 +222,127 @@ public sealed class GitHubFirmwareDownloadService : IFirmwareDownloadService
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Never waits for a refresh that is in flight: it only clears the cached lists, and a
+    /// refresh that started before this call does not publish its result afterwards.
+    /// </remarks>
     public void InvalidateCache()
     {
-        _cacheLock.Wait();
-        try
-        {
-            _cachedReleases = null;
-            _cachedWifiReleases = null;
-        }
-        finally
-        {
-            _cacheLock.Release();
-        }
+        _firmwareCache.Invalidate();
+        _wifiCache.Invalidate();
     }
 
-    private async Task<List<JsonElement>> GetFirmwareReleasesAsync(CancellationToken cancellationToken)
+    private Task<List<JsonElement>> GetFirmwareReleasesAsync(CancellationToken cancellationToken) =>
+        GetReleasesAsync(_firmwareCache, _firmwareRepoApiUrl, cancellationToken);
+
+    private Task<List<JsonElement>> GetWifiReleasesAsync(CancellationToken cancellationToken) =>
+        GetReleasesAsync(_wifiCache, _wifiRepoApiUrl, cancellationToken);
+
+    /// <summary>
+    /// Returns the cached release list for one repository, fetching it at most once however
+    /// many callers miss the cache at the same time.
+    /// </summary>
+    /// <remarks>
+    /// Concurrent callers (several devices checking for updates at once) used to all see a
+    /// stale cache and each make their own GitHub request, spending the unauthenticated rate
+    /// limit several times over. The refresh gate makes the first caller fetch and the rest
+    /// wait for, and then reuse, its result.
+    /// </remarks>
+    private async Task<List<JsonElement>> GetReleasesAsync(
+        ReleaseCache cache, string apiUrl, CancellationToken cancellationToken)
     {
-        await _cacheLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (cache.TryGetFresh(_cacheTtl, out var cached))
+        {
+            return cached;
+        }
+
+        await cache.RefreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_cachedReleases != null && DateTime.UtcNow - _cacheTimestamp < _cacheTtl)
+            // Another caller may have refreshed while this one waited for the gate.
+            if (cache.TryGetFresh(_cacheTtl, out cached))
             {
-                return _cachedReleases;
+                return cached;
             }
 
-            var elements = await FetchReleasesFromApiAsync(_firmwareRepoApiUrl, cancellationToken).ConfigureAwait(false);
-            _cachedReleases = elements;
-            _cacheTimestamp = DateTime.UtcNow;
+            var generation = cache.Generation;
+            var elements = await FetchReleasesFromApiAsync(apiUrl, cancellationToken).ConfigureAwait(false);
+            cache.Publish(elements, generation);
             return elements;
         }
         finally
         {
-            _cacheLock.Release();
+            cache.RefreshGate.Release();
         }
     }
 
-    private async Task<List<JsonElement>> GetWifiReleasesAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// The cached release list for one repository.
+    /// </summary>
+    /// <remarks>
+    /// The list and its timestamp live in one immutable entry swapped by a single reference
+    /// write, so a reader can never pair a new list with an old timestamp. <see cref="RefreshGate"/>
+    /// is held across the network request and only ever awaited asynchronously; the short
+    /// <c>lock</c> guards nothing but the generation check and the swap, so
+    /// <see cref="Invalidate"/> never blocks on the network. The gate is not disposed: the
+    /// service has no shutdown path, and <c>AvailableWaitHandle</c> is never touched.
+    /// </remarks>
+    private sealed class ReleaseCache
     {
-        await _cacheLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        private readonly object _sync = new();
+        private Entry? _entry;
+        private int _generation;
+
+        public SemaphoreSlim RefreshGate { get; } = new(1, 1);
+
+        public int Generation
         {
-            if (_cachedWifiReleases != null && DateTime.UtcNow - _wifiCacheTimestamp < _cacheTtl)
+            get
             {
-                return _cachedWifiReleases;
+                lock (_sync)
+                {
+                    return _generation;
+                }
+            }
+        }
+
+        public bool TryGetFresh(TimeSpan ttl, out List<JsonElement> releases)
+        {
+            var entry = Volatile.Read(ref _entry);
+            if (entry != null && DateTime.UtcNow - entry.FetchedAtUtc < ttl)
+            {
+                releases = entry.Releases;
+                return true;
             }
 
-            var elements = await FetchReleasesFromApiAsync(_wifiRepoApiUrl, cancellationToken).ConfigureAwait(false);
-            _cachedWifiReleases = elements;
-            _wifiCacheTimestamp = DateTime.UtcNow;
-            return elements;
+            releases = null!;
+            return false;
         }
-        finally
+
+        /// <summary>
+        /// Stores a fetched list, unless the cache was invalidated after the fetch began.
+        /// </summary>
+        public void Publish(List<JsonElement> releases, int generationAtFetchStart)
         {
-            _cacheLock.Release();
+            lock (_sync)
+            {
+                if (_generation == generationAtFetchStart)
+                {
+                    Volatile.Write(ref _entry, new Entry(releases, DateTime.UtcNow));
+                }
+            }
         }
+
+        public void Invalidate()
+        {
+            lock (_sync)
+            {
+                _generation++;
+                Volatile.Write(ref _entry, null);
+            }
+        }
+
+        private sealed record Entry(List<JsonElement> Releases, DateTime FetchedAtUtc);
     }
 
     private async Task<List<JsonElement>> FetchReleasesFromApiAsync(string apiUrl, CancellationToken cancellationToken)

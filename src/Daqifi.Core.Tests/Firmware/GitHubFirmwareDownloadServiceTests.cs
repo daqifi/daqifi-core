@@ -337,6 +337,57 @@ public class GitHubFirmwareDownloadServiceTests : IDisposable
         Assert.All(results, result => Assert.Equal("v19.5.4", result?.TagName));
     }
 
+    [Fact]
+    public async Task InvalidateCache_DuringRefresh_DoesNotWaitAndIsNotUndone()
+    {
+        const string firmwareUrl = "https://api.github.com/repos/daqifi/daqifi-nyquist-firmware/releases";
+        _handler.SetResponse(firmwareUrl, HttpStatusCode.OK,
+            BuildReleasesJson(MakeRelease("v3.2.0", draft: false, prerelease: false, hexAsset: "firmware.hex")));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _handler.BeforeRespond = _ => release.Task;
+
+        var service = CreateService();
+        var inFlight = service.GetLatestReleaseAsync();
+        Assert.True(SpinWait.SpinUntil(() => _handler.RequestCount == 1, TimeSpan.FromSeconds(5)));
+
+        // The refresh is still held open; invalidating must not wait for it. A blocked
+        // invalidation surfaces as a TimeoutException.
+        await Task.Run(service.InvalidateCache).WaitAsync(TimeSpan.FromSeconds(5));
+
+        release.SetResult();
+        Assert.Equal("v3.2.0", (await inFlight)?.TagName);
+
+        // The refresh began before the invalidation, so it must not have repopulated the cache.
+        _handler.BeforeRespond = null;
+        await service.GetLatestReleaseAsync();
+        Assert.Equal(2, _handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task Cache_SlowFirmwareRefresh_DoesNotBlockWifiLookup()
+    {
+        const string firmwareUrl = "https://api.github.com/repos/daqifi/daqifi-nyquist-firmware/releases";
+        _handler.SetResponse(firmwareUrl, HttpStatusCode.OK,
+            BuildReleasesJson(MakeRelease("v3.2.0", draft: false, prerelease: false, hexAsset: "firmware.hex")));
+        _handler.SetResponse(
+            "https://api.github.com/repos/daqifi/winc1500-Manual-UART-Firmware-Update/releases",
+            HttpStatusCode.OK,
+            BuildReleasesJson(MakeRelease("v19.5.4", draft: false, prerelease: false, hexAsset: null)));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _handler.BeforeRespond = url => url == firmwareUrl ? release.Task : Task.CompletedTask;
+
+        var service = CreateService();
+        var firmware = service.GetLatestReleaseAsync();
+
+        // The firmware request is still held open; a WiFi lookup queued behind it would
+        // surface as a TimeoutException.
+        var wifi = await service.GetLatestWifiReleaseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("v19.5.4", wifi?.TagName);
+
+        release.SetResult();
+        Assert.Equal("v3.2.0", (await firmware)?.TagName);
+    }
+
     #endregion
 
     #region DownloadLatestFirmwareAsync
@@ -572,6 +623,12 @@ internal class MockHttpMessageHandler : HttpMessageHandler
 
     public TimeSpan ResponseDelay { get; set; }
 
+    /// <summary>
+    /// Awaited, with the request URL, before responding. Lets a test hold one request open
+    /// until it chooses to release it.
+    /// </summary>
+    public Func<string, Task>? BeforeRespond { get; set; }
+
     public void SetResponse(string url, HttpStatusCode statusCode, string content)
     {
         _responses[url] = (statusCode, content, null);
@@ -594,6 +651,11 @@ internal class MockHttpMessageHandler : HttpMessageHandler
         }
 
         var url = request.RequestUri!.ToString();
+
+        if (BeforeRespond != null)
+        {
+            await BeforeRespond(url);
+        }
 
         if (_responses.TryGetValue(url, out var entry))
         {
