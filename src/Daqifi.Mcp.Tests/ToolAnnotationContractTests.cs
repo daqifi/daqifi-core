@@ -31,7 +31,11 @@ public class ToolAnnotationContractTests
     }
 
     // OpenWorld is false across the board: this server talks to DAQiFi devices (and itself), not
-    // an unpredictable set of entities. Destructive is true only for delete_sd_file. ReadOnly is
+    // an unpredictable set of entities. Destructive marks the calls a client should confirm: the
+    // irreversible delete_sd_file, and every tool that changes what the device drives onto a pin
+    // (digital level/direction, PWM, DAC), since that reaches whatever circuit is wired to it.
+    // Channel configuration and the sample rate stay non-destructive — they lose no data and are
+    // undone by calling the same tool again. ReadOnly is
     // true for pure reads; read_channel_values / capture_samples stay false because they start
     // streaming when the device is idle. download_sd_file writes host files, so it is not ReadOnly
     // even though --read-only still allows it.
@@ -46,13 +50,13 @@ public class ToolAnnotationContractTests
         ("list_channels", true, false, false),
         ("configure_analog_channels", false, false, false),
         ("configure_digital_channels", false, false, false),
-        ("set_digital_direction", false, false, false),
-        ("set_digital_output", false, false, false),
-        ("set_pwm_output", false, false, false),
-        ("disable_pwm", false, false, false),
+        ("set_digital_direction", false, true, false),
+        ("set_digital_output", false, true, false),
+        ("set_pwm_output", false, true, false),
+        ("disable_pwm", false, true, false),
         ("list_analog_outputs", true, false, false),
-        ("set_analog_output", false, false, false),
-        ("latch_analog_outputs", false, false, false),
+        ("set_analog_output", false, true, false),
+        ("latch_analog_outputs", false, true, false),
         ("read_analog_output", true, false, false),
         ("set_sample_rate", false, false, false),
         ("start_sd_logging", false, false, false),
@@ -94,12 +98,6 @@ public class ToolAnnotationContractTests
             .ToArray();
 
         Assert.Equal(tabulated, advertised);
-    }
-
-    [Fact]
-    public void DeleteSdFile_IsTheOnlyDestructiveTool()
-    {
-        Assert.Equal(new[] { "delete_sd_file" }, Expected.Where(h => h.Destructive).Select(h => h.Name));
     }
 
     private static MethodInfo Method(string name) =>

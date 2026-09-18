@@ -79,7 +79,7 @@ public static class DaqifiTools
         [Description("Digital channel numbers to enable, e.g. [0,1,2]. Channels not listed are disabled.")] int[] enabledChannels)
         => GuardAsync(() => agent.ConfigureDigitalChannelsAsync(deviceId, enabledChannels));
 
-    [McpServerTool(Name = "set_digital_direction", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "set_digital_direction", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Set a digital channel's direction: 'input' (high-impedance, sampled during streaming) or 'output' (driven by the device; set the level with set_digital_output). Rejected while PWM is enabled on the channel — call disable_pwm first.")]
     public static Task<DigitalPinResult> SetDigitalDirection(
         DaqifiAgent agent,
@@ -88,7 +88,7 @@ public static class DaqifiTools
         [Description("'input' or 'output'.")] string direction)
         => GuardAsync(() => agent.SetDigitalDirectionAsync(deviceId, channel, direction));
 
-    [McpServerTool(Name = "set_digital_output", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "set_digital_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Drive a digital channel high or low. If the channel is currently an input it is switched to output direction first, so one call is enough to drive a pin. Rejected while PWM is enabled on the channel — call disable_pwm first.")]
     public static Task<DigitalPinResult> SetDigitalOutput(
         DaqifiAgent agent,
@@ -97,7 +97,7 @@ public static class DaqifiTools
         [Description("true to drive the pin high, false to drive it low.")] bool high)
         => GuardAsync(() => agent.SetDigitalOutputAsync(deviceId, channel, high));
 
-    [McpServerTool(Name = "set_pwm_output", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "set_pwm_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Start PWM output on a PWM-capable digital channel (Nyquist: channels 0, 3, 4, 5, 6, 7). Sets the duty cycle, optionally the device-wide frequency, then enables the channel. The frequency is shared by ALL PWM channels (one hardware timer). While PWM runs, set_digital_direction/set_digital_output on the channel are rejected rather than silently ignored — call disable_pwm first to drive it digitally again.")]
     public static Task<PwmResult> SetPwmOutput(
         DaqifiAgent agent,
@@ -107,7 +107,7 @@ public static class DaqifiTools
         [Description("PWM frequency in Hz, 6-50000, applied device-wide. Pass 0 to keep the current session frequency (defaults to 1000 Hz until explicitly set).")] int frequencyHz = 0)
         => GuardAsync(() => agent.SetPwmOutputAsync(deviceId, channel, dutyCyclePercent, frequencyHz));
 
-    [McpServerTool(Name = "disable_pwm", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "disable_pwm", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Stop PWM output on a digital channel. The pin is left high-impedance (not driven); use set_digital_direction/set_digital_output to drive it digitally again. Allowed on any digital channel, including one that isn't PWM-capable — this is the only recovery path for the firmware's half-armed PWM state. This call always succeeds from the caller's point of view: if the channel was never actually armed, the firmware rejects the command internally but that rejection is not surfaced here (the tool never throws for it and the result carries no error field).")]
     public static Task<PwmResult> DisablePwm(
         DaqifiAgent agent,
@@ -122,7 +122,7 @@ public static class DaqifiTools
         [Description("The device_id to inspect.")] string deviceId)
         => Guard(() => agent.ListAnalogOutputs(deviceId));
 
-    [McpServerTool(Name = "set_analog_output", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "set_analog_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Drive an analog output (DAC) channel to a voltage. Nyquist 3 hardware only; on any other board the call is refused rather than silently discarded by the firmware. A voltage outside the channel's range is rejected before anything is sent — call list_analog_outputs for the range. By default the value takes effect immediately; pass latch=false to stage it instead and apply several channels together with latch_analog_outputs. Note that the latch is device-wide, not per-channel: a call with latch=true also applies anything staged earlier on OTHER channels, and the result reports only the channel written — call list_analog_outputs afterwards to see them all.")]
     public static Task<AnalogOutputResult> SetAnalogOutput(
         DaqifiAgent agent,
@@ -132,7 +132,7 @@ public static class DaqifiTools
         [Description("Apply the value now (default). Pass false to stage it without changing the pin; it takes effect on the next latch_analog_outputs, which is how several outputs are made to change together.")] bool latch = true)
         => GuardAsync(() => agent.SetAnalogOutputAsync(deviceId, channel, volts, latch));
 
-    [McpServerTool(Name = "latch_analog_outputs", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "latch_analog_outputs", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Apply every analog output voltage staged with set_analog_output latch=false, so the staged channels change together. Returns the state of every analog output afterwards. Harmless with nothing staged — the device re-applies what it already holds.")]
     public static Task<AnalogOutputLatchResult> LatchAnalogOutputs(
         DaqifiAgent agent,
