@@ -657,9 +657,9 @@ public sealed class DaqifiAgent
             if (cap <= 0)
             {
                 throw new InvalidOperationException(
-                    "No channels are enabled, so the device has no sample-rate capacity right now. " +
-                    "Enable at least one channel with configure_analog_channels or " +
-                    "configure_digital_channels before setting a sample rate.");
+                    "No analog input channels are enabled, so the device has no sample-rate capacity right now. " +
+                    "Enable at least one analog channel with configure_analog_channels before setting a " +
+                    "sample rate; digital channels are sampled on the analog tick and add no capacity of their own.");
             }
 
             if (rateHz > cap)
