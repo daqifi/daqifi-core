@@ -277,6 +277,19 @@ public class DigitalConfigurationToolContractTests
         Assert.Equal(new[] { 0, 1 }, status.EnabledAnalogChannels);
         Assert.Equal(new[] { 4 }, status.EnabledDigitalChannels);
     }
+
+    [Fact]
+    public async Task ConfigureDigitalChannels_DoesNotRefreshTheDeviceCap()
+    {
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        var before = device.CapabilityReads;
+
+        var result = await agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
+
+        Assert.Equal(before, device.CapabilityReads);
+        Assert.Equal(device.StreamingFrequency, result.SampleRateHz);
+        Assert.Null(result.SampleRateAdjustedFromHz);
+    }
 }
 
 public class DigitalPinToolContractTests
@@ -546,9 +559,25 @@ public class SampleRateToolContractTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.SetSampleRateAsync(AgentHarness.DeviceId, 100));
 
-        Assert.Contains("No channels are enabled", ex.Message);
+        Assert.Contains("No analog input channels are enabled", ex.Message);
         Assert.Contains("configure_analog_channels", ex.Message);
         Assert.DoesNotContain("exceeds the maximum", ex.Message);
+    }
+
+    [Fact]
+    public async Task SetSampleRate_WithOnlyDigitalEnabled_DoesNotSendTheAgentToDigitalConfigure()
+    {
+        // Core's cap counts analog inputs only (a digital-only selection is 0 Hz, as the device
+        // itself reports), so enabling a digital channel is not a remedy for "no capacity".
+        var (agent, _) = AgentHarness.WithConnectedDevice();
+        await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, Array.Empty<int>());
+        await agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.SetSampleRateAsync(AgentHarness.DeviceId, 100));
+
+        Assert.Contains("configure_analog_channels", ex.Message);
+        Assert.DoesNotContain("configure_digital_channels", ex.Message);
     }
 
     [Fact]

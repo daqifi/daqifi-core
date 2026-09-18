@@ -127,10 +127,10 @@ public sealed record ConfigureResult(
     int? SampleRateAdjustedFromHz);
 
 /// <summary>
-/// Result of a digital channel-configuration change. <see cref="SampleRateHz"/> and
-/// <see cref="SampleRateAdjustedFromHz"/> mirror <see cref="ConfigureResult"/> — digital
-/// reconfiguration also refreshes the device's rate cap, so the same live-rate re-validation
-/// applies (#447).
+/// Result of a digital channel-configuration change. <see cref="SampleRateHz"/> is the live
+/// streaming frequency, echoed as-is. <see cref="SampleRateAdjustedFromHz"/> is retained for
+/// contract compatibility and is always <c>null</c> — digital enablement does not change
+/// Core's analog-only rate cap, so this path does not re-validate or adjust the live rate.
 /// </summary>
 public sealed record ConfigureDigitalResult(
     string DeviceId,

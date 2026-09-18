@@ -367,7 +367,7 @@ public sealed class DaqifiAgent
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
 
-        return await device.RunExclusiveAsync(async _ =>
+        return await device.RunExclusiveAsync(_ =>
         {
             var digital = Snapshot(device).Where(c => c.Type == ChannelType.Digital).ToList();
             var validNumbers = digital.Select(c => c.ChannelNumber).ToHashSet();
@@ -391,13 +391,11 @@ public sealed class DaqifiAgent
                 streaming.EnableChannels(toEnable);
             }
 
-            // See ConfigureAnalogChannelsAsync: keeps CurrentMaximumRateHz current for
-            // set_sample_rate even though the rate model itself ignores digital channels.
-            await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
-
-            var adjustedFromHz = EnforceSampleRateCap(streaming);
-
-            return new ConfigureDigitalResult(deviceId, EnabledDigital(device), streaming.StreamingFrequency, adjustedFromHz);
+            return Task.FromResult(new ConfigureDigitalResult(
+                deviceId,
+                EnabledDigital(device),
+                streaming.StreamingFrequency,
+                SampleRateAdjustedFromHz: null));
         }).ConfigureAwait(false);
     }
 
@@ -659,9 +657,9 @@ public sealed class DaqifiAgent
             if (cap <= 0)
             {
                 throw new InvalidOperationException(
-                    "No channels are enabled, so the device has no sample-rate capacity right now. " +
-                    "Enable at least one channel with configure_analog_channels or " +
-                    "configure_digital_channels before setting a sample rate.");
+                    "No analog input channels are enabled, so the device has no sample-rate capacity right now. " +
+                    "Enable at least one analog channel with configure_analog_channels before setting a " +
+                    "sample rate; digital channels are sampled on the analog tick and add no capacity of their own.");
             }
 
             if (rateHz > cap)
@@ -679,12 +677,11 @@ public sealed class DaqifiAgent
     /// Computes the effective sample-rate ceiling for <paramref name="streaming"/> right now: the
     /// device's own cap for its currently enabled channels
     /// (<see cref="IStreamingDevice.MaximumStreamingFrequencyHz"/>, kept current by
-    /// <see cref="RefreshCapabilityDocumentAsync"/> after every channel-configuration call),
+    /// <see cref="RefreshCapabilityDocumentAsync"/> after analog channel configuration),
     /// lowered further by <c>--max-sample-rate-hz</c> if one was configured. Shared by
     /// <see cref="SetSampleRateAsync"/> (to validate a request) and
-    /// <see cref="ConfigureAnalogChannelsAsync"/>/<see cref="ConfigureDigitalChannelsAsync"/> (to
-    /// re-validate the rate that is already live once the channel set — and therefore the cap —
-    /// changes underneath it).
+    /// <see cref="ConfigureAnalogChannelsAsync"/> (to re-validate the rate that is already live
+    /// once the analog channel set — and therefore the cap — changes underneath it).
     /// </summary>
     /// <remarks>
     /// The device half of this arithmetic lives in Core (<see cref="SampleRateCap"/>) so every
@@ -708,9 +705,9 @@ public sealed class DaqifiAgent
 
     /// <summary>
     /// Re-validates the already-live <see cref="IStreamingDevice.StreamingFrequency"/> against the
-    /// cap this device's channel set now allows, lowering it when the set just enabled by
-    /// <see cref="ConfigureAnalogChannelsAsync"/>/<see cref="ConfigureDigitalChannelsAsync"/>
-    /// shrank the cap below the rate a previous <see cref="SetSampleRateAsync"/> call left running
+    /// cap this device's channel set now allows, lowering it when the analog set just enabled by
+    /// <see cref="ConfigureAnalogChannelsAsync"/> shrank the cap below the rate a previous
+    /// <see cref="SetSampleRateAsync"/> call left running
     /// (#447) — otherwise that stale rate stays live, is echoed back to the agent as if it were
     /// still valid, and is unreachable through <see cref="SetSampleRateAsync"/>'s own guard, since
     /// re-requesting the same value now fails.
