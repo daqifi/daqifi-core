@@ -103,9 +103,14 @@ public class ToolAnnotationContractTests
     private static MethodInfo Method(string name) =>
         ToolMethods().Single(m => NameOf(m) == name);
 
+    // Mirrors WithToolsFromAssembly: every [McpServerToolType] in the server assembly, not just
+    // DaqifiTools, so a tool added in a new class cannot skip this contract.
     private static IEnumerable<MethodInfo> ToolMethods() =>
-        typeof(DaqifiTools)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+        typeof(DaqifiTools).Assembly.GetTypes()
+            .Where(t => t.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
+            .SelectMany(t => t.GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static |
+                BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .Where(m => m.GetCustomAttribute<McpServerToolAttribute>() is not null);
 
     private static string NameOf(MethodInfo method) =>
