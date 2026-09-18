@@ -24,6 +24,11 @@ internal static class AnalogScaling
     /// the offset makes host-side values diverge from the device's own <c>MEAS:VOLT:DC?</c> reading
     /// whenever the internal scale factor is non-unity and the offset is non-zero.
     /// </para>
+    /// <para>
+    /// Parameters follow the formula left to right (offset last), so the easily transposed
+    /// <paramref name="internalScaleM"/> and <paramref name="calibrationB"/> read in formula order
+    /// at every call site.
+    /// </para>
     /// </remarks>
     /// <param name="rawValue">The raw ADC count.</param>
     /// <param name="resolution">The ADC's maximum raw count (2^bits - 1). Must be non-zero.</param>

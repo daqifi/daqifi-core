@@ -14,7 +14,8 @@ public interface IMessageConsumer<T> : IDisposable
     bool IsRunning { get; }
 
     /// <summary>
-    /// Gets the number of buffered unread bytes waiting to be parsed.
+    /// Gets how much received input is still waiting to be parsed. Despite the name,
+    /// <see cref="StreamMessageConsumer{T}"/> reports buffered unread <em>bytes</em>, not messages.
     /// </summary>
     int QueuedMessageCount { get; }
 
