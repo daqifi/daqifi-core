@@ -93,6 +93,7 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
 
     /// <summary>
     /// Gets or sets the output value for digital output channels (true = high, false = low).
+    /// Local bookkeeping mirroring the last commanded state; setting it does not drive the pin.
     /// </summary>
     public bool OutputValue
     {

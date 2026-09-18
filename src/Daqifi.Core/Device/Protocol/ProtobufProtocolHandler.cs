@@ -120,6 +120,9 @@ public class ProtobufProtocolHandler : IProtocolHandler
             return ProtobufMessageType.Stream;
         }
 
+        // Never returns SdCard: SD card command responses (listings, downloads) arrive on the
+        // text/raw-byte path, not as live protobuf frames, so no DaqifiOutMessage shape marks one.
+
         if (message.DeviceStatus != 0)
         {
             return ProtobufMessageType.Error;
