@@ -17,21 +17,6 @@ public class SerialDeviceFinderTests
     // The part-number to DeviceType mapping this finder uses is covered by
     // DiscoveryDeviceTypeMapperTests (issue #283).
     [Fact]
-    public async Task DiscoverAsync_WithCancellationToken_ReturnsDevices()
-    {
-        // Arrange
-        using var finder = new SerialDeviceFinder();
-        using var cts = new CancellationTokenSource();
-
-        // Act
-        var devices = await finder.DiscoverAsync(cts.Token);
-
-        // Assert
-        Assert.NotNull(devices);
-        // May or may not find devices depending on system, but should not throw
-    }
-
-    [Fact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {
         // Arrange
@@ -198,15 +183,21 @@ public class SerialDeviceFinderTests
         // non-DAQiFi ports as before — no change to that path.
         var fakeProvider = new RecordingUsbPortDescriptorProvider(_ => null);
 
-        using var finder = new SerialDeviceFinder(9600, fakeProvider);
+        // Inject a fixed port list so the null-descriptor fallback IS invoked even
+        // on CI hosts with zero real serial ports — otherwise the test would
+        // pass vacuously (Assert.NotNull on an empty list, CallCount == 0).
+        // Use an obviously-invalid port name so SerialPort.Open() fails
+        // immediately on every platform — never touches a real device.
+        using var finder = new SerialDeviceFinder(
+            9600,
+            fakeProvider,
+            portNameProvider: () => new[] { "MOCK_PORT_DOES_NOT_EXIST" });
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
-        // Just verifying it doesn't throw and returns a (probably empty) list;
-        // actual ports depend on the test machine. The key contract is that
-        // null-descriptor doesn't filter the port out of consideration.
-        // The legacy probe path may exceed 200ms on machines with real ports —
-        // an OperationCanceledException there still proves the contract:
-        // null descriptors fall through to probing rather than being filtered.
+        // Probe path is short (legacy fallback fails to open immediately on
+        // the bogus port name). OCE is still acceptable; what matters is that
+        // the null-returning provider was actually called and the port was not
+        // filtered out of consideration.
         try
         {
             var devices = await finder.DiscoverAsync(cts.Token);
@@ -214,8 +205,11 @@ public class SerialDeviceFinderTests
         }
         catch (OperationCanceledException)
         {
-            // Probe ran (legacy fallback engaged) and exceeded the test budget.
+            // Probe ran (null descriptor fell through to probing) and exceeded the test budget.
         }
+
+        Assert.True(fakeProvider.CallCount > 0,
+            "Null-returning descriptor provider was never invoked — the fall-through-to-probe path is not exercised by this test.");
     }
 
     [Fact]

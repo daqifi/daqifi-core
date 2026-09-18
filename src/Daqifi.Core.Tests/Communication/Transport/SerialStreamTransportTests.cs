@@ -389,18 +389,6 @@ public class SerialStreamTransportTests
         Assert.Contains("COM3", disconnectedInfo);
     }
 
-    [Fact]
-    public void SerialStreamTransport_GetAvailablePortNames_ShouldReturnArray()
-    {
-        // Act
-        var portNames = SerialStreamTransport.GetAvailablePortNames();
-        
-        // Assert
-        Assert.NotNull(portNames);
-        // Note: We can't assert specific ports as they vary by system
-        // but we can verify it returns an array without throwing
-    }
-
     /// <summary>
     /// A <see cref="SerialPort"/> that records whether it has been disposed, so tests can assert
     /// the transport's ownership/disposal contract. Never opened.
