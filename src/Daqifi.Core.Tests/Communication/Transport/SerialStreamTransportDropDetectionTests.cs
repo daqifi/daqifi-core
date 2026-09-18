@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
 
@@ -322,17 +323,13 @@ public class SerialStreamTransportDropDetectionTests
         Assert.False(SerialStreamTransport.IsPortEnumerated("/dev/daqifi-382-does-not-exist"));
     }
 
-    [Fact]
+    [PlatformFact(
+        TestPlatforms.Windows,
+        "Windows COM names are not filesystem paths, so the device-node fallback cannot be observed there.")]
     public void IsPortEnumerated_ForAnExistingDeviceNodePath_ReportsPresent()
     {
         // The Unix fallback: a port the framework enumeration happens not to return is still
-        // present if its device node exists. Windows port names are not paths, so it does not
-        // apply there.
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
+        // present if its device node exists.
         var path = Path.GetTempFileName();
         try
         {

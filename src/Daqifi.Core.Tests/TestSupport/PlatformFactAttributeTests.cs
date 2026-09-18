@@ -4,8 +4,8 @@ using System.Runtime.InteropServices;
 namespace Daqifi.Core.Tests.TestSupport;
 
 /// <summary>
-/// Covers the platform gate that replaced the three bare <c>return</c>s in the USB descriptor
-/// provider tests (issue #663). The decision itself is pure — <see cref="PlatformFactAttribute.ShouldSkip"/>
+/// Covers the platform gate that replaced bare <c>return</c>s on off-platform tests
+/// (issue #663). The decision itself is pure — <see cref="PlatformFactAttribute.ShouldSkip"/>
 /// takes the current platform as an argument — so every arm of it is exercised on every CI leg,
 /// which is exactly the property the gate exists to give the tests it guards.
 /// </summary>
@@ -130,7 +130,7 @@ public class PlatformFactAttributeTests
 
     #endregion
 
-    #region The three gates it was introduced for
+    #region The gates that used to silently return
 
     [Theory]
     [InlineData(
@@ -145,12 +145,24 @@ public class PlatformFactAttributeTests
         typeof(Daqifi.Core.Tests.Device.Discovery.LinuxUsbPortDescriptorProviderTests),
         "GetDescriptor_OffLinux_AnswersNullForEveryPort",
         TestPlatforms.Linux)]
+    [InlineData(
+        typeof(Daqifi.Core.Tests.Firmware.Winc.WincFlasherTests),
+        "Locator_TryResolve_PropagatesAnUnreadableTree_RatherThanReportingNotFound",
+        TestPlatforms.Windows)]
+    [InlineData(
+        typeof(Daqifi.Core.Tests.Communication.Transport.SerialStreamTransportDropDetectionTests),
+        "IsPortEnumerated_ForAnExistingDeviceNodePath_ReportsPresent",
+        TestPlatforms.Windows)]
+    [InlineData(
+        typeof(Daqifi.Core.Tests.Communication.Transport.SerialPortNameSnapshotTests),
+        "IsPortEnumerated_ForAPresentDeviceNode_DoesNotEnumerateAtAll",
+        TestPlatforms.Windows)]
     public void OffPlatformGateTests_CarryThePlatformFact_SoTheyCannotSilentlyReturnAgain(
         Type testClass,
         string testMethod,
         TestPlatforms expectedSkipOn)
     {
-        // Pins the fix: each of these three used to be a [Fact] whose body opened with
+        // Pins the fix: each of these used to be a [Fact] whose body opened with
         // "if (on my own platform) return;", reporting passed while asserting nothing.
         var method = testClass.GetMethod(testMethod, BindingFlags.Public | BindingFlags.Instance);
         Assert.NotNull(method);

@@ -1,5 +1,7 @@
 using Daqifi.Core.Firmware.Winc;
+using Daqifi.Core.Tests.TestSupport;
 using Microsoft.Extensions.Logging;
+using System.Runtime.Versioning;
 
 namespace Daqifi.Core.Tests.Firmware.Winc;
 
@@ -466,16 +468,14 @@ public class WincFlasherTests
         }
     }
 
-    [Fact]
+    [PlatformFact(
+        TestPlatforms.Windows,
+        "chmod semantics differ on Windows; the UnixFileMode probe can only be observed on Unix.")]
+    [UnsupportedOSPlatform("windows")] // Mirrors the gate for the platform analyzer (CA1416).
     public void Locator_TryResolve_PropagatesAnUnreadableTree_RatherThanReportingNotFound()
     {
         // "Could not locate the tool - WiFi flashing is Windows-only" is genuinely misleading when
         // the tool is sitting right there behind a permissions problem, so this case must surface.
-        if (OperatingSystem.IsWindows())
-        {
-            return; // chmod semantics differ; the behavior under test is the catch removal itself.
-        }
-
         var root = Path.Combine(Path.GetTempPath(), $"winc_{Guid.NewGuid():N}");
         var locked = Path.Combine(root, "locked");
         Directory.CreateDirectory(locked);
