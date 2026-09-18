@@ -178,38 +178,30 @@ public class SerialDeviceFinderTests
     {
         // Cross-platform fallback: when the descriptor provider can't
         // classify a port (returns null), the legacy probe behavior is
-        // preserved so we don't regress on Linux/macOS where we don't
-        // yet have a descriptor lookup. The probe will time out on
-        // non-DAQiFi ports as before — no change to that path.
+        // preserved so we don't regress on hosts without a descriptor lookup.
+        //
+        // Both seams are injected so the test is deterministic on every host:
+        // a fixed port list (a CI runner with zero serial ports would otherwise
+        // never call the provider and pass vacuously), and a recording probe so
+        // the assertion is on the port actually being probed, not merely classified.
         var fakeProvider = new RecordingUsbPortDescriptorProvider(_ => null);
+        var probed = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-        // Inject a fixed port list so the null-descriptor fallback IS invoked even
-        // on CI hosts with zero real serial ports — otherwise the test would
-        // pass vacuously (Assert.NotNull on an empty list, CallCount == 0).
-        // Use an obviously-invalid port name so SerialPort.Open() fails
-        // immediately on every platform — never touches a real device.
         using var finder = new SerialDeviceFinder(
             9600,
             fakeProvider,
-            portNameProvider: () => new[] { "MOCK_PORT_DOES_NOT_EXIST" });
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            portNameProvider: () => new[] { "MOCK_PORT_DOES_NOT_EXIST" },
+            probeOverride: (port, _) =>
+            {
+                probed.Add(port);
+                return Task.FromResult<IDeviceInfo?>(null);
+            });
 
-        // Probe path is short (legacy fallback fails to open immediately on
-        // the bogus port name). OCE is still acceptable; what matters is that
-        // the null-returning provider was actually called and the port was not
-        // filtered out of consideration.
-        try
-        {
-            var devices = await finder.DiscoverAsync(cts.Token);
-            Assert.NotNull(devices);
-        }
-        catch (OperationCanceledException)
-        {
-            // Probe ran (null descriptor fell through to probing) and exceeded the test budget.
-        }
+        var devices = await finder.DiscoverAsync();
 
-        Assert.True(fakeProvider.CallCount > 0,
-            "Null-returning descriptor provider was never invoked — the fall-through-to-probe path is not exercised by this test.");
+        Assert.Empty(devices);
+        Assert.Equal(1, fakeProvider.CallCount);
+        Assert.Equal(new[] { "MOCK_PORT_DOES_NOT_EXIST" }, probed);
     }
 
     [Fact]
