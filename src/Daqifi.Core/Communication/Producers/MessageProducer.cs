@@ -31,6 +31,12 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// waitable half of the same state <see cref="IsIdle"/> reports.
     /// </remarks>
     private readonly ManualResetEventSlim _idle = new(initialState: true);
+
+    /// <summary>
+    /// Makes <see cref="Send"/>'s reset-and-enqueue one step as far as the background loop's
+    /// idle signal is concerned. See <see cref="SignalIdleIfQuiet"/>.
+    /// </summary>
+    private readonly object _idleSync = new();
     private volatile bool _isRunning;
 
     /// <summary>
@@ -229,12 +235,17 @@ public class MessageProducer<T> : IMessageProducer<T>
         if (!_isRunning)
             throw new InvalidOperationException("Message producer is not running. Call Start() first.");
 
-        // Reset before the enqueue so a StopSafely already waiting cannot observe a still-set
-        // idle event while the queue is no longer empty. Conservative the other way: there is
-        // a moment where the event is reset and the queue is still empty, so a waiter stays
-        // parked until this message is drained — which is the wait they asked for.
-        _idle.Reset();
-        _messageQueue.Enqueue(message);
+        // Reset and enqueue under the same lock the background loop takes to signal idle, so
+        // the loop cannot find the queue empty and then signal idle after this message landed.
+        // Without the lock, "check empty -> Send resets and enqueues -> set" left the event set
+        // with a message queued, and a Disconnect straight after a Send (the usual "stop
+        // streaming, then disconnect" teardown) could stop the loop before writing it.
+        lock (_idleSync)
+        {
+            _idle.Reset();
+            _messageQueue.Enqueue(message);
+        }
+
         _messageAvailable.Set();
     }
 
@@ -381,18 +392,19 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// Marks the producer idle if the queue is still empty after a drain.
     /// </summary>
     /// <remarks>
-    /// The re-check after <see cref="ManualResetEventSlim.Set"/> is the race with
-    /// <see cref="Send"/>: a message can land between the empty check and the Set, and
-    /// without the Reset that waiter would return while work is outstanding.
+    /// The empty check and the Set happen under <see cref="_idleSync"/>, which
+    /// <see cref="Send"/> also holds across its Reset and Enqueue. That makes the pair atomic
+    /// with respect to a Send: either the message is already queued (no Set), or it is
+    /// enqueued after the Set and its Reset follows. A set-then-recheck without the lock is
+    /// not enough, because a waiter can wake on the transient Set before the recheck undoes it.
     /// </remarks>
     private void SignalIdleIfQuiet()
     {
-        if (_messageQueue.IsEmpty)
+        lock (_idleSync)
         {
-            _idle.Set();
-            if (!_messageQueue.IsEmpty)
+            if (_messageQueue.IsEmpty)
             {
-                _idle.Reset();
+                _idle.Set();
             }
         }
     }
