@@ -63,11 +63,16 @@ public class StreamMessageConsumerTests
         using var consumer = new StreamMessageConsumer<string>(stream, parser);
         
         string? receivedMessage = null;
-        consumer.MessageReceived += (sender, args) => receivedMessage = args.Message.Data;
+        using var received = new ManualResetEventSlim(false);
+        consumer.MessageReceived += (sender, args) =>
+        {
+            receivedMessage = args.Message.Data;
+            received.Set();
+        };
         
         // Act
         consumer.Start();
-        Thread.Sleep(20); // Give time for processing
+        Assert.True(received.Wait(TimeSpan.FromSeconds(2)), "MessageReceived should have fired.");
         consumer.Stop();
         
         // Assert
@@ -84,11 +89,19 @@ public class StreamMessageConsumerTests
         using var consumer = new StreamMessageConsumer<string>(stream, parser);
         
         var receivedMessages = new List<string>();
-        consumer.MessageReceived += (sender, args) => receivedMessages.Add(args.Message.Data);
+        using var received = new ManualResetEventSlim(false);
+        consumer.MessageReceived += (sender, args) =>
+        {
+            receivedMessages.Add(args.Message.Data);
+            if (receivedMessages.Count >= 3)
+            {
+                received.Set();
+            }
+        };
         
         // Act
         consumer.Start();
-        Thread.Sleep(30); // Give time for processing
+        Assert.True(received.Wait(TimeSpan.FromSeconds(2)), "Expected all three messages to arrive.");
         consumer.Stop();
         
         // Assert
@@ -107,27 +120,17 @@ public class StreamMessageConsumerTests
         using var consumer = new StreamMessageConsumer<string>(errorStream, parser);
         
         Exception? capturedError = null;
-        var errorReceived = false;
-        consumer.ErrorOccurred += (sender, args) => 
-        { 
+        using var errorReceived = new ManualResetEventSlim(false);
+        consumer.ErrorOccurred += (sender, args) =>
+        {
             capturedError = args.Error;
-            errorReceived = true;
+            errorReceived.Set();
         };
         
         // Act
         consumer.Start();
-        
-        // Wait for error with timeout
-        var timeout = DateTime.UtcNow.AddMilliseconds(500);
-        while (!errorReceived && DateTime.UtcNow < timeout)
-        {
-            Thread.Sleep(10);
-        }
-        
+        Assert.True(errorReceived.Wait(TimeSpan.FromSeconds(2)), "Error event should have been fired");
         consumer.Stop();
-        
-        // Assert
-        Assert.True(errorReceived, "Error event should have been fired");
         Assert.NotNull(capturedError);
         Assert.IsType<InvalidOperationException>(capturedError);
     }
