@@ -1,69 +1,35 @@
 # Git Workflow Rules
 
-## Branch Protection
+CONTRIBUTING.md owns the contributor-facing process (branch names, PublicAPI tracking, the
+CA2007/IDE0161/CA1707 build rules). These are the guardrails for agents working in this repo.
 
-### NEVER Push Directly to Main/Master
-- **ALWAYS** create a feature branch for any changes
-- **ALWAYS** use pull requests to merge changes into main/master
-- **NEVER** use `git push origin main` or `git push origin master`
-- **NEVER** bypass branch protection rules
+## Never push to `main`
 
-### Proper Workflow
+- `main` is gated by a merge queue: squash-only, CI's `build` check required. Every change
+  lands through a pull request from a feature branch.
+- **NEVER** `git push origin main`, and never bypass the ruleset.
+- Branch from a fresh `origin/main` (`git fetch origin` first), not from local `main`, which
+  can silently drift behind or ahead of the remote.
+- Branch names: `feature/`, `fix/`, `chore/` or `docs/` + a short description.
 
-1. **Create a feature branch**:
-   ```bash
-   git checkout -b feature/description
-   # or
-   git checkout -b fix/description
-   ```
+## Commits and pull requests
 
-2. **Make changes and commit**:
-   ```bash
-   git add .
-   git commit -m "description"
-   ```
+- Titles use the conventional-commit style already in `git log`: `type(scope): summary`, e.g.
+  `fix(sdcard): ...`, `feat(mcp): ...`, `chore(api): ...`; `!` after the scope marks a breaking
+  change. The squash merge uses the PR title, so the title is what ends up on `main`.
+- PR descriptions lead with what was wrong in plain, user-facing terms, then how it was
+  fixed; detail goes below. Reference the issue (`closes #N`).
+- CI must be green before the PR goes into the queue.
 
-3. **Push to feature branch**:
-   ```bash
-   git push origin feature/description
-   ```
+## Don't use `git stash`
 
-4. **Create Pull Request**:
-   ```bash
-   gh pr create --title "..." --body "..."
-   ```
+The stash stack is shared by every worktree of this repo, and parallel sessions each work in
+their own worktree. A `stash pop` can hand you someone else's changes. Set work aside with a
+WIP commit instead.
 
-### Branch Naming Conventions
-- Features: `feature/short-description`
-- Bug fixes: `fix/short-description`
-- Chores: `chore/short-description`
-- Documentation: `docs/short-description`
+## If you started work on `main`
 
-### Pull Request Requirements
-- Include comprehensive description
-- Reference related issues
-- Ensure all tests pass
-- Wait for CI/CD checks
-- Request review when needed
-
-### Exception Handling
-If you accidentally start work on main:
 ```bash
-# Create a new branch from current state
-git checkout -b feature/description
-
-# Reset main to remote state
-git checkout main
-git reset --hard origin/main
-
-# Switch back to feature branch
-git checkout feature/description
+git switch -c fix/description       # keep the work on a new branch
+git branch -f main origin/main      # put local main back where the remote is
 ```
-
-## Rationale
-Pushing directly to main/master:
-- Bypasses code review
-- Bypasses CI/CD checks
-- Can break the build for other developers
-- Violates team workflow standards
-- May violate repository branch protection rules
