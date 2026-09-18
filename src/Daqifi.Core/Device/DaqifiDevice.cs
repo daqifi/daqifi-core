@@ -475,7 +475,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// </summary>
     protected IStreamTransport? Transport => _transport;
 
-    private IProtocolHandler? _protocolHandler;
+    private ProtobufProtocolHandler? _protocolHandler;
 
     // "Teardown has finished" — read by ExecuteTextCommandCoreAsync to reject work on a dead
     // device. Distinct from _disposeClaimed below, which marks teardown as *started*.
@@ -4118,34 +4118,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// Routes a parsed inbound message through the protocol handler.
     /// </summary>
     /// <remarks>
-    /// The consumer is typed to <see cref="DaqifiOutMessage"/>, so the handler's type test can
-    /// never fail here — yet satisfying <see cref="IProtocolHandler.CanHandle"/> used to mean
-    /// boxing every single frame into a <c>GenericInboundMessage&lt;object&gt;</c> just to ask.
-    /// The typed entry point skips both the wrapper and the question (issue #490); a custom
-    /// <see cref="IProtocolHandler"/> still goes the long way round.
+    /// Calls the typed <see cref="ProtobufProtocolHandler.Handle"/> entry point so streaming
+    /// frames are not wrapped in a <c>GenericInboundMessage&lt;object&gt;</c> (issue #490).
     /// </remarks>
     /// <param name="message">The parsed message.</param>
     private void OnInboundMessageParsed(IInboundMessage<DaqifiOutMessage> message)
     {
-        if (_protocolHandler is ProtobufProtocolHandler protobufHandler)
-        {
-            protobufHandler.Handle(message.Data);
-            return;
-        }
-
-        if (_protocolHandler == null)
-        {
-            return;
-        }
-
-        // Convert to generic inbound message and route through protocol handler
-        var genericMessage = new GenericInboundMessage<object>(message.Data);
-
-        if (_protocolHandler.CanHandle(genericMessage))
-        {
-            // Fire and forget - we don't need to wait for the handler to complete
-            _ = _protocolHandler.HandleAsync(genericMessage);
-        }
+        _protocolHandler?.Handle(message.Data);
     }
 }
 

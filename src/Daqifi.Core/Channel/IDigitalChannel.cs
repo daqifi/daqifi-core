@@ -7,6 +7,8 @@ public interface IDigitalChannel : IChannel
 {
     /// <summary>
     /// Gets or sets the output value for digital output channels (true = high, false = low).
+    /// This is local bookkeeping mirroring the last commanded state; use
+    /// <c>IStreamingDevice.SetDioValue</c> to change the device.
     /// </summary>
     bool OutputValue { get; set; }
 
