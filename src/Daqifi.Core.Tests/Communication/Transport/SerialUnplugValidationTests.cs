@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using System.Diagnostics;
 using Xunit.Abstractions;
 
@@ -11,9 +12,9 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Does nothing unless <c>DAQIFI_UNPLUG_PORT</c> names a serial port, so CI and ordinary local
-/// runs are unaffected. Each test needs its own unplug, so run them one at a time, plugging the
-/// device back in between:
+/// Skipped unless <c>DAQIFI_UNPLUG_PORT</c> names a serial port, so CI and ordinary local runs
+/// are unaffected (xUnit records Skipped, not Passed). Each test needs its own unplug, so run
+/// them one at a time, plugging the device back in between:
 /// </para>
 /// <code>
 /// DAQIFI_UNPLUG_PORT=/dev/cu.usbmodem1101 \
@@ -45,14 +46,13 @@ public class SerialUnplugValidationTests
         _output = output;
     }
 
-    [Fact]
+    [EnvFact(
+        "DAQIFI_UNPLUG_PORT",
+        "set DAQIFI_UNPLUG_PORT to a connected DAQiFi serial port to run this hardware validation " +
+        "(see the class remarks for the full command line).")]
     public void UnpluggedSerialDevice_ReportsConnectionLost_WithinTheDocumentedBound()
     {
-        if (!TryGetHardwarePort(out var portName))
-        {
-            return;
-        }
-
+        var portName = RequireHardwarePort();
         var baudRate = ReadInt("DAQIFI_UNPLUG_BAUD", 115200);
         var warmup = TimeSpan.FromSeconds(ReadInt("DAQIFI_UNPLUG_WARMUP_SECONDS", 20));
         var timeout = TimeSpan.FromSeconds(ReadInt("DAQIFI_UNPLUG_TIMEOUT_SECONDS", 180));
@@ -145,17 +145,16 @@ public class SerialUnplugValidationTests
         Log("PASS — unplug reported as Lost, not Disconnected.");
     }
 
-    [Fact]
+    [EnvFact(
+        "DAQIFI_UNPLUG_PORT",
+        "set DAQIFI_UNPLUG_PORT to a connected DAQiFi serial port to run this hardware validation " +
+        "(see the class remarks for the full command line).")]
     public void UnpluggedSerialDevice_IsPrunedFromTheRegistry()
     {
         // Re-verifies PR #381's stale-registration pruning against a real unplug: the registry
         // prunes registrations whose device stops reporting IsConnected, which before #382 never
         // happened for a physically unplugged USB device.
-        if (!TryGetHardwarePort(out var portName))
-        {
-            return;
-        }
-
+        var portName = RequireHardwarePort();
         var baudRate = ReadInt("DAQIFI_UNPLUG_BAUD", 115200);
         var timeout = TimeSpan.FromSeconds(ReadInt("DAQIFI_UNPLUG_TIMEOUT_SECONDS", 180));
 
@@ -210,25 +209,14 @@ public class SerialUnplugValidationTests
     }
 
     /// <summary>
-    /// Resolves the port to validate against, or reports that this run is not a hardware run.
+    /// The port <see cref="EnvFactAttribute"/> already required to be set. A missing value here
+    /// is a wiring bug (the attribute should have skipped), not an unconfigured run.
     /// </summary>
-    /// <remarks>
-    /// xUnit 2.x has no dynamic skip (<c>Assert.Skip</c> arrived in v3), and a statically skipped
-    /// <c>[Fact(Skip = ...)]</c> cannot be turned on by the operator at all — so an unconfigured
-    /// run logs why it did nothing and returns. The hardware assertions below are the point of the
-    /// test; they run whenever <c>DAQIFI_UNPLUG_PORT</c> is set.
-    /// </remarks>
-    private bool TryGetHardwarePort(out string portName)
+    private static string RequireHardwarePort()
     {
-        portName = Environment.GetEnvironmentVariable("DAQIFI_UNPLUG_PORT") ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(portName))
-        {
-            return true;
-        }
-
-        Log("SKIPPED — set DAQIFI_UNPLUG_PORT to a connected DAQiFi serial port to run this " +
-            "hardware validation (see the class remarks for the full command line).");
-        return false;
+        var portName = Environment.GetEnvironmentVariable("DAQIFI_UNPLUG_PORT");
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+        return portName;
     }
 
     private static int ReadInt(string variable, int fallback)
