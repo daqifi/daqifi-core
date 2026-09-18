@@ -220,6 +220,9 @@ public class MessageProducerTests
 
         // Act & Assert - a failing write on the background thread must not surface to the caller
         producer.Send(new ScpiMessage("TEST:COMMAND"));
+        Assert.True(
+            SpinWait.SpinUntil(() => producer.StartedWriteCount == 1 && producer.IsIdle, TimeSpan.FromSeconds(2)),
+            "The failing write never ran.");
         Assert.True(producer.IsRunning);
         Assert.True(producer.StopSafely());
     }
