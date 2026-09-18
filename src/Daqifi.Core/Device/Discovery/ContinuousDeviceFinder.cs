@@ -576,9 +576,6 @@ public class ContinuousDeviceFinder : IDisposable
         DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs(deviceInfo));
     }
 
-    /// <summary>
-    /// Whether a tracked device sits on one of the ports the finder reported as busy.
-    /// </summary>
     /// <summary>How much a busy port can be trusted to speak for a tracked device.</summary>
     private enum BusyRescue
     {
