@@ -30,11 +30,15 @@ builder.Services.AddSingleton<VersionStatus>();
 builder.Services
     // Name the running version in the initialization handshake. Clients log and display it, so
     // "which daqifi-mcp am I talking to?" has an answer without calling a tool (issue #727).
-    .AddMcpServer(o => o.ServerInfo = new Implementation
+    .AddMcpServer(o =>
     {
-        Name = "daqifi-mcp",
-        Title = "DAQiFi",
-        Version = ServerVersion.Current,
+        o.ServerInfo = new Implementation
+        {
+            Name = "daqifi-mcp",
+            Title = "DAQiFi",
+            Version = ServerVersion.Current,
+        };
+        o.ServerInstructions = ServerOptions.Instructions;
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
