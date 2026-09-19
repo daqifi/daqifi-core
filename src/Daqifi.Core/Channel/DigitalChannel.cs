@@ -3,6 +3,10 @@ namespace Daqifi.Core.Channel;
 /// <summary>
 /// Represents a digital input/output channel.
 /// </summary>
+/// <remarks>
+/// Instance members are thread-safe. Property accessors and <see cref="SetActiveSample(IDataSample)"/>
+/// serialize on a private lock so concurrent readers and writers observe consistent state.
+/// </remarks>
 public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
 {
     private readonly object _lock = new();
@@ -41,10 +45,15 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     /// <summary>
     /// Gets or sets the channel name.
     /// </summary>
+    /// <exception cref="ArgumentNullException">The assigned value is <see langword="null"/>.</exception>
     public string Name
     {
         get { lock (_lock) { return _name; } }
-        set { lock (_lock) { _name = value; } }
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (_lock) { _name = value; }
+        }
     }
 
     /// <inheritdoc />
@@ -204,6 +213,7 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     /// SampleReceived event.
     /// </summary>
     /// <param name="sample">The sample to set as active.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
     public void SetActiveSample(IDataSample sample)
     {
         Internal.ActiveSampleAssignment.StoreUnderLock(_lock, sample, ref _activeSample);

@@ -225,8 +225,12 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:GET "filename.bin"
     /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFile("data.bin"));
     /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="fileName"/> is null, empty, or contains <c>"</c> or <c>;</c>.
+    /// </exception>
     public static IOutboundMessage<string> GetSdFile(string fileName)
     {
+        ValidateSdFileName(fileName);
         return new ScpiMessage($"SYSTem:STORage:SD:GET \"{fileName}\"");
     }
 
@@ -241,8 +245,12 @@ public class ScpiMessageProducer
     /// <c>SYSTem:STORage:SD:LOGging</c> and older firmware does not accept it (see daqifi-core#251).
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="fileName"/> is null, empty, or contains <c>"</c> or <c>;</c>.
+    /// </exception>
     public static IOutboundMessage<string> SetSdLoggingFileName(string fileName)
     {
+        ValidateSdFileName(fileName);
         return new ScpiMessage($"SYSTem:STORage:SD:FILE \"{fileName}\"");
     }
 
@@ -822,6 +830,24 @@ public class ScpiMessageProducer
         ValidateChannel(channel);
 
         return new ScpiMessage($"CONFigure:ADC:chanCALB? {channel}");
+    }
+
+    // SD filenames are interpolated into a quoted SCPI argument. Empty names are
+    // never useful, and `"` / `;` break out of the string or inject a second
+    // command. Shared so GetSdFile and SetSdLoggingFileName cannot drift.
+    private static void ValidateSdFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
+        }
+
+        if (fileName.IndexOfAny(new[] { '"', ';' }) >= 0)
+        {
+            throw new ArgumentException(
+                "Filename contains invalid characters. Quotes and semicolons are not allowed.",
+                nameof(fileName));
+        }
     }
 
     // Every channel-addressed SCPI command rejects a negative channel with the same
