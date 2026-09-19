@@ -7,12 +7,6 @@ public class Pic32BootloaderProtocolTests
     private readonly Pic32BootloaderProtocol _protocol = new();
 
     [Fact]
-    public void ImplementsIBootloaderProtocol()
-    {
-        Assert.IsAssignableFrom<IBootloaderProtocol>(_protocol);
-    }
-
-    [Fact]
     public void CreateRequestVersionMessage_DelegatesToProducer()
     {
         var expected = Pic32BootloaderMessageProducer.CreateRequestVersionMessage();

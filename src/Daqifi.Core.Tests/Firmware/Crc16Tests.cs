@@ -23,10 +23,10 @@ public class Crc16Tests
     [Fact]
     public void Constructor_WithSingleByte_ComputesCrc()
     {
-        // CRC-16/XMODEM of [0x01] should be a known value
+        // CRC-16/XMODEM of [0x01] = 0x1021 (poly 0x1021, init 0).
         var crc = new Crc16([0x01]);
 
-        Assert.NotEqual(0, crc.Crc);
+        Assert.Equal(0x1021, crc.Crc);
     }
 
     [Fact]
@@ -97,11 +97,11 @@ public class Crc16Tests
     [Fact]
     public void Crc16_AllZeros_ProducesZeroCrc()
     {
-        // CRC-16/XMODEM of all zeros should be deterministic
+        // CRC-16/XMODEM init is 0; zeros never shift a nonzero remainder in.
         var crc = new Crc16([0x00, 0x00, 0x00, 0x00]);
 
-        // Just verify it's deterministic, not necessarily zero
-        var crc2 = new Crc16([0x00, 0x00, 0x00, 0x00]);
-        Assert.Equal(crc.Crc, crc2.Crc);
+        Assert.Equal(0, crc.Crc);
+        Assert.Equal(0, crc.Low);
+        Assert.Equal(0, crc.High);
     }
 }

@@ -1092,10 +1092,17 @@ public class DeviceReconnectTests
         WaitUntilRetrying(device);
 
         device.Dispose();
-        transport.Dispose();
 
-        // Whatever the loop was in the middle of, it unwinds without surfacing anything.
-        Thread.Sleep(400);
+        // Dispose calls Disconnect, which supersedes the loop and returns without waiting for
+        // it. The loop still has to unwind — same post-condition as a caller Disconnect during
+        // retry, minus the ReconnectFailed wait that Dispose does not subscribe to.
+        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+
+        Assert.False(device.IsReconnecting);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        Assert.False(transport.IsConnected);
+
+        transport.Dispose();
     }
 
     #endregion
