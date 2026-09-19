@@ -144,9 +144,11 @@ logging.
 
 **Consequence — this collapses most of the gating problem:**
 
-- Every command daqifi-core issues today exists on all supported firmware → **no version
-  table entries are needed yet**. Don't build the table until we consume a post-v3.5.0
-  command.
+- Every command daqifi-core issued at decision time existed on all supported firmware →
+  **no version table entries were needed yet**. Don't build the table until we consume a
+  post-v3.5.0 command. *(Amendment: that trigger has landed. `SdFileTransferOverWifi`
+  (≥ v3.7.0) shipped the table in [#256](https://github.com/daqifi/daqifi-core/issues/256);
+  the "don't build until" rule is unchanged — see the implementation note under Decision 2.)*
 - The **version-selected-command** mode (send the old name on old firmware) is **unnecessary
   and out of scope** — there is no supported firmware that needs the pre-rename names. Core
   #253's unconditional `SD:FILE` is correct as-is.
@@ -195,6 +197,8 @@ therefore be snapshotted before/without the firmware version and silently go sta
 ```csharp
 namespace Daqifi.Core.Device;
 
+// Historical sketch (2026-06-19). The shipped enum also includes SdFileTransferOverWifi
+// (the first post-floor member; the table was built for it — see the #256 note below).
 public enum DeviceFeature
 {
     AnalogOutput,        // SOURce:VOLTage:LEVel / CONF:DAC — board gate: NQ3 only
@@ -203,7 +207,8 @@ public enum DeviceFeature
     // supported firmware:
     SdStorageQuery,      // SYSTem:STORage:SD:SPACe?   (fw v3.4.6b1)
     CapabilityDocument,  // CONFigure:CAPabilities:JSON? (fw v3.5.0)
-    // … add post-v3.5.0 commands here as we consume them; that is when the table is built.
+    SdFileTransferOverWifi, // SYSTem:STORage:SD:LIST? / :GET / :DELete over TCP (fw ≥ v3.7.0)
+    // Further post-v3.5.0 commands are added here as we consume them.
 }
 
 // Device/FeatureNotSupportedException.cs — the typed backstop.
@@ -325,7 +330,9 @@ predates firmware v3.5.0 removing the Type-2 muxed scan-rate cap (firmware #528)
 
 The decision is: **a v3.5.0 floor + board-derived capability (both live) + the `-113` typed
 backstop (always correct), with the version table and #327 reader deferred until they earn
-their place.**
+their place.** Both have now earned it — see the implementation notes under Decision 2
+([#256](https://github.com/daqifi/daqifi-core/issues/256) table,
+[#390](https://github.com/daqifi/daqifi-core/issues/390) reader).
 
 ## Consequences
 
@@ -334,8 +341,8 @@ their place.**
   code is the floor constant + the `-113` → `FeatureNotSupportedException` backstop.
 - Today's generic `SdCardOperationException` for old firmware becomes a clear, typed
   `FeatureNotSupportedException` carrying required-vs-actual version.
-- The seam is stable, so the deferred table and #327 reader slot in later without touching
-  consumers.
+- The seam is stable, so the table (#256) and capability-document reader (#390) slotted in
+  later without touching consumers — see the implementation notes under Decision 2.
 
 **Negative / costs**
 - A floor is a support commitment: pre-v3.5.0 devices get best-effort behavior and typed
