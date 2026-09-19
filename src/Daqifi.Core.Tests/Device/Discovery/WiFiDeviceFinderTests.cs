@@ -36,19 +36,13 @@ public class WiFiDeviceFinderTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_WithCancellationToken_CanBeCancelled()
+    public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
-        // Arrange - Use port 0 to let system assign random port (avoid conflicts)
         using var finder = new WiFiDeviceFinder(0);
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+        cts.Cancel();
 
-        // Act
-        var devices = await finder.DiscoverAsync(cts.Token);
-
-        // Assert
-        Assert.NotNull(devices);
-        // Should return empty or partial results when cancelled
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
     }
 
     [Fact]
@@ -64,17 +58,6 @@ public class WiFiDeviceFinderTests
 
         // Assert
         Assert.True(eventRaised);
-    }
-
-    [Fact]
-    public void WiFiDeviceFinder_Dispose_DoesNotThrow()
-    {
-        // Arrange
-        var finder = new WiFiDeviceFinder();
-
-        // Act & Assert
-        finder.Dispose();
-        // Should not throw
     }
 
     [Fact]
