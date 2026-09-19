@@ -8,33 +8,10 @@ The device interfaces provide a consistent API for discovering, connecting to, a
 
 ## Quick Start
 
-The simplest way to connect to a DAQiFi device is using the `DaqifiDeviceFactory`:
-
-```csharp
-using Daqifi.Core.Device;
-using Daqifi.Core.Communication.Producers;
-
-// Connect to a device (handles transport, connection, and initialization)
-await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
-
-// Subscribe to incoming data
-device.MessageReceived += (sender, e) =>
-{
-    if (e.Message.Data is DaqifiOutMessage message)
-    {
-        Console.WriteLine($"Timestamp: {message.MsgTimeStamp}");
-        Console.WriteLine($"Analog values: {string.Join(", ", message.AnalogInData)}");
-    }
-};
-
-// Configure channels and start streaming
-device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // Enable first 2 channels (bitmask 0b11 = 3)
-device.Send(ScpiMessageProducer.StartStreaming(100)); // 100 Hz sample rate
-
-await Task.Delay(TimeSpan.FromSeconds(10)); // Stream for 10 seconds
-
-device.Send(ScpiMessageProducer.StopStreaming);
-```
+Connect, enable a channel, and stream in a few lines — see
+[See it in 30 seconds](../README.md#see-it-in-30-seconds) in the root README.
+The rest of this document is the deeper surface: interfaces, reconnect, diagnostics,
+thread safety, and the cases the README does not cover.
 
 ## Core Interfaces
 
@@ -45,7 +22,9 @@ The base interface for all DAQiFi devices, providing fundamental connection and 
 - `Name` - Device identifier
 - `IpAddress` - Network address (for WiFi devices)
 - `IsConnected` - Connection status
-- `Status` - Detailed connection status (Disconnected, Connecting, Connected, Lost)
+- `Status` - Detailed connection status (`Disconnected`, `Connecting`, `Connected`, `Lost`;
+  plus `Retrying` / `Failed` once reconnection is enabled — see
+  [Reconnecting automatically after a drop](#reconnecting-automatically-after-a-drop))
 - `Connect()` / `Disconnect()` - Blocking connection management
 - `ConnectAsync(CancellationToken)` / `DisconnectAsync(CancellationToken)` - Non-blocking, cancellable
   connection management. These are genuine interface members, not default-interface-method shims over
@@ -190,26 +169,10 @@ Pre-configured presets:
 
 ### Device Discovery and Connection
 
-```csharp
-using Daqifi.Core.Device;
-using Daqifi.Core.Device.Discovery;
-
-// Discover devices on the network
-using var finder = new WiFiDeviceFinder();
-var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
-
-foreach (var deviceInfo in devices)
-{
-    Console.WriteLine($"Found: {deviceInfo.Name} at {deviceInfo.IPAddress}:{deviceInfo.Port}");
-}
-
-// Connect to the first discovered device
-if (devices.Any())
-{
-    await using var device = await DaqifiDeviceFactory.ConnectFromDeviceInfoAsync(devices.First());
-    // Device is ready to use
-}
-```
+Find-and-connect recipes (WiFi broadcast, serial, mDNS, `AllTransportsDeviceFinder`) live
+in the root README under [Device discovery](../README.md#device-discovery). The sections
+below are what that page does not cover: USB `LocationKey` correlation, continuous
+discovery, and the deeper network-finder notes.
 
 ### USB Physical-Location Correlation
 
@@ -245,17 +208,15 @@ resolve to `null`, same as `IUsbPortDescriptorProvider`'s cross-platform fallbac
 > parsing/fallback logic has automated coverage). Confirm both on a Windows bench with real
 > hardware before relying on this for anything safety-critical.
 
-### Discover Across All Transports (Recommended)
+### Discover Across All Transports
 
-To "find any DAQiFi on WiFi or USB" in one call, use `AllTransportsDeviceFinder` — it runs the
-per-transport finders concurrently and returns a single deduplicated set. Because it is itself an
-`IDeviceFinder`, wrapping it in a `ContinuousDeviceFinder` (below) gives deduplicated *continuous*
-discovery across every transport for free.
+The README's [Device discovery](../README.md#device-discovery) recipe constructs
+`AllTransportsDeviceFinder` from the individual finders. Two helpers live only here:
 
 ```csharp
 using Daqifi.Core.Device.Discovery;
 
-// One-shot across WiFi + serial:
+// One-shot across the default WiFi + serial set (no mDNS):
 using var finder = AllTransportsDeviceFinder.CreateDefault();
 var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(3));
 
@@ -265,69 +226,49 @@ var device = await DaqifiDeviceFactory.DiscoverAndConnectAsync(
     timeout: TimeSpan.FromSeconds(5));
 ```
 
-A transport finder that fails (e.g. WiFi discovery with no network) is logged and skipped, so the
-other transports still return. Deduplication reuses `ContinuousDeviceFinder`'s per-transport
-identity, so the same physical unit reachable over both WiFi and USB appears as two connection
-options; pass a custom `identitySelector` (e.g. by serial number) to collapse them.
+Because `AllTransportsDeviceFinder` is itself an `IDeviceFinder`, wrapping it in a
+`ContinuousDeviceFinder` (below) gives deduplicated *continuous* discovery across every
+transport for free. A transport finder that fails (e.g. WiFi discovery with no network) is
+logged and skipped, so the other transports still return. Deduplication reuses
+`ContinuousDeviceFinder`'s per-transport identity, so the same physical unit reachable over
+both WiFi and USB appears as two connection options; pass a custom `identitySelector` (e.g.
+by serial number) to collapse them.
 
-### Network Discovery: UDP Broadcast and mDNS
+### Network Discovery Notes
 
-There are two ways to find a device over the network, and on a real home network you want both.
+The short mDNS + broadcast recipe is in the README. These are the notes that page does not
+keep:
 
-`WiFiDeviceFinder` sends the legacy `DAQiFi?\r\n` query to the subnet broadcast address on UDP
-30303. It works, and it is the only path for devices on older firmware — but subnet-directed
-broadcast is unreliable the moment more than one access point is involved. On a single-SSID,
-two-AP network with the host on 5 GHz at one AP and the device on 2.4 GHz at the other, enough
-broadcast frames are dropped crossing the AP boundary that ARP itself fails to resolve; discovery
-then returns zero devices while the device is associated, healthy and holding a DHCP lease
-([#183](https://github.com/daqifi/daqifi-core/issues/183)). Nothing the library does with sockets
-can fix that, because the frames never survive the radio.
-
-`MDnsDeviceFinder` browses for the `_daqifi._tcp.local.` service on the mDNS multicast group
-(224.0.0.251:5353) instead. That is the one multicast group every prosumer router already reflects
-across APs, SSIDs and VLANs, and it is the path that also survives WSL2 (whose NAT bridge drops
-outbound broadcast) and client-isolated guest networks. The device advertises PTR + SRV + TXT + A
-in a single reply; the finder parses the SRV port and A address, reads `sn` / `pn` / `fw` /
-`friendly` out of the TXT record, and returns the same `IDeviceInfo` shape with
-`ConnectionType.WiFi` — so it is a drop-in for anything already consuming discovery results.
-
-```csharp
-using Daqifi.Core.Device.Discovery;
-
-using var finder = new AllTransportsDeviceFinder(
-    [new WiFiDeviceFinder(), new MDnsDeviceFinder(), new SerialDeviceFinder()]);
-
-var devices = await finder.DiscoverAsync(TimeSpan.FromSeconds(5));
-```
-
-Running both network finders is additive, not redundant: a device on firmware without an mDNS
-responder is still found by broadcast, and a device the broadcast cannot reach is still found by
-mDNS. The same unit answering on both paths is deduplicated by the aggregator only if you pass an
-`identitySelector` that collapses them (e.g. by serial number) — the default per-transport identity
-prefers the MAC address, which the broadcast reply carries and the advertisement does not, so it
-keeps them as two entries, both of which are genuinely connectable.
-
-Selecting on the serial number works because this finder reports it in the same form the other
-finders do. The firmware publishes the board's 64-bit serial in TXT as 16 hex digits while the
-protobuf path carries the same integer numerically, so the advertised value is converted to the
-decimal representation the rest of the library uses (`0x7E2815916200E898` is `9090539562006014104`,
-one board, not two).
-
-Practical notes:
-
+- **Why broadcast fails on a multi-AP home network.** `WiFiDeviceFinder` sends `DAQiFi?\r\n`
+  to the subnet broadcast address on UDP 30303. On a single-SSID, two-AP network with the
+  host on 5 GHz at one AP and the device on 2.4 GHz at the other, enough broadcast frames
+  are dropped crossing the AP boundary that ARP itself fails to resolve; discovery then
+  returns zero devices while the device is associated, healthy and holding a DHCP lease
+  ([#183](https://github.com/daqifi/daqifi-core/issues/183)). Nothing the library does with
+  sockets can fix that — the frames never survive the radio. `MDnsDeviceFinder` browses
+  `_daqifi._tcp.local.` on 224.0.0.251:5353 instead, which consumer routers already reflect
+  across APs and which also survives WSL2 NAT (broadcast is dropped) and client-isolated
+  guest networks.
+- **Same board, two entries.** The default per-transport identity prefers the MAC address,
+  which the broadcast reply carries and the mDNS advertisement does not, so a unit answering
+  on both paths stays as two connectable entries. Pass `identitySelector: d => d.SerialNumber`
+  to collapse them. The firmware publishes the board's 64-bit serial in TXT as 16 hex digits
+  while the protobuf path carries the same integer numerically, so the advertised value is
+  converted to the decimal form the rest of the library uses (`0x7E2815916200E898` is
+  `9090539562006014104`, one board, not two).
+- **The mDNS port is shared, not seized.** The finder binds UDP 5353 with `SO_REUSEADDR`
+  (plus `SO_REUSEPORT` on Linux/macOS, which BSD-derived stacks require) and joins the group
+  on every eligible NIC. Multicast datagrams are delivered to *every* socket joined to the
+  group, so running alongside the host's own mDNS daemon (mDNSResponder, Avahi) takes no
+  traffic from it. If the port cannot be shared at all, the pass returns empty rather than
+  throwing.
+- **`LocalInterfaceAddress`** is resolved by matching the device's address against each local
+  interface's subnet, rather than read off the socket as the broadcast finder does — a
+  multicast listener has to be bound to the wildcard address to receive anything on Linux
+  and macOS.
 - **Firmware.** The device-side responder is
   [daqifi-nyquist-firmware#345](https://github.com/daqifi/daqifi-nyquist-firmware/issues/345).
   On firmware without it, this finder simply returns nothing — use the broadcast path.
-- **The mDNS port is shared, not seized.** The finder binds UDP 5353 with `SO_REUSEADDR` (plus
-  `SO_REUSEPORT` on Linux/macOS, which BSD-derived stacks require) and joins the group on every
-  eligible NIC. Multicast datagrams are delivered to *every* socket joined to the group, so
-  running alongside the host's own mDNS daemon (mDNSResponder, Avahi) takes no traffic from it.
-  If the port cannot be shared at all, the pass returns empty rather than throwing.
-- **Multicast-filtered networks.** Some corporate and hardened guest networks drop multicast
-  outright. Connect by IP address directly (`DaqifiDeviceFactory.ConnectTcpAsync`) when they do.
-- **`LocalInterfaceAddress`** is resolved by matching the device's address against each local
-  interface's subnet, rather than read off the socket as the broadcast finder does — a multicast
-  listener has to be bound to the wildcard address to receive anything on Linux and macOS.
 
 ### Continuous Discovery (Live Device Set)
 
@@ -1020,24 +961,18 @@ device.DisableChannel(ai0);
 // Turn everything off.
 device.DisableAllChannels();
 
-// Digital I/O: set direction and drive an output.
-var dio1 = channels.First(c => c.Type == ChannelType.Digital && c.ChannelNumber == 1);
-device.SetDioDirection(dio1, ChannelDirection.Output);
-device.SetDioValue(dio1, true); // drive high
-
-// PWM on a capable channel (IDigitalChannel.IsPwmCapable). Duty is per channel; the
-// frequency is device-wide because one hardware timer drives every PWM channel.
-var pwm = channels.OfType<IDigitalChannel>().First(c => c.IsPwmCapable);
-device.SetPwmDutyCycle(pwm, 25);  // 1-100 %
-device.SetPwmFrequency(1000);     // 6-50000 Hz, shared by all PWM channels
-device.SetPwmEnabled(pwm, true);  // start; SetPwmEnabled(pwm, false) stops (pin goes high-impedance)
-
 // Analog output (NQ3 only) — addressed by channel number; staged value is applied immediately.
+// Check device.Supports(DeviceFeature.AnalogOutput) first — see Feature support below.
 device.SetAnalogOutput(0, 2.5); // DAC channel 0 to 2.5 V
 
 // Reboot the device (also disconnects, since the device drops its link while restarting).
 device.Reboot();
 ```
+
+Digital I/O and PWM recipes live in the root README
+([Digital output](../README.md#digital-output), [PWM output](../README.md#pwm-output)).
+The `SetDio*` / `SetPwm*` members are on `IStreamingDevice` the same way the enable/disable
+calls above are.
 
 > Channel objects passed to the enable/disable and DIO methods must belong to the device's
 > `Channels` collection (so the internal state and bitmask stay in sync). Analog-output (DAC)
@@ -1049,9 +984,43 @@ directly on `IStreamingDevice`:
 
 ```csharp
 await streamingDevice.EnableChannelsAsync(new[] { ai0, ai2 }, cancellationToken);
-await streamingDevice.SetDioValueAsync(dio1, true, cancellationToken);
+await streamingDevice.SetAnalogOutputAsync(0, 2.5, cancellationToken);
 await streamingDevice.RebootAsync(cancellationToken);
 ```
+
+### Feature support
+
+Some surfaces are board- or firmware-gated. Branch on `device.Supports(DeviceFeature)` —
+do not compare firmware strings yourself. Calling the gated API anyway throws
+`FeatureNotSupportedException` (feature, required version, reported version, board).
+
+```csharp
+await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
+
+// Analog output is Nyquist 3 hardware only.
+if (device.Supports(DeviceFeature.AnalogOutput))
+    device.SetAnalogOutput(0, 2.5);
+
+// SD list/get/delete over WiFi needs firmware ≥ 3.7.0 plus SD + WiFi hardware.
+// Over USB the same operations are available on all SD-capable firmware and are not gated.
+if (device.Supports(DeviceFeature.SdFileTransferOverWifi))
+{
+    var files = await device.GetSdCardFilesAsync();
+}
+
+try
+{
+    await device.GetSdCardFilesAsync();
+}
+catch (FeatureNotSupportedException ex)
+{
+    Console.WriteLine($"{ex.Feature}: needs {ex.RequiredVersion}, device reports {ex.ActualVersion} ({ex.Board})");
+}
+```
+
+`DaqifiDeviceFactory` returns `DaqifiStreamingDevice`, which inherits `Supports` from
+`DaqifiDevice`. The requirement table and `-113` backstop live in
+[ADR 0001](adr/0001-firmware-feature-gating.md) — this is the call-site pattern only.
 
 ## SCPI Commands
 
@@ -1317,19 +1286,3 @@ if (device.DecodeFailureCount > 0)
 `ErrorOccurred` is raised on a background thread, so handlers should do the minimum and push real
 work elsewhere. A handler that throws is caught and ignored — it can never disturb reading or
 streaming.
-
-## Features
-
-- **Simple Factory API**: Single-call connection with `DaqifiDeviceFactory`
-- **Multi-Device Registry**: `DaqifiDeviceRegistry` tracks the live device set and detects the same
-  unit connected over two transports
-- **Clean Abstraction**: Hardware details hidden behind well-defined interfaces
-- **Event-Driven**: Status changes and messages handled via events
-- **Observable Failures**: Background read and decode errors surface on `ErrorOccurred` instead of
-  failing silently
-- **Opt-in Auto-Reconnect**: A dropped connection can rebuild itself — transport, initialization,
-  channel configuration and stream — with no consumer code
-- **Type Safety**: Generic message types provide compile-time safety
-- **Retry Support**: Built-in connection retry with exponential backoff
-- **Thread-Safe Sending**: Background message queue for thread-safe command sending
-- **Cross-Platform**: Compatible with .NET 9.0 and .NET 10.0
