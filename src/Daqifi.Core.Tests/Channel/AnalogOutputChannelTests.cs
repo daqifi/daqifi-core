@@ -187,6 +187,15 @@ public class AnalogOutputChannelTests
     }
 
     [Fact]
+    public void Name_Null_Throws()
+    {
+        var channel = new AnalogOutputChannel(0);
+
+        var ex = Assert.Throws<ArgumentNullException>(() => channel.Name = null!);
+        Assert.Equal("value", ex.ParamName);
+    }
+
+    [Fact]
     public void SetActiveSample_NullSample_Throws()
     {
         var channel = new AnalogOutputChannel(0);

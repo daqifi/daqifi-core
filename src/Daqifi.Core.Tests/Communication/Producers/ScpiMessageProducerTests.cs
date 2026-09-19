@@ -124,6 +124,40 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void GetSdFile_WithNullOrEmptyFileName_Throws(string? fileName)
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName!));
+    }
+
+    [Theory]
+    [InlineData("a\"b")]
+    [InlineData("a;b")]
+    public void GetSdFile_WithInjectionChars_Throws(string fileName)
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SetSdLoggingFileName_WithNullOrEmptyFileName_Throws(string? fileName)
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetSdLoggingFileName(fileName!));
+    }
+
+    [Theory]
+    [InlineData("a\"b")]
+    [InlineData("a;b")]
+    public void SetSdLoggingFileName_WithInjectionChars_Throws(string fileName)
+    {
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetSdLoggingFileName(fileName));
+    }
+
     [Fact]
     public void StartStreaming_ReturnsCorrectCommand()
     {

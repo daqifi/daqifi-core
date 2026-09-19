@@ -3,6 +3,11 @@ namespace Daqifi.Core.Channel;
 /// <summary>
 /// Represents an analog input/output channel with scaling and calibration capabilities.
 /// </summary>
+/// <remarks>
+/// Instance members are thread-safe. Mutable state is guarded by a private lock, except
+/// <see cref="Scaling"/> which is published with <see cref="Volatile"/> because a
+/// <see cref="ChannelScaling"/> instance is immutable.
+/// </remarks>
 public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementNotifier
 {
     /// <summary>
@@ -56,10 +61,15 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// <summary>
     /// Gets or sets the channel name.
     /// </summary>
+    /// <exception cref="ArgumentNullException">The assigned value is <see langword="null"/>.</exception>
     public string Name
     {
         get { lock (_lock) { return _name; } }
-        set { lock (_lock) { _name = value; } }
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (_lock) { _name = value; }
+        }
     }
 
     /// <inheritdoc />
@@ -338,6 +348,7 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     /// SampleReceived event.
     /// </summary>
     /// <param name="sample">The sample to set as active.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
     public void SetActiveSample(IDataSample sample)
     {
         Internal.ActiveSampleAssignment.StoreUnderLock(_lock, sample, ref _activeSample);

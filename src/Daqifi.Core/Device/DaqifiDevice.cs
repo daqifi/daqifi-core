@@ -3052,6 +3052,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _messageProducer?.Dispose();
             _transport?.Dispose();
             _operations.Dispose();
+            _statusRefreshGate.Dispose();
             _disposed = true;
         }
     }
