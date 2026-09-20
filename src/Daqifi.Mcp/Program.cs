@@ -46,8 +46,10 @@ var host = builder.Build();
 var agent = host.Services.GetRequiredService<DaqifiAgent>();
 
 // Fire-and-forget: a stale install is worth a stderr line, but never worth delaying startup or
-// failing it. The check is bounded by its own timeout and swallows its own failures.
-host.Services.GetRequiredService<VersionStatus>().Start();
+// failing it. The check is bounded by its own timeout and swallows its own failures. The host
+// stopping token aborts the nuget GET if shutdown wins the race with the 5s request timeout.
+host.Services.GetRequiredService<VersionStatus>()
+    .Start(host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping);
 
 try
 {

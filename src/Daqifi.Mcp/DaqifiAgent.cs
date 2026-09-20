@@ -162,6 +162,9 @@ public sealed class DaqifiAgent
     /// rather than the sum of both (#488). That matters because <see cref="WiFiDeviceFinder"/>
     /// listens for its whole budget by design, so running it before serial used to add its full
     /// timeout to every pass — on the first tool call of every session.
+    /// The listen budget is linked with <paramref name="cancellationToken"/>: a timeout still
+    /// returns whatever answered (empty if nothing did), while cancelling the token throws
+    /// <see cref="OperationCanceledException"/> without waiting out the window.
     /// </remarks>
     public async Task<IReadOnlyList<DiscoveredDevice>> DiscoverAsync(
         int timeoutMs, bool wifi, bool serial, CancellationToken cancellationToken)
@@ -169,9 +172,7 @@ public sealed class DaqifiAgent
         var timeout = ClampDiscoveryTimeout(timeoutMs);
 
         var infos = await DiscoverAcrossTransportsAsync(
-            CreateTransportFinders(wifi, serial), timeout).ConfigureAwait(false);
-
-        cancellationToken.ThrowIfCancellationRequested();
+            CreateTransportFinders(wifi, serial), timeout, cancellationToken).ConfigureAwait(false);
 
         var result = new List<DiscoveredDevice>();
         foreach (var info in infos)
@@ -219,19 +220,42 @@ public sealed class DaqifiAgent
     /// and lose the USB device that was found alongside it.
     /// </remarks>
     internal static async Task<IReadOnlyList<IDeviceInfo>> DiscoverAcrossTransportsAsync(
-        IReadOnlyList<IDeviceFinder> finders, TimeSpan timeout)
+        IReadOnlyList<IDeviceFinder> finders,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
     {
-        // Both transports disabled is a legitimate no-op call, but AllTransportsDeviceFinder
-        // requires at least one finder — answer it here rather than let the aggregator throw.
-        if (finders.Count == 0)
-        {
-            return Array.Empty<IDeviceInfo>();
-        }
-
         try
         {
-            using var allTransports = new AllTransportsDeviceFinder(finders);
-            return (await allTransports.DiscoverAsync(timeout).ConfigureAwait(false)).ToList();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Both transports disabled is a legitimate no-op call, but AllTransportsDeviceFinder
+            // requires at least one finder — answer it here rather than let the aggregator throw.
+            if (finders.Count == 0)
+            {
+                return Array.Empty<IDeviceInfo>();
+            }
+
+            // Link the listen budget to the caller token and pass Core's CT overload, not the
+            // timeout overload. The timeout overload cannot see the caller token, so a cancelled
+            // discover_devices used to sit in WiFiDeviceFinder's receive loop until the window
+            // ended and only then ThrowIfCancellationRequested(). Timeout still means "return
+            // whatever answered" (empty if nothing did); caller cancel still means
+            // OperationCanceledException. Same split DaqifiDeviceFactory.DiscoverAndConnectAsync
+            // already implements.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeout);
+            try
+            {
+                using var allTransports = new AllTransportsDeviceFinder(finders);
+                var found = (await allTransports.DiscoverAsync(timeoutCts.Token).ConfigureAwait(false))
+                    .ToList();
+                cancellationToken.ThrowIfCancellationRequested();
+                return found;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return Array.Empty<IDeviceInfo>();
+            }
         }
         finally
         {
