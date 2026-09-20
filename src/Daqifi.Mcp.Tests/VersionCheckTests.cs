@@ -260,7 +260,8 @@ public class VersionStatusTests
         // still be able to abandon the wait without sitting on the 5s HTTP timeout.
         var source = new HangingLatestVersionSource();
         var status = NewStatus(source);
-        status.Start();
+        using var hostCts = new CancellationTokenSource();
+        status.Start(hostCts.Token);
         await source.Started;
 
         using var cts = new CancellationTokenSource();
@@ -269,6 +270,7 @@ public class VersionStatusTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
         Assert.Equal(1, source.CallCount);
+        hostCts.Cancel();
     }
 
     [Fact]
