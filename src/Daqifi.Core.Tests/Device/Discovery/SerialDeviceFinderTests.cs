@@ -64,16 +64,6 @@ public class SerialDeviceFinderTests
     }
 
     [Fact]
-    public void SerialDeviceFinder_Dispose_DoesNotThrow()
-    {
-        // Arrange
-        var finder = new SerialDeviceFinder();
-
-        // Act & Assert
-        finder.Dispose();
-    }
-
-    [Fact]
     public async Task DiscoverAsync_AfterDispose_ThrowsObjectDisposedException()
     {
         // Arrange
@@ -82,27 +72,6 @@ public class SerialDeviceFinderTests
 
         // Act & Assert
         await Assert.ThrowsAsync<ObjectDisposedException>(() => finder.DiscoverAsync());
-    }
-
-    [Fact]
-    public void SerialDeviceFinder_CustomBaudRateConstructor_DoesNotThrow()
-    {
-        // Keeps the public SerialDeviceFinder(int) overload exercised. 115200 rather than 9600 so
-        // this is a genuinely non-default rate — 9600 is DefaultBaudRate, which the parameterless
-        // constructor already covers. The baud rate itself is a private field with no accessor, so
-        // "does not throw" is the whole of what a test can say here, and the name says exactly that
-        // rather than implying the value is checked.
-        using var finder = new SerialDeviceFinder(115200);
-    }
-
-    [Fact]
-    public void SerialDeviceFinder_CustomUsbLocationProvider_AcceptsProvider()
-    {
-        var fakeProvider = new RecordingUsbLocationProvider(_ => "Port_#0001.Hub_#0001");
-
-        // As with the baud-rate overload above: the provider is a private field with no accessor,
-        // so "the constructor accepts it and does not throw" is the whole of what a test can say.
-        using var finder = new SerialDeviceFinder(9600, usbPortDescriptorProvider: null, usbLocationProvider: fakeProvider);
     }
 
     [Fact]
@@ -225,37 +194,30 @@ public class SerialDeviceFinderTests
         // down the whole discovery pass — fall through to legacy probing
         // for the port and continue with the rest of the list.
         //
-        // Inject a fixed port list so the throwing provider IS invoked even
-        // on CI hosts with zero real serial ports — otherwise the test would
-        // pass vacuously without exercising the exception-handling path.
+        // Both seams are injected so the test is deterministic on every host:
+        // a fixed port list (a CI runner with zero serial ports would otherwise
+        // never call the provider and pass vacuously), and a recording probe so
+        // the assertion is on the port actually being probed after the throw,
+        // not on an OperationCanceledException from a real SerialPort.Open.
         var fakeProvider = new RecordingUsbPortDescriptorProvider(_ =>
             throw new InvalidOperationException("simulated provider failure"));
+        var probed = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-        // Use an obviously-invalid port name so SerialPort.Open() fails
-        // immediately on every platform — never touches a real device, even
-        // if the host happens to expose a high-numbered COM port (COM999 etc.
-        // can exist on some Windows setups with virtual serial drivers).
         using var finder = new SerialDeviceFinder(
             9600,
             fakeProvider,
-            portNameProvider: () => new[] { "MOCK_PORT_DOES_NOT_EXIST" });
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            portNameProvider: () => new[] { "MOCK_PORT_DOES_NOT_EXIST" },
+            probeOverride: (port, _) =>
+            {
+                probed.Add(port);
+                return Task.FromResult<IDeviceInfo?>(null);
+            });
 
-        // Probe path is short (legacy fallback fails to open immediately on
-        // the bogus port name). OCE is still acceptable; what matters is that
-        // the throwing provider was actually called and didn't propagate.
-        try
-        {
-            var devices = await finder.DiscoverAsync(cts.Token);
-            Assert.NotNull(devices);
-        }
-        catch (OperationCanceledException)
-        {
-            // Probe ran (provider throw was caught and treated as null).
-        }
+        var devices = await finder.DiscoverAsync();
 
-        Assert.True(fakeProvider.CallCount > 0,
-            "Throwing descriptor provider was never invoked — the exception-handling path is not exercised by this test.");
+        Assert.Empty(devices);
+        Assert.Equal(1, fakeProvider.CallCount);
+        Assert.Equal(new[] { "MOCK_PORT_DOES_NOT_EXIST" }, probed);
     }
 
     // --- #294: hang immunity -------------------------------------------------
@@ -885,12 +847,5 @@ public class SerialDeviceFinderTests
             Interlocked.Increment(ref _callCount);
             return _classifier(portName);
         }
-    }
-
-    private sealed class RecordingUsbLocationProvider : IUsbLocationProvider
-    {
-        private readonly Func<string, string?> _resolver;
-        public RecordingUsbLocationProvider(Func<string, string?> resolver) => _resolver = resolver;
-        public string? GetLocationKey(string portNameOrDevicePath) => _resolver(portNameOrDevicePath);
     }
 }

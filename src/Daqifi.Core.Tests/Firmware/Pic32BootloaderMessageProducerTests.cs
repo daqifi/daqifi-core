@@ -205,15 +205,13 @@ public class Pic32BootloaderMessageProducerTests
     {
         var hexRecord = new byte[] { 0xAA, 0xBB };
         var message = Pic32BootloaderMessageProducer.CreateProgramFlashMessage(hexRecord);
-
-        // Verify the CRC is computed over [0x03, 0xAA, 0xBB]
         var expectedCrc = new Crc16([0x03, 0xAA, 0xBB]);
 
-        // The message should contain these CRC bytes (possibly DLE-escaped)
-        // Just verify the CRC object is created successfully and message is valid
-        Assert.True(message.Length > 4);
         Assert.Equal(SOH, message[0]);
         Assert.Equal(EOT, message[^1]);
+
+        var payload = UnescapePayload(message);
+        Assert.Equal(new byte[] { 0x03, 0xAA, 0xBB, expectedCrc.Low, expectedCrc.High }, payload);
     }
 
     [Fact]
@@ -273,5 +271,25 @@ public class Pic32BootloaderMessageProducerTests
             Assert.Equal(EOT, message[^1]);
             Assert.True(message.Length >= 4); // At minimum: SOH + cmd + crc_low + crc_high + EOT
         }
+    }
+
+    /// <summary>
+    /// Strips SOH/EOT and DLE-unescapes the payload so CRC bytes can be asserted even when they
+    /// collide with framing bytes.
+    /// </summary>
+    private static byte[] UnescapePayload(byte[] message)
+    {
+        var payload = new List<byte>(message.Length - 2);
+        for (var i = 1; i < message.Length - 1; i++)
+        {
+            if (message[i] == DLE)
+            {
+                i++;
+            }
+
+            payload.Add(message[i]);
+        }
+
+        return [.. payload];
     }
 }
