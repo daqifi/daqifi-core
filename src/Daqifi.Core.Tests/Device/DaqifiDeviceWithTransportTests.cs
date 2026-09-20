@@ -176,15 +176,7 @@ public class DaqifiDeviceWithTransportTests
         
         // Act
         device.Connect();
-        
-        // Allow time for message producer to start
-        Thread.Sleep(100);
-        
         device.Send(ScpiMessageProducer.GetDeviceInfo);
-        
-        // Allow time for message to be processed
-        Thread.Sleep(200);
-        
         device.Disconnect();
         
         // Assert
@@ -281,18 +273,15 @@ public class DaqifiDeviceWithTransportTests
         using var device = new DaqifiDevice("Mock Device", transport);
 
         device.Connect();
-        Thread.Sleep(50); // MessageProducer background thread spin-up
         device.Send(ScpiMessageProducer.GetDeviceInfo);
-        Thread.Sleep(200); // Allow the producer to flush
+        device.Disconnect();
         var firstStreamBytes = transport.CurrentStreamSnapshot();
         Assert.NotEmpty(firstStreamBytes);
 
-        device.Disconnect();
         transport.RotateStream();
         device.Connect();
-        Thread.Sleep(50);
         device.Send(ScpiMessageProducer.GetDeviceInfo);
-        Thread.Sleep(200);
+        device.Disconnect();
 
         // The send AFTER reconnect must land on the new stream — not on the
         // first (now-disposed) stream we captured above.
