@@ -1,4 +1,5 @@
 using System.IO.Ports;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Communication.Transport;
 
@@ -674,7 +675,8 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             // disturbing them. A DaqifiDevice surfaces its own StatusChanged subscriber failures on
             // ErrorOccurred; this transport carries no logger, so a consumer working against a bare
             // transport gets the same best-effort trace DeviceFinderBase gives its event raises.
-            SafeTrace(ex);
+            SafeTrace(() =>
+                $"[{nameof(SerialStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {ex}");
         }
         finally
         {
@@ -686,40 +688,6 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             {
                 // The device is already gone; failing to close its handle changes nothing.
             }
-        }
-    }
-
-    /// <summary>
-    /// Writes the diagnostic line for a <see cref="StatusChanged"/> subscriber failure, swallowing
-    /// anything a misbehaving <see cref="System.Diagnostics.TraceListener"/> throws.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="System.Diagnostics.Trace"/> dispatches to listeners the consumer installed, so it
-    /// is consumer code and can throw like any other. A listener throwing out of the <c>catch</c>
-    /// that was containing a bad subscriber would defeat the containment and cost the port handle
-    /// anyway. Same guarantee as <c>DeviceFinderBase.RaiseIsolated</c> and
-    /// <c>DaqifiStreamingDevice.SafeTrace</c>; this transport has no <c>ILogger</c>, hence the local
-    /// twin rather than a shared one.
-    /// <para>
-    /// The message is composed <em>inside</em> the guard rather than passed in ready-made, because
-    /// <paramref name="subscriberFailure"/> came out of consumer code too: rendering an exception
-    /// whose <see cref="object.ToString"/> or <see cref="Exception.Message"/> throws would otherwise
-    /// escape the <c>catch</c> from the interpolation itself and leave the drop path exactly as
-    /// disrupted as an unguarded raise.
-    /// </para>
-    /// </remarks>
-    /// <param name="subscriberFailure">The exception the subscriber threw.</param>
-    private static void SafeTrace(Exception subscriberFailure)
-    {
-        try
-        {
-            System.Diagnostics.Trace.WriteLine(
-                $"[{nameof(SerialStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {subscriberFailure}");
-        }
-        catch
-        {
-            // A trace listener — or an exception that cannot render itself — is not permitted to
-            // affect the drop path.
         }
     }
 

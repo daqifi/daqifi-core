@@ -8,6 +8,7 @@ using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 #nullable enable
 
@@ -1073,21 +1074,7 @@ internal sealed class TextExchangeEngine
         }
     }
 
-    /// <summary>
-    /// Logs through the device's logger without letting a throwing logger take down an exchange —
-    /// the same isolation <c>DaqifiDevice.SafeLog</c> gives the rest of the device.
-    /// </summary>
-    private void Log(Action<ILogger> logAction)
-    {
-        try
-        {
-            logAction(_host.Logger);
-        }
-        catch
-        {
-            // A logger that throws is not permitted to take down device operation.
-        }
-    }
+    private void Log(Action<ILogger> logAction) => SafeLog(() => logAction(_host.Logger));
 
     /// <summary>
     /// One line the text consumer produced, together with what the outbound writer had already

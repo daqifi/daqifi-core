@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Transport;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Communication.Producers;
 
@@ -337,23 +338,6 @@ public class MessageProducer<T> : IMessageProducer<T>
             // StopSafely() block until timeout.
             _isRunning = false;
             SafeLog(() => _logger.LogError(ex, "MessageProducer background loop terminated abnormally."));
-        }
-    }
-
-    /// <summary>
-    /// Invokes a logging action, swallowing any exception thrown by the logger
-    /// itself. A faulting logger must never be allowed to terminate the background
-    /// processing loop or leave the producer in an inconsistent state.
-    /// </summary>
-    private static void SafeLog(Action logAction)
-    {
-        try
-        {
-            logAction();
-        }
-        catch
-        {
-            // A logger that throws is not permitted to take down the producer.
         }
     }
 

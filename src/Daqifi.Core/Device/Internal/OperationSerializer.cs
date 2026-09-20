@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 #nullable enable
 
@@ -656,22 +657,6 @@ internal sealed class OperationSerializer : IDisposable
         while (!producer.IsIdle && clock.GetElapsedTime(startedAt) < budget)
         {
             await Task.Delay(DrainPollInterval, clock, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// Runs <paramref name="logAction"/> without letting a throwing logger take down an
-    /// operation — the same isolation <c>DaqifiDevice.SafeLog</c> gives the rest of the device.
-    /// </summary>
-    private static void SafeLog(Action logAction)
-    {
-        try
-        {
-            logAction();
-        }
-        catch
-        {
-            // A logger that throws is not permitted to take down device operation.
         }
     }
 
