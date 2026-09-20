@@ -378,6 +378,8 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 ## For maintainers
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how `main` is gated, PublicAPI tracking, and the rest of the contributor process.
+
 This library follows semantic versioning. Releases are automated via GitHub Actions:
 
 1. Create a new GitHub Release

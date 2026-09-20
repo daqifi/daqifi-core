@@ -64,6 +64,9 @@ nunit-*.xml
 .vscode/
 *.code-workspace
 
+# Visual Studio
+.vs/
+
 # User-specific files
 *.rsuser
 *.suo
