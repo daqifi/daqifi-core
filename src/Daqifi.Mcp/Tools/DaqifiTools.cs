@@ -14,12 +14,12 @@ namespace Daqifi.Mcp.Tools;
 [McpServerToolType]
 public static class DaqifiTools
 {
-    [McpServerTool(Name = "get_server_info")]
+    [McpServerTool(Name = "get_server_info", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("Report this MCP server's own version and whether a newer Daqifi.Mcp has been published to NuGet. Call it when a tool you expected does not exist, when behaviour disagrees with the documentation, or before telling a user that a DAQiFi cannot do something: the tool surface grows with each release, so an out-of-date server is missing capabilities rather than the hardware lacking them. The message field says what to do about it. Needs no device and no connection, costs no device round-trip, and is available in --read-only mode. The comparison is made once per server start; --no-version-check disables it, and then versionCheck reads 'disabled'.")]
     public static Task<ServerVersionInfo> GetServerInfo(VersionStatus versionStatus)
         => GuardAsync(versionStatus.GetAsync);
 
-    [McpServerTool(Name = "discover_devices")]
+    [McpServerTool(Name = "discover_devices", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("Discover DAQiFi devices on USB/serial and WiFi. Returns a list whose device_id values are used by the other tools. Call this first.")]
     public static Task<IReadOnlyList<DiscoveredDevice>> DiscoverDevices(
         DaqifiAgent agent,
@@ -29,7 +29,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.DiscoverAsync(timeoutMs, wifi, serial, cancellationToken));
 
-    [McpServerTool(Name = "connect_device")]
+    [McpServerTool(Name = "connect_device", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Connect to a previously-discovered device. Pass a device_id from discover_devices. Channels are populated on connect. If that physical device is already connected (including over a different transport), the existing connection is returned — use the device_id from the result for follow-up calls.")]
     public static Task<ConnectedDeviceInfo> ConnectDevice(
         DaqifiAgent agent,
@@ -37,33 +37,33 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.ConnectAsync(deviceId, cancellationToken));
 
-    [McpServerTool(Name = "disconnect_device")]
+    [McpServerTool(Name = "disconnect_device", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Disconnect from a connected device and release it.")]
     public static Task<string> DisconnectDevice(
         DaqifiAgent agent,
         [Description("The device_id to disconnect.")] string deviceId)
         => GuardAsync(() => agent.DisconnectAsync(deviceId));
 
-    [McpServerTool(Name = "list_connected_devices")]
+    [McpServerTool(Name = "list_connected_devices", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("List the devices currently connected to this server. Cheap; safe to call often.")]
     public static IReadOnlyList<ConnectedDeviceInfo> ListConnectedDevices(DaqifiAgent agent)
         => Guard(agent.ListConnected);
 
-    [McpServerTool(Name = "get_device_status")]
+    [McpServerTool(Name = "get_device_status", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("Get a live status snapshot for a connected device: connection state, streaming/logging flags, sample rate, and enabled analog channels.")]
     public static DeviceStatus GetDeviceStatus(
         DaqifiAgent agent,
         [Description("The device_id to inspect.")] string deviceId)
         => Guard(() => agent.GetStatus(deviceId));
 
-    [McpServerTool(Name = "list_channels")]
+    [McpServerTool(Name = "list_channels", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("List all channels on a connected device with their type, enabled state, and direction.")]
     public static IReadOnlyList<ChannelInfo> ListChannels(
         DaqifiAgent agent,
         [Description("The device_id to inspect.")] string deviceId)
         => Guard(() => agent.ListChannels(deviceId));
 
-    [McpServerTool(Name = "configure_analog_channels")]
+    [McpServerTool(Name = "configure_analog_channels", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Enable exactly the given analog input channels (by channel number) and disable the rest. Pass an empty list to disable all analog channels. Widening the channel set can lower the device's sample-rate ceiling; if the currently set rate no longer fits, it is automatically lowered to the new ceiling and the response's sampleRateAdjustedFromHz reports the rate it was lowered from.")]
     public static Task<ConfigureResult> ConfigureAnalogChannels(
         DaqifiAgent agent,
@@ -71,7 +71,7 @@ public static class DaqifiTools
         [Description("Analog channel numbers to enable, e.g. [0,1,2,3]. Channels not listed are disabled.")] int[] enabledChannels)
         => GuardAsync(() => agent.ConfigureAnalogChannelsAsync(deviceId, enabledChannels));
 
-    [McpServerTool(Name = "configure_digital_channels")]
+    [McpServerTool(Name = "configure_digital_channels", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Enable exactly the given digital channels (by channel number) and disable the rest. Enabled digital channels are sampled during streaming; the device's DIO enable is global, so enabling any digital channel powers the whole port. Pass an empty list to disable all digital channels.")]
     public static Task<ConfigureDigitalResult> ConfigureDigitalChannels(
         DaqifiAgent agent,
@@ -79,7 +79,7 @@ public static class DaqifiTools
         [Description("Digital channel numbers to enable, e.g. [0,1,2]. Channels not listed are disabled.")] int[] enabledChannels)
         => GuardAsync(() => agent.ConfigureDigitalChannelsAsync(deviceId, enabledChannels));
 
-    [McpServerTool(Name = "set_digital_direction")]
+    [McpServerTool(Name = "set_digital_direction", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Set a digital channel's direction: 'input' (high-impedance, sampled during streaming) or 'output' (driven by the device; set the level with set_digital_output). Rejected while PWM is enabled on the channel — call disable_pwm first.")]
     public static Task<DigitalPinResult> SetDigitalDirection(
         DaqifiAgent agent,
@@ -88,7 +88,7 @@ public static class DaqifiTools
         [Description("'input' or 'output'.")] string direction)
         => GuardAsync(() => agent.SetDigitalDirectionAsync(deviceId, channel, direction));
 
-    [McpServerTool(Name = "set_digital_output")]
+    [McpServerTool(Name = "set_digital_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Drive a digital channel high or low. If the channel is currently an input it is switched to output direction first, so one call is enough to drive a pin. Rejected while PWM is enabled on the channel — call disable_pwm first.")]
     public static Task<DigitalPinResult> SetDigitalOutput(
         DaqifiAgent agent,
@@ -97,7 +97,7 @@ public static class DaqifiTools
         [Description("true to drive the pin high, false to drive it low.")] bool high)
         => GuardAsync(() => agent.SetDigitalOutputAsync(deviceId, channel, high));
 
-    [McpServerTool(Name = "set_pwm_output")]
+    [McpServerTool(Name = "set_pwm_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Start PWM output on a PWM-capable digital channel (Nyquist: channels 0, 3, 4, 5, 6, 7). Sets the duty cycle, optionally the device-wide frequency, then enables the channel. The frequency is shared by ALL PWM channels (one hardware timer). While PWM runs, set_digital_direction/set_digital_output on the channel are rejected rather than silently ignored — call disable_pwm first to drive it digitally again.")]
     public static Task<PwmResult> SetPwmOutput(
         DaqifiAgent agent,
@@ -107,7 +107,7 @@ public static class DaqifiTools
         [Description("PWM frequency in Hz, 6-50000, applied device-wide. Pass 0 to keep the current session frequency (defaults to 1000 Hz until explicitly set).")] int frequencyHz = 0)
         => GuardAsync(() => agent.SetPwmOutputAsync(deviceId, channel, dutyCyclePercent, frequencyHz));
 
-    [McpServerTool(Name = "disable_pwm")]
+    [McpServerTool(Name = "disable_pwm", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Stop PWM output on a digital channel. The pin is left high-impedance (not driven); use set_digital_direction/set_digital_output to drive it digitally again. Allowed on any digital channel, including one that isn't PWM-capable — this is the only recovery path for the firmware's half-armed PWM state. This call always succeeds from the caller's point of view: if the channel was never actually armed, the firmware rejects the command internally but that rejection is not surfaced here (the tool never throws for it and the result carries no error field).")]
     public static Task<PwmResult> DisablePwm(
         DaqifiAgent agent,
@@ -115,14 +115,14 @@ public static class DaqifiTools
         [Description("The digital channel number to stop PWM on.")] int channel)
         => GuardAsync(() => agent.DisablePwmAsync(deviceId, channel));
 
-    [McpServerTool(Name = "list_analog_outputs")]
+    [McpServerTool(Name = "list_analog_outputs", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("List the device's analog output (DAC) channels with the voltage range each accepts, its resolution, and the value it is driving. Call this before set_analog_output to learn the legal range. An empty list means no DAC channel is modelled, which happens two ways: the board has none (analog output is Nyquist 3 hardware), or it has them but did not describe them in its capability document (firmware below v3.5.0). Do not read an empty list as 'writing is impossible' — in the second case set_analog_output still drives the channel by number and answers with rangeChecked false, saying that nothing validated the voltage; only in the first is it refused. Available in --read-only mode; costs no device round-trip, so `volts` is only what this server has written or read back this session — a null there means this server has not touched the channel, NOT that the pin is at 0 V. Use read_analog_output to ask the device itself.")]
     public static IReadOnlyList<AnalogOutputState> ListAnalogOutputs(
         DaqifiAgent agent,
         [Description("The device_id to inspect.")] string deviceId)
         => Guard(() => agent.ListAnalogOutputs(deviceId));
 
-    [McpServerTool(Name = "set_analog_output")]
+    [McpServerTool(Name = "set_analog_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Drive an analog output (DAC) channel to a voltage. Nyquist 3 hardware only; on any other board the call is refused rather than silently discarded by the firmware. A voltage outside the channel's range is rejected before anything is sent — call list_analog_outputs for the range. By default the value takes effect immediately; pass latch=false to stage it instead and apply several channels together with latch_analog_outputs. Note that the latch is device-wide, not per-channel: a call with latch=true also applies anything staged earlier on OTHER channels, and the result reports only the channel written — call list_analog_outputs afterwards to see them all.")]
     public static Task<AnalogOutputResult> SetAnalogOutput(
         DaqifiAgent agent,
@@ -132,14 +132,14 @@ public static class DaqifiTools
         [Description("Apply the value now (default). Pass false to stage it without changing the pin; it takes effect on the next latch_analog_outputs, which is how several outputs are made to change together.")] bool latch = true)
         => GuardAsync(() => agent.SetAnalogOutputAsync(deviceId, channel, volts, latch));
 
-    [McpServerTool(Name = "latch_analog_outputs")]
+    [McpServerTool(Name = "latch_analog_outputs", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Apply every analog output voltage staged with set_analog_output latch=false, so the staged channels change together. Returns the state of every analog output afterwards. Harmless with nothing staged — the device re-applies what it already holds.")]
     public static Task<AnalogOutputLatchResult> LatchAnalogOutputs(
         DaqifiAgent agent,
         [Description("The device_id to latch.")] string deviceId)
         => GuardAsync(() => agent.LatchAnalogOutputsAsync(deviceId));
 
-    [McpServerTool(Name = "read_analog_output")]
+    [McpServerTool(Name = "read_analog_output", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("Ask the device what voltage an analog output channel is holding. This is a round-trip to the firmware, so it reflects what the device actually accepted — including a value written before this server connected — but it is not a measurement of the pin: the DAC has no readback path, so the device answers with the value it was last told to drive. Refused while the device is streaming, because the binary stream corrupts the reply. Available in --read-only mode.")]
     public static Task<AnalogOutputReading> ReadAnalogOutput(
         DaqifiAgent agent,
@@ -148,7 +148,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.ReadAnalogOutputAsync(deviceId, channel, cancellationToken));
 
-    [McpServerTool(Name = "set_sample_rate")]
+    [McpServerTool(Name = "set_sample_rate", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Set the device sample (streaming) rate in Hz, applied to streaming and SD-card logging. The achievable maximum depends on how many channels are currently enabled (configure channels first for an accurate ceiling) and is further capped by --max-sample-rate-hz if set; a request above the effective cap is rejected — the call throws rather than silently applying a lower rate.")]
     public static Task<SampleRateResult> SetSampleRate(
         DaqifiAgent agent,
@@ -156,7 +156,7 @@ public static class DaqifiTools
         [Description("Sample rate in Hz. The ceiling varies with the enabled channel count; get_device_status or a prior configure_analog_channels call error message reports the current limit.")] int rateHz)
         => GuardAsync(() => agent.SetSampleRateAsync(deviceId, rateHz));
 
-    [McpServerTool(Name = "start_sd_logging")]
+    [McpServerTool(Name = "start_sd_logging", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Start on-device SD-card logging using the currently enabled channels and sample rate. Requires a USB/serial connection (the SD card and WiFi share a bus). Configure channels and sample rate first.")]
     public static Task<StartLoggingResult> StartSdLogging(
         DaqifiAgent agent,
@@ -166,7 +166,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.StartLoggingAsync(deviceId, fileName, format, cancellationToken));
 
-    [McpServerTool(Name = "stop_sd_logging")]
+    [McpServerTool(Name = "stop_sd_logging", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Stop on-device SD-card logging on a device.")]
     public static Task<string> StopSdLogging(
         DaqifiAgent agent,
@@ -174,7 +174,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.StopLoggingAsync(deviceId, cancellationToken));
 
-    [McpServerTool(Name = "list_sd_files")]
+    [McpServerTool(Name = "list_sd_files", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("List the log files on the device's SD card, with size and creation date where the device reports them. An empty list always means an empty card — a device that fails to answer the listing raises an error instead. Available in --read-only mode.")]
     public static Task<SdFileListing> ListSdFiles(
         DaqifiAgent agent,
@@ -182,7 +182,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.ListSdFilesAsync(deviceId, cancellationToken));
 
-    [McpServerTool(Name = "get_sd_storage")]
+    [McpServerTool(Name = "get_sd_storage", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("Report free, used, and total space on the device's SD card. Refused while the device is logging (the SD card is busy) — call stop_sd_logging first. Available in --read-only mode.")]
     public static Task<SdStorageReport> GetSdStorage(
         DaqifiAgent agent,
@@ -190,7 +190,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.GetSdStorageAsync(deviceId, cancellationToken));
 
-    [McpServerTool(Name = "download_sd_file")]
+    [McpServerTool(Name = "download_sd_file", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Download an SD-card log file to this machine and, by default, parse it into a CSV you can read. Returns the local path of both files plus the sample and CSV row counts (a row is one timestamp, not one sample). Run SD retrieval before any live streaming on the same connection: a stream collapses the device's SD buffer and later downloads come back empty. Filenames come from list_sd_files. Large files take as long as the transfer takes.")]
     public static Task<SdDownloadReport> DownloadSdFile(
         DaqifiAgent agent,
@@ -200,7 +200,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.DownloadSdFileAsync(deviceId, fileName, exportCsv, cancellationToken));
 
-    [McpServerTool(Name = "delete_sd_file")]
+    [McpServerTool(Name = "delete_sd_file", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Permanently delete a file from the device's SD card. There is no undo and no recycle bin — download it first if the data matters. Refused in --read-only mode, and refused while the device is logging.")]
     public static Task<SdDeleteResult> DeleteSdFile(
         DaqifiAgent agent,
@@ -209,7 +209,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.DeleteSdFileAsync(deviceId, fileName, cancellationToken));
 
-    [McpServerTool(Name = "read_channel_values")]
+    [McpServerTool(Name = "read_channel_values", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Read the latest value on every enabled channel: volts for analog inputs, 0/1 for digital ones, each with the timestamp it was sampled at. Returns as soon as every enabled channel has reported, so it normally costs one sample period rather than the full timeout; a channel that reported nothing comes back with a null value rather than a zero. Configure and enable channels first — with none enabled the device sends nothing and the call is refused. If the device is not already streaming this starts its stream and stops it again afterwards (refused in --read-only mode, since that is a change); a stream that was already running is read and left running.")]
     public static Task<ChannelReadings> ReadChannelValues(
         DaqifiAgent agent,
@@ -218,7 +218,7 @@ public static class DaqifiTools
         CancellationToken cancellationToken = default)
         => GuardAsync(() => agent.ReadChannelValuesAsync(deviceId, timeoutMs, cancellationToken));
 
-    [McpServerTool(Name = "capture_samples")]
+    [McpServerTool(Name = "capture_samples", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Capture a block of live data as rows: one row per sample tick, one column per enabled channel (columns are named AI0/DIO0 and listed in the result). The capture ends at whichever budget runs out first, the duration or the row count, and reports what it actually got — rows, the rate it achieved, and the number of samples dropped because this server could not keep up. Compare measuredRateHz (this machine's clock) with sampleRateHz to see whether the device is streaming as fast as it was asked to, and with deviceClockRateHz (the device's own timestamps) to see whether its clock is keeping real time. Configure channels and the sample rate first. If the device is not already streaming this starts its stream and stops it again afterwards (refused in --read-only mode); a stream that was already running is read and left running. The device is held exclusively for the whole capture, so other tool calls on it wait.")]
     public static Task<CaptureResult> CaptureSamples(
         DaqifiAgent agent,
