@@ -285,6 +285,23 @@ public class AnalogChannelTests
     }
 
     [Fact]
+    public void Name_Null_Throws()
+    {
+        var channel = new AnalogChannel(0);
+
+        var ex = Assert.Throws<ArgumentNullException>(() => channel.Name = null!);
+        Assert.Equal("value", ex.ParamName);
+    }
+
+    [Fact]
+    public void SetActiveSample_NullSample_Throws()
+    {
+        var channel = new AnalogChannel(0);
+
+        Assert.Throws<ArgumentNullException>(() => channel.SetActiveSample(null!));
+    }
+
+    [Fact]
     public void Properties_CanBeModified()
     {
         // Arrange

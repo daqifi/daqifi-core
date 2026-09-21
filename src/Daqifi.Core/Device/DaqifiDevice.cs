@@ -3052,6 +3052,21 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _messageProducer?.Dispose();
             _transport?.Dispose();
             _operations.Dispose();
+
+            // _statusRefreshGate is deliberately NOT disposed here, which is the one place in
+            // this method that breaks the "dispose what you own" habit — so it is worth saying
+            // why. SemaphoreSlim only owns an OS handle once somebody reads AvailableWaitHandle,
+            // and nothing in this library ever does, so disposing it reclaims nothing; it only
+            // poisons the instance. What it would cost is real: Dispose() drops the queue of
+            // already-waiting async waiters on the floor without faulting them, so a second
+            // refresh sitting behind a first would stop being woken when the first released,
+            // and would sit there until the caller's own deadline expired and report a timeout.
+            // Leaving the gate alone, that caller is handed the gate immediately, sends, and
+            // gets the DeviceNotConnectedException SendViaProducer raises for a disposed
+            // producer — the fast, accurate answer. _operations makes the opposite trade
+            // because OperationSerializer is built for it: every one of its touchpoints already
+            // catches ObjectDisposedException. This gate has no such contract, and the object
+            // is collected with the device anyway.
             _disposed = true;
         }
     }
@@ -3517,6 +3532,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         }
         finally
         {
+            // Unconditional, and safe to be so only because ReleaseResources leaves this gate
+            // alone — see the note there. If the gate ever starts being disposed, this release
+            // has to be contained, or a teardown racing an in-flight refresh throws over the
+            // top of a status that already arrived and was already applied to Metadata.
             _statusRefreshGate.Release();
         }
     }

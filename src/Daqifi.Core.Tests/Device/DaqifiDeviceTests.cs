@@ -275,6 +275,61 @@ public class DaqifiDeviceTests
         Assert.Equal(9, device.Metadata.Health.BatteryPercent);
     }
 
+    [Fact]
+    public async Task RefreshDeviceStatusAsync_WhenTheDeviceIsDisposedMidRefresh_NeitherWaiterIsStranded()
+    {
+        // Closing the app -- or an `await using` scope unwinding -- while a refresh is in
+        // flight is an ordinary thing to do, and two callers can legitimately be on this API at
+        // once. Both must survive the teardown:
+        //
+        //  * the one holding the gate keeps the reply it already asked for, and
+        //  * the one queued behind it is still handed the gate when the first lets go.
+        //
+        // Both of those depend on ReleaseResources leaving _statusRefreshGate alone.
+        // SemaphoreSlim.Dispose() would drop the queued waiter without faulting it -- the
+        // second caller would never be woken and would sit out its whole deadline -- and would
+        // make the first caller's unconditional Release() throw ObjectDisposedException over
+        // the top of a status that had already arrived and been applied to Metadata. This test
+        // is what fails if that Dispose() is ever added back.
+        var device = new TestableDaqifiDevice("TestDevice");
+        device.Connect();
+
+        var first = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+
+        await Task.Delay(50);
+        Assert.Single(device.SentCommands);
+
+        // A second caller, now queued on the gate rather than racing the first.
+        var second = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+
+        await Task.Delay(50);
+        Assert.Single(device.SentCommands);
+        Assert.False(second.IsCompleted);
+
+        device.Dispose();
+
+        // The reply the device had already put on the wire lands after the teardown.
+        device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 33 });
+
+        await first;
+        Assert.Equal(33, device.Metadata.Health.BatteryPercent);
+
+        // The queued caller is woken the moment the first lets go, gets as far as the send,
+        // and is told plainly that the device went away. The exception TYPE is the whole
+        // assertion: a stranded waiter would instead sit on the gate until its own 5s deadline
+        // and report a TimeoutException, which says nothing true about what happened.
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => second);
+        elapsed.Stop();
+
+        Assert.True(
+            elapsed.Elapsed < TimeSpan.FromSeconds(3),
+            $"the queued refresh should fail as soon as the gate is free, but took {elapsed.Elapsed}");
+
+        // It never reached the wire, so the first caller's request is still the only one sent.
+        Assert.Single(device.SentCommands);
+    }
+
     private sealed class TestableDaqifiDevice : DaqifiDevice
     {
         public TestableDaqifiDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)
@@ -289,8 +344,16 @@ public class DaqifiDeviceTests
         /// implementation throws without one. Recording the text also lets a test assert
         /// WHICH command was sent, not merely that the call did not throw.
         /// </summary>
+        /// <remarks>
+        /// The connectivity guard is kept. It is the one piece of the real <c>Send</c> that a
+        /// test can observe the absence of: without it the double happily "sends" on a
+        /// disconnected or disposed device, and a test asserting what a caller sees after
+        /// teardown would be asserting something the production path cannot do.
+        /// </remarks>
         public override void Send<T>(IOutboundMessage<T> message)
         {
+            EnsureConnected();
+
             if (message is IOutboundMessage<string> text)
             {
                 SentCommands.Add(text.Data);
