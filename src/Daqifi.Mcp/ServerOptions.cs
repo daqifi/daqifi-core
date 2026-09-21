@@ -60,6 +60,27 @@ public sealed class ServerOptions
         return new ServerOptions { ReadOnly = readOnly, MaxSampleRateHz = maxRate, VersionCheck = versionCheck };
     }
 
+    /// <summary>
+    /// Handshake text sent as MCP <c>ServerInstructions</c>. The session rules already in the MCP
+    /// README — not a second playbook.
+    /// </summary>
+    /// <remarks>
+    /// The read-only rule is included only when the server is actually running read-only. Sent
+    /// unconditionally it would be both noise and a hint that writes might be refused on a server
+    /// where they will not be — and this text is paid on every session.
+    /// </remarks>
+    public string Instructions => ReadOnly ? $"{SessionRules}\n{ReadOnlyRule}" : SessionRules;
+
+    private const string SessionRules =
+        """
+        - Discover first (`discover_devices`), then connect with a returned `device_id`.
+        - Retrieve before you stream. A live streaming session collapses the device's SD buffer (firmware #703), after which downloads come back empty until the device is reconnected or another SD recording re-arms it. Do the SD work first on a fresh connection.
+        - Analog output is Nyquist 3 hardware. On any other board `set_analog_output` is refused outright.
+        """;
+
+    private const string ReadOnlyRule =
+        "- This server is running with `--read-only`: anything that changes the device or the card is refused. Reading data back is still allowed, but `read_channel_values` and `capture_samples` are refused while the device is idle, because they would have to start its stream.";
+
     public const string HelpText =
         """
         daqifi-mcp — Model Context Protocol server for DAQiFi devices
