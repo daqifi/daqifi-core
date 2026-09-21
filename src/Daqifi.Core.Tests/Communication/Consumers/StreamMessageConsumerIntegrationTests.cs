@@ -2,6 +2,7 @@ using System.Text;
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.Protocol;
+using Daqifi.Core.Tests.TestSupport;
 using Google.Protobuf;
 
 namespace Daqifi.Core.Tests.Communication.Consumers;
@@ -265,15 +266,19 @@ public class StreamMessageConsumerIntegrationTests
 
         // Start the consumer to let it read the partial data into internal buffer
         consumer.Start();
-        Thread.Sleep(50); // Brief pause to allow consumer to read data
+        WaitUntil.That(
+            () => stream.Position >= partialData.Length,
+            "the consumer never read the leftover bytes");
 
         // Act - Call ClearBuffer via interface (as desktop would do during reconnection)
         IMessageConsumer<DaqifiOutMessage> interfaceRef = consumer;
         interfaceRef.ClearBuffer();
 
         // Assert - Internal buffer should be cleared once the consumer thread honors the request.
-        var cleared = WaitFor(() => consumer.QueuedMessageCount == 0, TimeSpan.FromSeconds(1));
-        Assert.True(cleared, "ClearBuffer() should drain the internal buffer within the timeout.");
+        WaitUntil.That(
+            () => consumer.QueuedMessageCount == 0,
+            "ClearBuffer() should drain the internal buffer within the timeout.",
+            TimeSpan.FromSeconds(1));
 
         // Additional verification: consumer should still be functional after clear
         Assert.True(consumer.IsRunning);
@@ -318,8 +323,12 @@ public class StreamMessageConsumerIntegrationTests
             clearCalls++;
         }
 
-        // Give the consumer a moment to process any final clears, then stop.
-        Thread.Sleep(50);
+        // Let the consumer complete another loop iteration so any in-flight ClearBuffer is
+        // honored, then stop.
+        var readsAfterHammer = stream.ReadCount;
+        WaitUntil.That(
+            () => stream.ReadCount > readsAfterHammer,
+            "the consumer never ran another iteration after the last clear");
         var stoppedCleanly = consumer.StopSafely(2000);
 
         // Assert - no concurrency exceptions (List corruption, torn reads) were ever reported.
@@ -345,8 +354,10 @@ public class StreamMessageConsumerIntegrationTests
         using var consumer = new StreamMessageConsumer<DaqifiOutMessage>(stream, parser);
 
         consumer.Start();
-        Assert.True(WaitFor(() => stream.IsBlockedInRead, TimeSpan.FromSeconds(1)),
-            "reader should have entered a blocking Read");
+        WaitUntil.That(
+            () => stream.IsBlockedInRead,
+            "reader should have entered a blocking Read",
+            TimeSpan.FromSeconds(1));
 
         // The reader is stuck in Read, so a bounded stop can't join it.
         Assert.False(consumer.StopSafely(100));
@@ -362,17 +373,6 @@ public class StreamMessageConsumerIntegrationTests
         stream.Release();
     }
 
-    private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition()) return true;
-            Thread.Sleep(5);
-        }
-        return condition();
-    }
-
     /// <summary>
     /// A read-only stream that always returns bytes, so the consumer thread stays in a tight
     /// read/parse loop for the duration of the concurrency test.
@@ -380,6 +380,9 @@ public class StreamMessageConsumerIntegrationTests
     private sealed class ContinuousDataStream : Stream
     {
         private byte _next;
+        private int _readCount;
+
+        public int ReadCount => Volatile.Read(ref _readCount);
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -390,6 +393,8 @@ public class StreamMessageConsumerIntegrationTests
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            Interlocked.Increment(ref _readCount);
+
             // Return a modest chunk each call so the buffer both grows and gets parsed/drained.
             var n = Math.Min(count, 64);
             for (var i = 0; i < n; i++)
