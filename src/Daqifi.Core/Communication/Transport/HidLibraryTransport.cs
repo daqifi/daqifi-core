@@ -3,9 +3,9 @@ using System.IO;
 namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
-/// HID transport implementation backed by the platform-appropriate HID
-/// adapter (HidSharp on Windows/Linux, native IOKit on macOS via
-/// <c>HidPlatformFactory</c>).
+/// HID transport implementation, backed by the platform-appropriate HID adapter: HidSharp on
+/// Windows and Linux, native IOKit on macOS (HidSharp enumerates no HID devices there —
+/// issue #262).
 /// </summary>
 public sealed class HidLibraryTransport : IHidTransport
 {
