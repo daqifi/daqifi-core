@@ -15,7 +15,29 @@ All code changes go through a pull request:
    `fix/short-description`, or `docs/short-description`.
 2. Make your changes and add/update tests.
 3. Open a PR against `main` describing the change and linking any related issue.
-4. CI must pass and the PR needs review before merge.
+4. CI must pass and every review conversation must be resolved before the PR can be queued —
+   see below for what `main` actually enforces.
+
+Agent rule files (`.cursor/rules`, `.claude/rules`) should point here rather than
+restating this process.
+
+### How `main` is gated
+
+`main` is merge-queue gated. Do not push to it. Every change lands through a pull request.
+
+- **Merge queue** — GitHub's merge queue is required. A queued PR is retested on a
+  `merge_group` (CI's required `build` check) before it lands.
+- **Approvals: zero required; resolved threads: all of them.** This is a solo-maintained
+  repo, so the ruleset asks for no approving review — but it does require every review
+  conversation to be resolved, so an open comment from a human or a review bot blocks the
+  merge until someone answers or resolves it. Pushing to a reviewed branch dismisses stale
+  approvals.
+- **Squash only** — merge commits and rebase merges are disabled. The squash commit title
+  is the PR title; the squash body is left blank.
+- **PR titles** — conventional-commit `type(scope): summary`, matching `git log`:
+  `fix(sdcard): ...`, `feat(mcp): ...`, `chore(api): ...`. Reserve `type(scope)!: summary`
+  for a breaking change. Because the squash uses the PR title, that title is the commit
+  message on `main` — write it for someone reading `git log`, not for the queue.
 
 ### Code style is enforced by the build, not by review
 
@@ -104,16 +126,6 @@ suppression (`dotnet pack src/Daqifi.Core/Daqifi.Core.csproj -p:ApiCompatGenerat
 which checks in a `CompatibilitySuppressions.xml` naming exactly what was broken. That file
 appearing in a diff is the signal ADR 0002 wants a reviewer to see.
 
-## Security: how we do and don't accept code
+## Security
 
-**We only ever accept code changes as pull requests against this repository.** A PR gives
-reviewers a real diff, runs CI against the change, and ties it to an accountable GitHub identity.
-
-We do **not** accept patches, "fixes," or libraries attached as `.zip`/binary files in issue or
-PR comments — regardless of how convincing or on-topic the surrounding message is. If you see a
-comment offering a downloadable file as a fix, please don't run or extract it, and flag it to a
-maintainer (or use GitHub's "Report content" option on the comment) so it can be reviewed and
-removed.
-
-If you've found a genuine security vulnerability, please report it privately to the maintainers
-via [daqifi.com](https://daqifi.com) rather than filing a public issue.
+See [SECURITY.md](SECURITY.md) for how we accept code and how to report a vulnerability.

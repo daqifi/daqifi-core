@@ -375,6 +375,8 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 - [Open an issue](https://github.com/daqifi/daqifi-core/issues) for bugs or feature requests
 - Reach the team via [daqifi.com](https://daqifi.com) for commercial integrations and custom hardware needs
+- Sending a patch? [CONTRIBUTING.md](CONTRIBUTING.md) covers how `main` is gated, the style rules the
+  build enforces, and PublicAPI tracking; [SECURITY.md](SECURITY.md) covers reporting a vulnerability
 
 ## For maintainers
 
