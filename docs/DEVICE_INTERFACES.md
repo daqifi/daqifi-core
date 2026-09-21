@@ -11,29 +11,22 @@ The device interfaces provide a consistent API for discovering, connecting to, a
 The simplest way to connect to a DAQiFi device is using the `DaqifiDeviceFactory`:
 
 ```csharp
+using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
-using Daqifi.Core.Communication.Producers;
 
 // Connect to a device (handles transport, connection, and initialization)
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-// Subscribe to incoming data
-device.MessageReceived += (sender, e) =>
-{
-    if (e.Message.Data is DaqifiOutMessage message)
-    {
-        Console.WriteLine($"Timestamp: {message.MsgTimeStamp}");
-        Console.WriteLine($"Analog values: {string.Join(", ", message.AnalogInData)}");
-    }
-};
+var ai0 = device.GetChannelsSnapshot().First(c => c.Type == ChannelType.Analog && c.ChannelNumber == 0);
+ai0.SampleReceived += (_, e) => Console.WriteLine($"{e.Sample.Timestamp}: {e.Sample.Value} V");
 
-// Configure channels and start streaming
-device.Send(ScpiMessageProducer.EnableAdcChannels("3")); // Enable first 2 channels (bitmask 0b11 = 3)
-device.Send(ScpiMessageProducer.StartStreaming(100)); // 100 Hz sample rate
+device.EnableChannel(ai0);
+device.StreamingFrequency = 100;
+device.StartStreaming();
 
-await Task.Delay(TimeSpan.FromSeconds(10)); // Stream for 10 seconds
+await Task.Delay(TimeSpan.FromSeconds(10));
 
-device.Send(ScpiMessageProducer.StopStreaming);
+device.StopStreaming();
 ```
 
 ## Core Interfaces
@@ -241,9 +234,9 @@ resolve to `null`, same as `IUsbPortDescriptorProvider`'s cross-platform fallbac
 > core design assumption ([#285](https://github.com/daqifi/daqifi-core/issues/285)), but it has
 > **not yet been empirically confirmed on Windows hardware** in this repo — the environment this
 > was built in has no Windows machine. `WindowsUsbLocationProvider`'s WMI query path is likewise
-> unverified against a real device (CI runs `ubuntu-latest` only, so only the platform-independent
-> parsing/fallback logic has automated coverage). Confirm both on a Windows bench with real
-> hardware before relying on this for anything safety-critical.
+> unverified against a real device. CI runs ubuntu, windows, and macos, which covers the
+> platform-independent parsing/fallback logic; it is not a hardware confirmation. Confirm both
+> on a Windows bench with real hardware before relying on this for anything safety-critical.
 
 ### Discover Across All Transports (Recommended)
 
