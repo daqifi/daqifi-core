@@ -6,16 +6,18 @@ using ModelContextProtocol.Server;
 namespace Daqifi.Mcp.Tests;
 
 /// <summary>
-/// The agent-visible copy on each tool: one job and its failure mode, plus the four README
-/// session rules on the handshake. Novels belong in the MCP README, not in <c>tools/list</c>.
+/// The agent-visible copy on each tool: one job and its failure mode, plus the README session
+/// rules on the handshake. Novels belong in the MCP README, not in <c>tools/list</c>, which every
+/// client pays for on every request.
 /// </summary>
 public class ToolDescriptionContractTests
 {
     /// <summary>
-    /// Long enough for a job plus a failure mode; short enough that the handshake-bench essays
-    /// cannot sneak back onto a tool or parameter.
+    /// A guardrail, not a style rule: the descriptions this replaced ran past 900 characters, so
+    /// this still catches an essay while leaving room for a job, its failure mode, and how to read
+    /// the result.
     /// </summary>
-    private const int MaxToolDescriptionChars = 400;
+    private const int MaxToolDescriptionChars = 450;
     private const int MaxParameterDescriptionChars = 200;
 
     [Fact]
@@ -28,30 +30,39 @@ public class ToolDescriptionContractTests
     }
 
     [Fact]
-    public void ServerInstructions_AreTheFourReadmeSessionRules()
+    public void ServerInstructions_AreTheReadmeSessionRules()
     {
-        var text = ServerOptions.Instructions;
+        var text = new ServerOptions().Instructions;
 
         Assert.Contains("discover_devices", text);
         Assert.Contains("firmware #703", text);
         Assert.Contains("Nyquist 3", text);
-        Assert.Contains("--read-only", text);
-        Assert.Contains("read_channel_values", text);
-        Assert.Contains("capture_samples", text);
+    }
+
+    [Fact]
+    public void ServerInstructions_MentionReadOnly_OnlyWhenTheServerIsReadOnly()
+    {
+        // Sent unconditionally this is both noise and a hint that writes might be refused on a
+        // server where they will not be — on text every session pays for at initialize.
+        Assert.DoesNotContain("--read-only", new ServerOptions().Instructions);
+
+        var readOnly = new ServerOptions { ReadOnly = true }.Instructions;
+        Assert.Contains("--read-only", readOnly);
+        Assert.Contains("read_channel_values", readOnly);
+        Assert.Contains("capture_samples", readOnly);
     }
 
     [Theory]
     [InlineData(nameof(DaqifiTools.DiscoverDevices), "timeoutMs")]
     [InlineData(nameof(DaqifiTools.ReadChannelValues), "timeoutMs")]
     [InlineData(nameof(DaqifiTools.CaptureSamples), "durationMs")]
-    public void TimeoutParameters_DoNotRetellHandshakeBenches(string method, string parameter)
+    public void TimeoutParameters_StateTheirClampWithoutRetellingTheBench(string method, string parameter)
     {
         var description = ParameterDescription(method, parameter);
 
-        Assert.DoesNotContain("slowest supported hosts", description);
-        Assert.DoesNotContain("bench-measured", description);
-        Assert.DoesNotContain("~100 ms", description);
-        Assert.DoesNotContain("1 kHz", description);
+        // The clamp is the part an agent cannot get anywhere else — a budget below the floor is
+        // silently raised, so a caller that does not know the floor misreads what it asked for.
+        Assert.Contains("clamped to", description);
         Assert.InRange(description.Length, 1, MaxParameterDescriptionChars);
     }
 

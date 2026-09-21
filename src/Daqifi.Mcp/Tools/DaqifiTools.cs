@@ -123,7 +123,7 @@ public static class DaqifiTools
         => Guard(() => agent.ListAnalogOutputs(deviceId));
 
     [McpServerTool(Name = "set_analog_output")]
-    [Description("Drive an analog output (DAC) channel to a voltage. Nyquist 3 only — other boards are refused. Out-of-range voltages are rejected before send; latch=false stages for latch_analog_outputs (latch is device-wide).")]
+    [Description("Drive an analog output (DAC) channel to a voltage. Nyquist 3 only — other boards are refused. Out-of-range voltages are rejected before send; latch=false stages instead. The latch is device-wide: latch=true also applies anything staged earlier on other channels.")]
     public static Task<AnalogOutputResult> SetAnalogOutput(
         DaqifiAgent agent,
         [Description("The device_id to control.")] string deviceId,
@@ -219,7 +219,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.ReadChannelValuesAsync(deviceId, timeoutMs, cancellationToken));
 
     [McpServerTool(Name = "capture_samples")]
-    [Description("Capture live data as rows (one per sample tick, columns named AI0/DIO0). Ends at duration or maxRows, whichever first. Starts the stream if idle (refused in --read-only); holds the device exclusively for the capture.")]
+    [Description("Capture live data as rows (one per sample tick, columns named AI0/DIO0). Configure channels and the sample rate first. Ends at duration or maxRows, whichever first. Starts the stream if idle (refused in --read-only); holds the device exclusively. measuredRateHz is this machine's clock, deviceClockRateHz the device's own timestamps — compare both with sampleRateHz to see what actually arrived.")]
     public static Task<CaptureResult> CaptureSamples(
         DaqifiAgent agent,
         [Description("The device_id to capture from.")] string deviceId,

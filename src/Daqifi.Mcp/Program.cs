@@ -38,7 +38,10 @@ builder.Services
             Title = "DAQiFi",
             Version = ServerVersion.Current,
         };
-        o.ServerInstructions = ServerOptions.Instructions;
+        // The session rules the README opens with, sent once at initialize. Clients hand these to
+        // the model as context, so they are the one place a rule can be stated without paying for
+        // it on every tools/list.
+        o.ServerInstructions = options.Instructions;
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
