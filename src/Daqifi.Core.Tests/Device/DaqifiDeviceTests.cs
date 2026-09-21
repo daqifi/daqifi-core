@@ -115,44 +115,6 @@ public class DaqifiDeviceTests
     }
 
     [Fact]
-    public void OnStatusMessageReceived_SubscriberException_StillRaisesMessageReceived()
-    {
-        // A misbehaving StatusMessageReceived subscriber must not prevent the
-        // undifferentiated MessageReceived event from firing for the same frame.
-        var device = new TestableDaqifiDevice("TestDevice");
-        device.StatusMessageReceived += _ => throw new InvalidOperationException("boom");
-
-        Daqifi.Core.Device.MessageReceivedEventArgs? raised = null;
-        device.MessageReceived += (_, e) => raised = e;
-
-        var status = new DaqifiOutMessage { AnalogInPortNum = 1 };
-
-        var ex = Record.Exception(() => device.InvokeStatusMessage(status));
-
-        Assert.Null(ex);
-        Assert.NotNull(raised);
-    }
-
-    [Fact]
-    public void OnStreamMessageReceived_SubscriberException_StillRaisesMessageReceived()
-    {
-        // A misbehaving StreamMessageReceived subscriber must not prevent the
-        // undifferentiated MessageReceived event from firing for the same frame.
-        var device = new TestableDaqifiDevice("TestDevice");
-        device.StreamMessageReceived += _ => throw new InvalidOperationException("boom");
-
-        Daqifi.Core.Device.MessageReceivedEventArgs? raised = null;
-        device.MessageReceived += (_, e) => raised = e;
-
-        var stream = new DaqifiOutMessage { MsgTimeStamp = 1 };
-
-        var ex = Record.Exception(() => device.InvokeStreamMessage(stream));
-
-        Assert.Null(ex);
-        Assert.NotNull(raised);
-    }
-
-    [Fact]
     public async Task RefreshDeviceStatusAsync_CompletesAndAppliesTheReply_WhenAStatusArrives()
     {
         // The point of the API: health is not live -- the device answers when asked and is

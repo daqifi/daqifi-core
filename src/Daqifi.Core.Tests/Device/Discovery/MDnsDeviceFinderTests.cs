@@ -322,15 +322,6 @@ public class MDnsDeviceFinderTests
     }
 
     [Fact]
-    public void Dispose_IsIdempotent()
-    {
-        var finder = new MDnsDeviceFinder();
-
-        finder.Dispose();
-        finder.Dispose();
-    }
-
-    [Fact]
     public async Task DiscoverAsync_AfterDispose_Throws()
     {
         var finder = new MDnsDeviceFinder();

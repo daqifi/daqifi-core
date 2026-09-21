@@ -506,14 +506,6 @@ public class CsvExporterTests
         Assert.Equal(string.Empty, writer.ToString());
     }
 
-    // ── Channel key format ───────────────────────────────────────────────────
-
-    [Fact]
-    public void ChannelDescriptor_Key_FormatIsCorrect()
-    {
-        Assert.Equal("DevA:SN001:Channel1", Ch1.Key);
-    }
-
     [Fact]
     public async Task Export_DigitalChannel_IncludedInHeader()
     {

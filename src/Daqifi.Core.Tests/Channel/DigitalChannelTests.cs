@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Daqifi.Core.Channel;
 
 namespace Daqifi.Core.Tests.Channel;
@@ -122,21 +123,22 @@ public class DigitalChannelTests
     [Fact]
     public async Task SetActiveSample_IsThreadSafe()
     {
-        // Arrange
         var channel = new DigitalChannel(0);
-        var tasks = new List<Task>();
+        var received = new ConcurrentBag<IDataSample>();
+        channel.SampleReceived += (_, args) => received.Add(args.Sample);
 
-        // Act
+        var tasks = new List<Task>();
         for (int i = 0; i < 100; i++)
         {
             var value = i % 2;
             tasks.Add(Task.Run(() => channel.SetActiveSample(value, DateTime.UtcNow)));
         }
 
-        await Task.WhenAll(tasks.ToArray());
+        await Task.WhenAll(tasks);
 
-        // Assert
-        Assert.NotNull(channel.ActiveSample);
+        Assert.Equal(100, received.Count);
+        Assert.Contains(received, s => ReferenceEquals(s, channel.ActiveSample));
+        Assert.All(received, s => Assert.True(s.Value is 0.0 or 1.0));
     }
 
     [Fact]
