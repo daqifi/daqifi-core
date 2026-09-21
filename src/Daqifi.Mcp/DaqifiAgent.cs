@@ -254,6 +254,11 @@ public sealed class DaqifiAgent
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                // Reached only if a finder rethrows the budget token instead of ending its pass
+                // on it. WiFiDeviceFinder and SerialDeviceFinder both end the pass and hand back
+                // what they already had, so the normal timeout returns through the block above
+                // with the other transport's devices intact — see
+                // DiscoverAcrossTransports_Timeout_KeepsWhatTheOtherTransportFound.
                 return Array.Empty<IDeviceInfo>();
             }
         }

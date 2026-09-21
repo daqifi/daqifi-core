@@ -225,6 +225,25 @@ public class DiscoveryFanOutTests
             $"already-cancelled discover waited {started.Elapsed}");
     }
 
+    [Fact]
+    public async Task DiscoverAcrossTransports_Timeout_KeepsWhatTheOtherTransportFound()
+    {
+        // The everyday shape of a pass: serial settles early, WiFi listens out the whole window
+        // and ends its pass on the budget token. Routing through the cancellation overload must
+        // not turn that ordinary timeout into an empty result — the USB device found alongside
+        // is exactly what discover_devices exists to report.
+        var wifi = new ListDeviceFinder(
+            new[] { Info("A", ConnectionType.WiFi) },
+            hangUntilCancelled: true,
+            endPassOnCancel: true);
+        var serial = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
+
+        var result = await DaqifiAgent.DiscoverAcrossTransportsAsync(
+            new IDeviceFinder[] { wifi, serial }, TimeSpan.FromMilliseconds(100));
+
+        Assert.Equal(new[] { "A", "B" }, result.Select(d => d.SerialNumber));
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private static void DisposeAll(IEnumerable<IDeviceFinder> finders)
@@ -284,6 +303,7 @@ public class DiscoveryFanOutTests
         private readonly Exception? _throw;
         private readonly Rendezvous? _rendezvous;
         private readonly bool _hangUntilCancelled;
+        private readonly bool _endPassOnCancel;
         private readonly TaskCompletionSource _started =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -291,12 +311,14 @@ public class DiscoveryFanOutTests
             IEnumerable<IDeviceInfo> devices,
             Exception? throwOnDiscover = null,
             Rendezvous? rendezvous = null,
-            bool hangUntilCancelled = false)
+            bool hangUntilCancelled = false,
+            bool endPassOnCancel = false)
         {
             _devices = devices.ToList();
             _throw = throwOnDiscover;
             _rendezvous = rendezvous;
             _hangUntilCancelled = hangUntilCancelled;
+            _endPassOnCancel = endPassOnCancel;
         }
 
         public bool Disposed { get; private set; }
@@ -323,7 +345,16 @@ public class DiscoveryFanOutTests
 
             if (_hangUntilCancelled)
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_endPassOnCancel)
+                {
+                    // What WiFiDeviceFinder and SerialDeviceFinder do: the token ending the
+                    // listen window is a normal end-of-pass, so hand back what was heard.
+                    return _devices;
+                }
             }
 
             if (_throw != null)

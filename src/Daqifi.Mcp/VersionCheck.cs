@@ -150,13 +150,11 @@ public sealed class VersionStatus
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // A cancelled GET is not "nuget.org was unreachable". Drop the cached task so the
-            // next caller can start a real check rather than inherit this cancellation.
-            lock (_checkGate)
-            {
-                _check = null;
-            }
-
+            // A cancelled GET is not "nuget.org was unreachable" — let it surface as a
+            // cancellation so it is not cached as a verdict. GetOrStart treats a cancelled
+            // task as "no check has run", so the next caller starts a real one. Deliberately
+            // not clearing _check here: another caller may already have replaced it with a
+            // live check, and nulling that would start a third request for no reason.
             throw;
         }
         catch (Exception ex)
