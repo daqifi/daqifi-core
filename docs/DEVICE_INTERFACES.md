@@ -999,23 +999,31 @@ do not compare firmware strings yourself. Calling the gated API anyway throws
 ```csharp
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-// Analog output is Nyquist 3 hardware only.
+// Ask before you offer it: analog output is Nyquist 3 hardware only.
 if (device.Supports(DeviceFeature.AnalogOutput))
+{
     device.SetAnalogOutput(0, 2.5);
+}
 
-// SD list/get/delete over WiFi needs firmware ≥ 3.7.0 plus SD + WiFi hardware.
-// Over USB the same operations are available on all SD-capable firmware and are not gated.
+// SD list/get/delete over this WiFi connection needs firmware >= 3.7.0 plus SD and WiFi
+// hardware. Over USB the same operations run on any SD-capable firmware and are not gated.
 if (device.Supports(DeviceFeature.SdFileTransferOverWifi))
 {
     var files = await device.GetSdCardFilesAsync();
 }
+```
 
+Or skip the check and let the call tell you — the exception carries everything needed to say
+why, which is usually what a UI wants to show:
+
+```csharp
 try
 {
-    await device.GetSdCardFilesAsync();
+    var files = await device.GetSdCardFilesAsync();
 }
 catch (FeatureNotSupportedException ex)
 {
+    // e.g. "SdFileTransferOverWifi: needs 3.7.0, device reports 3.6.1 (Nyquist1)"
     Console.WriteLine($"{ex.Feature}: needs {ex.RequiredVersion}, device reports {ex.ActualVersion} ({ex.Board})");
 }
 ```
