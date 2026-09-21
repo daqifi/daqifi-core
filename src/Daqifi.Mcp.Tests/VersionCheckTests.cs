@@ -86,10 +86,61 @@ internal sealed class StubLatestVersionSource(string? latest = null, Exception? 
 {
     internal int CallCount { get; private set; }
 
+    internal CancellationToken LastToken { get; private set; }
+
     public Task<string?> GetLatestStableVersionAsync(CancellationToken cancellationToken)
     {
         CallCount++;
+        LastToken = cancellationToken;
         return failure is null ? Task.FromResult(latest) : Task.FromException<string?>(failure);
+    }
+}
+
+/// <summary>
+/// A source that blocks until cancelled, so the version-check token path can be observed
+/// without a real HTTP round-trip.
+/// </summary>
+internal sealed class HangingLatestVersionSource : ILatestVersionSource
+{
+    private readonly TaskCompletionSource _started =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal int CallCount { get; private set; }
+
+    internal Task Started => _started.Task;
+
+    public async Task<string?> GetLatestStableVersionAsync(CancellationToken cancellationToken)
+    {
+        CallCount++;
+        _started.TrySetResult();
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        return "999.0.0";
+    }
+}
+
+/// <summary>
+/// First call hangs until cancelled; later calls return the supplied version immediately,
+/// so a cancelled attempt can be shown not to poison the next <see cref="VersionStatus.GetAsync"/>.
+/// </summary>
+internal sealed class CancelOnceThenAnswerSource(string latest) : ILatestVersionSource
+{
+    private readonly TaskCompletionSource _started =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal int CallCount { get; private set; }
+
+    internal Task Started => _started.Task;
+
+    public async Task<string?> GetLatestStableVersionAsync(CancellationToken cancellationToken)
+    {
+        var n = ++CallCount;
+        if (n == 1)
+        {
+            _started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+
+        return latest;
     }
 }
 
@@ -175,6 +226,69 @@ public class VersionStatusTests
         await status.GetAsync();
 
         Assert.Equal(1, source.CallCount);
+    }
+
+    [Fact]
+    public async Task GetAsync_ForwardsTheCallerTokenToTheSource()
+    {
+        using var cts = new CancellationTokenSource();
+        var source = new StubLatestVersionSource(ServerVersion.Current);
+
+        await NewStatus(source).GetAsync(cts.Token);
+
+        Assert.Equal(cts.Token, source.LastToken);
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenCanceled_ThrowsRatherThanReportingUnavailable()
+    {
+        var source = new HangingLatestVersionSource();
+        var status = NewStatus(source);
+        using var cts = new CancellationTokenSource();
+
+        var check = status.GetAsync(cts.Token);
+        await source.Started;
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => check);
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenACheckIsAlreadyRunning_HonorsTheWaiterToken()
+    {
+        // Start() kicks the check off with the host stopping token; get_server_info must
+        // still be able to abandon the wait without sitting on the 5s HTTP timeout.
+        var source = new HangingLatestVersionSource();
+        var status = NewStatus(source);
+        using var hostCts = new CancellationTokenSource();
+        status.Start(hostCts.Token);
+        await source.Started;
+
+        using var cts = new CancellationTokenSource();
+        var waiting = status.GetAsync(cts.Token);
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        Assert.Equal(1, source.CallCount);
+        hostCts.Cancel();
+    }
+
+    [Fact]
+    public async Task ACancelledCheck_IsNotCached_SoTheNextCallerGetsARealAnswer()
+    {
+        var source = new CancelOnceThenAnswerSource(ServerVersion.Current);
+        var status = NewStatus(source);
+        using var cts = new CancellationTokenSource();
+
+        var cancelled = status.GetAsync(cts.Token);
+        await source.Started;
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+
+        var info = await status.GetAsync();
+
+        Assert.Equal("ok", info.VersionCheck);
+        Assert.Equal(2, source.CallCount);
     }
 
     [Fact]
