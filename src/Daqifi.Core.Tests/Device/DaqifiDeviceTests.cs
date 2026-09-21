@@ -276,31 +276,52 @@ public class DaqifiDeviceTests
     }
 
     [Fact]
-    public async Task RefreshDeviceStatusAsync_WhenTheDeviceIsDisposedMidRefresh_StillReportsTheReplyItGot()
+    public async Task RefreshDeviceStatusAsync_WhenTheDeviceIsDisposedMidRefresh_NeitherWaiterIsStranded()
     {
-        // Teardown disposes the refresh gate, and the refresh releases that gate from a
-        // finally. A user closing the app (or an `await using` scope unwinding) while a
-        // refresh is in flight is an ordinary thing to do, so the release must not be able to
-        // throw ObjectDisposedException over the top of a status that actually arrived and was
-        // already applied to Metadata.
+        // Closing the app -- or an `await using` scope unwinding -- while a refresh is in
+        // flight is an ordinary thing to do, and two callers can legitimately be on this API at
+        // once. Both must survive the teardown:
+        //
+        //  * the one holding the gate keeps the reply it already asked for, and
+        //  * the one queued behind it is still handed the gate when the first lets go.
+        //
+        // Both of those depend on ReleaseResources leaving _statusRefreshGate alone.
+        // SemaphoreSlim.Dispose() would drop the queued waiter without faulting it -- the
+        // second caller would never be woken and would sit out its whole deadline -- and would
+        // make the first caller's unconditional Release() throw ObjectDisposedException over
+        // the top of a status that had already arrived and been applied to Metadata. This test
+        // is what fails if that Dispose() is ever added back.
         var device = new TestableDaqifiDevice("TestDevice");
         device.Connect();
 
-        var refresh = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+        var first = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
 
-        // The refresh now owns the gate and is parked on its own reply.
         await Task.Delay(50);
         Assert.Single(device.SentCommands);
-        Assert.False(refresh.IsCompleted);
+
+        // A second caller, now queued on the gate rather than racing the first.
+        var second = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+
+        await Task.Delay(50);
+        Assert.Single(device.SentCommands);
+        Assert.False(second.IsCompleted);
 
         device.Dispose();
 
         // The reply the device had already put on the wire lands after the teardown.
         device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 33 });
 
-        await refresh;
-
+        await first;
         Assert.Equal(33, device.Metadata.Health.BatteryPercent);
+
+        // The queued caller was handed the gate and got as far as asking, instead of being
+        // stranded on a semaphore nothing will ever release.
+        await Task.Delay(100);
+        Assert.Equal(2, device.SentCommands.Count);
+
+        device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 44 });
+        await second;
+        Assert.Equal(44, device.Metadata.Health.BatteryPercent);
     }
 
     private sealed class TestableDaqifiDevice : DaqifiDevice
