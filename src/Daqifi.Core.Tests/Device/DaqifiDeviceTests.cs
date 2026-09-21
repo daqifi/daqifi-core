@@ -314,14 +314,20 @@ public class DaqifiDeviceTests
         await first;
         Assert.Equal(33, device.Metadata.Health.BatteryPercent);
 
-        // The queued caller was handed the gate and got as far as asking, instead of being
-        // stranded on a semaphore nothing will ever release.
-        await Task.Delay(100);
-        Assert.Equal(2, device.SentCommands.Count);
+        // The queued caller is woken the moment the first lets go, gets as far as the send,
+        // and is told plainly that the device went away. The exception TYPE is the whole
+        // assertion: a stranded waiter would instead sit on the gate until its own 5s deadline
+        // and report a TimeoutException, which says nothing true about what happened.
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => second);
+        elapsed.Stop();
 
-        device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 44 });
-        await second;
-        Assert.Equal(44, device.Metadata.Health.BatteryPercent);
+        Assert.True(
+            elapsed.Elapsed < TimeSpan.FromSeconds(3),
+            $"the queued refresh should fail as soon as the gate is free, but took {elapsed.Elapsed}");
+
+        // It never reached the wire, so the first caller's request is still the only one sent.
+        Assert.Single(device.SentCommands);
     }
 
     private sealed class TestableDaqifiDevice : DaqifiDevice
@@ -338,8 +344,16 @@ public class DaqifiDeviceTests
         /// implementation throws without one. Recording the text also lets a test assert
         /// WHICH command was sent, not merely that the call did not throw.
         /// </summary>
+        /// <remarks>
+        /// The connectivity guard is kept. It is the one piece of the real <c>Send</c> that a
+        /// test can observe the absence of: without it the double happily "sends" on a
+        /// disconnected or disposed device, and a test asserting what a caller sees after
+        /// teardown would be asserting something the production path cannot do.
+        /// </remarks>
         public override void Send<T>(IOutboundMessage<T> message)
         {
+            EnsureConnected();
+
             if (message is IOutboundMessage<string> text)
             {
                 SentCommands.Add(text.Data);
