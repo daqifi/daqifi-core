@@ -361,14 +361,16 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 ## Connection types
 
-- **WiFi** — discovered via UDP broadcast (port 30303)
+- **WiFi** — discovered via UDP broadcast (port 30303) and mDNS (`_daqifi._tcp.local.` / 5353)
 - **Serial** — USB-connected, enumerated as serial ports
-- **HID** — used during firmware updates (HidSharp backend)
+- **HID** — used during firmware updates; HidSharp on Windows and Linux, native IOKit on macOS
+  (HidSharp enumerates no HID devices there — #262)
 
 ## Requirements
 
 - .NET 9.0 or .NET 10.0 on Windows, macOS, or Linux
-- WiFi discovery: UDP port 30303 reachable (firewall may need configuring; admin may be required on Windows)
+- WiFi discovery: UDP port 30303 (broadcast) reachable, plus UDP 5353 multicast for mDNS
+  (`_daqifi._tcp.local.`) — firewall may need configuring; admin may be required on Windows
 - Serial discovery: appropriate USB drivers for your platform
 
 ## Community & support
