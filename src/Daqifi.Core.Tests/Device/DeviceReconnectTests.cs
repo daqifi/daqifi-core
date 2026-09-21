@@ -1079,7 +1079,7 @@ public class DeviceReconnectTests
     }
 
     [Fact]
-    public void DisposingDuringAReconnect_DoesNotThrow()
+    public void DisposingDuringAReconnect_UnwindsTheLoopAndLeavesTheDeviceDisconnected()
     {
         var transport = new ScriptedReconnectTransport();
         var device = new ScriptedStreamingDevice("Disposed Device", transport);
