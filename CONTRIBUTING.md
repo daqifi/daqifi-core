@@ -12,7 +12,7 @@ repro steps, expected vs. actual behavior, device model/firmware version, and OS
 All code changes go through a pull request:
 
 1. Fork the repo (or branch, if you have write access) — `feature/short-description`,
-   `fix/short-description`, or `docs/short-description`.
+   `fix/short-description`, `docs/short-description`, or `chore/short-description`.
 2. Make your changes and add/update tests.
 3. Open a PR against `main` describing the change and linking any related issue.
 4. CI must pass and the PR needs review before merge.
