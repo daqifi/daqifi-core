@@ -311,14 +311,13 @@ public class MDnsDeviceFinderTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_WithCancellationToken_ReturnsWithoutThrowing()
+    public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
         using var finder = new MDnsDeviceFinder();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
 
-        var devices = await finder.DiscoverAsync(cts.Token);
-
-        Assert.NotNull(devices);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
     }
 
     [Fact]
