@@ -275,6 +275,34 @@ public class DaqifiDeviceTests
         Assert.Equal(9, device.Metadata.Health.BatteryPercent);
     }
 
+    [Fact]
+    public async Task RefreshDeviceStatusAsync_WhenTheDeviceIsDisposedMidRefresh_StillReportsTheReplyItGot()
+    {
+        // Teardown disposes the refresh gate, and the refresh releases that gate from a
+        // finally. A user closing the app (or an `await using` scope unwinding) while a
+        // refresh is in flight is an ordinary thing to do, so the release must not be able to
+        // throw ObjectDisposedException over the top of a status that actually arrived and was
+        // already applied to Metadata.
+        var device = new TestableDaqifiDevice("TestDevice");
+        device.Connect();
+
+        var refresh = device.RefreshDeviceStatusAsync(TimeSpan.FromSeconds(5));
+
+        // The refresh now owns the gate and is parked on its own reply.
+        await Task.Delay(50);
+        Assert.Single(device.SentCommands);
+        Assert.False(refresh.IsCompleted);
+
+        device.Dispose();
+
+        // The reply the device had already put on the wire lands after the teardown.
+        device.InvokeStatusMessage(new DaqifiOutMessage { BattStatus = 33 });
+
+        await refresh;
+
+        Assert.Equal(33, device.Metadata.Health.BatteryPercent);
+    }
+
     private sealed class TestableDaqifiDevice : DaqifiDevice
     {
         public TestableDaqifiDevice(string name, IPAddress? ipAddress = null) : base(name, ipAddress)

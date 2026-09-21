@@ -226,7 +226,7 @@ public class ScpiMessageProducer
     /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFile("data.bin"));
     /// </remarks>
     /// <exception cref="ArgumentException">
-    /// <paramref name="fileName"/> is null, empty, or contains <c>"</c> or <c>;</c>.
+    /// <paramref name="fileName"/> is null, empty, or contains <c>"</c>, <c>;</c>, or a line break.
     /// </exception>
     public static IOutboundMessage<string> GetSdFile(string fileName)
     {
@@ -246,7 +246,7 @@ public class ScpiMessageProducer
     /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
     /// <exception cref="ArgumentException">
-    /// <paramref name="fileName"/> is null, empty, or contains <c>"</c> or <c>;</c>.
+    /// <paramref name="fileName"/> is null, empty, or contains <c>"</c>, <c>;</c>, or a line break.
     /// </exception>
     public static IOutboundMessage<string> SetSdLoggingFileName(string fileName)
     {
@@ -262,13 +262,12 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:DELete "filename"
     /// Example: messageProducer.Send(ScpiMessageProducer.DeleteSdFile("data.bin"));
     /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="fileName"/> is null, empty, or contains <c>"</c>, <c>;</c>, or a line break.
+    /// </exception>
     public static IOutboundMessage<string> DeleteSdFile(string fileName)
     {
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
-        }
-
+        ValidateSdFileName(fileName);
         return new ScpiMessage($"SYSTem:STORage:SD:DELete \"{fileName}\"");
     }
 
@@ -832,9 +831,13 @@ public class ScpiMessageProducer
         return new ScpiMessage($"CONFigure:ADC:chanCALB? {channel}");
     }
 
-    // SD filenames are interpolated into a quoted SCPI argument. Empty names are
-    // never useful, and `"` / `;` break out of the string or inject a second
-    // command. Shared so GetSdFile and SetSdLoggingFileName cannot drift.
+    // SD filenames are interpolated into a quoted SCPI argument. Empty names are never useful,
+    // and `"` / `;` / CR / LF break out of the quoted string, inject a second command, or end
+    // the line-delimited frame early and expose whatever follows as its own command. The
+    // rejected set is deliberately the same one SdCardOperations.ValidateSdCardFileName applies
+    // at the device-facing entry points, so a name that clears one layer cannot be rejected --
+    // or worse, accepted -- by the other. Shared across the three filename commands here so
+    // they cannot drift from each other either.
     private static void ValidateSdFileName(string fileName)
     {
         if (string.IsNullOrWhiteSpace(fileName))
@@ -842,10 +845,10 @@ public class ScpiMessageProducer
             throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
         }
 
-        if (fileName.IndexOfAny(new[] { '"', ';' }) >= 0)
+        if (fileName.IndexOfAny(['"', '\n', '\r', ';']) >= 0)
         {
             throw new ArgumentException(
-                "Filename contains invalid characters. Quotes and semicolons are not allowed.",
+                "Filename contains invalid characters. Quotes, newlines, and semicolons are not allowed.",
                 nameof(fileName));
         }
     }

@@ -133,9 +133,15 @@ public class ScpiMessageProducerTests
         Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName!));
     }
 
+    // The newline cases are the ones that matter most: the transport frames commands by line,
+    // so anything after a \n in an interpolated filename arrives at the device as a command of
+    // its own ("log.bin\nSYSTem:REboot" would reboot it). Same rejected set as
+    // SdCardOperations.ValidateSdCardFileName, which guards the device-facing entry points.
     [Theory]
     [InlineData("a\"b")]
     [InlineData("a;b")]
+    [InlineData("log.bin\nSYSTem:REboot")]
+    [InlineData("log.bin\rSYSTem:REboot")]
     public void GetSdFile_WithInjectionChars_Throws(string fileName)
     {
         Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName));
@@ -153,9 +159,23 @@ public class ScpiMessageProducerTests
     [Theory]
     [InlineData("a\"b")]
     [InlineData("a;b")]
+    [InlineData("log.bin\nSYSTem:REboot")]
+    [InlineData("log.bin\rSYSTem:REboot")]
     public void SetSdLoggingFileName_WithInjectionChars_Throws(string fileName)
     {
         Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetSdLoggingFileName(fileName));
+    }
+
+    [Theory]
+    [InlineData("a\"b")]
+    [InlineData("a;b")]
+    [InlineData("log.bin\nSYSTem:REboot")]
+    [InlineData("log.bin\rSYSTem:REboot")]
+    public void DeleteSdFile_WithInjectionChars_Throws(string fileName)
+    {
+        // DELete interpolates into the same quoted argument as GET and FILE, so it goes
+        // through the same validator rather than keeping its own weaker null/empty-only check.
+        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.DeleteSdFile(fileName));
     }
 
     [Fact]

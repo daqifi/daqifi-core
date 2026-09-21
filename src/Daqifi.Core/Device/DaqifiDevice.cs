@@ -3052,6 +3052,12 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _messageProducer?.Dispose();
             _transport?.Dispose();
             _operations.Dispose();
+
+            // A refresh that is in flight right now still has to release this gate from its
+            // own finally, and a caller can still enter RefreshDeviceStatusAsync in the window
+            // between its connectivity check and its wait. Both touchpoints contain the
+            // resulting ObjectDisposedException — see RefreshDeviceStatusAsync — which is the
+            // same bargain _operations makes above.
             _statusRefreshGate.Dispose();
             _disposed = true;
         }
@@ -3473,6 +3479,19 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 $"Timed out after {wait.TotalSeconds:0.##}s waiting for an earlier status "
                 + "refresh on this device to finish.");
         }
+        catch (ObjectDisposedException ex)
+        {
+            // A Dispose landed in the window between EnsureConnected and this wait and tore the
+            // gate down. "The device is gone" is the honest answer and the one already
+            // documented for this method; letting the gate's own ObjectDisposedException out
+            // would leak an implementation detail for a condition the caller cannot act on
+            // differently. Translated the same way OperationSerializer and TextExchangeEngine
+            // translate the identical race on their own locks — inner exception preserved.
+            throw new DeviceNotConnectedException(
+                "The device status could not be refreshed because the device is disposed.",
+                ex,
+                isShuttingDown: true);
+        }
 
         try
         {
@@ -3518,7 +3537,18 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         }
         finally
         {
-            _statusRefreshGate.Release();
+            try
+            {
+                _statusRefreshGate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Raced a Dispose that already tore the gate down. Throwing from this finally
+                // would replace whatever the refresh actually produced — including a status
+                // that DID arrive and was already applied to Metadata — with an exception
+                // about the library's own bookkeeping. Mirrors OperationSerializer, which
+                // swallows the same race around its own lock.
+            }
         }
     }
 
