@@ -8,8 +8,6 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Device;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Diagnostics;
 
 /// <summary>

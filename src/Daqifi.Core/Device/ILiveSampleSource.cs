@@ -2,8 +2,6 @@ using System.Collections.Generic;
 using System.Threading;
 using Daqifi.Core.Channel;
 
-#nullable enable
-
 namespace Daqifi.Core.Device;
 
 /// <summary>

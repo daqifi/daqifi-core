@@ -1,7 +1,5 @@
 using System.Net;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Discovery;
 
 /// <summary>
