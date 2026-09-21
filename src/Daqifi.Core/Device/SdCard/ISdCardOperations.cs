@@ -4,8 +4,6 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.SdCard;
 
 /// <summary>

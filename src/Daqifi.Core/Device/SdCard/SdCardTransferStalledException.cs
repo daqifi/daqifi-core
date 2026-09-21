@@ -1,8 +1,6 @@
 using System;
 using System.Globalization;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.SdCard;
 
 /// <summary>

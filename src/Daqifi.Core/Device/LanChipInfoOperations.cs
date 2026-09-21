@@ -6,8 +6,6 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
 
-#nullable enable
-
 namespace Daqifi.Core.Device;
 
 /// <summary>

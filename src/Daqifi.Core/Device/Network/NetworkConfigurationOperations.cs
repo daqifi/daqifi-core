@@ -4,8 +4,6 @@ using System.Threading.Tasks;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device.Internal;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Network;
 
 /// <summary>

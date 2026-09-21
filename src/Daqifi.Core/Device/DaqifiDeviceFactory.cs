@@ -2,8 +2,6 @@ using System.Net;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device.Discovery;
 
-#nullable enable
-
 namespace Daqifi.Core.Device;
 
 /// <summary>

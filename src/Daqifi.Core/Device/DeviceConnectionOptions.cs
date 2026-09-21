@@ -1,8 +1,6 @@
 using Daqifi.Core.Communication.Transport;
 using Microsoft.Extensions.Logging;
 
-#nullable enable
-
 namespace Daqifi.Core.Device;
 
 /// <summary>

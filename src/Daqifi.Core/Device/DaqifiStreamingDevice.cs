@@ -19,8 +19,6 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 
-#nullable enable
-
 namespace Daqifi.Core.Device;
 
 /// <summary>
