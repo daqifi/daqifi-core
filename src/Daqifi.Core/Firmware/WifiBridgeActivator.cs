@@ -16,8 +16,7 @@ namespace Daqifi.Core.Firmware;
 /// <c>SYSTem:COMMUnicate:LAN:FWUpdate</c> / <c>SYSTem:COMMunicate:LAN:APPLY</c>
 /// pair with the timing the firmware's WiFi-deinit/reinit state machine
 /// expects, then closes the port so it can be handed back.
-/// </remarks>
-/// <remarks>
+/// <para>
 /// <see cref="Activate(string, CancellationToken)"/> and
 /// <see cref="Deactivate(string, CancellationToken)"/> call
 /// <see cref="SerialStreamTransport.Connect"/> synchronously, which ultimately
@@ -29,6 +28,7 @@ namespace Daqifi.Core.Firmware;
 /// thread; prefer <see cref="ActivateAsync(string, CancellationToken)"/> /
 /// <see cref="DeactivateAsync(string, CancellationToken)"/>, which isolate the
 /// call onto a worker task and race it against a hard timeout.
+/// </para>
 /// </remarks>
 public static class WifiBridgeActivator
 {
