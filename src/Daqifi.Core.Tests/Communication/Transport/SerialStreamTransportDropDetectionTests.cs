@@ -105,7 +105,10 @@ public class SerialStreamTransportDropDetectionTests
         transport.StartDropDetection();
 
         Assert.False(transport.IsLivenessMonitorActive);
-        Thread.Sleep(400);
+        for (var i = 0; i < TransportConnectionWatchdog.PresenceMissThreshold * 5; i++)
+        {
+            transport.PollLivenessForTesting();
+        }
         Assert.Equal(0, Volatile.Read(ref drops));
     }
 
@@ -174,7 +177,10 @@ public class SerialStreamTransportDropDetectionTests
         transport.StartDropDetection();
 
         Assert.False(transport.IsLivenessMonitorActive);
-        Thread.Sleep(400);
+        for (var i = 0; i < TransportConnectionWatchdog.PresenceMissThreshold * 5; i++)
+        {
+            transport.PollLivenessForTesting();
+        }
         Assert.Equal(0, Volatile.Read(ref drops));
 
         // Fault escalation still covers the port.

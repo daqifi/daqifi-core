@@ -14,7 +14,7 @@ public class DaqifiDeviceLoggerTests
     public void PopulateChannels_NoUsableResolution_LogsWarningThroughInjectedLogger()
     {
         var logger = new CapturingLogger();
-        var device = new DaqifiStreamingDevice("Lab Nq1", ipAddress: null, logger: logger);
+        using var device = new DaqifiStreamingDevice("Lab Nq1", ipAddress: null, logger: logger);
         device.Connect();
 
         device.PopulateChannelsFromStatus(StatusWithResolution(analogCount: 2, resolution: 0));
@@ -29,7 +29,7 @@ public class DaqifiDeviceLoggerTests
     public void PopulateChannels_ValidStatus_LogsNoWarning()
     {
         var logger = new CapturingLogger();
-        var device = new DaqifiStreamingDevice("Lab Nq1", ipAddress: null, logger: logger);
+        using var device = new DaqifiStreamingDevice("Lab Nq1", ipAddress: null, logger: logger);
         device.Connect();
 
         device.PopulateChannelsFromStatus(StatusWithResolution(analogCount: 2, resolution: 65535));
@@ -41,7 +41,7 @@ public class DaqifiDeviceLoggerTests
     public void PopulateChannels_NoLogger_UsesNullLogger_DoesNotThrow()
     {
         // No logger supplied — the device must fall back to a no-op logger, not NRE on a warning path.
-        var device = new DaqifiStreamingDevice("Lab Nq1"); // logger defaults to null -> NullLogger
+        using var device = new DaqifiStreamingDevice("Lab Nq1"); // logger defaults to null -> NullLogger
         device.Connect();
 
         var ex = Record.Exception(() => device.PopulateChannelsFromStatus(StatusWithResolution(2, resolution: 0)));
@@ -58,7 +58,7 @@ public class DaqifiDeviceLoggerTests
     public void PopulateChannels_ThrowingLogger_IsSwallowed_DoesNotPropagate()
     {
         // A misbehaving consumer logger must never take down device operation (SafeLog isolation).
-        var device = new DaqifiStreamingDevice("Lab Nq1", ipAddress: null, logger: new ThrowingLogger());
+        using var device = new DaqifiStreamingDevice("Lab Nq1", ipAddress: null, logger: new ThrowingLogger());
         device.Connect();
 
         var ex = Record.Exception(() => device.PopulateChannelsFromStatus(StatusWithResolution(2, resolution: 0)));

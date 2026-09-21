@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
 
@@ -85,9 +86,12 @@ public class ConnectionLossEscalationTests
         // One failure, then the stream goes back to idling — a glitch, not a disconnect. Escalation
         // needs a run of five, so nothing may be reported. (That a *successful* read clears an
         // accumulated run is covered by StreamMessageConsumerHealthReportingTests.)
+        var readsBefore = transport.FailingStream.ReadCount;
         transport.FailingStream.FailOnce();
 
-        Thread.Sleep(600);
+        WaitUntil.That(
+            () => transport.FailingStream.ReadCount >= readsBefore + TransportConnectionWatchdog.ConsecutiveFaultThreshold,
+            "the reader never consumed the glitch and resumed idle reads");
 
         lock (statuses)
         {
@@ -122,7 +126,15 @@ public class ConnectionLossEscalationTests
         // teardown does. None of that may be reported as a loss.
         device.Disconnect();
 
-        Thread.Sleep(600);
+        WaitUntil.That(
+            () =>
+            {
+                lock (statuses)
+                {
+                    return statuses.Contains(ConnectionStatus.Disconnected);
+                }
+            },
+            "the device never reported Disconnected");
 
         lock (statuses)
         {
@@ -153,29 +165,12 @@ public class ConnectionLossEscalationTests
 
         consumer.Start();
 
-        Assert.True(WaitUntil(
+        WaitUntil.That(
             () => sink.FaultCount >= TransportConnectionWatchdog.ConsecutiveFaultThreshold,
-            TimeSpan.FromSeconds(10)),
-            $"expected the unreadable stream to be escalated, saw {sink.FaultCount} fault(s)");
+            () => $"expected the unreadable stream to be escalated, saw {sink.FaultCount} fault(s)");
         Assert.True(Volatile.Read(ref errors) >= 1);
 
         consumer.StopSafely(timeoutMs: 2000);
-    }
-
-    private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            Thread.Sleep(10);
-        }
-
-        return condition();
     }
 
     /// <summary>
@@ -278,8 +273,11 @@ public class ConnectionLossEscalationTests
     internal sealed class FailableStream : Stream
     {
         private int _failuresRemaining = -1;
+        private int _readCount;
 
         public volatile bool FailReads;
+
+        public int ReadCount => Volatile.Read(ref _readCount);
 
         /// <summary>
         /// Fails exactly one read, then goes back to idling — a glitch rather than a disconnect.
@@ -288,6 +286,8 @@ public class ConnectionLossEscalationTests
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            Interlocked.Increment(ref _readCount);
+
             if (FailReads)
             {
                 Thread.Sleep(5);

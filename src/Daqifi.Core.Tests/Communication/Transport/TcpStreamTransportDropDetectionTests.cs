@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using System.Net;
 using System.Net.Sockets;
 
@@ -86,13 +87,18 @@ public class TcpStreamTransportDropDetectionTests
 
         using var consumer = new StreamMessageConsumer<string>(
             transport.Stream, new LineBasedMessageParser(), healthSink: transport);
+        var readerFaults = 0;
+        consumer.ErrorOccurred += (_, _) => Interlocked.Increment(ref readerFaults);
         consumer.Start();
 
         transport.Disconnect();
 
         // Tearing down the socket makes the reader loop fail repeatedly; none of that may be
-        // reported as a drop on top of the disconnect the caller asked for.
-        Thread.Sleep(500);
+        // reported as a drop on top of the disconnect the caller asked for. Wait until the
+        // reader has seen enough failures that a wrongly-armed watchdog would have fired.
+        WaitUntil.That(
+            () => Volatile.Read(ref readerFaults) >= TransportConnectionWatchdog.ConsecutiveFaultThreshold,
+            "the reader never observed the closed socket");
         consumer.StopSafely(timeoutMs: 2000);
 
         lock (drops)
@@ -159,8 +165,15 @@ public class TcpStreamTransportDropDetectionTests
 
         device.Disconnect();
 
-        // Give any lingering reader-loop failure a chance to be (wrongly) escalated.
-        Thread.Sleep(500);
+        WaitUntil.That(
+            () =>
+            {
+                lock (statuses)
+                {
+                    return statuses.Contains(ConnectionStatus.Disconnected);
+                }
+            },
+            "the device never reported Disconnected");
 
         lock (statuses)
         {

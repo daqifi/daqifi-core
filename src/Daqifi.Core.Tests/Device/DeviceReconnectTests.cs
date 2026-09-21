@@ -76,8 +76,10 @@ public class DeviceReconnectTests
 
         transport.SimulateDrop();
 
-        // Long enough that any reconnect worth having would have started by now.
-        Thread.Sleep(500);
+        WaitUntil.That(
+            () => device.Status == ConnectionStatus.Lost && !device.IsReconnecting,
+            "the device never settled at Lost without starting a reconnect",
+            EventTimeout);
 
         Assert.Equal(ConnectionStatus.Lost, device.Status);
         Assert.False(device.IsReconnecting);
@@ -623,7 +625,10 @@ public class DeviceReconnectTests
 
         // It really did stop: no further attempts after the report.
         var connectsAtGiveUp = transport.ConnectCount;
-        Thread.Sleep(300);
+        WaitUntil.That(
+            () => !device.IsReconnecting,
+            "the reconnect loop never stopped after giving up",
+            EventTimeout);
         Assert.Equal(connectsAtGiveUp, transport.ConnectCount);
         Assert.False(device.IsReconnecting);
     }
@@ -719,7 +724,12 @@ public class DeviceReconnectTests
 
         // The caller's teardown owns the outcome: the loop must not have overwritten it, nor
         // re-opened the transport behind it.
-        Thread.Sleep(300);
+        WaitUntil.That(
+            () => device.Status == ConnectionStatus.Disconnected
+                && !transport.IsConnected
+                && !device.IsReconnecting,
+            "the device never settled at Disconnected after the caller tore it down",
+            EventTimeout);
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.False(transport.IsConnected);
         Assert.False(device.IsReconnecting);
@@ -758,7 +768,7 @@ public class DeviceReconnectTests
         device.Disconnect();
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
 
-        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+        WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
 
         // The caller's decision has to survive it.
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
@@ -792,7 +802,7 @@ public class DeviceReconnectTests
 
         device.Disconnect();
 
-        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+        WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
 
         Assert.False(
             transport.SawConcurrentLifecycleCalls,
@@ -838,7 +848,7 @@ public class DeviceReconnectTests
             "a caller's Connect ran inside the transport alongside the reconnect's connect");
 
         connectGate.Set();
-        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+        WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
     }
 
     [Fact]
@@ -872,7 +882,7 @@ public class DeviceReconnectTests
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.False(transport.SawConcurrentLifecycleCalls);
 
-        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+        WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
         Assert.False(transport.IsConnected);
     }
 
@@ -1070,7 +1080,7 @@ public class DeviceReconnectTests
         device.Disconnect();
         initGate.Set();
 
-        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
+        WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
 
         Assert.Equal(0, Volatile.Read(ref reconnectedCount));
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
@@ -1161,7 +1171,7 @@ public class DeviceReconnectTests
 
         // Reconnected is raised from inside the loop; let it finish unwinding so the second drop is
         // unambiguously a fresh one rather than one folded into the loop still in flight.
-        WaitUntil(() => !device.IsReconnecting, "the first reconnect loop never finished");
+        WaitUntil.That(() => !device.IsReconnecting, "the first reconnect loop never finished", EventTimeout);
 
         var second = WaitFor<ReconnectedEventArgs>(h => device.Reconnected += h);
         device.ClearSentCommands();
@@ -1199,7 +1209,10 @@ public class DeviceReconnectTests
         var connectsBeforeDrop = transport.ConnectCount;
         transport.SimulateDrop();
 
-        Thread.Sleep(500);
+        WaitUntil.That(
+            () => device.Status == ConnectionStatus.Disconnected && !device.IsReconnecting,
+            "the Lost handler's Disconnect was overruled by a reconnect",
+            EventTimeout);
 
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(0, Volatile.Read(ref reconnectEvents));
@@ -1454,9 +1467,10 @@ public class DeviceReconnectTests
     /// backoff, which is the only point at which a test can cancel without racing that teardown.
     /// </summary>
     private static void WaitUntilRetrying(DaqifiStreamingDevice device) =>
-        WaitUntil(
+        WaitUntil.That(
             () => device.Status == ConnectionStatus.Retrying,
-            "the reconnect loop never reached its backoff wait");
+            "the reconnect loop never reached its backoff wait",
+            EventTimeout);
 
     /// <summary>
     /// Releases a gate from another thread after a short delay, for tests where the call that would
@@ -1477,22 +1491,6 @@ public class DeviceReconnectTests
         var frame = new DaqifiOutMessage { MsgTimeStamp = deviceTimestamp };
         frame.AnalogInDataFloat.Add(value);
         return frame;
-    }
-
-    private static void WaitUntil(Func<bool> condition, string because)
-    {
-        var deadline = DateTime.UtcNow + EventTimeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return;
-            }
-
-            Thread.Sleep(5);
-        }
-
-        Assert.True(condition(), because);
     }
 
     /// <summary>

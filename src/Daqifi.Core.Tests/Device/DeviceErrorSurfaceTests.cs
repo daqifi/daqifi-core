@@ -2,6 +2,7 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using System.Net;
 using System.Text;
 
@@ -53,7 +54,9 @@ public class DeviceErrorSurfaceTests
         device.Connect();
         transport.ScriptedStream.TimeoutReads = true;
 
-        Thread.Sleep(500);
+        WaitUntil.That(
+            () => transport.ScriptedStream.ReadCount >= 5,
+            "the idle reader never issued timeout reads");
 
         Assert.Equal(0, Volatile.Read(ref errors));
         Assert.Equal(ConnectionStatus.Connected, device.Status);
@@ -79,7 +82,8 @@ public class DeviceErrorSurfaceTests
         // The reader survived the throwing handler: it is still issuing reads, and the device was
         // not knocked out of Connected by it.
         var readsSoFar = transport.ScriptedStream.ReadCount;
-        Assert.True(WaitUntil(() => transport.ScriptedStream.ReadCount > readsSoFar + 2, TimeSpan.FromSeconds(10)),
+        WaitUntil.That(
+            () => transport.ScriptedStream.ReadCount > readsSoFar + 2,
             "the reader loop stopped issuing reads after a subscriber threw");
         Assert.Equal(ConnectionStatus.Connected, device.Status);
     }
@@ -98,7 +102,10 @@ public class DeviceErrorSurfaceTests
 
         var afterDisconnect = Volatile.Read(ref errors);
         transport.ScriptedStream.FailReads = true;
-        Thread.Sleep(400);
+
+        WaitUntil.That(
+            () => device.Status == ConnectionStatus.Disconnected,
+            "the device never reported Disconnected");
 
         Assert.Equal(afterDisconnect, Volatile.Read(ref errors));
     }
@@ -147,7 +154,7 @@ public class DeviceErrorSurfaceTests
     [Fact]
     public void ASystematicallyThrowingDecode_StaysObservableWhileTheStreamKeepsRunning()
     {
-        var device = CreateStreamingDevice();
+        using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
         channel.IsEnabled = true;
 
@@ -195,7 +202,7 @@ public class DeviceErrorSurfaceTests
     {
         // The volume guarantee from the acceptance criteria: thousands of identical failures must
         // not become thousands of events.
-        var device = CreateStreamingDevice();
+        using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
         channel.IsEnabled = true;
         channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
@@ -222,7 +229,7 @@ public class DeviceErrorSurfaceTests
     [Fact]
     public void AHealthyDecode_LeavesTheFailureCounterAtZeroAndRaisesNothing()
     {
-        var device = CreateStreamingDevice();
+        using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
         channel.IsEnabled = true;
 
@@ -246,7 +253,7 @@ public class DeviceErrorSurfaceTests
     [Fact]
     public void TheDecodeFailureCounter_DescribesTheCurrentSession()
     {
-        var device = CreateStreamingDevice();
+        using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
         channel.IsEnabled = true;
         channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
@@ -266,7 +273,7 @@ public class DeviceErrorSurfaceTests
     public void AFrameThatArrivesOutsideAStreamingSession_IsNotCountedAsADecodeFailure()
     {
         // Frames outside a session are re-raised but never decoded, so nothing can fail.
-        var device = CreateStreamingDevice();
+        using var device = CreateStreamingDevice();
         var channel = (IAnalogChannel)device.Channels.First(c => c.Type == ChannelType.Analog);
         channel.IsEnabled = true;
         channel.SampleReceived += (_, _) => throw new InvalidOperationException("decode consumer is broken");
@@ -279,22 +286,6 @@ public class DeviceErrorSurfaceTests
     #endregion
 
     #region Helpers
-
-    private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            Thread.Sleep(10);
-        }
-
-        return condition();
-    }
 
     private static DecodableStreamingDevice CreateStreamingDevice()
     {

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
@@ -841,7 +842,10 @@ public class ContinuousDeviceFinderTests
         });
 
         finder.Start();
-        await WaitUntil(() => inner.PassesStarted > 0);
+        await WaitUntil.ThatAsync(
+            () => inner.PassesStarted > 0,
+            "the finder never started a pass",
+            WaitTimeout);
 
         var sw = Stopwatch.StartNew();
         await finder.StopAsync();
@@ -862,7 +866,10 @@ public class ContinuousDeviceFinderTests
         });
 
         finder.Start();
-        await WaitUntil(() => inner.PassesStarted > 0);
+        await WaitUntil.ThatAsync(
+            () => inner.PassesStarted > 0,
+            "the finder never started a pass",
+            WaitTimeout);
 
         var sw = Stopwatch.StartNew();
         finder.Dispose(); // must cancel the in-flight pass, not wait out the 30s PassTimeout
@@ -877,16 +884,6 @@ public class ContinuousDeviceFinderTests
         var completed = await Task.WhenAny(signal.Task, Task.Delay(WaitTimeout));
         Assert.True(completed == signal.Task, "Timed out waiting for the expected event.");
         return await signal.Task;
-    }
-
-    private static async Task WaitUntil(Func<bool> condition)
-    {
-        var sw = Stopwatch.StartNew();
-        while (!condition())
-        {
-            Assert.True(sw.Elapsed < WaitTimeout, "Timed out waiting for the expected condition.");
-            await Task.Delay(10);
-        }
     }
 
     #endregion
