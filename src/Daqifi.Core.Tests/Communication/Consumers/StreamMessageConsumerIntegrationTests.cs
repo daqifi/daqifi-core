@@ -323,10 +323,12 @@ public class StreamMessageConsumerIntegrationTests
             clearCalls++;
         }
 
-        // Let the consumer honor any in-flight clear, then stop.
+        // Let the consumer complete another loop iteration so any in-flight ClearBuffer is
+        // honored, then stop.
+        var readsAfterHammer = stream.ReadCount;
         WaitUntil.That(
-            () => consumer.QueuedMessageCount == 0,
-            "the consumer never drained after the last clear");
+            () => stream.ReadCount > readsAfterHammer,
+            "the consumer never ran another iteration after the last clear");
         var stoppedCleanly = consumer.StopSafely(2000);
 
         // Assert - no concurrency exceptions (List corruption, torn reads) were ever reported.
@@ -378,6 +380,9 @@ public class StreamMessageConsumerIntegrationTests
     private sealed class ContinuousDataStream : Stream
     {
         private byte _next;
+        private int _readCount;
+
+        public int ReadCount => Volatile.Read(ref _readCount);
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -388,6 +393,8 @@ public class StreamMessageConsumerIntegrationTests
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            Interlocked.Increment(ref _readCount);
+
             // Return a modest chunk each call so the buffer both grows and gets parsed/drained.
             var n = Math.Min(count, 64);
             for (var i = 0; i < n; i++)
