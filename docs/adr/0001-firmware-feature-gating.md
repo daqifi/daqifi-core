@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-06-19)
 - **Issue:** [#251](https://github.com/daqifi/daqifi-core/issues/251)
-- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal), [#256](https://github.com/daqifi/daqifi-core/issues/256) (version table + `Supports()` seam), [#390](https://github.com/daqifi/daqifi-core/issues/390) (capability-document reader)
+- **Follow-ups:** [#254](https://github.com/daqifi/daqifi-core/issues/254) (floor + `-113` backstop, **done**), [#255](https://github.com/daqifi/daqifi-core/issues/255) (dead-code removal, **done** via [#258](https://github.com/daqifi/daqifi-core/pull/258)), [#256](https://github.com/daqifi/daqifi-core/issues/256) (version table + `Supports()` seam, **done**), [#390](https://github.com/daqifi/daqifi-core/issues/390) (capability-document reader, **done**)
 - **Supersedes:** —
 
 > **Note on the evidence section.** §"Context — firmware audit" below is a *living*
@@ -91,7 +91,7 @@ v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → v3.6.1
   streaming before toggling channels.
 - **v3.5.0** — the 1 kHz Type-2 muxed scan-rate cap was **removed**; Type-2 now obeys the
   transport cap ([#528](https://github.com/daqifi/daqifi-nyquist-firmware/pull/528)).
-- **v3.6.1 (pending)** — `CONFigure:CAPabilities:JSON?` bounds were aligned to the actual
+- **v3.6.1** — `CONFigure:CAPabilities:JSON?` bounds were aligned to the actual
   setter bounds ([#548](https://github.com/daqifi/daqifi-nyquist-firmware/pull/548)). Clients
   that parse the capability JSON to infer setter ranges may see different values.
 
@@ -107,7 +107,7 @@ model reality (seed data contributed on [#251](https://github.com/daqifi/daqifi-
 | `StartStreaming` / `StopStreaming` | `SYSTem:StartStreamData` / `StopStreamData` → `STReam:START` / `STOP` | both kept as **aliases** ([#324](https://github.com/daqifi/daqifi-nyquist-firmware/pull/324)) | no — old name works on all fw |
 | `SetUsbTransparencyMode` | `USB:SetTransparentMode` → `USB:TRANSparent:MODE` | both kept as **aliases** | no |
 | `SetSdLoggingFileName` | `STORage:SD:LOGging` → `STORage:SD:FILE` | **hard rename, no alias** ([#323](https://github.com/daqifi/daqifi-nyquist-firmware/pull/323)) | **yes** — see above |
-| `GetSdLoggingState` | `STORage:SD:LOGging?` | **never existed in firmware** | dead code — remove |
+| `GetSdLoggingState` (removed) | `STORage:SD:LOGging?` | **never existed in firmware** | n/a — removed in [#258](https://github.com/daqifi/daqifi-core/pull/258) |
 
 Verified at the v3.5.0 tree: `STReam:START`, `StartStreamData`, `USB:TRANSparent:MODE`,
 `SetTransparentMode`, and `STORage:SD:FILE` are all present, while `STORage:SD:LOGging` is
@@ -144,9 +144,11 @@ logging.
 
 **Consequence — this collapses most of the gating problem:**
 
-- Every command daqifi-core issues today exists on all supported firmware → **no version
-  table entries are needed yet**. Don't build the table until we consume a post-v3.5.0
-  command.
+- Every command daqifi-core issued at decision time existed on all supported firmware →
+  **no version table entries were needed yet**. Don't build the table until we consume a
+  post-v3.5.0 command. *(Amendment: that trigger has landed. `SdFileTransferOverWifi`
+  (≥ v3.7.0) shipped the table in [#256](https://github.com/daqifi/daqifi-core/issues/256);
+  the "don't build until" rule is unchanged — see the implementation note under Decision 2.)*
 - The **version-selected-command** mode (send the old name on old firmware) is **unnecessary
   and out of scope** — there is no supported firmware that needs the pre-rename names. Core
   #253's unconditional `SD:FILE` is correct as-is.
@@ -195,6 +197,8 @@ therefore be snapshotted before/without the firmware version and silently go sta
 ```csharp
 namespace Daqifi.Core.Device;
 
+// Historical sketch (2026-06-19). The shipped enum also includes SdFileTransferOverWifi
+// (the first post-floor member; the table was built for it — see the #256 note below).
 public enum DeviceFeature
 {
     AnalogOutput,        // SOURce:VOLTage:LEVel / CONF:DAC — board gate: NQ3 only
@@ -203,7 +207,8 @@ public enum DeviceFeature
     // supported firmware:
     SdStorageQuery,      // SYSTem:STORage:SD:SPACe?   (fw v3.4.6b1)
     CapabilityDocument,  // CONFigure:CAPabilities:JSON? (fw v3.5.0)
-    // … add post-v3.5.0 commands here as we consume them; that is when the table is built.
+    SdFileTransferOverWifi, // SYSTem:STORage:SD:LIST? / :GET / :DELete over TCP (fw ≥ v3.7.0)
+    // Further post-v3.5.0 commands are added here as we consume them.
 }
 
 // Device/FeatureNotSupportedException.cs — the typed backstop.
@@ -325,7 +330,9 @@ predates firmware v3.5.0 removing the Type-2 muxed scan-rate cap (firmware #528)
 
 The decision is: **a v3.5.0 floor + board-derived capability (both live) + the `-113` typed
 backstop (always correct), with the version table and #327 reader deferred until they earn
-their place.**
+their place.** Both have now earned it — see the implementation notes under Decision 2
+([#256](https://github.com/daqifi/daqifi-core/issues/256) table,
+[#390](https://github.com/daqifi/daqifi-core/issues/390) reader).
 
 ## Consequences
 
@@ -334,8 +341,8 @@ their place.**
   code is the floor constant + the `-113` → `FeatureNotSupportedException` backstop.
 - Today's generic `SdCardOperationException` for old firmware becomes a clear, typed
   `FeatureNotSupportedException` carrying required-vs-actual version.
-- The seam is stable, so the deferred table and #327 reader slot in later without touching
-  consumers.
+- The seam is stable, so the table (#256) and capability-document reader (#390) slotted in
+  later without touching consumers — see the implementation notes under Decision 2.
 
 **Negative / costs**
 - A floor is a support commitment: pre-v3.5.0 devices get best-effort behavior and typed
@@ -346,11 +353,11 @@ their place.**
 **Follow-up implementation issues**
 1. [#254](https://github.com/daqifi/daqifi-core/issues/254) — **`MinSupportedFirmware = v3.5.0`
    + `FeatureNotSupportedException` + `-113` backstop** on `GetSdCardStorageAsync` (the guard
-   deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)). *Primary near-term
-   deliverable.*
+   deferred from [#214](https://github.com/daqifi/daqifi-core/pull/214)): **done**.
 2. [#255](https://github.com/daqifi/daqifi-core/issues/255) — **Remove dead code**: the
    `GetSdLoggingState` producer + `SYSTem:STORage:SD:LOGging?` query never existed in the
-   firmware SCPI table. Public-API removal, separate from the #253 fix.
+   firmware SCPI table. Public-API removal, separate from the #253 fix: **done** in
+   [#258](https://github.com/daqifi/daqifi-core/pull/258).
 3. [#256](https://github.com/daqifi/daqifi-core/issues/256) — `DeviceFeature` version table +
    lazy `Supports(...)`: **done** (triggered by SD-over-WiFi @ v3.7.0; see the implementation
    note under Decision 2).
