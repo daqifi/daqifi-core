@@ -15,6 +15,7 @@ using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 #nullable enable
 
@@ -3725,24 +3726,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         catch (Exception ex)
         {
             SafeLog(() => _logger.LogWarning(ex, "[{EventName}] classified-event subscriber threw", eventName));
-        }
-    }
-
-    /// <summary>
-    /// Runs a logging call, swallowing any exception a misbehaving <see cref="ILogger"/> throws.
-    /// A consumer-supplied logger must never affect device operation — least of all in
-    /// <see cref="RaiseClassifiedEvent"/>, whose whole purpose is to isolate frame processing
-    /// from faults. Mirrors <c>MessageProducer.SafeLog</c>.
-    /// </summary>
-    private static void SafeLog(Action logAction)
-    {
-        try
-        {
-            logAction();
-        }
-        catch
-        {
-            // A logger that throws is not permitted to take down device operation.
         }
     }
 

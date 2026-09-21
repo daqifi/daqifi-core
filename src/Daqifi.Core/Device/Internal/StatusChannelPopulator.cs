@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 #nullable enable
 
@@ -325,26 +326,5 @@ internal sealed class StatusChannelPopulator
             return list[index];
         }
         return defaultValue;
-    }
-
-    /// <summary>
-    /// Runs a logging call, swallowing anything a consumer-supplied <see cref="ILogger"/>
-    /// throws. Mirrors <c>DaqifiDevice.SafeLog</c>, which is private to that class.
-    /// </summary>
-    /// <remarks>
-    /// A logger that throws must not abort channel population: the warnings guarded here are
-    /// emitted precisely when the device reported something implausible, so a faulting logger
-    /// would turn a recoverable bad status frame into a failed population.
-    /// </remarks>
-    private static void SafeLog(Action logAction)
-    {
-        try
-        {
-            logAction();
-        }
-        catch
-        {
-            // A logger that throws is not permitted to affect device operation.
-        }
     }
 }
