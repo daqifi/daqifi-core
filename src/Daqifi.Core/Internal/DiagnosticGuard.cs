@@ -3,9 +3,9 @@ using System.Diagnostics;
 namespace Daqifi.Core.Internal;
 
 /// <summary>
-/// Isolates diagnostic side-effects from device and transport operation. A consumer-supplied
-/// logger or <see cref="TraceListener"/> must never take down a connect, reconnect, drop path,
-/// or frame pipeline.
+/// Isolates best-effort calls out to consumer code from device and transport operation. A
+/// consumer-supplied logger, <see cref="TraceListener"/>, or event subscriber must never take
+/// down a connect, reconnect, drop path, or frame pipeline.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,22 +13,34 @@ namespace Daqifi.Core.Internal;
 /// across the device, producer, and transport types.
 /// </para>
 /// <para>
-/// The empty <c>catch</c> is deliberate, and it is the reason this type is narrow. Swallowing an
-/// exception is only defensible when the work being swallowed is <em>purely</em> diagnostic —
-/// when dropping it costs a log line and nothing else. That is the whole contract here: pass a
-/// logger call or a <see cref="Trace"/> write, nothing that the device's own correctness depends
-/// on. Nor does the guard log the failure it caught: logging from inside a catch was considered
-/// and rejected for this codebase (issue #98), and would in any case mean calling the very
+/// The empty <c>catch</c> is deliberate, and the contract that makes it defensible is worth
+/// stating precisely, because it is narrower than "swallow exceptions" and wider than "logging".
+/// What may be passed here is a <b>best-effort notification out to consumer code</b> — an
+/// <see cref="Microsoft.Extensions.Logging.ILogger"/> call, a <see cref="Trace"/> write, or the
+/// raise of a best-effort event such as <c>SendFailed</c> or <c>ErrorOccurred</c> — where the
+/// only thing lost when it throws is that one notification. Consumer code is entitled to
+/// misbehave; the producer's background thread, the reader loop, and the decode path are not
+/// entitled to die because it did.
+/// </para>
+/// <para>
+/// What may <em>not</em> be passed is anything the device's own state or correctness depends on.
+/// A call whose failure has to change what happens next does not belong behind a guard that
+/// cannot report it.
+/// </para>
+/// <para>
+/// Nor does the guard log the failure it caught: logging from inside a catch was considered and
+/// rejected for this codebase (issue #98), and would in any case often mean calling the very
 /// logger that just threw.
 /// </para>
 /// </remarks>
 internal static class DiagnosticGuard
 {
     /// <summary>
-    /// Runs a logging call, swallowing anything it throws. See the type-level remarks for what
-    /// may and may not be passed here.
+    /// Runs a best-effort notification out to consumer code — a logging call, or the raise of an
+    /// event whose subscribers must not be able to take down the caller — swallowing anything it
+    /// throws. See the type-level remarks for what may and may not be passed here.
     /// </summary>
-    /// <param name="action">The logging call to run.</param>
+    /// <param name="action">The logging call or best-effort event raise to run.</param>
     internal static void SafeLog(Action action)
     {
         try
