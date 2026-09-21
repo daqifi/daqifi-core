@@ -1,7 +1,9 @@
 namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
-/// Default HID enumerator implementation backed by the HidSharp package.
+/// Default HID enumerator implementation, backed by the platform-appropriate HID adapter:
+/// HidSharp on Windows and Linux, native IOKit on macOS (HidSharp enumerates no HID devices
+/// there — issue #262).
 /// </summary>
 public sealed class HidLibraryDeviceEnumerator : IHidDeviceEnumerator
 {

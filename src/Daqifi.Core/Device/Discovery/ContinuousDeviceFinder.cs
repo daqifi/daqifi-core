@@ -17,10 +17,12 @@ namespace Daqifi.Core.Device.Discovery;
 /// its own polling loop and stale-removal logic.
 /// </summary>
 /// <remarks>
-/// One instance wraps a single finder, so it represents one transport's scan
-/// cadence and live set. To track multiple transports (WiFi, Serial, HID), create
-/// one <see cref="ContinuousDeviceFinder"/> per finder — each can use its own
-/// interval — and merge their events.
+/// One instance wraps a single <see cref="IDeviceFinder"/>. For multi-transport
+/// continuous discovery (WiFi, Serial, HID), wrap one
+/// <see cref="AllTransportsDeviceFinder"/> rather than creating one
+/// <see cref="ContinuousDeviceFinder"/> per transport — that composite already
+/// fans out and deduplicates, as its remarks describe. Separate instances are
+/// only needed when each finder must use its own scan interval.
 /// </remarks>
 public class ContinuousDeviceFinder : IDisposable
 {
