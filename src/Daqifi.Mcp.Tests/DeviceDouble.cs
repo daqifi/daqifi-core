@@ -45,6 +45,12 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     internal int CapabilityReads { get; private set; }
 
     /// <summary>
+    /// When set, runs before the document is applied, with the token the tool passed into the
+    /// refresh. A cancelled configure should abort here rather than sitting out the wait.
+    /// </summary>
+    internal Func<CancellationToken, Task>? BeforeCapabilityRead { get; set; }
+
+    /// <summary>
     /// What the device answers as its cap for the analog channels enabled at the moment it is
     /// asked. Default mirrors an NQ1: a fixed per-tick budget shared by the enabled inputs.
     /// </summary>
@@ -127,11 +133,17 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
     /// real device does: <c>CurrentMaximumRateHz</c> describes the selection that was live when
     /// the document was read, so the number only moves when the document is re-read.
     /// </summary>
-    public override Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
+    public override async Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
         CancellationToken cancellationToken = default)
     {
         CapabilityReads++;
-        return Task.FromResult<CapabilityDocument?>(ApplyCapabilityDocumentForCurrentChannels());
+        if (BeforeCapabilityRead is { } before)
+        {
+            await before(cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return ApplyCapabilityDocumentForCurrentChannels();
     }
 
     /// <summary>
