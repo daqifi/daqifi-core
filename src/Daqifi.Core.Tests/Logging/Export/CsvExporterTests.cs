@@ -526,17 +526,6 @@ public class CsvExporterTests
         Assert.Contains(ChDig.Key, header);
     }
 
-    // ── No EF/Windows references compile check ───────────────────────────────
-
-    [Fact]
-    public void ExporterTypes_DoNotReferenceEfCoreOrWindows()
-    {
-        // If this file compiles, the types exist without EF/WPF dependencies.
-        // This test is a compile-time guarantee — it always passes if the project builds.
-        var _ = new CsvExporter();
-        Assert.NotNull(_);
-    }
-
     // ── #191 progress finalization on no-op export ───────────────────────────
 
     [Fact]

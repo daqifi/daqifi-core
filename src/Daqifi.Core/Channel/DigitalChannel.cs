@@ -93,19 +93,12 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
 
     /// <summary>
     /// Gets or sets the output value for digital output channels (true = high, false = low).
+    /// Local bookkeeping mirroring the last commanded state; setting it does not drive the pin.
     /// </summary>
     public bool OutputValue
     {
         get { lock (_lock) { return _outputValue; } }
-        set
-        {
-            lock (_lock)
-            {
-                _outputValue = value;
-                // When output value changes, we could trigger an event or callback
-                // to notify the device to update the physical output
-            }
-        }
+        set { lock (_lock) { _outputValue = value; } }
     }
 
     /// <summary>

@@ -17,21 +17,6 @@ public class SerialDeviceFinderTests
     // The part-number to DeviceType mapping this finder uses is covered by
     // DiscoveryDeviceTypeMapperTests (issue #283).
     [Fact]
-    public async Task DiscoverAsync_WithCancellationToken_ReturnsDevices()
-    {
-        // Arrange
-        using var finder = new SerialDeviceFinder();
-        using var cts = new CancellationTokenSource();
-
-        // Act
-        var devices = await finder.DiscoverAsync(cts.Token);
-
-        // Assert
-        Assert.NotNull(devices);
-        // May or may not find devices depending on system, but should not throw
-    }
-
-    [Fact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {
         // Arrange
@@ -193,29 +178,30 @@ public class SerialDeviceFinderTests
     {
         // Cross-platform fallback: when the descriptor provider can't
         // classify a port (returns null), the legacy probe behavior is
-        // preserved so we don't regress on Linux/macOS where we don't
-        // yet have a descriptor lookup. The probe will time out on
-        // non-DAQiFi ports as before — no change to that path.
+        // preserved so we don't regress on hosts without a descriptor lookup.
+        //
+        // Both seams are injected so the test is deterministic on every host:
+        // a fixed port list (a CI runner with zero serial ports would otherwise
+        // never call the provider and pass vacuously), and a recording probe so
+        // the assertion is on the port actually being probed, not merely classified.
         var fakeProvider = new RecordingUsbPortDescriptorProvider(_ => null);
+        var probed = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-        using var finder = new SerialDeviceFinder(9600, fakeProvider);
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        using var finder = new SerialDeviceFinder(
+            9600,
+            fakeProvider,
+            portNameProvider: () => new[] { "MOCK_PORT_DOES_NOT_EXIST" },
+            probeOverride: (port, _) =>
+            {
+                probed.Add(port);
+                return Task.FromResult<IDeviceInfo?>(null);
+            });
 
-        // Just verifying it doesn't throw and returns a (probably empty) list;
-        // actual ports depend on the test machine. The key contract is that
-        // null-descriptor doesn't filter the port out of consideration.
-        // The legacy probe path may exceed 200ms on machines with real ports —
-        // an OperationCanceledException there still proves the contract:
-        // null descriptors fall through to probing rather than being filtered.
-        try
-        {
-            var devices = await finder.DiscoverAsync(cts.Token);
-            Assert.NotNull(devices);
-        }
-        catch (OperationCanceledException)
-        {
-            // Probe ran (legacy fallback engaged) and exceeded the test budget.
-        }
+        var devices = await finder.DiscoverAsync();
+
+        Assert.Empty(devices);
+        Assert.Equal(1, fakeProvider.CallCount);
+        Assert.Equal(new[] { "MOCK_PORT_DOES_NOT_EXIST" }, probed);
     }
 
     [Fact]
