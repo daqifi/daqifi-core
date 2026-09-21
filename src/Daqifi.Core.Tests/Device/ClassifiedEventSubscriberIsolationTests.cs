@@ -63,16 +63,32 @@ public class ClassifiedEventSubscriberIsolationTests
     }
 
     [Fact]
-    public void AThrowingSubscriber_StillLetsTheClassifiedEventReachTheUndifferentiatedEvent()
+    public void AThrowingStatusSubscriber_StillLetsTheClassifiedEventReachTheUndifferentiatedEvent()
     {
-        // A misbehaving StatusMessageReceived subscriber must not prevent MessageReceived (or the
-        // stream decode path, for StreamMessageReceived) from firing for the same frame.
+        // A misbehaving StatusMessageReceived subscriber must not prevent MessageReceived from
+        // firing for the same frame.
         var device = new RaiseProbeDevice("TestDevice");
 
         device.StatusMessageReceived += _ => throw new InvalidOperationException("misbehaves");
         device.MessageReceived += (_, _) => device.UndifferentiatedRaisesSeen++;
 
         device.InvokeStatusMessage(StatusFrame());
+
+        Assert.Equal(1, device.UndifferentiatedRaisesSeen);
+    }
+
+    [Fact]
+    public void AThrowingStreamSubscriber_StillLetsTheClassifiedEventReachTheUndifferentiatedEvent()
+    {
+        // The stream half of the pair above. StreamMessageReceived runs on the decode path, so a
+        // throwing subscriber there has a second way to swallow the frame before MessageReceived
+        // is raised -- which is why this is asserted separately rather than assumed from Status.
+        var device = new RaiseProbeDevice("TestDevice");
+
+        device.StreamMessageReceived += _ => throw new InvalidOperationException("misbehaves");
+        device.MessageReceived += (_, _) => device.UndifferentiatedRaisesSeen++;
+
+        device.InvokeStreamMessage(StreamFrame());
 
         Assert.Equal(1, device.UndifferentiatedRaisesSeen);
     }

@@ -283,7 +283,12 @@ public class AnalogChannelTests
 
         Assert.Equal(100, received.Count);
         Assert.Contains(received, s => ReferenceEquals(s, channel.ActiveSample));
-        Assert.All(received, s => Assert.InRange(s.Value, 0, 99));
+
+        // Every value written came back exactly once: no write was lost, duplicated, or torn
+        // into a value nobody wrote. InRange(0, 99) would pass on all three of those.
+        Assert.Equal(
+            Enumerable.Range(0, 100).Select(i => (double)i).ToHashSet(),
+            received.Select(s => s.Value).ToHashSet());
     }
 
     [Fact]
