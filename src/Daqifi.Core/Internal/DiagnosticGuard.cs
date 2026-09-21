@@ -7,12 +7,28 @@ namespace Daqifi.Core.Internal;
 /// logger or <see cref="TraceListener"/> must never take down a connect, reconnect, drop path,
 /// or frame pipeline.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Replaces a dozen byte-identical <c>SafeLog</c> / <c>SafeTrace</c> twins that had accumulated
+/// across the device, producer, and transport types.
+/// </para>
+/// <para>
+/// The empty <c>catch</c> is deliberate, and it is the reason this type is narrow. Swallowing an
+/// exception is only defensible when the work being swallowed is <em>purely</em> diagnostic —
+/// when dropping it costs a log line and nothing else. That is the whole contract here: pass a
+/// logger call or a <see cref="Trace"/> write, nothing that the device's own correctness depends
+/// on. Nor does the guard log the failure it caught: logging from inside a catch was considered
+/// and rejected for this codebase (issue #98), and would in any case mean calling the very
+/// logger that just threw.
+/// </para>
+/// </remarks>
 internal static class DiagnosticGuard
 {
     /// <summary>
-    /// Runs a logging call (or any similarly-isolated side-effect), swallowing anything it throws.
+    /// Runs a logging call, swallowing anything it throws. See the type-level remarks for what
+    /// may and may not be passed here.
     /// </summary>
-    /// <param name="action">The logging call or isolated side-effect to run.</param>
+    /// <param name="action">The logging call to run.</param>
     internal static void SafeLog(Action action)
     {
         try

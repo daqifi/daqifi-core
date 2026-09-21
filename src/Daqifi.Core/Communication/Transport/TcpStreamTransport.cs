@@ -416,7 +416,8 @@ public class TcpStreamTransport : IStreamTransport, ITransportHealthSink
             // already been taken out of their fields, so if this unwound past the dispose below,
             // Disconnect() and Dispose() would both find null and skip them too, leaking the socket
             // for the life of the process. Not rethrown, and traced best-effort because this
-            // transport carries no logger: see SerialStreamTransport.HandleConnectionLost.
+            // transport carries no logger: see SerialStreamTransport.HandleConnectionLost, which
+            // also explains why the line is composed inside the lambda rather than eagerly.
             SafeTrace(() =>
                 $"[{nameof(TcpStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {ex}");
         }

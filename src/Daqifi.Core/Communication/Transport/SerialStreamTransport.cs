@@ -675,6 +675,12 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
             // disturbing them. A DaqifiDevice surfaces its own StatusChanged subscriber failures on
             // ErrorOccurred; this transport carries no logger, so a consumer working against a bare
             // transport gets the same best-effort trace DeviceFinderBase gives its event raises.
+            //
+            // The lambda is load-bearing, not decoration: `ex` came out of consumer code too, so
+            // rendering it is no safer than raising to it. Composing the line eagerly — SafeTrace($"...")
+            // — would let a throwing ToString() escape the very catch that is containing the
+            // subscriber, and the watchdog/reader thread would be disrupted anyway (issue #494,
+            // pinned by DropPathSubscriberIsolationTests).
             SafeTrace(() =>
                 $"[{nameof(SerialStreamTransport)}] a {nameof(StatusChanged)} subscriber threw while a dropped connection was being reported: {ex}");
         }
