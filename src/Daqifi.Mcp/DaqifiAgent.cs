@@ -472,7 +472,20 @@ public sealed class DaqifiAgent
             // that value" rather than requiring special-casing here.
             var desiredFrequencyHz = frequencyHz != 0 ? frequencyHz : streaming.PwmFrequencyHz;
 
-            streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
+            try
+            {
+                streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
+            }
+            catch (ArgumentOutOfRangeException ex) when (ex.ParamName == nameof(dutyCyclePercent))
+            {
+                // Core's message names SetPwmEnabled(channel, false), an SDK method an MCP caller
+                // cannot invoke. Same rewrite direction/output already do for the PWM-active case:
+                // name disable_pwm, and keep the original exception as the inner.
+                throw new InvalidOperationException(
+                    "Duty cycle must be 1-100 percent. To stop the output, call disable_pwm.",
+                    ex);
+            }
+
             _pwmDutyCommanded.AddOrUpdate(ch, PwmCommandedMarker);
 
             // Reprogram the shared device-wide timer. Core skips the SCPI round-trip when the
