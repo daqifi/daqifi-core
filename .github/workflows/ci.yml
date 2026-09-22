@@ -70,7 +70,7 @@ jobs:
       run: dotnet restore Daqifi.Core.sln
 
     - name: Build
-      run: dotnet build --no-restore Daqifi.Core.sln
+      run: dotnet build -c Release --no-restore Daqifi.Core.sln
 
     # --no-build because the step above already built it. Without that flag every
     # leg compiled the solution a second time, which the matrix would have tripled.
@@ -79,7 +79,7 @@ jobs:
     # --no-build. This step can now only fail on a test failure — the post-test
     # MSBuild step that used to fail it after a fully green run is gone (#689).
     - name: Test
-      run: dotnet test --no-build --no-restore Daqifi.Core.sln
+      run: dotnet test -c Release --no-build --no-restore Daqifi.Core.sln
 
     # The baseline is only as good as it is current. ApiCompat can only report a
     # member the baseline package actually contains, so every API added since the
