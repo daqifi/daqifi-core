@@ -7,7 +7,7 @@
 [![NuGet](https://img.shields.io/nuget/v/Daqifi.Core?style=flat-square&logo=nuget)](https://www.nuget.org/packages/Daqifi.Core)
 [![Downloads](https://img.shields.io/nuget/dt/Daqifi.Core?style=flat-square)](https://www.nuget.org/packages/Daqifi.Core)
 [![Build](https://img.shields.io/github/actions/workflow/status/daqifi/daqifi-core/ci.yml?style=flat-square&label=build)](https://github.com/daqifi/daqifi-core/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/github/license/daqifi/daqifi-core?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/daqifi/daqifi-core?style=flat-square)](https://github.com/daqifi/daqifi-core/blob/main/LICENSE)
 ![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0-512BD4?style=flat-square&logo=dotnet)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)
 
@@ -23,7 +23,7 @@ DAQiFi builds wireless data acquisition hardware designed to get out of the way 
 
 Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
 
-Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O, PWM and analog outputs, set the sample rate, and run SD-card logging — then list, download, and CSV the recorded data back — through plain conversation.
+Want to drive a device from an AI assistant? The repo also ships an **[MCP server](https://github.com/daqifi/daqifi-core/blob/main/src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O, PWM and analog outputs, set the sample rate, and run SD-card logging — then list, download, and CSV the recorded data back — through plain conversation.
 
 ## See it in 30 seconds
 
@@ -49,7 +49,7 @@ device.StartStreaming();
 ```
 
 A real, working program — no GUI required. Prefer the raw protobuf frame instead? Subscribe to
-`device.MessageReceived` — see [Streaming Data](docs/DEVICE_INTERFACES.md#streaming-data).
+`device.MessageReceived` — see [Streaming Data](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#streaming-data).
 
 ## Common applications
 
@@ -70,7 +70,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
 | **SDK** | **DAQiFi Core — this library** |
 | App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
-| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM/analog output, SD logging, and SD data retrieval |
+| Agent | [MCP server](https://github.com/daqifi/daqifi-core/blob/main/src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM/analog output, SD logging, and SD data retrieval |
 | Your code | Custom apps, dashboards, pipelines, test rigs |
 
 ## What you can do
@@ -141,7 +141,7 @@ await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.10
 > silently ends that session's data. Use `DeviceConnectionOptions.Observing` for a secondary session
 > that only needs to look, and `DaqifiDeviceRegistry` to avoid opening the same unit twice in one
 > process. See
-> [Connecting stops any stream already running](docs/DEVICE_INTERFACES.md#connecting-stops-any-stream-already-running).
+> [Connecting stops any stream already running](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#connecting-stops-any-stream-already-running).
 
 ### Device discovery
 
@@ -284,7 +284,7 @@ device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed inpu
 
 Every `IStreamingDevice` method above (and the rest of the channel/PWM/analog-output/reboot surface)
 has a cancellable `...Async` twin declared on the interface — see
-[IStreamingDevice](docs/DEVICE_INTERFACES.md#istreamingdevice) for the full list.
+[IStreamingDevice](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#istreamingdevice) for the full list.
 
 ### PWM output
 
@@ -396,5 +396,5 @@ for the reasoning.
 ---
 
 <p align="center">
-  Built by <a href="https://daqifi.com">DAQiFi</a> · Licensed under <a href="LICENSE">MIT</a>
+  Built by <a href="https://daqifi.com">DAQiFi</a> · Licensed under <a href="https://github.com/daqifi/daqifi-core/blob/main/LICENSE">MIT</a>
 </p>
