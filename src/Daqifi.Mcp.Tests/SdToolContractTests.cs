@@ -228,8 +228,10 @@ public class ToolErrorTranslationTests
         var ex = Assert.Throws<McpException>(() => DaqifiTools.GetDeviceStatus(agent, "serial:NOPE"));
 
         // Not a generic "An error occurred": the whole point is that "call connect_device first"
-        // survives the trip to the model.
+        // survives the trip to the model. The original failure stays attached so a host that
+        // logs the exception still has the cause.
         Assert.Contains("connect_device", ex.Message);
+        Assert.IsType<InvalidOperationException>(ex.InnerException);
     }
 
     [Fact]
@@ -241,6 +243,7 @@ public class ToolErrorTranslationTests
             () => DaqifiTools.SetSampleRate(agent, "serial:NOPE", 100));
 
         Assert.Contains("not connected", ex.Message);
+        Assert.IsType<InvalidOperationException>(ex.InnerException);
     }
 
     [Fact]
@@ -254,6 +257,31 @@ public class ToolErrorTranslationTests
             () => DaqifiTools.SetPwmOutput(agent, AgentHarness.DeviceId, channel: 1, dutyCyclePercent: 50));
 
         Assert.Contains("does not support PWM", ex.Message);
+        Assert.IsType<ArgumentException>(ex.InnerException);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(101)]
+    public async Task PwmDutyOutsideRange_NamesDisablePwmAndKeepsTheCause(int dutyCyclePercent)
+    {
+        // Core rejects a duty outside 1-100 with ArgumentOutOfRangeException whose message says
+        // "SetPwmEnabled(channel, false)". Guard used to forward that text, so the model was
+        // told to call an SDK method it has no tool for.
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        device.ClearSent();
+
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => DaqifiTools.SetPwmOutput(
+                agent, AgentHarness.DeviceId, channel: 4, dutyCyclePercent: dutyCyclePercent));
+
+        Assert.Contains("disable_pwm", ex.Message);
+        Assert.DoesNotContain("SetPwmEnabled", ex.Message);
+
+        var rewritten = Assert.IsType<InvalidOperationException>(ex.InnerException);
+        var core = Assert.IsType<ArgumentOutOfRangeException>(rewritten.InnerException);
+        Assert.Contains("SetPwmEnabled", core.Message);
+        Assert.Empty(device.Sent);
     }
 
     [Fact]

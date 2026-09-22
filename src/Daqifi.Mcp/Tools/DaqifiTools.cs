@@ -246,7 +246,7 @@ public static class DaqifiTools
         }
         catch (Exception ex)
         {
-            throw new McpException(ex.Message);
+            throw new McpException(ex.Message, ex);
         }
     }
 
@@ -266,7 +266,7 @@ public static class DaqifiTools
         }
         catch (Exception ex)
         {
-            throw new McpException(ex.Message);
+            throw new McpException(ex.Message, ex);
         }
     }
 }
