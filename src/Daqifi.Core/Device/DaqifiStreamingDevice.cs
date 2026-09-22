@@ -547,7 +547,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <summary>
     /// Raises <see cref="GapDetected"/>, isolating the decode pipeline from a subscriber
     /// exception so a throwing handler cannot skip this frame's per-channel decode (which the
-    /// broad catch in <see cref="OnStreamMessageReceived"/> would then silently drop). Mirrors
+    /// per-frame catch in <see cref="StreamFrameDecoder.EmitStreamFrame"/> would then drop). Mirrors
     /// <c>DaqifiDevice.RaiseClassifiedEvent</c>.
     /// </summary>
     private void RaiseGapDetected(TimestampGapEventArgs args)
