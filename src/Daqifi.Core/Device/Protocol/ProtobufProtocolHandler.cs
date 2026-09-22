@@ -19,7 +19,11 @@ public class ProtobufProtocolHandler : IProtocolHandler
     /// </summary>
     /// <param name="statusMessageHandler">Optional handler for status messages.</param>
     /// <param name="streamMessageHandler">Optional handler for streaming messages.</param>
-    /// <param name="sdCardMessageHandler">Optional handler for SD card messages.</param>
+    /// <param name="sdCardMessageHandler">
+    /// Reserved. <see cref="DetectMessageType"/> never returns
+    /// <see cref="ProtobufMessageType.SdCard"/>, so <see cref="Handle"/> and
+    /// <see cref="HandleAsync"/> do not invoke this handler. Kept for source compatibility.
+    /// </param>
     /// <param name="errorMessageHandler">Optional handler for error messages.</param>
     public ProtobufProtocolHandler(
         Action<DaqifiOutMessage>? statusMessageHandler = null,
@@ -89,6 +93,8 @@ public class ProtobufProtocolHandler : IProtocolHandler
                 _streamMessageHandler?.Invoke(message);
                 break;
 
+            // Reserved. DetectMessageType never returns SdCard, so this arm is not reached;
+            // it stays so the public handler slot still has a route.
             case ProtobufMessageType.SdCard:
                 _sdCardMessageHandler?.Invoke(message);
                 break;

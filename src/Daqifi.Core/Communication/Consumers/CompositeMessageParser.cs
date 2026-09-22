@@ -276,8 +276,6 @@ public class CompositeMessageParser : IMessageParser<object>
         for (int i = 0; i < Math.Min(data.Length - 1, 5); i++)
         {
             var byte1 = data[i];
-            var byte2 = data[i + 1];
-            
             // Look for varint patterns (field number + wire type)
             if ((byte1 & 0x07) <= 5 && // Valid wire type (0-5)
                 (byte1 >> 3) > 0)      // Non-zero field number
