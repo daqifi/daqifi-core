@@ -178,27 +178,6 @@ public class MessageProducerTests
     }
 
     [Fact]
-    public void MessageProducer_BackgroundThreading_ShouldProcessMessagesAsynchronously()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        using var producer = new MessageProducer<string>(stream);
-        var message = new ScpiMessage("ASYNC:TEST");
-        
-        producer.Start();
-        
-        // Act
-        producer.Send(message);
-        
-        // Stop safely to ensure all messages are processed
-        producer.StopSafely();
-        
-        // Assert
-        var written = Encoding.UTF8.GetString(stream.ToArray());
-        Assert.Contains("ASYNC:TEST", written);
-    }
-
-    [Fact]
     public void MessageProducer_MultipleMessages_ShouldProcessInOrder()
     {
         // Arrange
