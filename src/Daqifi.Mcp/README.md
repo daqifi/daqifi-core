@@ -11,7 +11,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that le
 discover it, connect, configure analog channels and sample rate, read live measurements, and run
 on-device SD-card logging.
 
-It is a thin layer over [`Daqifi.Core`](../Daqifi.Core) — all device/protocol logic lives there.
+It is a thin layer over [`Daqifi.Core`](https://github.com/daqifi/daqifi-core/tree/main/src/Daqifi.Core) — all device/protocol logic lives there.
 The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 
 ## Tools
