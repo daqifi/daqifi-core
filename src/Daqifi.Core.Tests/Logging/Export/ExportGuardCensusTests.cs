@@ -29,14 +29,23 @@ namespace Daqifi.Core.Tests.Logging.Export;
 /// <c>CsvExporterTests</c> asserts the type alone. None of them notices if a guard stops
 /// reporting the offending value, or starts naming a parameter that no longer exists.
 /// </para>
+/// <para>
+/// The completeness check identifies a throw site by the sentence the guard actually produced,
+/// the same way <c>ChannelGuardCensusTests</c> does. A count of <c>SourceFile</c> labels is not
+/// enough: a duplicated row can pad a file and hide a throw nobody reaches, and
+/// <c>LiveCsvRecording.cs</c> has two <see cref="ArgumentOutOfRangeException"/> sites, so that
+/// pad is possible. Reaching a sentence nobody has seen before means reaching a <c>throw</c>
+/// nobody has seen before.
+/// </para>
 /// </remarks>
 public class ExportGuardCensusTests
 {
     /// <summary>One inline range guard: what the caller sees, and where it lives.</summary>
     /// <param name="Site">Human-readable name, so a failure says which guard drifted.</param>
     /// <param name="SourceFile">
-    /// The file the guard is written in. Used by the completeness scan below to check this table
-    /// against the source rather than against itself.
+    /// The file the guard is written in. The completeness scan pairs it with the sentence the
+    /// guard actually threw, so a duplicated row cannot pad a file's count for a throw no entry
+    /// reaches.
     /// </param>
     /// <param name="Method">
     /// The method or constructor that throws. Its parameter list is what
@@ -48,7 +57,12 @@ public class ExportGuardCensusTests
     /// Expected <see cref="ArgumentOutOfRangeException.ActualValue"/>. Never null: reporting the
     /// rejected value is the whole reason to use the three-argument constructor.
     /// </param>
-    /// <param name="MessagePrefix">The guard's own message, before the framework's decoration.</param>
+    /// <param name="Message">
+    /// The guard's own sentence, exactly, before the framework's decoration. Also serves as the
+    /// throw site's identity: entries that reach the same <c>throw</c> observe the same sentence,
+    /// which is what lets the completeness check count throw sites rather than trusting the
+    /// <paramref name="SourceFile"/> labels the table hands itself.
+    /// </param>
     /// <param name="Act">Invokes the guard with an argument it must reject.</param>
     private sealed record GuardSite(
         string Site,
@@ -56,8 +70,59 @@ public class ExportGuardCensusTests
         MethodBase Method,
         string ParamName,
         object ActualValue,
-        string MessagePrefix,
+        string Message,
         Func<Task> Act);
+
+    /// <summary>
+    /// Runs every censused guard and reports the file it is declared in alongside the sentence it
+    /// actually produced. The sentence is the throw site's identity: two entries that land on one
+    /// <c>throw</c> observe the same sentence, and reaching a different sentence means reaching a
+    /// different <c>throw</c>.
+    /// </summary>
+    /// <remarks>
+    /// The sentence is declared in the table but is not taken on trust: every entry's message is
+    /// pinned to the real exception by <see cref="AssertGuardSentenceIsExactly"/> as it is
+    /// observed, so an entry cannot claim a sentence its guard does not produce. That is what
+    /// closes the hole a bare file label would leave — a duplicated entry padding the count for a
+    /// file and hiding a guard that no entry reaches. <c>LiveCsvRecording.cs</c> has two throw
+    /// sites, so that pad is possible. Producing a distinct sentence means actually reaching a
+    /// distinct <c>throw</c>.
+    /// </remarks>
+    private static async Task<IReadOnlyList<(string SourceFile, string Message)>> ObserveGuards()
+    {
+        var observed = new List<(string SourceFile, string Message)>();
+
+        foreach (var site in Census())
+        {
+            var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(site.Act);
+            AssertGuardSentenceIsExactly(site, ex);
+            observed.Add((site.SourceFile, site.Message));
+        }
+
+        return observed;
+    }
+
+    /// <summary>
+    /// Asserts that the guard produced exactly the sentence the census declares for it — no
+    /// prefix match, because the sentence doubles as the throw site's identity and a prefix match
+    /// would let one guard's message be a truncation of another's, silently merging two sites.
+    /// </summary>
+    /// <remarks>
+    /// Compared against an exception the framework builds from the census's own declared values,
+    /// rather than by pulling the guard's sentence back out of
+    /// <see cref="ArgumentOutOfRangeException.Message"/>. Extracting it would mean knowing how the
+    /// framework decorates a message with the parameter name and the actual value — and that
+    /// decoration comes from a localizable resource, so hardcoding its English form would fail this
+    /// census on a machine running a localized runtime, for guards that are perfectly correct.
+    /// Building the reference the same way in the same process sidesteps the question entirely:
+    /// whatever the decoration is, both sides get it.
+    /// </remarks>
+    private static void AssertGuardSentenceIsExactly(GuardSite site, ArgumentOutOfRangeException actual)
+    {
+        var reference = new ArgumentOutOfRangeException(site.ParamName, site.ActualValue, site.Message);
+
+        Assert.Equal(reference.Message, actual.Message);
+    }
 
     /// <summary>
     /// The COMPLETE set of range guards in <c>Logging/Export</c>, not a sample. A guard added to
@@ -157,12 +222,11 @@ public class ExportGuardCensusTests
             Assert.Equal(
                 (site.Site, site.ParamName, (object?)site.ActualValue),
                 (site.Site, ex.ParamName, ex.ActualValue));
-            Assert.StartsWith(site.MessagePrefix, ex.Message, StringComparison.Ordinal);
+            AssertGuardSentenceIsExactly(site, ex);
 
             // The message the caller reads is a sentence about the subject and ends in a period.
-            // Asserted on the prefix, which the line above has just pinned to the real message.
-            Assert.EndsWith(".", site.MessagePrefix, StringComparison.Ordinal);
-            Assert.Equal(site.MessagePrefix.Trim(), site.MessagePrefix);
+            Assert.EndsWith(".", site.Message, StringComparison.Ordinal);
+            Assert.Equal(site.Message.Trim(), site.Message);
 
             AssertParamNameNamesSomethingReal(site);
         }
@@ -199,16 +263,29 @@ public class ExportGuardCensusTests
     }
 
     [Fact]
-    public void ExportRangeGuardCensus_MatchesEveryThrowSiteInTheSource()
+    public async Task ExportRangeGuardCensus_MatchesEveryThrowSiteInTheSource()
     {
         // Read from the source rather than from the census, so a guard added to the folder with no
         // entry in the table turns this red instead of being silently uncovered. Without this the
         // census could only ever check the guards it already knows about.
+        //
+        // Compared per file as DISTINCT OBSERVED SENTENCES against throw lines. A count of the
+        // SourceFile labels the table hands itself is the wrong number: a duplicated entry can pad
+        // a file's total and hide a guard that no entry reaches. LiveCsvRecording.cs has two throw
+        // sites, so that pad is possible. A distinct sentence has to be earned by actually reaching
+        // a distinct throw.
+        //
+        // Treating the sentence as the identity holds while the throw sites in one file say
+        // different things, which they do today. Should two ever collide, this reads one sentence
+        // short and fails — the safe direction: it asks for a look rather than passing on a guard
+        // nobody exercises. The fix is to give them distinct messages, which a caller wants anyway.
         var found = RangeGuardSourceScanner.ThrowSitesIn(ExportSourceDirectory);
 
+        var reached = (await ObserveGuards()).Distinct().Select(g => g.SourceFile);
+
         Assert.Equal(
-            RangeGuardSourceScanner.SummarizeByFile(Census().Select(s => s.SourceFile)),
-            RangeGuardSourceScanner.SummarizeByFile(found.Select(s => s.File)));
+            RangeGuardSourceScanner.SummarizeByFile(found.Select(s => s.File)),
+            RangeGuardSourceScanner.SummarizeByFile(reached));
     }
 
     [Fact]
