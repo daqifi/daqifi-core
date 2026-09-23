@@ -10,18 +10,13 @@ on:
   # queued PR sits until it is timed out of the queue.
   merge_group:
 
-  # Backstop only. The queue tests the real post-merge state, so this should not be
-  # what catches a break — but main can still move without passing through a queue
-  # (a ruleset bypass, an admin push), and #444/#445 showed how expensive an
-  # unnoticed red main is: five later PRs failed on inherited breakage, and CI that
-  # only ran on pull_request had no run on main to point at.
+  # Backstop only. The queue tests the real post-merge state, but main can still
+  # move without passing through a queue (a ruleset bypass, an admin push).
   push:
     branches: [ main ]
 
-# Superseded pushes to a PR branch used to keep running to completion; with three
-# runners per run that waste is now tripled, so cancel them. Only pull_request runs
-# are cancelled: a merge_group run is the gate for a commit that is about to land,
-# and a push run on main is the backstop above — neither is ever redundant.
+# Cancel only pull_request runs. A merge_group run is the gate for a commit about
+# to land, and a push run on main is the backstop above — neither is redundant.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -30,11 +25,9 @@ permissions:
   contents: read
 
 jobs:
-  # One leg per supported OS (#635). The library branches on the host OS in a dozen
-  # files — the macOS IOKit HID transport, the Windows PnP/WMI discovery providers —
-  # and until now the first machine to compile any of that was a user's.
-  # fail-fast is off so one platform's failure still leaves the other two's results
-  # readable, which is the whole point of having them.
+  # One leg per supported OS. The library branches on the host OS (macOS IOKit HID,
+  # Windows PnP/WMI discovery). fail-fast is off so one platform's failure still
+  # leaves the other two's results readable.
   test:
     name: test
     timeout-minutes: 20
@@ -72,32 +65,15 @@ jobs:
     - name: Build
       run: dotnet build --no-restore Daqifi.Core.sln
 
-    # --no-build because the step above already built it. Without that flag every
-    # leg compiled the solution a second time, which the matrix would have tripled.
-    # Coverage rides along with this run: Daqifi.Core.Tests.csproj asks for the
-    # in-process collector, which instruments at load time and so is unaffected by
-    # --no-build. This step can now only fail on a test failure — the post-test
-    # MSBuild step that used to fail it after a fully green run is gone (#689).
+    # --no-build because the step above already built it. Coverage is collected
+    # in-process at load time, so --no-build does not affect it. This step fails
+    # only on a test failure.
     - name: Test
       run: dotnet test --no-build --no-restore Daqifi.Core.sln
 
-    # The baseline is only as good as it is current. ApiCompat can only report a
-    # member the baseline package actually contains, so every API added since the
-    # pinned version sits outside the comparison - an out-of-date baseline is a
-    # narrower check, not a stricter one, and the step below would keep passing
-    # while covering less and less. Bumping it is part of cutting a release
-    # (CONTRIBUTING.md); this is what makes forgetting visible instead of silent.
-    #
-    # Deliberately a failure, not a warning: after a release is published this
-    # goes red until the bump lands, which is the point. It costs one unauthenticated
-    # HTTP request to the index the pack step already downloads from.
-    #
-    # Stable versions only. release.yml accepts prerelease tags (`1.8.0-beta.1`),
-    # and the flat-container index lists them alongside the rest - but a prerelease
-    # is not what a consumer restores by default, so it must not become the
-    # baseline every other PR is then required to match. Filtering them here is
-    # also what keeps the baseline parseable as a plain three-part version, which
-    # PublicApiTrackingTests asserts.
+    # Stable versions only. A prerelease is not what a consumer restores by default,
+    # so it must not become the baseline. Filtering also keeps the baseline a plain
+    # three-part version, which PublicApiTrackingTests asserts.
     - name: Check the package validation baseline is the latest published version
       if: matrix.os == 'ubuntu-latest'
       shell: bash
@@ -118,34 +94,21 @@ jobs:
           exit 1
         fi
 
-    # The public API surface is guarded twice (issue #636). RS0016/RS0017 guard it
-    # at compile time against the checked-in PublicAPI.*.txt, which the Build step
-    # above already covers - but those files are part of the PR, so a PR that
-    # deletes an entry and the member together compiles clean. This step is the
-    # second half: it compares the packaged assemblies against what Daqifi.Core
-    # actually published to nuget.org (the baseline version in Daqifi.Core.csproj),
-    # which a PR cannot edit, and fails on a member the baseline had.
+    # `--no-build` is absent on purpose: it skips the ApiCompat targets, so a pack
+    # that uses it validates nothing. release.yml packs `--no-build` (to keep the
+    # git-tag version stamp) and is not this gate.
     #
-    # `--no-build` is deliberately absent: it skips the ApiCompat targets outright,
-    # so a pack that uses it validates nothing. That is also why release.yml's pack
-    # is not the gate - it packs `--no-build` so the assemblies keep the version
-    # stamped from the git tag. Everything reaching a release tag has passed this
-    # step first, on the PR and again on main.
-    #
-    # Ubuntu only: the packaged shape is identical on all three legs, so the other
-    # two would pay to compute the same answer. `dotnet pack` defaults to Release,
-    # so this does compile Daqifi.Core once more rather than reusing the Debug
-    # output above - one project, a few seconds, on one leg. The package itself is
-    # thrown away; only the validation result matters.
+    # Ubuntu only: the packaged shape is identical on every leg. `dotnet pack`
+    # defaults to Release, so this compiles Daqifi.Core once more rather than
+    # reusing the Debug output above. The package is thrown away; only the
+    # validation result matters.
     - name: Validate packaged API against the last published release
       if: matrix.os == 'ubuntu-latest'
       run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --no-restore --output "${{ runner.temp }}/api-validation"
 
-    # Daqifi.Core.Tests.csproj collects coverage on every run, so the cobertura
-    # reports already exist by this point; the next two steps are only about not
-    # throwing them away when the job ends. Reporting only — deliberately no
-    # threshold that can fail the build (#641). `always()` so a red test run still
-    # publishes whatever coverage was written before the failure.
+    # Reports already exist from the test step. Reporting only — no coverage
+    # threshold that can fail the job. `always()` so a red test run still publishes
+    # whatever coverage was written before the failure.
     - name: Coverage summary
       if: always()
       shell: bash
@@ -158,8 +121,8 @@ jobs:
         # the summary and the uploaded artifact have always used.
         #
         # A failed move degrades to a warning and a report missing from the summary. This step
-        # runs under `set -e`, so letting one abort the step would put coverage back in a
-        # position to fail an otherwise green leg — the whole point of #689.
+        # runs under `set -e`, so letting one abort the step would let coverage fail an
+        # otherwise green leg.
         for report in src/coverage/*/*/coverage.cobertura.xml; do
           framework=$(basename "$(dirname "$(dirname "$report")")")
           mv -f "$report" "src/coverage/coverage.$framework.cobertura.xml" \
