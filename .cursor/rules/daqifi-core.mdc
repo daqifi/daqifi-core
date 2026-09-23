@@ -43,3 +43,14 @@ First-class parsers: SCPI (line-based) and protobuf. JSON is a device stream-for
 - Awaits in `Daqifi.Core` → `ConfigureAwait(false)` (CA2007; tests exempt).
 - File-scoped namespaces (IDE0161).
 - No underscores in `Daqifi.Core` public member names (CA1707; test method names are exempt).
+
+## Don't use `git stash`
+
+The stash stack is shared by every worktree of this repo, and parallel sessions each work in their own worktree. A `stash pop` can hand you someone else's changes. Set work aside with a WIP commit instead.
+
+## If you started work on `main`
+
+```bash
+git switch -c fix/description       # keep the work on a new branch
+git branch -f main origin/main      # put local main back where the remote is
+```
