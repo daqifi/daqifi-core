@@ -1,8 +1,11 @@
+using Daqifi.Core.Communication.Consumers;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 
 namespace Daqifi.Core.Tests.Device;
 
@@ -289,6 +292,96 @@ public class DaqifiDeviceWithTransportTests
         Assert.NotEmpty(secondStreamBytes);
         Assert.NotSame(firstStreamBytes, secondStreamBytes);
     }
+
+    [Fact]
+    public void DaqifiDevice_Disconnect_DisposesMessagePumpsThenNullsThem()
+    {
+        // StopMessagePumps used to StopSafely and then null the fields, so a normal
+        // disconnect (and every reconnect attempt, which tears down the same way) dropped
+        // the producer's wait handles and skipped StreamMessageConsumer.Dispose's stale-reader
+        // join. ReleaseResources only disposes when the fields are still set, which is the
+        // abandon path — it never saw these instances.
+        var transport = new MockStreamTransport();
+        var device = new DaqifiDevice("Mock Device", transport);
+        var errors = new List<Exception>();
+        device.ErrorOccurred += (_, args) => errors.Add(args.Error);
+
+        device.Connect();
+        var producer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
+        var consumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        Assert.NotNull(producer);
+        Assert.NotNull(consumer);
+        Assert.False(IsDisposed(producer));
+        Assert.False(IsDisposed(consumer));
+
+        device.Disconnect();
+
+        Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
+        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.True(IsDisposed(producer));
+        Assert.True(IsDisposed(consumer));
+        Assert.Throws<ObjectDisposedException>(() => producer.Send(ScpiMessageProducer.GetDeviceInfo));
+        Assert.Throws<ObjectDisposedException>(() => consumer.Start());
+
+        // Reconnect builds a fresh pair. The previous instances stay disposed.
+        device.Connect();
+        var reconnectedProducer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
+        var reconnectedConsumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        Assert.NotNull(reconnectedProducer);
+        Assert.NotNull(reconnectedConsumer);
+        Assert.NotSame(producer, reconnectedProducer);
+        Assert.NotSame(consumer, reconnectedConsumer);
+
+        device.Disconnect();
+        Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
+        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.True(IsDisposed(reconnectedProducer));
+        Assert.True(IsDisposed(reconnectedConsumer));
+
+        // Idempotent teardown: a second disconnect, then Dispose, with the pumps already
+        // released. ReleaseResources still disposes when the fields are set (abandon path);
+        // here they are null, so that tail must not throw — and a second Dispose is a no-op.
+        device.Disconnect();
+        device.Dispose();
+        device.Dispose();
+        Assert.Empty(errors);
+        transport.Dispose();
+    }
+
+    [Fact]
+    public async Task DaqifiDevice_DisconnectAsync_DisposesMessagePumpsThenNullsThem()
+    {
+        var transport = new MockStreamTransport();
+        await using var device = new DaqifiDevice("Mock Device", transport);
+
+        device.Connect();
+        var producer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
+        var consumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        Assert.NotNull(producer);
+        Assert.NotNull(consumer);
+
+        await device.DisconnectAsync();
+
+        Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
+        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.True(IsDisposed(producer));
+        Assert.True(IsDisposed(consumer));
+
+        // DisposeAsync runs DisconnectAsync again, then ReleaseResources against null pumps.
+        await device.DisposeAsync();
+    }
+
+    private static T? PrivateField<T>(object instance, string name) where T : class
+    {
+        return (T?)instance.GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(instance);
+    }
+
+    private static bool IsDisposed(object instance) =>
+        (bool)instance.GetType()
+            .GetField("_disposed", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(instance)!;
 
     // Mock transport that swaps to a fresh MemoryStream on RotateStream(),
     // mirroring the real SerialStreamTransport whose Stream property returns
