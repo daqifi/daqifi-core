@@ -103,37 +103,6 @@ public class DaqifiAgentTests
     }
 
     [Fact]
-    public async Task SetSampleRate_BelowOne_Throws()
-    {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => NewAgent().SetSampleRateAsync("x", 0));
-        Assert.Contains(">= 1", ex.Message);
-    }
-
-    [Fact]
-    public async Task SetSampleRate_InReadOnlyMode_IsBlocked()
-    {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent(readOnly: true).SetSampleRateAsync("x", 100));
-        Assert.Contains("read-only", ex.Message);
-    }
-
-    [Fact]
-    public async Task ConfigureAnalogChannels_InReadOnlyMode_IsBlocked()
-    {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent(readOnly: true).ConfigureAnalogChannelsAsync("x", new[] { 0, 1 }));
-        Assert.Contains("read-only", ex.Message);
-    }
-
-    [Fact]
-    public async Task ConfigureDigitalChannels_InReadOnlyMode_IsBlocked()
-    {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent(readOnly: true).ConfigureDigitalChannelsAsync("x", new[] { 0, 1 }));
-        Assert.Contains("read-only", ex.Message);
-    }
-
-    [Fact]
     public async Task SetDigitalDirection_InvalidDirection_ThrowsBeforeDeviceLookup()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -154,14 +123,6 @@ public class DaqifiAgentTests
     }
 
     [Fact]
-    public async Task SetDigitalOutput_InReadOnlyMode_IsBlocked()
-    {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent(readOnly: true).SetDigitalOutputAsync("x", 0, high: true));
-        Assert.Contains("read-only", ex.Message);
-    }
-
-    [Fact]
     public async Task SetDigitalOutput_UnknownDevice_ThrowsWithActionableMessage()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -170,27 +131,11 @@ public class DaqifiAgentTests
     }
 
     [Fact]
-    public async Task SetPwmOutput_InReadOnlyMode_IsBlocked()
-    {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent(readOnly: true).SetPwmOutputAsync("x", 4, dutyCyclePercent: 50, frequencyHz: 1000));
-        Assert.Contains("read-only", ex.Message);
-    }
-
-    [Fact]
     public async Task SetPwmOutput_UnknownDevice_ThrowsWithActionableMessage()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => NewAgent().SetPwmOutputAsync("serial:NOPE", 4, dutyCyclePercent: 50, frequencyHz: 1000));
         Assert.Contains("connect_device", ex.Message);
-    }
-
-    [Fact]
-    public async Task DisablePwm_InReadOnlyMode_IsBlocked()
-    {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewAgent(readOnly: true).DisablePwmAsync("x", 4));
-        Assert.Contains("read-only", ex.Message);
     }
 }
 

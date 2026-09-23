@@ -41,7 +41,4 @@
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
   </ItemGroup>
 
-  <!-- ModelContextProtocol + Microsoft.Extensions.Hosting are added via `dotnet add package`
-       so the restored versions are pinned to whatever is current. -->
-
 </Project>
