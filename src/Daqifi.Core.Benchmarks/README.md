@@ -74,7 +74,12 @@ If a gate is ever wanted, gate on allocation rather than time.
 
 ## Baseline
 
-**Before #699**, taken on `main` at `2a59fd1`. #697 was still open; this is the table that filed it.
+Non-protobuf rows are the `2a59fd1` run on `main` (the table that filed #697). The protobuf
+SD-card rows are the post-#699 figures for the raw `AnalogInData` path, copied from #699
+rather than re-measured here. No other timing row was hand-edited; those refresh on the next
+`workflow_dispatch` of the Benchmarks workflow. That run also picks up this harness change:
+`DecodeRawAnalogFrame` is the decode baseline, and the framing and consumer buffers are raw
+counts, so the published means for those families still describe the previous harness.
 
 ```
 BenchmarkDotNet v0.15.8, macOS Tahoe 26.5 (25F71) [Darwin 25.5.0]
@@ -107,8 +112,8 @@ Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
-| ProtobufDrainAll | 4,636 µs | 16,880 KB |
-| ProtobufTimeToFirstSample | 1,623 µs | 6,754 KB |
+| ProtobufDrainAll | 2,091.4 µs | 13,170 KB |
+| ProtobufTimeToFirstSample | 9.4 µs | 263 KB |
 | CsvDrainAll | 5,412 µs | 15,212 KB |
 | CsvTimeToFirstSample | 1.96 µs | 13.6 KB |
 | JsonDrainAll | 7,042 µs | 7,181 KB |
@@ -125,20 +130,7 @@ Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
 The absolute numbers are a property of this machine, not of the library. What travels between
 machines is the shape: the ratios between cases, and the allocation figures.
 
-### After #699
-
-The protobuf first-sample outlier is gone. #699 closed #697: the reader yields each frame as it
-is decoded instead of parsing a whole 64 KB buffer first, and the configuration pre-scan stops
-once the clock is known. Figures from #699's own before/after run (default job). That was a
-separate invocation, so its *before* column differs slightly from the `2a59fd1` table above:
-
-| Method | Before | After | |
-| --- | ---: | ---: | --- |
-| `ProtobufTimeToFirstSample` | 1,565.6 µs | **9.4 µs** | 167× |
-| `ProtobufTimeToFirstSample` allocated | 6,753 KB | **263 KB** | 26× |
-| `ProtobufDrainAll` | 4,504.4 µs | **2,091.4 µs** | 2.2× |
-| `ProtobufDrainAll` allocated | 16,880 KB | **13,170 KB** | 1.3× |
-
-`CsvTimeToFirstSample` is 2.0 µs on that run, so first-sample latency is 4.7× CSV rather than
-800×. Draining the whole file got 2.2× faster as a side effect: the per-chunk list and message
-wrappers are gone.
+#699 closed #697: the reader yields each frame as it is decoded instead of parsing a whole 64 KB
+buffer first, and the configuration pre-scan stops once the clock is known. `CsvTimeToFirstSample`
+was 2.0 µs on that run, so first-sample latency is 4.7× CSV rather than 800×. Draining the whole
+file got 2.2× faster as a side effect: the per-chunk list and message wrappers are gone.
