@@ -82,6 +82,14 @@ in place.
   guarantee — acceptable today because DAQiFi's own consumers are the only known integrators,
   but worth revisiting if that changes.
 
+**Pack gate**
+- Appending a positional-record parameter removes the old constructor, so
+  `EnablePackageValidation` fails the pack with `CP0002` against the nuget.org baseline.
+  That is expected under this decision; it is not a major-version bump. Suppress it the way
+  `CONTRIBUTING.md` ("The published package is the second opinion") describes — check in a
+  `CompatibilitySuppressions.xml` — and delete that suppression when
+  `PackageValidationBaselineVersion` bumps to a release that contains the new constructor.
+
 ## Out of scope
 
 This ADR does not cover breaking changes to non-record public types, method signature changes,

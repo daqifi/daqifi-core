@@ -12,62 +12,22 @@ root = true
 # an editor. Together with the repo-wide TreatWarningsAsErrors that turns a
 # violation into a failed build, which is the point: a style checked only by
 # whoever happens to open the file in an IDE is not enforced at all (issue #484).
-#
-# The repo had no stated preference, so a new file copied whichever style its
-# neighbour used and the split reached 142 block-scoped files against roughly
-# 200 file-scoped ones. Either style would have been defensible; file-scoped is
-# the one most of the codebase already used, so choosing it converts the smaller
-# half.
 [*.cs]
 csharp_style_namespace_declarations = file_scoped:warning
 dotnet_diagnostic.IDE0161.severity = warning
 
-# CA2007 (ConfigureAwait) applies to the Daqifi.Core library only.
-#
-# Daqifi.Core ships synchronous facades that block on their own async work
-# (DaqifiDevice.Connect(), DaqifiDeviceFactory.ConnectTcp/ConnectSerial,
-# IStreamTransport.Connect/Disconnect, ...). Under a single-threaded
-# SynchronizationContext — a WPF/WinForms UI thread — a naked `await` posts its
-# continuation back to that context, which is already blocked inside
-# GetAwaiter().GetResult(), and the application deadlocks with no timeout and no
-# exception (issue #495).
-#
-# CA2007 makes that a build error rather than a code-review habit. Library code
-# has no business resuming on the caller's context, so the rule applies to every
-# await in this project, not just the connect path. Test projects are exempt
-# (CONTRIBUTING.md), which is why this section is path-qualified instead of
-# applying to every [*.cs] in the repo.
+# Path-scoped to the library: tests are exempt (CONTRIBUTING.md), and a naked await
+# deadlocks a sync facade on a single-threaded SynchronizationContext (issue #495).
 [src/Daqifi.Core/**.cs]
 dotnet_diagnostic.CA2007.severity = warning
 
-# CA1707 (no underscores in public member names) is scoped here for a second
-# reason: Daqifi.Core is the only project in the repo that publishes a public
-# surface, and the test projects name their methods Method_Case_Expectation by
-# convention, which this rule would otherwise report on every one of them.
-#
-# Left at CA1707's default api_surface (public) on purpose. Widening it to `all`
-# sounds stricter but is wrong here: it also reports private static fields
-# written in the repo's own _camelCase convention - for instance
-# SdCardFileParserFactory._supportedExtensions - so the extra strictness would
-# be paid for by fighting a convention this repo deliberately follows. The
-# private SCREAMING_SNAKE constants that remain (SdCardOperations,
-# GitHubFirmwareDownloadService, NetworkConfigurationOperations,
-# DeviceDiagnosticsOperations) are invisible outside this assembly and are left
-# alone rather than renamed under a rule that does not police them.
+# Left at the default public api_surface. Widening CA1707 to `all` would flag
+# private `_camelCase` fields; tests use Method_Case_Expectation, and only
+# Daqifi.Core publishes a public surface, so the rule stays in this section.
 dotnet_diagnostic.CA1707.severity = warning
 
-# RS0041 (public API should not use nullable-oblivious types) applies to the
-# hand-written surface only.
-#
-# Protos/DaqifiOutMessage.proto is compiled by protoc into a C# file with no
-# '#nullable enable', so every reference type on its generated public surface is
-# oblivious and RS0041 fires 166 times on code nobody hand-edits. The fix -
-# annotating the output - is not ours to make: protoc regenerates the file.
-#
-# The obliviousness is still recorded, not lost: those members appear in
-# PublicAPI.Shipped.txt with the analyzer's own '~' prefix, which is how an
-# oblivious signature is spelled there, so a change in their nullability still
-# shows up as an API diff. Scoped to the one generated file on purpose, so
-# RS0041 keeps guarding every public member Daqifi.Core actually writes.
+# Silenced only on protoc-generated DaqifiOutMessage.cs (no nullable context).
+# Oblivious members stay marked `~` in PublicAPI.Shipped.txt; hand-written public
+# API keeps RS0041.
 [src/Daqifi.Core/Communication/Messages/DaqifiOutMessage.cs]
 dotnet_diagnostic.RS0041.severity = none

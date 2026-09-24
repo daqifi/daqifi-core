@@ -12,25 +12,15 @@
     packages lives in the repo-root Directory.Build.targets (issue #644), which
     is imported late enough to see $(IsPackable) and skip the test projects.
 
-    TargetFramework(s) is deliberately NOT centralized. Daqifi.Core, the tests,
-    and Daqifi.Mcp multi-target net9.0;net10.0 (issue #643 resolved the Daqifi.Mcp
-    asymmetry in favour of matching Daqifi.Core); Daqifi.Core.Benchmarks is
-    net10.0 only. Which frameworks a project builds for is a fact a reader
-    expects to find in that project's .csproj, and a default here would silently
-    apply to any project added later - a sample, another harness - whether or
-    not that is right for it. The uniformity that actually matters is guarded
-    by a test instead: Daqifi.Mcp must ship an asset for every framework
-    Daqifi.Core supports, so the tool runs wherever the library does. See
-    Daqifi.Core.Tests/Build/TargetFrameworkTests.cs.
+    Do not set TargetFramework here. Which frameworks a project builds for
+    belongs in that project's .csproj; a default here would silently apply to
+    any project added later. The uniformity that matters is guarded by a test
+    instead: Daqifi.Mcp must ship an asset for every framework Daqifi.Core
+    supports. See Daqifi.Core.Tests/Build/TargetFrameworkTests.cs.
   -->
   <PropertyGroup>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!--
-      Warnings are errors everywhere, including Daqifi.Mcp, which was the one
-      project that never opted in. It is warning-clean in Debug and Release, so
-      turning it on here needed no code changes.
-    -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!--
       Run the IDE* code-style analyzers as part of the build, not just inside an
