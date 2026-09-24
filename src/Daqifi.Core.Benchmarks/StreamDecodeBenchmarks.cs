@@ -77,17 +77,19 @@ public class StreamDecodeBenchmarks
     }
 
     /// <summary>
-    /// The common shape: the firmware's fast streaming encoder sends calibrated floats.
+    /// The hot path. Every supported firmware sends raw ADC counts, on every transport, and
+    /// each value is scaled through <see cref="IAnalogChannel.GetScaledValue"/>.
     /// </summary>
     [Benchmark(Baseline = true, OperationsPerInvoke = FrameCount)]
-    public void DecodeAnalogFloatFrame() => _float.Replay();
+    public void DecodeRawAnalogFrame() => _raw.Replay();
 
     /// <summary>
-    /// The same frame carrying raw ADC counts instead, which routes each value through
-    /// <see cref="IAnalogChannel.GetScaledValue"/> — the per-sample calibration arithmetic.
+    /// Defensive protocol branch. The protocol still defines a pre-scaled float payload
+    /// (<c>AnalogInDataFloat</c>) and a frame that carries one is used as-is, but no supported
+    /// firmware fills it, so this is not the hot path.
     /// </summary>
     [Benchmark(OperationsPerInvoke = FrameCount)]
-    public void DecodeRawAnalogFrame() => _raw.Replay();
+    public void DecodeAnalogFloatFrame() => _float.Replay();
 
     /// <summary>
     /// Analog and digital in one frame, the shape a stream with DIO enabled produces.

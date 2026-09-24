@@ -22,7 +22,8 @@ internal static class SyntheticFrames
     private const uint TicksPerFrame = 50_000;
 
     /// <summary>
-    /// A buffer of <paramref name="frameCount"/> length-prefixed frames.
+    /// A buffer of <paramref name="frameCount"/> length-prefixed frames, each carrying raw ADC
+    /// counts (<c>AnalogInData</c>) — the payload supported firmware fills.
     /// </summary>
     /// <param name="frameCount">How many frames to write.</param>
     /// <param name="truncateLastFrame">
@@ -40,7 +41,7 @@ internal static class SyntheticFrames
             var message = new DaqifiOutMessage { MsgTimeStamp = (uint)(frame + 1) * TicksPerFrame };
             for (var channel = 0; channel < AnalogChannelCount; channel++)
             {
-                message.AnalogInDataFloat.Add(1.0f + channel * 0.01f);
+                message.AnalogInData.Add(1_000 + channel);
             }
 
             var payload = message.ToByteArray();
