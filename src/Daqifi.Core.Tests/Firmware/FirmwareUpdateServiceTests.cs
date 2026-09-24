@@ -1698,10 +1698,11 @@ public class FirmwareUpdateServiceTests
         var options = CreateFastOptions();
         options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(5);
         options.PostWifiReconnectDelay = TimeSpan.FromMilliseconds(5);
-        // Long enough that a missing wait would let the LAN restore slip out before the cancel
-        // is seen. The cancel is already raised by the time the wait starts, so it ends at once
-        // rather than actually costing 30s.
-        options.PostUsbTransparentModeExitDelay = TimeSpan.FromSeconds(30);
+        // Positive so the success-path settle exists for this cancel to land in. The token is
+        // already cancelled when that wait starts, so it ends at once. Kept short on purpose:
+        // the failure restore honors the same option and does not observe the cancelled token,
+        // so this value is paid in full on the way out.
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromMilliseconds(15);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
@@ -1811,14 +1812,99 @@ public class FirmwareUpdateServiceTests
     public void FirmwareUpdateServiceOptions_PostUsbTransparentModeExitDelay_DefaultsToBridgeDeactivationPace()
     {
         // The default is the behavior: a consumer that upgrades without touching options gets
-        // the pacing. 100ms is not arbitrary — it is the same inter-command wait
-        // WifiBridgeActivator.Deactivate already uses for this exact mode transition over a raw
-        // serial port, so the managed-connection path is paced identically. Pinned so the two
-        // cannot silently drift apart.
+        // the pacing on both the success restore and the failure bridge-exit. 100ms is not
+        // arbitrary — it is the same inter-command wait WifiBridgeActivator.Deactivate already
+        // uses for this exact mode transition over a raw serial port, so the managed-connection
+        // paths stay paced identically until a host overrides the option. Pinned so the default
+        // cannot silently drift apart from that raw-serial pace.
         var options = new FirmwareUpdateServiceOptions();
 
         Assert.Equal(TimeSpan.FromMilliseconds(100), options.PostUsbTransparentModeExitDelay);
+        Assert.Equal(WifiBridgeActivator.InterCommandDelay, options.PostUsbTransparentModeExitDelay);
         options.Validate();
+    }
+
+    [Fact]
+    public async Task UpdateWifiModuleAsync_WhenFlashFails_FailureRestoreHonorsPostUsbTransparentModeExitDelay()
+    {
+        // The success path already waits PostUsbTransparentModeExitDelay. The failure restore
+        // used to wait the fixed WifiBridgeActivator.InterCommandDelay (100ms) instead, so a
+        // host that raised the option still got the short pause on the path that most needs it.
+        // 250ms is neither the default nor that fixed pace: a gap under it means the failure
+        // path ignored the option. The caller token is cancelled before the restore, and the
+        // recovery budget (50ms) expires during the settle. Either one aborting the wait would
+        // skip LAN:APPLY or collapse the gap to the budget.
+        var delay = TimeSpan.FromMilliseconds(250);
+        Assert.NotEqual(WifiBridgeActivator.InterCommandDelay, delay);
+
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM36");
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan? transparentModeExitAt = null;
+        TimeSpan? lanApplyAt = null;
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:COMMUnicate:LAN:FWUpdate")
+            {
+                cts.Cancel();
+            }
+            else if (command == "SYSTem:USB:SetTransparentMode 0")
+            {
+                transparentModeExitAt ??= clock.Elapsed;
+            }
+            else if (command == "SYSTem:COMMunicate:LAN:APPLY")
+            {
+                lanApplyAt ??= clock.Elapsed;
+            }
+        };
+
+        var options = CreateFastOptions();
+        options.PostUsbTransparentModeExitDelay = delay;
+        // Shorter than the settle, so a wait that observes the recovery budget cannot
+        // satisfy the gap assertion below — and cannot send LAN:APPLY either.
+        options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
+
+        var service = new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner(),
+            NullLogger<FirmwareUpdateService>.Instance,
+            new FakeBootloaderProtocol([[0x10]]),
+            new FakeHidDeviceEnumerator([]),
+            options);
+
+        var firmwareDir = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.UpdateWifiModuleAsync(device, firmwareDir, cancellationToken: cts.Token));
+        }
+        finally
+        {
+            Directory.Delete(firmwareDir, recursive: true);
+        }
+
+        Assert.Equal(FirmwareUpdateState.Failed, service.CurrentState);
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:APPLY"
+            ],
+            device.SentCommands);
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", device.SentCommands);
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:SAVE", device.SentCommands);
+
+        Assert.NotNull(transparentModeExitAt);
+        Assert.NotNull(lanApplyAt);
+        var gap = lanApplyAt.Value - transparentModeExitAt.Value;
+        Assert.True(
+            gap >= delay - TimeSpan.FromMilliseconds(40),
+            $"Failure restore waited {gap.TotalMilliseconds:0}ms between the transparent-mode exit and LAN:APPLY; " +
+            $"expected at least {delay.TotalMilliseconds:0}ms (PostUsbTransparentModeExitDelay), not the fixed 100ms bridge pace.");
     }
 
     [Fact]
@@ -2184,16 +2270,19 @@ public class FirmwareUpdateServiceTests
     public async Task UpdateWifiModuleAsync_WhenRecoveryBudgetExpiresAfterReconnect_StillFinishesTheBridgeExit()
     {
         // The recovery budget bounds the wait for the transport to come back, not the two-command
-        // exit that follows it. Here the budget (50ms) is already spent by the time the pause
-        // between the two commands elapses, and the LAN:APPLY still goes out: stopping half way
-        // would hand the console back while leaving the WiFi manager in its bridge-mode state
-        // machine, which is a worse place to leave the device than either end of the sequence.
+        // exit that follows it. The pause is PostUsbTransparentModeExitDelay, and it outlasts the
+        // budget (50ms): by the time it elapses the budget is already spent, and LAN:APPLY still
+        // goes out. Stopping half way would hand the console back while leaving the WiFi manager
+        // in its bridge-mode state machine, which is a worse place to leave the device than
+        // either end of the sequence.
         var device = new FakeStreamingDevice("COM13");
 
         var options = CreateFastOptions();
         options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
         // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
         options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
+        // Longer than that budget. A settle that observed it would be cancelled before LAN:APPLY.
+        options.PostUsbTransparentModeExitDelay = TimeSpan.FromMilliseconds(150);
 
         var service = new FirmwareUpdateService(
             new FakeHidTransport(),
