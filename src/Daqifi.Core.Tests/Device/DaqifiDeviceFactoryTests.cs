@@ -197,8 +197,8 @@ public class DaqifiDeviceFactoryTests
             InitializeDevice = false
         };
 
-        // Act & Assert - Should throw due to connection refused
-        await Assert.ThrowsAnyAsync<Exception>(
+        // Act & Assert - same closed loopback port as TcpStreamTransport_ConnectAsync_WithClosedPort.
+        await Assert.ThrowsAsync<SocketException>(
             () => DaqifiDeviceFactory.ConnectTcpAsync(IPAddress.Loopback, 1, options));
     }
 

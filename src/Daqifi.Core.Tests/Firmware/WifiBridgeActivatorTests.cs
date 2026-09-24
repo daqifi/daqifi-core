@@ -1,4 +1,6 @@
+using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Firmware;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Firmware;
 
@@ -25,7 +27,12 @@ public class WifiBridgeActivatorTests
     [Fact]
     public void Activate_InvalidPort_Throws()
     {
-        Assert.ThrowsAny<Exception>(() => WifiBridgeActivator.Activate("COM999"));
+        var portName = AbsentSerialPorts.Create();
+
+        var ex = Assert.Throws<SerialPortConnectException>(() => WifiBridgeActivator.Activate(portName));
+
+        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
+        Assert.Equal(portName, ex.PortName);
     }
 
     [Fact]
@@ -49,7 +56,12 @@ public class WifiBridgeActivatorTests
     [Fact]
     public void Deactivate_InvalidPort_Throws()
     {
-        Assert.ThrowsAny<Exception>(() => WifiBridgeActivator.Deactivate("COM999"));
+        var portName = AbsentSerialPorts.Create();
+
+        var ex = Assert.Throws<SerialPortConnectException>(() => WifiBridgeActivator.Deactivate(portName));
+
+        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
+        Assert.Equal(portName, ex.PortName);
     }
 
     // Activate and Deactivate share one private sequence method, so the null guard now fires
@@ -83,7 +95,15 @@ public class WifiBridgeActivatorTests
     [Fact]
     public async Task ActivateAsync_InvalidPort_PropagatesUnderlyingException()
     {
-        await Assert.ThrowsAnyAsync<Exception>(() => WifiBridgeActivator.ActivateAsync("COM999"));
+        // RunWithHardTimeoutAsync awaits the worker, so the open failure is the typed
+        // SerialPortConnectException rather than an AggregateException wrapper.
+        var portName = AbsentSerialPorts.Create();
+
+        var ex = await Assert.ThrowsAsync<SerialPortConnectException>(
+            () => WifiBridgeActivator.ActivateAsync(portName));
+
+        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
+        Assert.Equal(portName, ex.PortName);
     }
 
     [Fact]
@@ -105,7 +125,13 @@ public class WifiBridgeActivatorTests
     [Fact]
     public async Task DeactivateAsync_InvalidPort_PropagatesUnderlyingException()
     {
-        await Assert.ThrowsAnyAsync<Exception>(() => WifiBridgeActivator.DeactivateAsync("COM999"));
+        var portName = AbsentSerialPorts.Create();
+
+        var ex = await Assert.ThrowsAsync<SerialPortConnectException>(
+            () => WifiBridgeActivator.DeactivateAsync(portName));
+
+        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
+        Assert.Equal(portName, ex.PortName);
     }
 
     [Fact]
