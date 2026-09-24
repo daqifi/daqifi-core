@@ -1,4 +1,5 @@
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Tests.TestSupport;
 using System.IO.Ports;
 
 namespace Daqifi.Core.Tests.Communication.Transport;
@@ -27,17 +28,6 @@ public class SerialStreamTransportTests
         Assert.False(transport.IsConnected);
         Assert.Contains("COM2", transport.ConnectionInfo);
         Assert.Contains("Disconnected", transport.ConnectionInfo);
-    }
-
-    [Fact]
-    public void SerialStreamTransport_Stream_WhenNotConnected_ShouldThrowException()
-    {
-        // Arrange
-        using var transport = new SerialStreamTransport("COM1");
-
-        // Act & Assert - ThrowsAny (assignability), mirroring how a consumer's
-        // catch (InvalidOperationException) still catches the now-derived typed exception.
-        Assert.ThrowsAny<InvalidOperationException>(() => transport.Stream);
     }
 
     [Fact]
@@ -119,112 +109,12 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
-    public void SerialStreamTransport_Connect_WithInvalidPort_ShouldThrowException()
-    {
-        // Arrange - Use a port name that shouldn't exist
-        using var transport = new SerialStreamTransport("COM999");
-        
-        // Act & Assert - Should throw some form of exception
-        Assert.ThrowsAny<Exception>(() => transport.Connect());
-        Assert.False(transport.IsConnected);
-    }
-
-    [Fact]
-    public async Task SerialStreamTransport_ConnectAsync_WithInvalidPort_ShouldThrowException()
-    {
-        // Arrange - Use a port name that shouldn't exist
-        using var transport = new SerialStreamTransport("COM999");
-        
-        // Act & Assert - Should throw some form of exception
-        await Assert.ThrowsAnyAsync<Exception>(() => transport.ConnectAsync());
-        Assert.False(transport.IsConnected);
-    }
-
-    /// <summary>
-    /// Produces a port name checked to be absent on the running host, so the missing-port tests
-    /// assert the <see cref="SerialPortConnectFailure.NotFound"/> translation and nothing else.
-    /// </summary>
-    /// <remarks>
-    /// Verified at runtime rather than hard-coded: a fixed name is only absent by assumption, and a
-    /// host that happens to have it — a virtual COM port, a leftover device node — would make these
-    /// tests either open real hardware or fail with a different error shape.
-    /// </remarks>
-    private static string CreateVerifiedAbsentPort()
-    {
-        // Whether the enumeration *answered* is tracked separately from what it returned, because
-        // the two failure modes are not equivalent and must not be collapsed. An empty result is a
-        // real answer — the host has no serial ports. A throw is no answer at all.
-        bool enumerationAnswered;
-        HashSet<string> enumerated;
-        try
-        {
-            enumerated = new HashSet<string>(SerialPort.GetPortNames(), StringComparer.OrdinalIgnoreCase);
-            enumerationAnswered = true;
-        }
-        catch (Exception)
-        {
-            // Enumeration can throw on some hosts (a container without /dev access, a locked-down
-            // machine). It must not take the suite down from inside a test helper — that reads as
-            // the feature under test breaking rather than the environment.
-            enumerated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            enumerationAnswered = false;
-        }
-
-        if (OperatingSystem.IsWindows())
-        {
-            // Windows has no absence check independent of the enumeration: a COM name is not a
-            // filesystem path, so there is no File.Exists equivalent, and the enumeration is itself
-            // the authority (it reads the HARDWARE\DEVICEMAP\SERIALCOMM registry map). That makes
-            // an answered enumeration sufficient — including an empty one, which positively means
-            // no COM ports exist — but leaves a *failed* enumeration with no evidence whatsoever.
-            // Choosing a name in that state would assert against an unverified port and could pass
-            // or fail for reasons unrelated to the translation being tested, so refuse instead.
-            if (!enumerationAnswered)
-            {
-                throw new InvalidOperationException(
-                    "Cannot verify an absent COM name: SerialPort.GetPortNames() failed and Windows " +
-                    "offers no independent check that a COM name is unused. Refusing to assert " +
-                    "against an unverified port.");
-            }
-
-            // The Windows serial stack only accepts COM-prefixed names, so a random suffix is not
-            // an option; take the highest COM number the enumeration does not claim.
-            for (var number = 255; number >= 200; number--)
-            {
-                var candidate = $"COM{number}";
-                if (!enumerated.Contains(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            throw new InvalidOperationException(
-                "No unused COM name available to exercise the missing-port path.");
-        }
-
-        // Unix needs no such guard: the port name is a filesystem path, so File.Exists answers
-        // independently of the enumeration and a failed enumeration costs the check nothing.
-
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            var candidate = $"/dev/tty.daqifi-core-absent-424-{Guid.NewGuid():N}";
-            if (!File.Exists(candidate) && !enumerated.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new InvalidOperationException(
-            "Could not generate an absent device node path to exercise the missing-port path.");
-    }
-
-    [Fact]
     public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_ReportsPortNotFound()
     {
         // #424: SerialPort.Open reports a port that does not exist as "Access to the port '...' is
         // denied.", sending users after a permissions problem for what is almost always a typo or
         // a stale name (USB device nodes are renumbered across replugs).
-        var portName = CreateVerifiedAbsentPort();
+        var portName = AbsentSerialPorts.Create();
         using var transport = new SerialStreamTransport(portName);
 
         var ex = await Assert.ThrowsAsync<SerialPortConnectException>(() => transport.ConnectAsync());
@@ -241,7 +131,7 @@ public class SerialStreamTransportTests
     public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_KeepsThePlatformException()
     {
         // The translation adds a name for the failure; it must not throw the diagnosis away.
-        using var transport = new SerialStreamTransport(CreateVerifiedAbsentPort());
+        using var transport = new SerialStreamTransport(AbsentSerialPorts.Create());
 
         var ex = await Assert.ThrowsAsync<SerialPortConnectException>(() => transport.ConnectAsync());
 
@@ -252,7 +142,7 @@ public class SerialStreamTransportTests
     public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_StillCatchableAsIoException()
     {
         // The chosen base type: a caller bracketing a connect with catch (IOException) keeps working.
-        using var transport = new SerialStreamTransport(CreateVerifiedAbsentPort());
+        using var transport = new SerialStreamTransport(AbsentSerialPorts.Create());
 
         var ex = await Assert.ThrowsAnyAsync<IOException>(() => transport.ConnectAsync());
 
@@ -264,7 +154,7 @@ public class SerialStreamTransportTests
     {
         // The status event carries the same translated exception, so a subscriber classifying a
         // failed connect sees the reason rather than the platform's guess.
-        using var transport = new SerialStreamTransport(CreateVerifiedAbsentPort());
+        using var transport = new SerialStreamTransport(AbsentSerialPorts.Create());
         Exception? reported = null;
         transport.StatusChanged += (_, e) => reported ??= e.Error;
 
@@ -280,7 +170,7 @@ public class SerialStreamTransportTests
         // The production classification path calls SerialPort.GetPortNames(), which can throw on
         // some hosts. That must degrade the reason, never replace the connect failure with the
         // probe's own exception or escape as an unhandled error.
-        using var transport = new SerialStreamTransport(CreateVerifiedAbsentPort())
+        using var transport = new SerialStreamTransport(AbsentSerialPorts.Create())
         {
             PortPresenceProbe = _ => throw new UnauthorizedAccessException("the probe could not run")
         };
@@ -298,7 +188,7 @@ public class SerialStreamTransportTests
     {
         // Translation happens inside a connect attempt, so it is still just a failed attempt: the
         // retry loop runs the configured number of times and surfaces the typed exception at the end.
-        using var transport = new SerialStreamTransport(CreateVerifiedAbsentPort());
+        using var transport = new SerialStreamTransport(AbsentSerialPorts.Create());
         var options = new ConnectionRetryOptions
         {
             Enabled = true,
@@ -336,31 +226,6 @@ public class SerialStreamTransportTests
         // Act & Assert - Should not throw
         await transport.DisconnectAsync();
         Assert.False(transport.IsConnected);
-    }
-
-    [Fact]
-    public void SerialStreamTransport_StatusChanged_ShouldFireOnConnectionFailure()
-    {
-        // Arrange
-        using var transport = new SerialStreamTransport("COM999");
-        TransportStatusEventArgs? capturedArgs = null;
-        
-        transport.StatusChanged += (sender, args) => capturedArgs = args;
-        
-        // Act
-        try
-        {
-            transport.Connect();
-        }
-        catch
-        {
-            // Expected
-        }
-        
-        // Assert
-        Assert.NotNull(capturedArgs);
-        Assert.False(capturedArgs.IsConnected);
-        Assert.NotNull(capturedArgs.Error);
     }
 
     [Fact]

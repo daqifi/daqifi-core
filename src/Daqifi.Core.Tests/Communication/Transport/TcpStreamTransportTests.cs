@@ -32,17 +32,6 @@ public class TcpStreamTransportTests
     }
 
     [Fact]
-    public void TcpStreamTransport_Stream_WhenNotConnected_ShouldThrowException()
-    {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
-
-        // Act & Assert - ThrowsAny (assignability), mirroring how a consumer's
-        // catch (InvalidOperationException) still catches the now-derived typed exception.
-        Assert.ThrowsAny<InvalidOperationException>(() => transport.Stream);
-    }
-
-    [Fact]
     public void TcpStreamTransport_Stream_WhenNotConnected_ThrowsTransportNotConnectedException()
     {
         // Arrange

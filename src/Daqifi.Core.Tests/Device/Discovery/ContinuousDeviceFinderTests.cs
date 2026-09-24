@@ -743,9 +743,17 @@ public class ContinuousDeviceFinderTests
     [Fact]
     public void Dispose_IsIdempotent()
     {
-        var finder = NewFinder(new StubDeviceFinder());
+        var inner = new StubDeviceFinder();
+        var finder = NewFinder(inner);
+
         finder.Dispose();
-        finder.Dispose(); // should not throw
+        Assert.True(inner.Disposed);
+
+        // Second dispose is a no-op (the early return must not clear the disposed state).
+        // Start still throws, matching DeviceFinderBaseTests' post-dispose contract.
+        finder.Dispose();
+        Assert.True(inner.Disposed);
+        Assert.Throws<ObjectDisposedException>(() => finder.Start());
     }
 
     #endregion
