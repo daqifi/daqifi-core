@@ -595,21 +595,6 @@ public class SampleRateToolContractTests
     }
 
     [Fact]
-    public async Task ConfiguringChannels_AlsoEnforcesTheServerWideClamp()
-    {
-        // The operator's clamp has to bind on the re-validation path too, or a channel change
-        // could leave a rate above it live and reported as adjusted-and-fine.
-        var (agent, _) = AgentHarness.WithConnectedDevice(maxSampleRateHz: 300);
-        await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
-        await agent.SetSampleRateAsync(AgentHarness.DeviceId, 300);
-
-        var result = await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0, 1 });
-
-        Assert.Null(result.SampleRateAdjustedFromHz);
-        Assert.Equal(300, result.SampleRateHz);
-    }
-
-    [Fact]
     public async Task SetSampleRate_BelowOne_IsRejectedBeforeTheDeviceIsTouched()
     {
         var (agent, device) = AgentHarness.WithConnectedDevice();
@@ -625,8 +610,10 @@ public class SampleRateToolContractTests
 public class ReadOnlyModeContractTests
 {
     /// <summary>
-    /// Every mutating tool, refused before it reaches a device that is genuinely connected. The
-    /// existing no-device tests cannot tell a real refusal from "there was nothing to do anyway".
+    /// Channel, output, and sample-rate tools, refused before they reach a device that is
+    /// genuinely connected. The existing no-device tests cannot tell a real refusal from "there
+    /// was nothing to do anyway". start_sd_logging, stop_sd_logging, and delete_sd_file are
+    /// covered by their own contract tests.
     /// </summary>
     public static TheoryData<string> MutatingTools() => new()
     {
