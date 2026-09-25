@@ -1,4 +1,4 @@
-using Daqifi.Core.Communication.Messages;
+using System.Reflection;
 using Daqifi.Core.Device.Protocol;
 using Xunit;
 
@@ -10,35 +10,7 @@ namespace Daqifi.Core.Tests.Device.Protocol;
 public class ProtobufProtocolHandlerTests
 {
     [Fact]
-    public void CanHandle_WithDaqifiOutMessage_ReturnsTrue()
-    {
-        // Arrange
-        var handler = new ProtobufProtocolHandler();
-        var message = new GenericInboundMessage<object>(new DaqifiOutMessage());
-
-        // Act
-        var result = handler.CanHandle(message);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    [Fact]
-    public void CanHandle_WithNonProtobufMessage_ReturnsFalse()
-    {
-        // Arrange
-        var handler = new ProtobufProtocolHandler();
-        var message = new GenericInboundMessage<object>("text message");
-
-        // Act
-        var result = handler.CanHandle(message);
-
-        // Assert
-        Assert.False(result);
-    }
-
-    [Fact]
-    public async Task HandleAsync_WithStatusMessage_CallsStatusHandler()
+    public void Handle_WithStatusMessage_CallsStatusHandler()
     {
         // Arrange
         var statusHandlerCalled = false;
@@ -56,10 +28,9 @@ public class ProtobufProtocolHandlerTests
             AnalogInPortNum = 8,
             DigitalPortNum = 16
         };
-        var inboundMessage = new GenericInboundMessage<object>(statusMessage);
 
         // Act
-        await handler.HandleAsync(inboundMessage);
+        handler.Handle(statusMessage);
 
         // Assert
         Assert.True(statusHandlerCalled);
@@ -69,7 +40,7 @@ public class ProtobufProtocolHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_WithStreamMessage_CallsStreamHandler()
+    public void Handle_WithStreamMessage_CallsStreamHandler()
     {
         // Arrange
         var streamHandlerCalled = false;
@@ -89,10 +60,8 @@ public class ProtobufProtocolHandlerTests
         streamMessage.AnalogInData.Add(100);
         streamMessage.AnalogInData.Add(200);
 
-        var inboundMessage = new GenericInboundMessage<object>(streamMessage);
-
         // Act
-        await handler.HandleAsync(inboundMessage);
+        handler.Handle(streamMessage);
 
         // Assert
         Assert.True(streamHandlerCalled);
@@ -102,28 +71,7 @@ public class ProtobufProtocolHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_WithNonProtobufMessage_DoesNotCallHandlers()
-    {
-        // Arrange
-        var statusHandlerCalled = false;
-        var streamHandlerCalled = false;
-
-        var handler = new ProtobufProtocolHandler(
-            statusMessageHandler: _ => statusHandlerCalled = true,
-            streamMessageHandler: _ => streamHandlerCalled = true);
-
-        var textMessage = new GenericInboundMessage<object>("text");
-
-        // Act
-        await handler.HandleAsync(textMessage);
-
-        // Assert
-        Assert.False(statusHandlerCalled);
-        Assert.False(streamHandlerCalled);
-    }
-
-    [Fact]
-    public async Task HandleAsync_WithFloatStreamMessage_CallsStreamHandler()
+    public void Handle_WithFloatStreamMessage_CallsStreamHandler()
     {
         // Arrange - a frame carrying pre-scaled floats (AnalogInDataFloat). No supported firmware
         // sends this shape on any transport, but the protocol defines it and detection must cover it.
@@ -144,10 +92,8 @@ public class ProtobufProtocolHandlerTests
         streamMessage.AnalogInDataFloat.Add(1.234f);
         streamMessage.AnalogInDataFloat.Add(2.345f);
 
-        var inboundMessage = new GenericInboundMessage<object>(streamMessage);
-
         // Act
-        await handler.HandleAsync(inboundMessage);
+        handler.Handle(streamMessage);
 
         // Assert
         Assert.True(streamHandlerCalled, "Stream handler should be called for AnalogInDataFloat messages");
@@ -224,31 +170,29 @@ public class ProtobufProtocolHandlerTests
     /// <summary>
     /// The typed entry point exists so a caller that already holds a <see cref="DaqifiOutMessage"/>
     /// does not have to wrap it just to be routed — an allocation per frame on a streaming device
-    /// (issue #490). It must route identically to <see cref="ProtobufProtocolHandler.HandleAsync"/>,
-    /// which is now built on it.
+    /// (issue #490).
     /// </summary>
     [Theory]
-    [InlineData(ProtobufMessageType.Status)]
-    [InlineData(ProtobufMessageType.Stream)]
-    [InlineData(ProtobufMessageType.Error)]
-    [InlineData(ProtobufMessageType.Unknown)]
-    public async Task Handle_RoutesTheSameWayHandleAsyncDoes(ProtobufMessageType messageType)
+    [InlineData(ProtobufMessageType.Status, "status")]
+    [InlineData(ProtobufMessageType.Stream, "stream")]
+    [InlineData(ProtobufMessageType.Error, "error")]
+    [InlineData(ProtobufMessageType.Unknown, null)]
+    public void Handle_RoutesToTheMatchingHandler(ProtobufMessageType messageType, string? expectedRoute)
     {
-        var viaHandle = new List<string>();
-        var viaHandleAsync = new List<string>();
-
-        var handleHandler = HandlerRecording(viaHandle);
-        var handleAsyncHandler = HandlerRecording(viaHandleAsync);
-
+        var routed = new List<string>();
+        var handler = HandlerRecording(routed);
         var message = MessageOfType(messageType);
 
-        handleHandler.Handle(message);
-        await handleAsyncHandler.HandleAsync(new GenericInboundMessage<object>(message));
+        handler.Handle(message);
 
-        Assert.Equal(viaHandleAsync, viaHandle);
-        Assert.Equal(
-            messageType == ProtobufMessageType.Unknown ? 0 : 1,
-            viaHandle.Count);
+        if (expectedRoute is null)
+        {
+            Assert.Empty(routed);
+        }
+        else
+        {
+            Assert.Equal([expectedRoute], routed);
+        }
     }
 
     [Fact]
@@ -257,6 +201,37 @@ public class ProtobufProtocolHandlerTests
         var handler = new ProtobufProtocolHandler();
 
         Assert.Throws<ArgumentNullException>(() => handler.Handle(null!));
+    }
+
+    /// <summary>
+    /// <see cref="ObsoleteAttribute"/> is not recorded in <c>PublicAPI.*.txt</c>, so nothing but
+    /// this notices if these #490 leftovers stop pointing callers at
+    /// <c>ProtobufProtocolHandler.Handle(DaqifiOutMessage)</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("Daqifi.Core.Communication.Messages.GenericInboundMessage`1", null)]
+    [InlineData("Daqifi.Core.Device.Protocol.IProtocolHandler", "CanHandle")]
+    [InlineData("Daqifi.Core.Device.Protocol.IProtocolHandler", "HandleAsync")]
+    [InlineData("Daqifi.Core.Device.Protocol.ProtobufProtocolHandler", "CanHandle")]
+    [InlineData("Daqifi.Core.Device.Protocol.ProtobufProtocolHandler", "HandleAsync")]
+    public void ObsoleteInboundRoutingSurface_PointsAtTypedHandle(string typeName, string? memberName)
+    {
+        var type = typeof(ProtobufProtocolHandler).Assembly.GetType(typeName, throwOnError: true)!;
+
+        MemberInfo member = memberName is null
+            ? type
+            : Assert.Single(type.GetMember(memberName));
+
+        var obsolete = member.GetCustomAttribute<ObsoleteAttribute>();
+
+        Assert.True(
+            obsolete != null,
+            $"{typeName}{(memberName is null ? "" : "." + memberName)} is no longer marked obsolete. "
+            + "Callers should be pointed at ProtobufProtocolHandler.Handle(DaqifiOutMessage).");
+        Assert.Contains(
+            "ProtobufProtocolHandler.Handle(DaqifiOutMessage)",
+            obsolete!.Message,
+            StringComparison.Ordinal);
     }
 
     private static ProtobufProtocolHandler HandlerRecording(List<string> routed) =>
