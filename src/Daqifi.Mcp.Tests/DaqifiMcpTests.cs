@@ -30,6 +30,27 @@ public class ServerOptionsTests
         Assert.Null(ServerOptions.Parse(new[] { "--max-sample-rate-hz", "fast" }).MaxSampleRateHz);
     }
 
+    [Fact]
+    public void Parse_UnknownFlag_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ServerOptions.Parse(new[] { "--not-a-flag" }));
+        Assert.Contains("--not-a-flag", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MaxSampleRate_MissingValue_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ServerOptions.Parse(new[] { "--max-sample-rate-hz" }));
+        Assert.Contains("requires a value", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_ReadOnlyTypo_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ServerOptions.Parse(new[] { "--read-onyl" }));
+        Assert.Contains("--read-onyl", ex.Message);
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("-5")]
