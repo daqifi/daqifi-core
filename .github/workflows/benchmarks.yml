@@ -1,11 +1,6 @@
 name: Benchmarks
 
-# On demand only, never on a pull request (issue #640). Timings on a shared GitHub
-# runner are far too noisy to gate a merge on: a perf check that fails a green PR
-# once a week lands straight back in the #634/#632 flake pattern, and the fix for
-# that is not a wider tolerance, it is not gating. Run this before a release, or
-# either side of a change that claims a performance win, and paste the table into
-# the ticket that claims it.
+# workflow_dispatch only.
 on:
   workflow_dispatch:
     inputs:

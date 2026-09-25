@@ -4,23 +4,14 @@ using Daqifi.Core.Channel;
 namespace Daqifi.Core.Benchmarks;
 
 /// <summary>
-/// The two per-sample conversions: the device's calibration
-/// (<see cref="AnalogChannel.GetScaledValue"/>, raw ADC count to volts) and the user's transducer
-/// transform (<see cref="ChannelScaling.Apply"/>, volts to engineering units).
+/// Per-sample device calibration (<see cref="AnalogChannel.GetScaledValue"/>) and transducer
+/// scaling (<see cref="ChannelScaling.Apply"/>).
 /// </summary>
 /// <remarks>
-/// <para>
-/// Both run once per sample per channel, so at 16 channels and 1 kHz they run 16,000 times a
-/// second. Neither should allocate and both should be a handful of nanoseconds; the reason to
-/// measure them is that they are the easiest place in the library for a well-meaning change — a
-/// validity check, a unit lookup, a nullable coefficient — to add a per-sample cost that nothing
-/// else would notice.
-/// </para>
-/// <para>
-/// <see cref="GetScaledValue"/> is measured through the channel, lock included: that lock is what
-/// stops a concurrent status refresh tearing the calibration coefficients, so it is part of what a
-/// sample costs and not an overhead to be measured around.
-/// </para>
+/// Both run once per sample, so a validity check, unit lookup, or nullable coefficient here adds
+/// a cost nothing else would notice. <see cref="GetScaledValue"/> is measured through the channel,
+/// lock included: that lock stops a concurrent status refresh tearing the calibration coefficients,
+/// so it is part of the sample cost rather than overhead to measure around.
 /// </remarks>
 [MemoryDiagnoser]
 public class ChannelScalingBenchmarks
@@ -56,9 +47,6 @@ public class ChannelScalingBenchmarks
         }
     }
 
-    /// <summary>
-    /// The device calibration as a consumer reaches it, through the channel and its lock.
-    /// </summary>
     [Benchmark(Baseline = true, OperationsPerInvoke = SampleCount)]
     public double GetScaledValue()
     {
