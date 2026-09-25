@@ -31,6 +31,14 @@ public sealed class ServerOptions
     /// </remarks>
     public bool VersionCheck { get; init; } = true;
 
+    /// <summary>
+    /// Parses MCP server launch flags.
+    /// </summary>
+    /// <param name="args">Process arguments, excluding the executable name.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="args"/> contains an unrecognized token, or <c>--max-sample-rate-hz</c>
+    /// is not followed by a value. A non-numeric or non-positive rate is ignored.
+    /// </exception>
     public static ServerOptions Parse(string[] args)
     {
         var readOnly = false;
@@ -47,13 +55,21 @@ public sealed class ServerOptions
                 case "--no-version-check":
                     versionCheck = false;
                     break;
-                case "--max-sample-rate-hz" when i + 1 < args.Length:
+                case "--max-sample-rate-hz":
+                    if (i + 1 >= args.Length)
+                    {
+                        throw new ArgumentException("Option '--max-sample-rate-hz' requires a value.");
+                    }
+
                     // Ignore non-positive values; a cap of <= 0 would otherwise reject every rate.
                     if (int.TryParse(args[++i], out var rate) && rate >= 1)
                     {
                         maxRate = rate;
                     }
+
                     break;
+                default:
+                    throw new ArgumentException($"Unrecognized option '{args[i]}'.");
             }
         }
 
