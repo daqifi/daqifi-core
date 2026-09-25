@@ -38,6 +38,7 @@ public class ProtobufProtocolHandler : IProtocolHandler
     /// </summary>
     /// <param name="message">The message to evaluate.</param>
     /// <returns><c>true</c> if the message is a DaqifiOutMessage; otherwise, <c>false</c>.</returns>
+    [Obsolete($"Use {nameof(ProtobufProtocolHandler)}.{nameof(Handle)}({nameof(DaqifiOutMessage)}) instead. This member will be removed in a future major version.")]
     public bool CanHandle(IInboundMessage<object> message)
     {
         return message.Data is DaqifiOutMessage;
@@ -46,8 +47,12 @@ public class ProtobufProtocolHandler : IProtocolHandler
     /// <summary>
     /// Processes the specified protobuf message and routes it to the appropriate handler.
     /// </summary>
+    /// <remarks>
+    /// Unwraps <paramref name="message"/> and calls <see cref="Handle(DaqifiOutMessage)"/>.
+    /// </remarks>
     /// <param name="message">The message to process.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
+    [Obsolete($"Use {nameof(ProtobufProtocolHandler)}.{nameof(Handle)}({nameof(DaqifiOutMessage)}) instead. This member will be removed in a future major version.")]
     public Task HandleAsync(IInboundMessage<object> message)
     {
         if (message.Data is not DaqifiOutMessage pbMessage)
@@ -63,10 +68,10 @@ public class ProtobufProtocolHandler : IProtocolHandler
     /// Classifies <paramref name="message"/> and routes it to the matching handler.
     /// </summary>
     /// <remarks>
-    /// The same work <see cref="HandleAsync"/> does, minus the unwrapping — routing is entirely
-    /// synchronous, so a caller that already holds a typed <see cref="DaqifiOutMessage"/> has no
-    /// reason to wrap it in an <see cref="IInboundMessage{T}"/> first. On a streaming device that
-    /// wrapper was allocated for every frame (issue #490).
+    /// Routing is entirely synchronous. A caller that already holds a typed
+    /// <see cref="DaqifiOutMessage"/> has no reason to wrap it in an
+    /// <see cref="IInboundMessage{T}"/> first. On a streaming device that wrapper was allocated
+    /// for every frame (issue #490). <c>DaqifiDevice</c> calls this method directly.
     /// </remarks>
     /// <param name="message">The protobuf message to route.</param>
     /// <exception cref="ArgumentNullException"><paramref name="message"/> is <c>null</c>.</exception>

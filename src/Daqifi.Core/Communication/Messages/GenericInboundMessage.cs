@@ -4,7 +4,12 @@ namespace Daqifi.Core.Communication.Messages;
 /// Represents a generic message containing incoming data from the DAQiFi device.
 /// This is a generic wrapper that can hold any type of data.
 /// </summary>
+/// <remarks>
+/// Device routing calls <c>ProtobufProtocolHandler.Handle(DaqifiOutMessage)</c> and does not
+/// wrap frames in this type (issue #490).
+/// </remarks>
 /// <typeparam name="T">The type of the data payload.</typeparam>
+[Obsolete($"Use {nameof(Daqifi.Core.Device.Protocol.ProtobufProtocolHandler)}.{nameof(Daqifi.Core.Device.Protocol.ProtobufProtocolHandler.Handle)}({nameof(DaqifiOutMessage)}) instead. This type will be removed in a future major version.")]
 public class GenericInboundMessage<T> : IInboundMessage<T>
 {
     /// <summary>
