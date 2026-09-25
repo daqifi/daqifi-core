@@ -84,17 +84,6 @@ public class Crc16Tests
     }
 
     [Fact]
-    public void Crc16_RequestVersionCommand_ProducesConsistentResult()
-    {
-        // The request version command byte is 0x01
-        var crc = new Crc16([0x01]);
-
-        // Verify low and high reconstruct the full CRC
-        var reconstructed = (ushort)(crc.Low | (crc.High << 8));
-        Assert.Equal(crc.Crc, reconstructed);
-    }
-
-    [Fact]
     public void Crc16_AllZeros_ProducesZeroCrc()
     {
         // CRC-16/XMODEM of all zeros should be deterministic

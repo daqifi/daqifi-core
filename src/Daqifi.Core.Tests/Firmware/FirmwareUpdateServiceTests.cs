@@ -4857,14 +4857,22 @@ public class FirmwareUpdateServiceTests
         });
 
         var hexPath = CreateTempFile();
+        Exception? outerFailure;
         try
         {
             // Hard timeout so a regression of the guard fails fast instead of hanging
-            // the run on the non-reentrant _operationLock.
+            // the run on the non-reentrant _operationLock. Record it: WaitAsync reports
+            // that timeout as cancellation, and ThrowsAny<Exception> would accept it.
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await Assert.ThrowsAnyAsync<Exception>(
+            outerFailure = await Record.ExceptionAsync(
                 () => service.UpdateFirmwareAsync(device, hexPath, progress)
                     .WaitAsync(timeoutCts.Token));
+
+            Assert.False(
+                outerFailure is TimeoutException
+                    || (outerFailure is OperationCanceledException canceled
+                        && canceled.CancellationToken == timeoutCts.Token),
+                "UpdateFirmwareAsync hit the test's own timeout — reentry deadlocked on the operation lock instead of throwing.");
         }
         finally
         {
@@ -4872,7 +4880,15 @@ public class FirmwareUpdateServiceTests
         }
 
         Assert.True(reentryAttempted, "Progress callback never fired — test setup wrong.");
-        var failure = Assert.IsType<InvalidOperationException>(reentrantFailure);
+
+        // The reentrant call throws InvalidOperationException. If that exception
+        // escapes the progress callback, the update wraps it, so the same failure
+        // is the outer exception or its inner exception — never the timeout above.
+        var reentry = reentrantFailure as InvalidOperationException
+            ?? outerFailure as InvalidOperationException
+            ?? reentrantFailure?.InnerException
+            ?? outerFailure?.InnerException;
+        var failure = Assert.IsType<InvalidOperationException>(reentry);
         Assert.Contains("in-flight firmware operation", failure.Message, StringComparison.Ordinal);
     }
 
