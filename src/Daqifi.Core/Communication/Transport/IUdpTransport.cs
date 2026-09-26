@@ -3,8 +3,10 @@ using System.Net;
 namespace Daqifi.Core.Communication.Transport;
 
 /// <summary>
-/// Represents a UDP transport mechanism for broadcast and unicast communication.
-/// Used primarily for device discovery and UDP-based messaging.
+/// UDP broadcast and unicast transport. Synchronous <see cref="Open"/> and
+/// <see cref="Close"/> finish the socket work on the calling thread and do not
+/// post back to a caller <see cref="SynchronizationContext"/>, which is the
+/// issue #508 deadlock fix.
 /// </summary>
 public interface IUdpTransport : IDisposable
 {

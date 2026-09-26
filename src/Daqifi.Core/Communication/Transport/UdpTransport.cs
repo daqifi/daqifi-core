@@ -82,24 +82,22 @@ public class UdpTransport : IUdpTransport
     /// Opens the UDP transport for communication.
     /// </summary>
     /// <returns>A task representing the asynchronous open operation.</returns>
-    public async Task OpenAsync()
+    public Task OpenAsync()
     {
         ThrowIfDisposed();
 
         if (IsOpen)
-            return;
+            return Task.CompletedTask;
 
         try
         {
+            // Bind is synchronous; return a completed task to keep the interface
+            // async without an extra state machine or thread-pool hop.
             _udpClient = new UdpClient(_localPort);
             _udpClient.EnableBroadcast = true;
 
-            // Set socket options for better performance
-            _udpClient.Client.ReceiveTimeout = 5000;
-            _udpClient.Client.SendTimeout = 5000;
-
             OnStatusChanged(true, null);
-            await Task.CompletedTask.ConfigureAwait(false);
+            return Task.CompletedTask;
         }
         catch (Exception ex)
         {
@@ -114,10 +112,10 @@ public class UdpTransport : IUdpTransport
     /// Closes the UDP transport.
     /// </summary>
     /// <returns>A task representing the asynchronous close operation.</returns>
-    public async Task CloseAsync()
+    public Task CloseAsync()
     {
         if (!IsOpen)
-            return;
+            return Task.CompletedTask;
 
         try
         {
@@ -135,7 +133,7 @@ public class UdpTransport : IUdpTransport
             OnStatusChanged(false, null);
         }
 
-        await Task.CompletedTask.ConfigureAwait(false);
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -144,15 +142,9 @@ public class UdpTransport : IUdpTransport
     /// <param name="data">The data to broadcast.</param>
     /// <param name="port">The destination port.</param>
     /// <returns>A task representing the asynchronous send operation.</returns>
-    public async Task SendBroadcastAsync(byte[] data, int port)
+    public Task SendBroadcastAsync(byte[] data, int port)
     {
-        ThrowIfDisposed();
-
-        if (!IsOpen)
-            throw new InvalidOperationException("UDP transport is not open.");
-
-        var broadcastEndPoint = new IPEndPoint(IPAddress.Broadcast, port);
-        await _udpClient!.SendAsync(data, data.Length, broadcastEndPoint).ConfigureAwait(false);
+        return SendBroadcastAsync(data, new IPEndPoint(IPAddress.Broadcast, port));
     }
 
     /// <summary>
@@ -215,7 +207,6 @@ public class UdpTransport : IUdpTransport
                 }
                 catch (OperationCanceledException)
                 {
-                    // Timeout or cancellation occurred
                     return null;
                 }
             }
@@ -228,7 +219,6 @@ public class UdpTransport : IUdpTransport
         }
         catch (SocketException)
         {
-            // Socket errors (like timeout) return null
             return null;
         }
     }
@@ -281,7 +271,6 @@ public class UdpTransport : IUdpTransport
             }
             catch
             {
-                // Ignore errors during disposal
             }
 
             _udpClient?.Dispose();
