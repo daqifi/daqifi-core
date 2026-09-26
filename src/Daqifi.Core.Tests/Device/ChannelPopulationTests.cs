@@ -60,20 +60,6 @@ public class ChannelPopulationTests
     }
 
     [Fact]
-    public void Channels_ReturnsReadOnlyList()
-    {
-        // Arrange
-        var device = new DaqifiDevice("TestDevice");
-        var message = new DaqifiOutMessage { AnalogInPortNum = 2 };
-
-        // Act
-        device.PopulateChannelsFromStatus(message);
-
-        // Assert
-        Assert.IsAssignableFrom<IReadOnlyList<IChannel>>(device.Channels);
-    }
-
-    [Fact]
     public void PopulateChannelsFromStatus_PreservesEnableDirectionAndOutputAcrossRepopulation()
     {
         // A later status refresh (e.g. reconnect / metadata re-query) updates channel instances

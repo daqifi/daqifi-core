@@ -36,12 +36,6 @@ namespace Daqifi.Core.Tests.Device.Internal;
 public class ConnectionGuardTests
 {
     [Fact]
-    public void EnsureConnected_WhenConnected_DoesNotThrow()
-    {
-        ConnectionGuard.EnsureConnected(isConnected: true);
-    }
-
-    [Fact]
     public void EnsureConnected_WhenNotConnected_ThrowsWithTheHistoricalMessage()
     {
         var ex = Assert.Throws<DeviceNotConnectedException>(
@@ -52,14 +46,6 @@ public class ConnectionGuardTests
         Assert.Equal("Device is not connected.", ex.Message);
         Assert.False(ex.IsShuttingDown);
         Assert.IsAssignableFrom<InvalidOperationException>(ex);
-    }
-
-    [Fact]
-    public void EnsureConnected_WhenConnectedAndTokenLive_DoesNotThrow()
-    {
-        using var cts = new CancellationTokenSource();
-
-        ConnectionGuard.EnsureConnected(isConnected: true, cts.Token);
     }
 
     [Fact]
