@@ -37,7 +37,8 @@ client-relevant boundary, not the commit date.
 **Release timeline (tag → date):** v3.0.0b0 (2025-01-14) → v3.0.0b2 (2025-08-04) →
 v3.1.0b2 (2025-10-09) → v3.2.0 (2025-11-06) → v3.4.3 (2026-01-30) → v3.4.4 (2026-02-06) →
 v3.4.6b1 (2026-03-12) → v3.5.0 (2026-06-08) → v3.6.0 (2026-06-12) → v3.6.1 → v3.6.3 →
-**v3.7.0** → v3.7.1 → **v3.7.2** (current firmware HEAD). SD file transfer over WiFi
+**v3.7.0** → v3.7.1 → v3.7.2 → **v3.7.3** (current firmware HEAD; SD:GET `__TRANSFER_ERROR__`,
+firmware #725). SD file transfer over WiFi
 (firmware #598/#599, commit `bf105585` = `git describe` v3.6.3-6) first shipped in the
 **v3.7.0** release tag (`git tag --contains bf105585`).
 
@@ -126,10 +127,10 @@ backstop below.
 The firmware emits SCPI errors **inline** on both transports — `UsbCdc.c:1052` and
 `wifi_tcp_server.c:211` both format `**ERROR: %d, "%s"\r\n`. An unknown command yields
 **`-113, "Undefined header"`** (libscpi `SCPI_ERROR_UNDEFINED_HEADER`) — a *different code*
-from a runtime `-200, "Execution error"`. daqifi-core already recognizes `**ERROR` lines
-(`ScpiResponseClassifier.IsErrorResponseLine`, `DaqifiStreamingDevice.IsScpiErrorLine`) but
-does not yet parse the numeric code. Parsing it is the concrete hook that makes a
-probe-and-detect backstop reliable.
+from a runtime `-200, "Execution error"`. daqifi-core classifies those lines with
+`ScpiResponseClassifier.IsScpiErrorLine` and parses the numeric code with
+`ScpiResponseClassifier.TryExtractErrorCode`. The `-113` backstop already throws
+`FeatureNotSupportedException` (`SdCardOperations.GetSdCardStorageAsync`).
 
 ## Decision
 
