@@ -1,12 +1,12 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device;
 using Daqifi.Core.Logging.Export;
-using Daqifi.Core.Tests.Firmware;
 using ChannelFactory = System.Threading.Channels.Channel;
 
 namespace Daqifi.Core.Tests.Logging.Export;
@@ -59,7 +59,7 @@ public class LiveCsvRecordingTests
     {
         // A streaming device is not automatically a live-sample source; the recording has nothing
         // to read and should say so at the call rather than write an empty file.
-        var device = new FakeStreamingDevice("no-live-samples");
+        var device = new StreamingDeviceWithoutLiveSamples("no-live-samples");
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => device.RecordLiveSamplesToCsvAsync(new StringWriter()));
@@ -468,6 +468,95 @@ public class LiveCsvRecordingTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(l => l.TrimEnd('\r'))
             .ToArray();
+
+    /// <summary>
+    /// An <see cref="IStreamingDevice"/> that does not implement <see cref="ILiveSampleSource"/>.
+    /// <see cref="DaqifiStreamingDevice"/> does, so a subclass of it cannot drive the rejection
+    /// path. The recording reads <see cref="IDevice.Name"/> and then throws; any other member is
+    /// off the path this test exercises.
+    /// </summary>
+    private sealed class StreamingDeviceWithoutLiveSamples(string name) : IStreamingDevice
+    {
+        public string Name => name;
+
+        public IPAddress? IpAddress => throw NotOnThisPath();
+        public bool IsConnected => throw NotOnThisPath();
+        public ConnectionStatus Status => throw NotOnThisPath();
+        public DeviceMetadata Metadata => throw NotOnThisPath();
+        public IReadOnlyList<IChannel> Channels => throw NotOnThisPath();
+        public IReadOnlyList<IChannel> GetChannelsSnapshot() => throw NotOnThisPath();
+        public int StreamingFrequency { get => throw NotOnThisPath(); set => throw NotOnThisPath(); }
+        public bool IsStreaming => throw NotOnThisPath();
+        public int PwmFrequencyHz => throw NotOnThisPath();
+
+        public event EventHandler<DeviceStatusEventArgs>? StatusChanged
+        {
+            add => throw NotOnThisPath();
+            remove => throw NotOnThisPath();
+        }
+
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add => throw NotOnThisPath();
+            remove => throw NotOnThisPath();
+        }
+
+        public event EventHandler<DeviceErrorEventArgs>? ErrorOccurred
+        {
+            add => throw NotOnThisPath();
+            remove => throw NotOnThisPath();
+        }
+
+        public event EventHandler<ChannelsPopulatedEventArgs>? ChannelsPopulated
+        {
+            add => throw NotOnThisPath();
+            remove => throw NotOnThisPath();
+        }
+
+        public void Connect() => throw NotOnThisPath();
+        public void Disconnect() => throw NotOnThisPath();
+        public Task ConnectAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task DisconnectAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public ValueTask DisposeAsync() => throw NotOnThisPath();
+        public void Send<T>(IOutboundMessage<T> message) => throw NotOnThisPath();
+
+        public void StartStreaming() => throw NotOnThisPath();
+        public void StopStreaming() => throw NotOnThisPath();
+        public void EnableChannel(IChannel channel) => throw NotOnThisPath();
+        public void EnableChannels(IEnumerable<IChannel> channels) => throw NotOnThisPath();
+        public void DisableChannel(IChannel channel) => throw NotOnThisPath();
+        public void DisableAllChannels() => throw NotOnThisPath();
+        public void SetDioDirection(IChannel channel, ChannelDirection direction) => throw NotOnThisPath();
+        public void SetDioValue(IChannel channel, bool value) => throw NotOnThisPath();
+        public void SetPwmEnabled(IChannel channel, bool enabled) => throw NotOnThisPath();
+        public void SetPwmDutyCycle(IChannel channel, int dutyCyclePercent) => throw NotOnThisPath();
+        public void SetPwmFrequency(int frequencyHz) => throw NotOnThisPath();
+        public void SetAnalogOutput(int channelNumber, double voltage) => throw NotOnThisPath();
+        public void Reboot() => throw NotOnThisPath();
+
+        public void SaveAdcCalibration() => throw NotOnThisPath();
+        public void LoadAdcCalibration() => throw NotOnThisPath();
+        public void SetAdcCalibrationSlope(int channelNumber, double calM) => throw NotOnThisPath();
+        public void SetAdcCalibrationOffset(int channelNumber, double calB) => throw NotOnThisPath();
+        public void SaveFactoryAdcCalibration() => throw NotOnThisPath();
+        public void LoadFactoryAdcCalibration() => throw NotOnThisPath();
+        public void UseAdcCalibration(int bank) => throw NotOnThisPath();
+        public void SaveVoltagePrecision() => throw NotOnThisPath();
+        public void LoadVoltagePrecision() => throw NotOnThisPath();
+
+        public Task SaveAdcCalibrationAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task LoadAdcCalibrationAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task SetAdcCalibrationSlopeAsync(int channelNumber, double calM, CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task SetAdcCalibrationOffsetAsync(int channelNumber, double calB, CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task SaveFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task LoadFactoryAdcCalibrationAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task UseAdcCalibrationAsync(int bank, CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task SaveVoltagePrecisionAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+        public Task LoadVoltagePrecisionAsync(CancellationToken cancellationToken = default) => throw NotOnThisPath();
+
+        private static InvalidOperationException NotOnThisPath() =>
+            new("RecordLiveSamplesToCsvAsync rejects a device with no live samples before reading anything but its name.");
+    }
 
     /// <summary>
     /// A real streaming device whose live stream is replaced by one the test writes into, so what
