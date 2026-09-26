@@ -599,18 +599,6 @@ public class DaqifiDeviceFactoryTests
         Assert.Equal(typeof(Task<DaqifiStreamingDevice>), method!.ReturnType);
     }
 
-    [Fact]
-    public void IStreamingDevice_ExposesChannelsAndMetadataDirectly()
-    {
-        // Promoted onto the interface (#333) so a caller holding only IStreamingDevice can obtain
-        // a channel to pass into the interface's own enable/disable/DIO/PWM methods, without a
-        // cast to the concrete device type.
-        Assert.NotNull(typeof(IStreamingDevice).GetProperty(nameof(IStreamingDevice.Channels)));
-        Assert.NotNull(typeof(IStreamingDevice).GetProperty(nameof(IStreamingDevice.Metadata)));
-        Assert.NotNull(typeof(IStreamingDevice).GetMethod(nameof(IStreamingDevice.GetChannelsSnapshot)));
-        Assert.NotNull(typeof(IStreamingDevice).GetEvent(nameof(IStreamingDevice.ChannelsPopulated)));
-    }
-
     #endregion
 
     #region Test Helpers

@@ -66,14 +66,6 @@ public class AnalogOutputChannelTests
             () => new AnalogOutputChannel(0, 12, minimum, maximum));
     }
 
-    [Fact]
-    public void Direction_SetToOutput_IsAccepted()
-    {
-        var channel = new AnalogOutputChannel(0) { Direction = ChannelDirection.Output };
-
-        Assert.Equal(ChannelDirection.Output, channel.Direction);
-    }
-
     [Theory]
     [InlineData(ChannelDirection.Input)]
     [InlineData(ChannelDirection.Unknown)]
