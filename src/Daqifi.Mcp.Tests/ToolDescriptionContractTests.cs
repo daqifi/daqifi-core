@@ -30,14 +30,15 @@ public class ToolDescriptionContractTests
     }
 
     [Fact]
-    public void DownloadSdFile_ScopesTheStreamingWarningToTheFirmwareThatHasIt()
+    public void DownloadSdFile_WarnsUnlessTheFirmwareIsKnownToHaveTheFix()
     {
-        // Firmware 3.7.3 fixed #703; stated unconditionally the warning is wrong for every
-        // device already running the fix.
+        // Firmware 3.7.3 fixed #703, so the warning is scoped. But discovery can report an empty
+        // or "Unknown" version, so the default has to be the safe one: retrieve first unless the
+        // device is known to be on 3.7.3 or later.
         var description = ToolDescription(nameof(DaqifiTools.DownloadSdFile));
 
         Assert.Contains("#703", description);
-        Assert.Contains("firmware below 3.7.3", description);
+        Assert.Contains("Unless the device reports firmware 3.7.3 or later", description);
     }
 
     [Theory]

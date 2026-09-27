@@ -191,7 +191,7 @@ public static class DaqifiTools
         => GuardAsync(() => agent.GetSdStorageAsync(deviceId, cancellationToken));
 
     [McpServerTool(Name = "download_sd_file", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Download an SD-card log file and by default parse it to CSV. On firmware below 3.7.3, retrieve before any live stream on the same connection — streaming collapses the SD buffer (firmware #703) and later downloads come back empty.")]
+    [Description("Download an SD-card log file and by default parse it to CSV. Unless the device reports firmware 3.7.3 or later, retrieve before any live stream on the same connection — on older firmware streaming collapses the SD buffer (firmware #703) and later downloads come back empty.")]
     public static Task<SdDownloadReport> DownloadSdFile(
         DaqifiAgent agent,
         [Description("The device_id to download from.")] string deviceId,

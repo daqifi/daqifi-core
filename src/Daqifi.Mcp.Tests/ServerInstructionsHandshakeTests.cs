@@ -25,9 +25,11 @@ public class ServerInstructionsHandshakeTests
         Assert.NotNull(instructions);
         Assert.Contains("discover_devices", instructions);
         Assert.Contains("Retrieve before you stream", instructions);
-        // Firmware 3.7.3 fixed the SD-buffer collapse (#703), so the rule has to say which
-        // devices it is about rather than present it as how every device behaves.
-        Assert.Contains("firmware below 3.7.3", instructions);
+        // Firmware 3.7.3 fixed the SD-buffer collapse (#703), so the rule is scoped. Discovery
+        // can report an empty or "Unknown" version, though, so only a known 3.7.3 or later
+        // lifts it.
+        Assert.Contains("3.7.3 or later", instructions);
+        Assert.Contains("treat an empty or unknown version as older", instructions);
         Assert.Contains("Nyquist 3", instructions);
         // Sent to a writable server, the read-only rule is noise and a hint that writes might be
         // refused where they will not be.
