@@ -50,8 +50,11 @@ internal static class ConnectRetryExecutor
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // MaxAttempts is at least 1, and every iteration returns or throws, so the loop
-        // does not need a post-loop epilogue.
+        // No loop condition on purpose: an iteration returns on success, throws on cancellation
+        // or on the final failure, and continues only while attempt < maxAttempts, so the body
+        // runs at most maxAttempts times and control never falls out of the loop. maxAttempts is
+        // always at least 1 (NoRetry pins it to 1 and the MaxAttempts setter rejects anything
+        // lower), so the first attempt always runs.
         for (var attempt = 1; ; attempt++)
         {
             try

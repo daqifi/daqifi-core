@@ -9,10 +9,9 @@ namespace Daqifi.Core.Device.Discovery;
 /// Shared lifecycle scaffolding for the concrete <see cref="IDeviceFinder"/>
 /// implementations (<see cref="HidDeviceFinder"/>, <see cref="SerialDeviceFinder"/>,
 /// <see cref="WiFiDeviceFinder"/>, <see cref="MDnsDeviceFinder"/>). Owns the discovery
-/// serialization semaphore, the
-/// <see cref="DeviceDiscovered"/>/<see cref="DiscoveryCompleted"/> events and their
-/// raisers, the disposed flag, and one consistent timeout/await/dispose policy so the
-/// boilerplate can no longer drift apart across copies (issue #343).
+/// serialization semaphore, the <see cref="DeviceDiscovered"/>/<see cref="DiscoveryCompleted"/>
+/// events and their raisers, the disposed flag, and one consistent timeout/await/dispose
+/// policy so the boilerplate can no longer drift apart across copies (issue #343).
 /// </summary>
 public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
 {
