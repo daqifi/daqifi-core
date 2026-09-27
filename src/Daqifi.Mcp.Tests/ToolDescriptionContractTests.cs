@@ -6,9 +6,9 @@ using ModelContextProtocol.Server;
 namespace Daqifi.Mcp.Tests;
 
 /// <summary>
-/// The agent-visible copy on each tool: one job and its failure mode, plus the README session
-/// rules on the handshake. Novels belong in the MCP README, not in <c>tools/list</c>, which every
-/// client pays for on every request.
+/// The agent-visible copy on each tool: one job and its failure mode. Novels belong in the MCP
+/// README, not in <c>tools/list</c>, which every client pays for on every request. The session
+/// rules sent on the handshake are pinned by <see cref="ServerInstructionsHandshakeTests"/>.
 /// </summary>
 public class ToolDescriptionContractTests
 {
@@ -30,26 +30,14 @@ public class ToolDescriptionContractTests
     }
 
     [Fact]
-    public void ServerInstructions_AreTheReadmeSessionRules()
+    public void DownloadSdFile_ScopesTheStreamingWarningToTheFirmwareThatHasIt()
     {
-        var text = new ServerOptions().Instructions;
+        // Firmware 3.7.3 fixed #703; stated unconditionally the warning is wrong for every
+        // device already running the fix.
+        var description = ToolDescription(nameof(DaqifiTools.DownloadSdFile));
 
-        Assert.Contains("discover_devices", text);
-        Assert.Contains("firmware #703", text);
-        Assert.Contains("Nyquist 3", text);
-    }
-
-    [Fact]
-    public void ServerInstructions_MentionReadOnly_OnlyWhenTheServerIsReadOnly()
-    {
-        // Sent unconditionally this is both noise and a hint that writes might be refused on a
-        // server where they will not be — on text every session pays for at initialize.
-        Assert.DoesNotContain("--read-only", new ServerOptions().Instructions);
-
-        var readOnly = new ServerOptions { ReadOnly = true }.Instructions;
-        Assert.Contains("--read-only", readOnly);
-        Assert.Contains("read_channel_values", readOnly);
-        Assert.Contains("capture_samples", readOnly);
+        Assert.Contains("#703", description);
+        Assert.Contains("firmware below 3.7.3", description);
     }
 
     [Theory]
