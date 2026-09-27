@@ -4,8 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using static Daqifi.Core.Internal.DiagnosticGuard;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>

@@ -1,7 +1,5 @@
 using System.Threading;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>

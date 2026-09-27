@@ -1,7 +1,5 @@
 using Daqifi.Core.Communication.Messages;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
