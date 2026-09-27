@@ -94,12 +94,65 @@ public class ToolStructuredContentContractTests
         Assert.Equal(tabulated, advertised);
     }
 
+    [Fact]
+    public async Task NullField_IsStillWritten_SoTheResultMatchesItsOutputSchema()
+    {
+        // The generated schema lists every record property as required, a nullable one as
+        // ["T","null"], but the SDK's default serializer drops null properties. A result with a
+        // null field would then be missing a required key, and a client that checks results
+        // against the schema rejects it. get_server_info with the version check off is the one
+        // tool that returns a null field (latestVersion) with no device attached.
+        var services = new ServiceCollection();
+        services.AddSingleton(new VersionStatus(
+            new ServerOptions { VersionCheck = false },
+            new StubLatestVersionSource()));
+        services.AddMcpServer().WithDaqifiTools();
+        await using var provider = services.BuildServiceProvider();
+        var tool = provider.GetServices<McpServerTool>()
+            .Single(t => t.ProtocolTool.Name == "get_server_info");
+        await using var server = McpServer.Create(
+            new StreamServerTransport(Stream.Null, Stream.Null),
+            new McpServerOptions(),
+            serviceProvider: provider);
+        var request = new RequestContext<CallToolRequestParams>(
+            server,
+            new JsonRpcRequest { Method = RequestMethods.ToolsCall },
+            new CallToolRequestParams { Name = "get_server_info" })
+        {
+            Services = provider,
+        };
+
+        var result = await tool.InvokeAsync(request, CancellationToken.None);
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.NotNull(result.StructuredContent);
+        var structured = result.StructuredContent.Value;
+        var required = tool.ProtocolTool.OutputSchema!.Value.GetProperty("required")
+            .EnumerateArray()
+            .Select(e => e.GetString()!)
+            .ToArray();
+        Assert.Contains("latestVersion", required);
+        foreach (var name in required)
+        {
+            Assert.True(
+                structured.TryGetProperty(name, out _),
+                $"structuredContent is missing required '{name}': {structured.GetRawText()}");
+        }
+
+        Assert.Equal(JsonValueKind.Null, structured.GetProperty("latestVersion").ValueKind);
+
+        // The text block is serialized with the same options, so it spells the null out too.
+        var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+        using var textJson = JsonDocument.Parse(text);
+        Assert.Equal(JsonValueKind.Null, textJson.RootElement.GetProperty("latestVersion").ValueKind);
+    }
+
     private static Tool Advertised(string name) =>
         AdvertisedTools.Single(t => t.Name == name);
 
     /// <summary>
     /// The tools exactly as the server advertises them: registered through the same
-    /// <c>WithToolsFromAssembly</c> call Program.cs makes, so every tool the server can list is
+    /// <c>WithDaqifiTools</c> call Program.cs makes, so every tool the server can list is
     /// covered here — whatever class it lives in — and nothing it would not list is.
     /// </summary>
     private static readonly IReadOnlyList<Tool> AdvertisedTools = BuildAdvertisedTools();
@@ -107,7 +160,7 @@ public class ToolStructuredContentContractTests
     private static IReadOnlyList<Tool> BuildAdvertisedTools()
     {
         var services = new ServiceCollection();
-        services.AddMcpServer().WithToolsFromAssembly(typeof(DaqifiTools).Assembly);
+        services.AddMcpServer().WithDaqifiTools();
         using var provider = services.BuildServiceProvider();
         return provider.GetServices<McpServerTool>().Select(t => t.ProtocolTool).ToList();
     }
