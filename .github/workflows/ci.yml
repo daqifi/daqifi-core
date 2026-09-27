@@ -71,6 +71,10 @@ jobs:
     - name: Test
       run: dotnet test --no-build --no-restore Daqifi.Core.sln
 
+    # Deliberately a failure, not a warning: an out-of-date baseline silently narrows
+    # the ApiCompat check below (CONTRIBUTING.md), so this goes red after a release
+    # until the baseline bump lands.
+    #
     # Stable versions only. A prerelease is not what a consumer restores by default,
     # so it must not become the baseline. Filtering also keeps the baseline a plain
     # three-part version, which PublicApiTrackingTests asserts.
@@ -94,6 +98,10 @@ jobs:
           exit 1
         fi
 
+    # Second half of the public-API guard (CONTRIBUTING.md): RS0016/RS0017 compare the
+    # code to PublicAPI.*.txt, which a PR can edit; this compares the package to the
+    # release on nuget.org, which no PR can edit.
+    #
     # `--no-build` is absent on purpose: it skips the ApiCompat targets, so a pack
     # that uses it validates nothing. release.yml packs `--no-build` (to keep the
     # git-tag version stamp) and is not this gate.
