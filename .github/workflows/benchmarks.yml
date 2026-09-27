@@ -40,6 +40,8 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+    # 10.0.x only: the host targets net10.0. A class that adds
+    # [SimpleJob(RuntimeMoniker.Net90)] (see the benchmarks README) needs 9.0.x here too.
     - name: Setup .NET
       uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
       with:
