@@ -76,10 +76,17 @@ public class DeviceReconnectTests
 
         transport.SimulateDrop();
 
-        WaitUntil.That(
-            () => device.Status == ConnectionStatus.Lost && !device.IsReconnecting,
-            "the device never settled at Lost without starting a reconnect",
-            EventTimeout);
+        // SimulateDrop has raised Lost by the time it returns, so waiting for Lost would observe
+        // nothing. The claim is that nothing follows it, and a policy that is off produces no
+        // event to wait for — so watch, over the window this test has always used, for any
+        // reconnect that would have started by now.
+        WaitUntil.HoldsFor(
+            () => device.Status == ConnectionStatus.Lost
+                && !device.IsReconnecting
+                && Volatile.Read(ref reconnectEvents) == 0
+                && transport.ConnectCount == connectsBeforeDrop,
+            "a drop with reconnect at its default did more than stop at Lost",
+            TimeSpan.FromMilliseconds(500));
 
         Assert.Equal(ConnectionStatus.Lost, device.Status);
         Assert.False(device.IsReconnecting);
@@ -1209,10 +1216,17 @@ public class DeviceReconnectTests
         var connectsBeforeDrop = transport.ConnectCount;
         transport.SimulateDrop();
 
-        WaitUntil.That(
-            () => device.Status == ConnectionStatus.Disconnected && !device.IsReconnecting,
+        // The handler's Disconnect runs inside SimulateDrop, so the device is already
+        // Disconnected when it returns and waiting for that would observe nothing. The claim is
+        // that no reconnect follows, which produces no event to wait for — so watch for one over
+        // the window this test has always used.
+        WaitUntil.HoldsFor(
+            () => device.Status == ConnectionStatus.Disconnected
+                && !device.IsReconnecting
+                && Volatile.Read(ref reconnectEvents) == 0
+                && transport.ConnectCount == connectsBeforeDrop,
             "the Lost handler's Disconnect was overruled by a reconnect",
-            EventTimeout);
+            TimeSpan.FromMilliseconds(500));
 
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.Equal(0, Volatile.Read(ref reconnectEvents));

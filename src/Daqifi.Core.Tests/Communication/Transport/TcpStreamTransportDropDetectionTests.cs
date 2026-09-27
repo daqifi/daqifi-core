@@ -165,15 +165,20 @@ public class TcpStreamTransportDropDetectionTests
 
         device.Disconnect();
 
-        WaitUntil.That(
+        // Disconnect has raised Disconnected by the time it returns, so waiting for that would
+        // observe nothing. The claim is that no Lost follows, and in the passing case nothing
+        // positive marks that: the device has already stopped its reader. Give any lingering
+        // reader-loop failure the window this test has always allowed to be (wrongly) escalated.
+        WaitUntil.HoldsFor(
             () =>
             {
                 lock (statuses)
                 {
-                    return statuses.Contains(ConnectionStatus.Disconnected);
+                    return !statuses.Contains(ConnectionStatus.Lost);
                 }
             },
-            "the device never reported Disconnected");
+            "an intentional disconnect was reported as ConnectionStatus.Lost",
+            TimeSpan.FromMilliseconds(500));
 
         lock (statuses)
         {

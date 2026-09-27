@@ -54,8 +54,13 @@ public class DeviceErrorSurfaceTests
         device.Connect();
         transport.ScriptedStream.TimeoutReads = true;
 
+        // Counted from after the switch: reads issued while connecting were zero-byte idle reads,
+        // not timeouts, and must not satisfy the wait. Every read past this baseline starts after
+        // TimeoutReads was set and so throws; once a sixth has started, five timeouts have been
+        // fully handled by the reader loop, error surface included.
+        var readsBeforeTimeouts = transport.ScriptedStream.ReadCount;
         WaitUntil.That(
-            () => transport.ScriptedStream.ReadCount >= 5,
+            () => transport.ScriptedStream.ReadCount > readsBeforeTimeouts + 5,
             "the idle reader never issued timeout reads");
 
         Assert.Equal(0, Volatile.Read(ref errors));
@@ -103,9 +108,14 @@ public class DeviceErrorSurfaceTests
         var afterDisconnect = Volatile.Read(ref errors);
         transport.ScriptedStream.FailReads = true;
 
-        WaitUntil.That(
-            () => device.Status == ConnectionStatus.Disconnected,
-            "the device never reported Disconnected");
+        // Nothing positive marks this one: Disconnect has already stopped and detached the
+        // reader, so in the passing case nothing is left to fail a read. A reader that outlived
+        // the disconnect would fail within milliseconds, and the throttle never holds back the
+        // first failure of a kind, so watch for that over the window this test has always used.
+        WaitUntil.HoldsFor(
+            () => Volatile.Read(ref errors) == afterDisconnect,
+            "a read failure after Disconnect still reached the device's error surface",
+            TimeSpan.FromMilliseconds(400));
 
         Assert.Equal(afterDisconnect, Volatile.Read(ref errors));
     }

@@ -266,9 +266,13 @@ public class StreamMessageConsumerIntegrationTests
 
         // Start the consumer to let it read the partial data into internal buffer
         consumer.Start();
+
+        // Wait for the bytes to be in the consumer's buffer, not merely read off the stream: the
+        // read advances Position before the append, so a Position check can pass while the buffer
+        // is still empty, and the zero-count check below would then pass without a clear.
         WaitUntil.That(
-            () => stream.Position >= partialData.Length,
-            "the consumer never read the leftover bytes");
+            () => consumer.QueuedMessageCount == partialData.Length,
+            () => $"the consumer never buffered the leftover bytes ({consumer.QueuedMessageCount} of {partialData.Length})");
 
         // Act - Call ClearBuffer via interface (as desktop would do during reconnection)
         IMessageConsumer<DaqifiOutMessage> interfaceRef = consumer;
@@ -323,11 +327,12 @@ public class StreamMessageConsumerIntegrationTests
             clearCalls++;
         }
 
-        // Let the consumer complete another loop iteration so any in-flight ClearBuffer is
-        // honored, then stop.
+        // Let the consumer honor the last ClearBuffer, then stop. The pending-clear check runs at
+        // the top of each iteration, before its read; the read after next is the first one whose
+        // iteration provably began after the last request, so its check cannot have missed it.
         var readsAfterHammer = stream.ReadCount;
         WaitUntil.That(
-            () => stream.ReadCount > readsAfterHammer,
+            () => stream.ReadCount > readsAfterHammer + 1,
             "the consumer never ran another iteration after the last clear");
         var stoppedCleanly = consumer.StopSafely(2000);
 

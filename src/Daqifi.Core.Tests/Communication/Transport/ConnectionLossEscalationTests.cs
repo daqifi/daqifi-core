@@ -86,11 +86,16 @@ public class ConnectionLossEscalationTests
         // One failure, then the stream goes back to idling — a glitch, not a disconnect. Escalation
         // needs a run of five, so nothing may be reported. (That a *successful* read clears an
         // accumulated run is covered by StreamMessageConsumerHealthReportingTests.)
-        var readsBefore = transport.FailingStream.ReadCount;
         transport.FailingStream.FailOnce();
 
+        // Counted from after the glitch is armed, so the failing read is at most the next one.
+        // Escalation is decided synchronously on the reader thread as each failure is reported,
+        // so once the read after threshold-many more has started, the glitch and the idle reads
+        // behind it have all been fully handled: enough for a run of five to have formed had
+        // the single failure, or the idle reads that follow it, been miscounted.
+        var readsAtGlitch = transport.FailingStream.ReadCount;
         WaitUntil.That(
-            () => transport.FailingStream.ReadCount >= readsBefore + TransportConnectionWatchdog.ConsecutiveFaultThreshold,
+            () => transport.FailingStream.ReadCount > readsAtGlitch + TransportConnectionWatchdog.ConsecutiveFaultThreshold,
             "the reader never consumed the glitch and resumed idle reads");
 
         lock (statuses)
@@ -126,15 +131,21 @@ public class ConnectionLossEscalationTests
         // teardown does. None of that may be reported as a loss.
         device.Disconnect();
 
-        WaitUntil.That(
+        // Disconnect has raised Disconnected by the time it returns, so waiting for that would
+        // observe nothing. The claim is that no Lost (and no error) follows, and in the passing
+        // case nothing positive marks that: the reader is already stopped. A reader still failing
+        // reads against an armed watchdog escalates after five failures at the 100 ms error
+        // back-off, so watch for the window this test has always used.
+        WaitUntil.HoldsFor(
             () =>
             {
                 lock (statuses)
                 {
-                    return statuses.Contains(ConnectionStatus.Disconnected);
+                    return !statuses.Contains(ConnectionStatus.Lost) && Volatile.Read(ref errors) == 0;
                 }
             },
-            "the device never reported Disconnected");
+            "an intentional disconnect was reported as a lost connection or a device error",
+            TimeSpan.FromMilliseconds(600));
 
         lock (statuses)
         {

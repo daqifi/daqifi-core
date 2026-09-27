@@ -4,7 +4,8 @@ namespace Daqifi.Core.Tests.TestSupport;
 
 /// <summary>
 /// Polls a condition until it holds, failing the test with a message that names what the caller
-/// was waiting for.
+/// was waiting for. <see cref="HoldsFor"/> is the negative counterpart: it watches an invariant
+/// for a bounded window instead.
 /// </summary>
 /// <remarks>
 /// The suite had grown nine copies of the same <c>DateTime.UtcNow</c> + <c>Thread.Sleep(5–10)</c>
@@ -110,6 +111,46 @@ public static class WaitUntil
         }
 
         Assert.True(condition(), because());
+    }
+
+    /// <summary>
+    /// Checks <paramref name="invariant"/> repeatedly for the whole of <paramref name="window"/>,
+    /// failing the test the moment it stops holding.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For claims that something does <b>not</b> happen (no <c>Lost</c> after an intentional
+    /// disconnect, no reconnect with the policy off) where the correct behaviour produces nothing
+    /// a test could wait for. Waiting with <see cref="That(Func{bool}, string, TimeSpan?)"/> on a
+    /// condition that is already true when the call is made returns at once and observes nothing,
+    /// which is how such a test goes vacuous without anyone noticing.
+    /// </para>
+    /// <para>
+    /// Prefer a positive signal whenever one exists: a counter moving past the point where the
+    /// failure would have shown, or the background work provably finishing. Use this only where
+    /// there is none, with a window sized to how long the failure would take to surface.
+    /// </para>
+    /// </remarks>
+    /// <param name="invariant">What must stay true for the whole window.</param>
+    /// <param name="because">What it means if it stops holding, in the caller's own terms.</param>
+    /// <param name="window">
+    /// How long to keep watching. Required: a negative observation has no sensible default length.
+    /// </param>
+    public static void HoldsFor(Func<bool> invariant, string because, TimeSpan window)
+    {
+        ArgumentNullException.ThrowIfNull(invariant);
+        ArgumentException.ThrowIfNullOrWhiteSpace(because);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(window, TimeSpan.Zero);
+
+        var elapsed = Stopwatch.StartNew();
+
+        while (elapsed.Elapsed < window)
+        {
+            Assert.True(invariant(), because);
+            Thread.Sleep(DefaultPollInterval);
+        }
+
+        Assert.True(invariant(), because);
     }
 
     private static bool Try(Func<bool> condition, TimeSpan timeout)
