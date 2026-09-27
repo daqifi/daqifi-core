@@ -5,6 +5,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
@@ -310,18 +311,25 @@ public class MDnsDeviceFinderTests
         Assert.True(completed);
     }
 
-    [Fact]
+    [NetworkBrowseFact(requireMulticast: true)]
     public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
     {
         // A browse runs until cancelled, and every response received before cancellation is the
-        // result (see the class remarks), not an OperationCanceledException. The bound turns a
-        // browse that ignored the token into a failure instead of a hung run.
+        // result (see the class remarks), not an OperationCanceledException.
         using var finder = new MDnsDeviceFinder();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        using var cts = new CancellationTokenSource();
 
-        var failure = await Record.ExceptionAsync(
-            () => finder.DiscoverAsync(cts.Token).WaitAsync(TimeSpan.FromSeconds(10)));
+        var browse = finder.DiscoverAsync(cts.Token);
 
+        // A pass that finds nothing to browse on returns at once. Still running after a moment
+        // means it is waiting on replies, so what ends it below is the cancellation.
+        var endedOnItsOwn = await Task.WhenAny(browse, Task.Delay(TimeSpan.FromMilliseconds(200))) == browse;
+        Assert.False(endedOnItsOwn, "the browse ended before it was cancelled");
+
+        cts.Cancel();
+
+        // Bounded, so a browse that ignored the token fails instead of hanging the run.
+        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Null(failure);
     }
 
