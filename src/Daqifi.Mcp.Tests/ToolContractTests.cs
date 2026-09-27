@@ -288,7 +288,25 @@ public class DigitalConfigurationToolContractTests
 
         Assert.Equal(before, device.CapabilityReads);
         Assert.Equal(device.StreamingFrequency, result.SampleRateHz);
-        Assert.Null(result.SampleRateAdjustedFromHz);
+    }
+
+    [Fact]
+    public async Task ConfigureDigitalChannels_NeverAdjustsTheLiveRate()
+    {
+        // ConfigureDigitalResult has no field to report an adjustment, so this path must never
+        // make one: were it to re-validate against the cap like configure_analog_channels, the
+        // rate would drop silently. Start from a live rate the cap has already moved under — the
+        // one case where re-validating would change it.
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
+        await agent.SetSampleRateAsync(AgentHarness.DeviceId, 20_000);
+        device.CapForEnabledAnalogCount = _ => 1_000;
+        await device.ReadCapabilityDocumentAsync();
+
+        var result = await agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
+
+        Assert.Equal(20_000, result.SampleRateHz);
+        Assert.Equal(20_000, device.StreamingFrequency);
     }
 }
 

@@ -394,8 +394,7 @@ public sealed class DaqifiAgent
             return Task.FromResult(new ConfigureDigitalResult(
                 deviceId,
                 EnabledDigital(device),
-                streaming.StreamingFrequency,
-                SampleRateAdjustedFromHz: null));
+                streaming.StreamingFrequency));
         }).ConfigureAwait(false);
     }
 
@@ -760,12 +759,13 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(async ct =>
         {
-            // Use-time backstop for #447: EnforceSampleRateCap already keeps the live rate at or
-            // under the cap through every configure_* call, but re-check here too, since this is
-            // the point an out-of-range rate would actually reach the firmware. The firmware's
-            // response to an over-cap rate is a silent one — it refuses with "Data out of range"
-            // and streams zero samples, with no exception and no ErrorOccurred — so failing loudly
-            // here is the only way an agent finds out before a logging session comes back empty.
+            // Use-time backstop for #447: set_sample_rate refuses an over-cap rate and
+            // EnforceSampleRateCap lowers one when configure_analog_channels moves the cap, but
+            // re-check here too, since this is the point an out-of-range rate would actually
+            // reach the firmware. The firmware's response to an over-cap rate is a silent one —
+            // it refuses with "Data out of range" and streams zero samples, with no exception and
+            // no ErrorOccurred — so failing loudly here is the only way an agent finds out before
+            // a logging session comes back empty.
             var cap = ComputeSampleRateCapHz(streaming);
             if (cap > 0 && streaming.StreamingFrequency > cap)
             {
