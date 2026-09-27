@@ -65,7 +65,6 @@ public class ScpiMessageProducer
     /// The new name is staged into the device's runtime settings and takes effect immediately, but
     /// is not persisted across reboots until <see cref="SaveDeviceName"/> is also sent.
     /// Command: SYSTem:DEVice:NAME "name"
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetDeviceName("My Device"));
     /// </remarks>
     /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> fails validation.</exception>
     public static IOutboundMessage<string> SetDeviceName(string? name)
@@ -86,7 +85,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Send after <see cref="SetDeviceName"/> so the staged name survives a reboot.
     /// Command: SYSTem:DEVice:NAME:SAVE
-    /// Example: messageProducer.Send(ScpiMessageProducer.SaveDeviceName);
     /// </remarks>
     public static IOutboundMessage<string> SaveDeviceName => new ScpiMessage("SYSTem:DEVice:NAME:SAVE");
 
@@ -96,7 +94,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// This command will cause the device to perform a complete restart.
     /// Command: SYSTem:REboot
-    /// Example: messageProducer.Send(ScpiMessageProducer.RebootDevice);
     /// </remarks>
     public static IOutboundMessage<string> RebootDevice => new ScpiMessage("SYSTem:REboot");
 
@@ -106,7 +103,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Returns device information including firmware version, serial number, and capabilities.
     /// Command: SYSTem:SYSInfoPB?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetDeviceInfo);
     /// </remarks>
     public static IOutboundMessage<string> GetDeviceInfo => new ScpiMessage("SYSTem:SYSInfoPB?");
 
@@ -131,7 +127,6 @@ public class ScpiMessageProducer
     /// document's shape is stable across firmware versions.
     /// Requires firmware v3.5.0 or newer (<see cref="Device.DeviceFeature.CapabilityDocument"/>).
     /// Command: CONFigure:CAPabilities:APIVersion?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetCapabilitiesApiVersion);
     /// </remarks>
     public static IOutboundMessage<string> GetCapabilitiesApiVersion =>
         new ScpiMessage("CONFigure:CAPabilities:APIVersion?");
@@ -146,7 +141,6 @@ public class ScpiMessageProducer
     /// <see cref="Device.Capabilities.CapabilityDocumentParser"/>.
     /// Requires firmware v3.5.0 or newer (<see cref="Device.DeviceFeature.CapabilityDocument"/>).
     /// Command: CONFigure:CAPabilities:JSON?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetCapabilitiesJson);
     /// </remarks>
     public static IOutboundMessage<string> GetCapabilitiesJson =>
         new ScpiMessage("CONFigure:CAPabilities:JSON?");
@@ -156,7 +150,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:FORceBoot
-    /// Example: messageProducer.Send(ScpiMessageProducer.ForceBootloader);
     /// </remarks>
     public static IOutboundMessage<string> ForceBootloader => new ScpiMessage("SYSTem:FORceBoot");
 
@@ -165,7 +158,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:POWer:STATe 1
-    /// Example: messageProducer.Send(ScpiMessageProducer.DeviceOn);
     /// </remarks>
     public static IOutboundMessage<string> TurnDeviceOn => new ScpiMessage("SYSTem:POWer:STATe 1");
 
@@ -175,7 +167,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// When echo is disabled, the device will not echo back received commands.
     /// Command: SYSTem:ECHO -1
-    /// Example: messageProducer.Send(ScpiMessageProducer.TurnOffEcho);
     /// </remarks>
     public static IOutboundMessage<string> DisableDeviceEcho => new ScpiMessage("SYSTem:ECHO -1");
 
@@ -185,7 +176,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// When echo is enabled, the device will echo back received commands.
     /// Command: SYSTem:ECHO 1
-    /// Example: messageProducer.Send(ScpiMessageProducer.TurnOnEcho);
     /// </remarks>
     public static IOutboundMessage<string> EnableDeviceEcho => new ScpiMessage("SYSTem:ECHO 1");
     
@@ -195,7 +185,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Note: LAN must be disabled first to enable SD card logging.
     /// Command: SYSTem:STORage:SD:ENAble 1
-    /// Example: messageProducer.Send(ScpiMessageProducer.EnableSdCard);
     /// </remarks>
     public static IOutboundMessage<string> EnableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 1");
 
@@ -204,7 +193,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:ENAble 0
-    /// Example: messageProducer.Send(ScpiMessageProducer.DisableSdCard);
     /// </remarks>
     public static IOutboundMessage<string> DisableStorageSd => new ScpiMessage("SYSTem:STORage:SD:ENAble 0");
 
@@ -213,7 +201,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:LIST?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFileList);
     /// </remarks>
     public static IOutboundMessage<string> GetSdFileList => new ScpiMessage("SYSTem:STORage:SD:LIST?");
 
@@ -223,7 +210,6 @@ public class ScpiMessageProducer
     /// <param name="fileName">The name of the file to retrieve. Provide the bare name without surrounding quotes; they are added automatically.</param>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:GET "filename.bin"
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdFile("data.bin"));
     /// </remarks>
     /// <exception cref="ArgumentException">
     /// <paramref name="fileName"/> is null, empty, or contains <c>"</c>, <c>;</c>, or a line break.
@@ -243,7 +229,6 @@ public class ScpiMessageProducer
     /// Command: SYSTem:STORage:SD:FILE "filename.bin"
     /// Requires firmware v3.5.0 or newer; the command was renamed from
     /// <c>SYSTem:STORage:SD:LOGging</c> and older firmware does not accept it (see daqifi-core#251).
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetSdLoggingFileName("data.bin"));
     /// </remarks>
     /// <exception cref="ArgumentException">
     /// <paramref name="fileName"/> is null, empty, or contains <c>"</c>, <c>;</c>, or a line break.
@@ -260,7 +245,6 @@ public class ScpiMessageProducer
     /// <param name="fileName">The name of the file to delete.</param>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:DELete "filename"
-    /// Example: messageProducer.Send(ScpiMessageProducer.DeleteSdFile("data.bin"));
     /// </remarks>
     /// <exception cref="ArgumentException">
     /// <paramref name="fileName"/> is null, empty, or contains <c>"</c>, <c>;</c>, or a line break.
@@ -277,7 +261,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Warning: This is a destructive operation that erases all data on the SD card.
     /// Command: SYSTem:STORage:SD:FORmat
-    /// Example: messageProducer.Send(ScpiMessageProducer.FormatSdCard);
     /// </remarks>
     public static IOutboundMessage<string> FormatSdCard => new ScpiMessage("SYSTem:STORage:SD:FORmat");
 
@@ -287,7 +270,6 @@ public class ScpiMessageProducer
     /// <param name="bytes">The maximum file size in bytes. Use 0 for the default (3.9 GB).</param>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:MAXSize bytes
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetSdMaxFileSize(1073741824)); // 1 GB
     /// </remarks>
     public static IOutboundMessage<string> SetSdMaxFileSize(long bytes)
     {
@@ -304,7 +286,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:MAXSize?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdMaxFileSize);
     /// </remarks>
     public static IOutboundMessage<string> GetSdMaxFileSize => new ScpiMessage("SYSTem:STORage:SD:MAXSize?");
 
@@ -315,7 +296,6 @@ public class ScpiMessageProducer
     /// Returns a single line of the form <c>"free,total"</c>, where both values are
     /// unsigned byte counts.
     /// Command: SYSTem:STORage:SD:SPACe?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdSpace);
     /// </remarks>
     public static IOutboundMessage<string> GetSdSpace => new ScpiMessage("SYSTem:STORage:SD:SPACe?");
 
@@ -331,7 +311,6 @@ public class ScpiMessageProducer
     /// unconditionally. The firmware gate is a safety mechanism; client software is responsible for the
     /// user-facing low-space warning (see <see cref="Device.SdCard.SdCardSpaceCheck"/>).
     /// Command: SYSTem:STORage:SD:MINFree bytes
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetSdMinFreeSpace(52428800)); // 50 MB floor
     /// </remarks>
     public static IOutboundMessage<string> SetSdMinFreeSpace(long bytes)
     {
@@ -349,7 +328,6 @@ public class ScpiMessageProducer
     /// <param name="size">The size in bytes to benchmark.</param>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:BENCHmark size
-    /// Example: messageProducer.Send(ScpiMessageProducer.RunSdBenchmark(1048576)); // 1 MB
     /// </remarks>
     public static IOutboundMessage<string> RunSdBenchmark(long size)
     {
@@ -366,7 +344,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:STORage:SD:BENCHmark?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSdBenchmarkResults);
     /// </remarks>
     public static IOutboundMessage<string> GetSdBenchmarkResults => new ScpiMessage("SYSTem:STORage:SD:BENCHmark?");
 
@@ -376,7 +353,6 @@ public class ScpiMessageProducer
     /// <param name="streamInterface">The target interface for streaming data.</param>
     /// <remarks>
     /// Command: SYSTem:STReam:INTerface value
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.SdCard));
     /// </remarks>
     public static IOutboundMessage<string> SetStreamInterface(StreamInterface streamInterface)
     {
@@ -393,7 +369,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:STReam:INTerface?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamInterface);
     /// </remarks>
     public static IOutboundMessage<string> GetStreamInterface => new ScpiMessage("SYSTem:STReam:INTerface?");
 
@@ -440,7 +415,6 @@ public class ScpiMessageProducer
     /// rejects a frequency above that cap with SCPI <c>-222</c> and does not start streaming — it
     /// does not clamp — so pre-validate or handle the error.
     /// Command: SYSTem:StartStreamData frequency
-    /// Example: messageProducer.Send(ScpiMessageProducer.StartStreaming(100)); // Stream at 100Hz
     /// </remarks>
     public static IOutboundMessage<string> StartStreaming(int frequency)
     {
@@ -452,7 +426,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: SYSTem:StopStreamData
-    /// Example: messageProducer.Send(ScpiMessageProducer.StopStreaming);
     /// </remarks>
     public static IOutboundMessage<string> StopStreaming => new ScpiMessage(StopStreamingCommand);
 
@@ -462,7 +435,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Sets the stream format to Protobuf (format = 0).
     /// Command: SYSTem:STReam:FORmat 0
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetProtobufStreamFormat);
     /// </remarks>
     public static IOutboundMessage<string> SetProtobufStreamFormat => SetStreamFormat(0);
 
@@ -472,7 +444,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Sets the stream format to JSON (format = 1).
     /// Command: SYSTem:STReam:FORmat 1
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetJsonStreamFormat);
     /// </remarks>
     public static IOutboundMessage<string> SetJsonStreamFormat => SetStreamFormat(1);
 
@@ -482,7 +453,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// Sets the stream format to CSV (format = 2).
     /// Command: SYSTem:STReam:FORmat 2
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetCsvStreamFormat);
     /// </remarks>
     public static IOutboundMessage<string> SetCsvStreamFormat => SetStreamFormat(2);
 
@@ -495,7 +465,6 @@ public class ScpiMessageProducer
     /// - 1 = JSON
     /// - 2 = CSV
     /// Command: SYSTem:STReam:FORmat?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamFormat);
     /// </remarks>
     public static IOutboundMessage<string> GetStreamFormat => new ScpiMessage($"{StreamFormatCommand}?");
 
@@ -545,7 +514,6 @@ public class ScpiMessageProducer
     /// <param name="direction">The direction value (0 = input, 1 = output).</param>
     /// <remarks>
     /// Command: DIO:PORt:DIRection channel,direction
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetDioPortDirection(1, 1)); // Set channel 1 as output
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is negative, or <paramref name="direction"/> is not 0 or 1.</exception>
     public static IOutboundMessage<string> SetDioPortDirection(int channel, int direction)
@@ -569,7 +537,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// The value is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: DIO:PORt:STATe channel,value
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetDioPortState(1, 1)); // Set channel 1 to high
     /// </remarks>
     public static IOutboundMessage<string> SetDioPortState(int channel, double value)
     {
@@ -585,7 +552,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: DIO:PORt:ENAble 1
-    /// Example: messageProducer.Send(ScpiMessageProducer.EnableDioPorts());
     /// </remarks>
     public static IOutboundMessage<string> EnableDioPorts()
     {
@@ -597,7 +563,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: DIO:PORt:ENAble 0
-    /// Example: messageProducer.Send(ScpiMessageProducer.DisableDioPorts());   
     /// </remarks>
     public static IOutboundMessage<string> DisableDioPorts()
     {
@@ -614,7 +579,6 @@ public class ScpiMessageProducer
     /// half-enabled state when PWM is enabled on a non-capable channel, so callers should gate
     /// on capability first (the device-level API does).
     /// Command: PWM:CHannel:ENable channel,enabled
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetPwmChannelEnabled(4, true)); // PWM on channel 4
     /// </remarks>
     public static IOutboundMessage<string> SetPwmChannelEnabled(int channel, bool enabled)
     {
@@ -632,7 +596,6 @@ public class ScpiMessageProducer
     /// All PWM channels share one hardware timer, so the frequency applies to every PWM
     /// channel on the device regardless of the channel this command is addressed to.
     /// Command: PWM:CHannel:FREQuency channel,frequency
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetPwmChannelFrequency(0, 1000)); // 1 kHz for all PWM
     /// </remarks>
     public static IOutboundMessage<string> SetPwmChannelFrequency(int channel, int frequencyHz)
     {
@@ -653,7 +616,6 @@ public class ScpiMessageProducer
     /// <param name="dutyCyclePercent">The duty cycle in whole percent (0-100).</param>
     /// <remarks>
     /// Command: PWM:CHannel:DUTY channel,duty
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50)); // 50% on channel 4
     /// </remarks>
     public static IOutboundMessage<string> SetPwmChannelDutyCycle(int channel, int dutyCyclePercent)
     {
@@ -678,7 +640,6 @@ public class ScpiMessageProducer
     /// together. The voltage is formatted with an invariant decimal point so the command
     /// is locale-independent.
     /// Command: SOURce:VOLTage:LEVel channel,voltage
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetAnalogOutputVoltage(0, 5.0)); // Channel 0 to 5 V
     /// </remarks>
     public static IOutboundMessage<string> SetAnalogOutputVoltage(int channel, double voltage)
     {
@@ -696,7 +657,6 @@ public class ScpiMessageProducer
     /// Latches the values previously staged via <see cref="SetAnalogOutputVoltage"/> so they
     /// take effect on the hardware. Analog output is available on NQ3 hardware only.
     /// Command: CONFigure:DAC:UPDATE
-    /// Example: messageProducer.Send(ScpiMessageProducer.UpdateDacOutputs);
     /// </remarks>
     public static IOutboundMessage<string> UpdateDacOutputs => new ScpiMessage("CONFigure:DAC:UPDATE");
 
@@ -710,7 +670,6 @@ public class ScpiMessageProducer
     /// told to drive, formatted to its configured voltage precision. Analog output is available on
     /// NQ3 hardware only.
     /// Command: SOURce:VOLTage:LEVel? channel
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetAnalogOutputVoltage(0));
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is negative.</exception>
     public static IOutboundMessage<string> GetAnalogOutputVoltage(int channel)
@@ -738,7 +697,6 @@ public class ScpiMessageProducer
     /// <see cref="SaveFactoryAdcCalibration"/> to write the factory bank instead, and
     /// <see cref="UseAdcCalibration"/> to choose which bank the device applies at boot.
     /// Command: CONFigure:ADC:SAVEcal
-    /// Example: messageProducer.Send(ScpiMessageProducer.SaveAdcCalibration);
     /// </remarks>
     public static IOutboundMessage<string> SaveAdcCalibration => new ScpiMessage("CONFigure:ADC:SAVEcal");
 
@@ -749,7 +707,6 @@ public class ScpiMessageProducer
     /// The inverse of <see cref="SaveAdcCalibration"/>. Use <see cref="LoadFactoryAdcCalibration"/> to restore the
     /// factory bank instead.
     /// Command: CONFigure:ADC:LOADcal
-    /// Example: messageProducer.Send(ScpiMessageProducer.LoadAdcCalibration);
     /// </remarks>
     public static IOutboundMessage<string> LoadAdcCalibration => new ScpiMessage("CONFigure:ADC:LOADcal");
 
@@ -764,7 +721,6 @@ public class ScpiMessageProducer
     /// <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/> (factory bank).
     /// The slope is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: CONFigure:ADC:chanCALM channel,calM
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetAdcCalibrationSlope(0, 1.0025));
     /// </remarks>
     public static IOutboundMessage<string> SetAdcCalibrationSlope(int channel, double calM)
     {
@@ -786,7 +742,6 @@ public class ScpiMessageProducer
     /// <see cref="SaveAdcCalibration"/> (user bank) or <see cref="SaveFactoryAdcCalibration"/> (factory bank).
     /// The offset is formatted with an invariant decimal point so the command is locale-independent.
     /// Command: CONFigure:ADC:chanCALB channel,calB
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetAdcCalibrationOffset(0, -0.0031));
     /// </remarks>
     public static IOutboundMessage<string> SetAdcCalibrationOffset(int channel, double calB)
     {
@@ -805,7 +760,6 @@ public class ScpiMessageProducer
     /// Returns the live runtime coefficient, which may differ from either NVM bank if it was changed with
     /// <see cref="SetAdcCalibrationSlope"/> since the last save/load.
     /// Command: CONFigure:ADC:chanCALM? channel
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetAdcCalibrationSlope(0));
     /// </remarks>
     public static IOutboundMessage<string> GetAdcCalibrationSlope(int channel)
     {
@@ -822,7 +776,6 @@ public class ScpiMessageProducer
     /// Returns the live runtime coefficient, which may differ from either NVM bank if it was changed with
     /// <see cref="SetAdcCalibrationOffset"/> since the last save/load.
     /// Command: CONFigure:ADC:chanCALB? channel
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetAdcCalibrationOffset(0));
     /// </remarks>
     public static IOutboundMessage<string> GetAdcCalibrationOffset(int channel)
     {
@@ -885,7 +838,6 @@ public class ScpiMessageProducer
     /// Writes every channel's live CalM/CalB into the factory bank. Contrast with <see cref="SaveAdcCalibration"/>,
     /// which writes the <i>user</i> bank. Which bank the device applies is chosen by <see cref="UseAdcCalibration"/>.
     /// Command: CONFigure:ADC:SAVEFcal
-    /// Example: messageProducer.Send(ScpiMessageProducer.SaveFactoryAdcCalibration);
     /// </remarks>
     public static IOutboundMessage<string> SaveFactoryAdcCalibration => new ScpiMessage("CONFigure:ADC:SAVEFcal");
 
@@ -896,7 +848,6 @@ public class ScpiMessageProducer
     /// The inverse of <see cref="SaveFactoryAdcCalibration"/>. Contrast with <see cref="LoadAdcCalibration"/>,
     /// which restores the <i>user</i> bank.
     /// Command: CONFigure:ADC:LOADFcal
-    /// Example: messageProducer.Send(ScpiMessageProducer.LoadFactoryAdcCalibration);
     /// </remarks>
     public static IOutboundMessage<string> LoadFactoryAdcCalibration => new ScpiMessage("CONFigure:ADC:LOADFcal");
 
@@ -909,7 +860,6 @@ public class ScpiMessageProducer
     /// selected bank; the same bank is then loaded automatically on every subsequent boot. Firmware rejects any value
     /// other than 0 or 1, so this method validates the argument before producing a command.
     /// Command: CONFigure:ADC:USECal bank
-    /// Example: messageProducer.Send(ScpiMessageProducer.UseAdcCalibration(1)); // apply the user bank
     /// </remarks>
     public static IOutboundMessage<string> UseAdcCalibration(int bank)
     {
@@ -928,7 +878,6 @@ public class ScpiMessageProducer
     /// The device replies with <c>0</c> (factory) or <c>1</c> (user), matching the argument accepted by
     /// <see cref="UseAdcCalibration"/>.
     /// Command: CONFigure:ADC:USECal?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetAdcCalibrationBank);
     /// </remarks>
     public static IOutboundMessage<string> GetAdcCalibrationBank => new ScpiMessage("CONFigure:ADC:USECal?");
 
@@ -937,7 +886,6 @@ public class ScpiMessageProducer
     /// </summary>
     /// <remarks>
     /// Command: CONFigure:VOLTage:SAVE
-    /// Example: messageProducer.Send(ScpiMessageProducer.SaveVoltagePrecision);
     /// </remarks>
     public static IOutboundMessage<string> SaveVoltagePrecision => new ScpiMessage("CONFigure:VOLTage:SAVE");
 
@@ -947,7 +895,6 @@ public class ScpiMessageProducer
     /// <remarks>
     /// The inverse of <see cref="SaveVoltagePrecision"/>.
     /// Command: CONFigure:VOLTage:LOAD
-    /// Example: messageProducer.Send(ScpiMessageProducer.LoadVoltagePrecision);
     /// </remarks>
     public static IOutboundMessage<string> LoadVoltagePrecision => new ScpiMessage("CONFigure:VOLTage:LOAD");
 
@@ -973,7 +920,6 @@ public class ScpiMessageProducer
     /// <param name="ssid">The SSID of the WiFi network.</param>
     /// <remarks>
     /// Command: SYSTem:COMMunicate:LAN:SSID "ssid" 
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetSsid("MyNetwork"));
     /// </remarks>
     public static IOutboundMessage<string> SetNetworkWifiSsid(string ssid)
     {
@@ -1201,7 +1147,6 @@ public class ScpiMessageProducer
     /// The device returns a JSON response:
     /// <c>{"ChipId":&lt;id&gt;,"FwVersion":"&lt;version&gt;","BuildDate":"&lt;date&gt;"}</c>
     /// Command: SYSTem:COMMunicate:LAN:GETChipInfo?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetLanChipInfo);
     /// </remarks>
     public static IOutboundMessage<string> GetLanChipInfo => new ScpiMessage("SYSTem:COMMunicate:LAN:GETChipInfo?");
 
@@ -1222,7 +1167,6 @@ public class ScpiMessageProducer
     /// buffer as a side effect (it also resets one-shot log suppression flags). The firmware does
     /// not prefix entries with a structured level/module/timestamp; each line is the raw message.
     /// Command: SYSTem:LOG?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSystemLog);
     /// </remarks>
     public static IOutboundMessage<string> GetSystemLog => new ScpiMessage("SYSTem:LOG?");
 
@@ -1233,7 +1177,6 @@ public class ScpiMessageProducer
     /// Also resets one-shot log suppression flags. The device replies with a short
     /// acknowledgement (<c>Log cleared</c>).
     /// Command: SYSTem:LOG:CLEar
-    /// Example: messageProducer.Send(ScpiMessageProducer.ClearSystemLog);
     /// </remarks>
     public static IOutboundMessage<string> ClearSystemLog => new ScpiMessage("SYSTem:LOG:CLEar");
 
@@ -1248,7 +1191,6 @@ public class ScpiMessageProducer
     /// (<c>MODULE: &lt;level&gt; (ceiling &lt;ceiling&gt;)</c>); the applied level may be lower than requested
     /// when a module's ceiling is below it.
     /// Command: SYSTem:LOG:LEVel module,level
-    /// Example: messageProducer.Send(ScpiMessageProducer.SetLogLevel("STREAM", 2));
     /// </remarks>
     public static IOutboundMessage<string> SetLogLevel(string module, int level)
     {
@@ -1284,7 +1226,6 @@ public class ScpiMessageProducer
     /// carries an <c>&lt;n&gt;:</c> prefix counting backwards from the present — <c>1:</c> is the most
     /// recent command — so the newest entry is printed last.
     /// Command: SYSTem:LOG:CMDHistory?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetCommandHistory);
     /// </remarks>
     public static IOutboundMessage<string> GetCommandHistory => new ScpiMessage("SYSTem:LOG:CMDHistory?");
 
@@ -1295,7 +1236,6 @@ public class ScpiMessageProducer
     /// Intended for verifying the logging pipeline end to end; the device replies with a short
     /// acknowledgement (<c>Added test log messages</c>).
     /// Command: SYSTem:LOG:TEST
-    /// Example: messageProducer.Send(ScpiMessageProducer.TestSystemLog);
     /// </remarks>
     public static IOutboundMessage<string> TestSystemLog => new ScpiMessage("SYSTem:LOG:TEST");
 
@@ -1306,7 +1246,6 @@ public class ScpiMessageProducer
     /// Non-destructive: unlike <see cref="GetSystemError"/>, this does not pop any entries.
     /// Returns a single integer.
     /// Command: SYSTem:ERRor:COUNt?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetSystemErrorCount);
     /// </remarks>
     public static IOutboundMessage<string> GetSystemErrorCount => new ScpiMessage("SYSTem:ERRor:COUNt?");
 
@@ -1319,7 +1258,6 @@ public class ScpiMessageProducer
     /// per-transport dropped-byte counters, SD write metrics, and <c>TimerISRCalls</c>). The exact
     /// field set varies by firmware version.
     /// Command: SYSTem:STReam:STATS?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetStreamStats);
     /// </remarks>
     public static IOutboundMessage<string> GetStreamStats => new ScpiMessage("SYSTem:STReam:STATS?");
 
@@ -1331,7 +1269,6 @@ public class ScpiMessageProducer
     /// <c>HeapFree</c>, <c>HeapUsed</c>, <c>HeapMinEverFree</c>, <c>CoherentPoolTotal</c>,
     /// <c>CoherentPoolFree</c>, and sample-pool counters). The exact field set varies by firmware version.
     /// Command: SYSTem:MEMory:FREE?
-    /// Example: messageProducer.Send(ScpiMessageProducer.GetMemoryDiagnostics);
     /// </remarks>
     public static IOutboundMessage<string> GetMemoryDiagnostics => new ScpiMessage("SYSTem:MEMory:FREE?");
 }

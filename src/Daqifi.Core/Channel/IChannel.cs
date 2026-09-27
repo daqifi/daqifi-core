@@ -21,7 +21,7 @@ public interface IChannel
     bool IsEnabled { get; set; }
 
     /// <summary>
-    /// Gets the channel type (Analog or Digital).
+    /// Gets the channel type. See <see cref="ChannelType"/> (Analog, Digital, or AnalogOutput).
     /// </summary>
     ChannelType Type { get; }
 

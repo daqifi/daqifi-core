@@ -1,7 +1,7 @@
 namespace Daqifi.Core.Channel;
 
 /// <summary>
-/// Represents an analog input/output channel with scaling and calibration capabilities.
+/// Represents an analog input channel with scaling and calibration capabilities.
 /// </summary>
 /// <remarks>
 /// Instance members are thread-safe. Mutable state is guarded by a private lock, except

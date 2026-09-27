@@ -74,8 +74,7 @@ If a gate is ever wanted, gate on allocation rather than time.
 
 ## Baseline
 
-Taken on `main` at `2a59fd1`, so there is a *before* for the open performance tickets to be
-measured against.
+**Before #699**, taken on `main` at `2a59fd1`. #697 was still open; this is the table that filed it.
 
 ```
 BenchmarkDotNet v0.15.8, macOS Tahoe 26.5 (25F71) [Darwin 25.5.0]
@@ -126,13 +125,20 @@ Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
 The absolute numbers are a property of this machine, not of the library. What travels between
 machines is the shape: the ratios between cases, and the allocation figures.
 
-### What the first run already showed
+### After #699
 
-The SD table has an outlier the harness was built to find. The CSV and JSON parsers hand back
-their first sample in about two microseconds; the protobuf parser takes **1.6 ms and 6.7 MB** —
-a third of the time and 40% of the allocation of draining the entire file. That is not the
-configuration pre-scan's message limit: dropping `ConfigurationScanMessageLimit` from 512 to 8
-changed nothing. It is `SdCardParseOptions.BufferSize`. The reader parses every message in a
-64 KB read before yielding the first one, and the configuration pass parses that same first chunk
-a second time. Filed as #697 rather than fixed here — this project's job was to make the number
-visible.
+The protobuf first-sample outlier is gone. #699 closed #697: the reader yields each frame as it
+is decoded instead of parsing a whole 64 KB buffer first, and the configuration pre-scan stops
+once the clock is known. Figures from #699's own before/after run (default job). That was a
+separate invocation, so its *before* column differs slightly from the `2a59fd1` table above:
+
+| Method | Before | After | |
+| --- | ---: | ---: | --- |
+| `ProtobufTimeToFirstSample` | 1,565.6 µs | **9.4 µs** | 167× |
+| `ProtobufTimeToFirstSample` allocated | 6,753 KB | **263 KB** | 26× |
+| `ProtobufDrainAll` | 4,504.4 µs | **2,091.4 µs** | 2.2× |
+| `ProtobufDrainAll` allocated | 16,880 KB | **13,170 KB** | 1.3× |
+
+`CsvTimeToFirstSample` is 2.0 µs on that run, so first-sample latency is 4.7× CSV rather than
+800×. Draining the whole file got 2.2× faster as a side effect: the per-chunk list and message
+wrappers are gone.
