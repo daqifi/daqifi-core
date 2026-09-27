@@ -18,8 +18,9 @@ All code changes go through a pull request:
 4. CI must pass and every review conversation must be resolved before the PR can be queued —
    see below for what `main` actually enforces.
 
-Agent rule files (`.cursor/rules`, `.claude/rules`) should point here rather than
-restating this process.
+The agent rule files (`.cursor/rules/`, `.claude/rules/`) defer to this file for the
+contributor process. If one of them disagrees with it, this file is right and the rule
+file needs fixing.
 
 ### How `main` is gated
 
@@ -30,10 +31,11 @@ restating this process.
 - **Approvals: zero required; resolved threads: all of them.** This is a solo-maintained
   repo, so the ruleset asks for no approving review — but it does require every review
   conversation to be resolved, so an open comment from a human or a review bot blocks the
-  merge until someone answers or resolves it. Pushing to a reviewed branch dismisses stale
-  approvals.
+  merge until it is marked resolved — replying alone doesn't clear it. Pushing to a
+  reviewed branch dismisses stale approvals.
 - **Squash only** — merge commits and rebase merges are disabled. The squash commit title
-  is the PR title; the squash body is left blank.
+  is the PR title (GitHub appends ` (#N)`); the body is left blank apart from GitHub's
+  `Co-authored-by:` trailers.
 - **PR titles** — conventional-commit `type(scope): summary`, matching `git log`:
   `fix(sdcard): ...`, `feat(mcp): ...`, `chore(api): ...`. Reserve `type(scope)!: summary`
   for a breaking change. Because the squash uses the PR title, that title is the commit
