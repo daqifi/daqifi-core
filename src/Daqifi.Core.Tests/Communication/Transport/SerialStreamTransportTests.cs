@@ -109,6 +109,21 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
+    public void SerialStreamTransport_Connect_WithMissingPort_ThrowsTheTypedExceptionUnwrapped()
+    {
+        // The synchronous entry point blocks on ConnectAsync. An exact-type match proves it
+        // unwraps the failure (GetAwaiter().GetResult()) instead of surfacing an AggregateException.
+        var portName = AbsentSerialPorts.Create();
+        using var transport = new SerialStreamTransport(portName);
+
+        var ex = Assert.Throws<SerialPortConnectException>(() => transport.Connect());
+
+        Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
+        Assert.Equal(portName, ex.PortName);
+        Assert.False(transport.IsConnected);
+    }
+
+    [Fact]
     public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_ReportsPortNotFound()
     {
         // #424: SerialPort.Open reports a port that does not exist as "Access to the port '...' is

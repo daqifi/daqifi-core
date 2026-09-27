@@ -184,20 +184,21 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public async Task ConnectTcpAsync_InvalidHost_ThrowsException()
+    public async Task ConnectTcpAsync_ToClosedLoopbackPort_ThrowsSocketException()
     {
-        // Arrange - Use localhost port 1 (reserved, never listening)
+        // Arrange - localhost port 1 (reserved, never listening), with the same retry options the
+        // transport twin TcpStreamTransport_ConnectAsync_WithClosedPort gets by default (NoRetry,
+        // 5s per-attempt timeout). The timeout must stay well above the refusal latency: Linux and
+        // macOS refuse a closed loopback port at once, but Windows retries the SYN before
+        // reporting the refusal, which takes longer than 1s. A shorter timeout lets the connect
+        // timeout win on Windows and surfaces TimeoutException instead of the refusal.
         var options = new DeviceConnectionOptions
         {
-            ConnectionRetry = new ConnectionRetryOptions
-            {
-                Enabled = false,
-                ConnectionTimeout = TimeSpan.FromSeconds(1)
-            },
+            ConnectionRetry = ConnectionRetryOptions.NoRetry,
             InitializeDevice = false
         };
 
-        // Act & Assert - same closed loopback port as TcpStreamTransport_ConnectAsync_WithClosedPort.
+        // Act & Assert - the factory lets the transport's refusal through unwrapped.
         await Assert.ThrowsAsync<SocketException>(
             () => DaqifiDeviceFactory.ConnectTcpAsync(IPAddress.Loopback, 1, options));
     }
