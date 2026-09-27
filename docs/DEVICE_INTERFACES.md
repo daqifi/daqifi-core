@@ -1004,14 +1004,22 @@ link it is on, and not every gated call enforces its own gate:
   reported version, board) unless the device supports `SdFileTransferOverWifi`. Over USB
   that gate does not apply — the SD card is reachable on any supported firmware.
 - **`SetAnalogOutput`** does not: it sends the command whatever the board, and a board other
-  than Nyquist 3 rejects it on the device without an exception reaching you. Checking
-  `Supports(DeviceFeature.AnalogOutput)` is the only guard.
+  than Nyquist 3 rejects it on the device without an exception reaching you. The check is
+  yours to make.
+
+One more subtlety: board and hardware requirements are only evaluated once the board is
+identified. While `device.Metadata.DeviceType` is still `Unknown` (no part number reported
+yet), `Supports` does not hold that against the device — the firmware-version requirement
+still applies, but a board-only gate such as `AnalogOutput` answers `true`. Where nothing
+downstream will refuse the call, require an identified board too.
 
 ```csharp
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
 
-// Ask before you offer it: analog output is Nyquist 3 hardware only.
-if (device.Supports(DeviceFeature.AnalogOutput))
+// Ask before you offer it: analog output is Nyquist 3 hardware only, and nothing after this
+// check will stop the command, so don't accept an unidentified board.
+if (device.Metadata.DeviceType != DeviceType.Unknown
+    && device.Supports(DeviceFeature.AnalogOutput))
 {
     device.SetAnalogOutput(0, 2.5);
 }
@@ -1035,13 +1043,14 @@ try
 }
 catch (FeatureNotSupportedException ex)
 {
-    // e.g. "SdFileTransferOverWifi: needs 3.7.0, device reports 3.6.1 (Nyquist1)"
-    Console.WriteLine($"{ex.Feature}: needs {ex.RequiredVersion}, device reports {ex.ActualVersion} ({ex.Board})");
+    // RequiredVersion is set only when the firmware is what falls short. A board or hardware
+    // shortfall leaves it null, since no upgrade would help. (ex.Message already covers both.)
+    var why = ex.RequiredVersion is { } required
+        ? $"needs firmware {required}, device reports {ex.ActualVersion}"  // e.g. 3.7.0 vs 3.6.1
+        : $"not available on this hardware ({ex.Board})";
+    Console.WriteLine($"{ex.Feature}: {why}");
 }
 ```
-
-`RequiredVersion` is set only when the firmware is what falls short; a board or hardware
-shortfall leaves it `null`, since no upgrade would help.
 
 `DaqifiDeviceFactory` returns `DaqifiStreamingDevice`, which inherits `Supports` from
 `DaqifiDevice` and adds `IsUsbConnection`. Neither is declared on `IStreamingDevice`, so code
