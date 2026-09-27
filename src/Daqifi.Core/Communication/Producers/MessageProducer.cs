@@ -18,6 +18,25 @@ public class MessageProducer<T> : IMessageProducer<T>
     private readonly ITransportHealthSink? _healthSink;
     private readonly ConcurrentQueue<IOutboundMessage<T>> _messageQueue;
     private readonly ManualResetEventSlim _messageAvailable = new(false);
+
+    /// <summary>
+    /// Waitable form of <see cref="IsIdle"/>. Starts set: a newly constructed producer has
+    /// nothing queued and is not writing.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="StopSafely"/> waits on this with its caller-supplied timeout instead of
+    /// polling the queue with <c>Thread.Sleep(10)</c>. Disconnect/Dispose used to sit on that
+    /// 10 ms tick for as long as anything was still queued behind an in-flight write, even
+    /// though the background loop already knew when it had gone idle. The event is the
+    /// waitable half of the same state <see cref="IsIdle"/> reports.
+    /// </remarks>
+    private readonly ManualResetEventSlim _idle = new(initialState: true);
+
+    /// <summary>
+    /// Makes <see cref="Send"/>'s reset-and-enqueue one step as far as the background loop's
+    /// idle signal is concerned. See <see cref="SignalIdleIfQuiet"/>.
+    /// </summary>
+    private readonly object _idleSync = new();
     private volatile bool _isRunning;
 
     /// <summary>
@@ -166,33 +185,32 @@ public class MessageProducer<T> : IMessageProducer<T>
     /// </summary>
     /// <param name="timeoutMs">Maximum time to wait for pending messages in milliseconds.</param>
     /// <returns>True if all messages were processed, false if timeout occurred.</returns>
+    /// <remarks>
+    /// Waits on <see cref="IsIdle"/> — nothing queued <b>and</b> no write in flight — rather
+    /// than on the queue being empty. A message leaves the queue before it is written, so an
+    /// empty-queue wait can return while bytes are still on their way out; the idle wait
+    /// covers that write, which is what "pending messages were sent" means. The wait is the
+    /// idle event, not a sleep-poll: once the loop goes idle, this returns without sitting
+    /// on a 10 ms tick.
+    /// </remarks>
     public bool StopSafely(int timeoutMs = 1000)
     {
         if (!_isRunning)
             return true;
-            
-        var startTime = DateTime.UtcNow;
-        
-        // Wait for queue to empty with timeout
-        while (!_messageQueue.IsEmpty)
+
+        if (!_idle.Wait(Math.Max(0, timeoutMs)))
         {
-            if ((DateTime.UtcNow - startTime).TotalMilliseconds > timeoutMs)
-            {
-                // Timeout - force stop
-                Stop();
-                return false;
-            }
-            
-            // Give the background thread time to process
-            Thread.Sleep(10);
+            // Timeout - force stop
+            Stop();
+            return false;
         }
-        
-        // Queue is empty, now stop normally
+
+        // Idle: nothing queued and no write in flight. Stop the parked loop.
         _isRunning = false;
         _messageAvailable.Set();
         _producerThread?.Join(1000);
         _producerThread = null;
-        
+
         return true;
     }
 
@@ -217,7 +235,17 @@ public class MessageProducer<T> : IMessageProducer<T>
         if (!_isRunning)
             throw new InvalidOperationException("Message producer is not running. Call Start() first.");
 
-        _messageQueue.Enqueue(message);
+        // Reset and enqueue under the same lock the background loop takes to signal idle, so
+        // the loop cannot find the queue empty and then signal idle after this message landed.
+        // Without the lock, "check empty -> Send resets and enqueues -> set" left the event set
+        // with a message queued, and a Disconnect straight after a Send (the usual "stop
+        // streaming, then disconnect" teardown) could stop the loop before writing it.
+        lock (_idleSync)
+        {
+            _idle.Reset();
+            _messageQueue.Enqueue(message);
+        }
+
         _messageAvailable.Set();
     }
 
@@ -315,6 +343,7 @@ public class MessageProducer<T> : IMessageProducer<T>
                     finally
                     {
                         _draining = false;
+                        SignalIdleIfQuiet();
                     }
                 }
                 catch (Exception ex)
@@ -336,6 +365,8 @@ public class MessageProducer<T> : IMessageProducer<T>
             // dead: that would let Send() enqueue messages that never drain and make
             // StopSafely() block until timeout.
             _isRunning = false;
+            _draining = false;
+            _idle.Set();
             SafeLog(() => _logger.LogError(ex, "MessageProducer background loop terminated abnormally."));
         }
     }
@@ -354,6 +385,27 @@ public class MessageProducer<T> : IMessageProducer<T>
         catch
         {
             // A logger that throws is not permitted to take down the producer.
+        }
+    }
+
+    /// <summary>
+    /// Marks the producer idle if the queue is still empty after a drain.
+    /// </summary>
+    /// <remarks>
+    /// The empty check and the Set happen under <see cref="_idleSync"/>, which
+    /// <see cref="Send"/> also holds across its Reset and Enqueue. That makes the pair atomic
+    /// with respect to a Send: either the message is already queued (no Set), or it is
+    /// enqueued after the Set and its Reset follows. A set-then-recheck without the lock is
+    /// not enough, because a waiter can wake on the transient Set before the recheck undoes it.
+    /// </remarks>
+    private void SignalIdleIfQuiet()
+    {
+        lock (_idleSync)
+        {
+            if (_messageQueue.IsEmpty)
+            {
+                _idle.Set();
+            }
         }
     }
 
@@ -386,6 +438,7 @@ public class MessageProducer<T> : IMessageProducer<T>
         {
             StopSafely();
             _messageAvailable.Dispose();
+            _idle.Dispose();
             _disposed = true;
         }
     }
