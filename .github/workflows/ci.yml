@@ -134,9 +134,9 @@ jobs:
     #
     # Ubuntu only: the packaged shape is identical on all three legs, so the other
     # two would pay to compute the same answer. `dotnet pack` defaults to Release,
-    # so this does compile Daqifi.Core once more rather than reusing the Debug
-    # output above - one project, a few seconds, on one leg. The package itself is
-    # thrown away; only the validation result matters.
+    # the configuration the Build step compiled, so without --no-build it still runs
+    # the build targets but finds Daqifi.Core up to date and skips the compile. The
+    # package itself is thrown away; only the validation result matters.
     - name: Validate packaged API against the last published release
       if: matrix.os == 'ubuntu-latest'
       run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --no-restore --output "${{ runner.temp }}/api-validation"
