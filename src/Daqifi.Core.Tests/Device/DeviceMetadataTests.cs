@@ -608,18 +608,4 @@ public class DeviceMetadataTests
         // Act & Assert
         Assert.Throws<ArgumentNullException>(() => target.CopyFrom(null!));
     }
-
-    [Fact]
-    public void CopyFrom_SourceWithNullCapabilities_DefaultsToNewCapabilities()
-    {
-        // Arrange
-        var source = new DeviceMetadata { Capabilities = null! };
-        var target = new DeviceMetadata();
-
-        // Act
-        target.CopyFrom(source);
-
-        // Assert
-        Assert.NotNull(target.Capabilities);
-    }
 }

@@ -246,6 +246,7 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         // A Dispose that throws hides the handles it did release behind an exception nobody can
         // act on, so the library's own cleanup failure is reported instead.
         Assert.Null(escaped);
+        Assert.False(transport.IsConnected);
     }
 
     #region Helpers

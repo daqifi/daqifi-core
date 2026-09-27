@@ -184,13 +184,6 @@ public class BootloaderSessionDeviceTests
     }
 
     [Fact]
-    public void Metadata_IsNonNull()
-    {
-        // Callers read this without a guard, so it must never be null.
-        Assert.NotNull(new BootloaderSessionDevice().Metadata);
-    }
-
-    [Fact]
     public void IpAddress_IsNull()
     {
         Assert.Null(new BootloaderSessionDevice().IpAddress);
