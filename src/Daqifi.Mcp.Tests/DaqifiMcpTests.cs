@@ -41,8 +41,7 @@ public class ServerOptionsTests
 
 public class DaqifiAgentTests
 {
-    private static DaqifiAgent NewAgent(bool readOnly = false) =>
-        new(new ServerOptions { ReadOnly = readOnly });
+    private static DaqifiAgent NewAgent() => new(new ServerOptions());
 
     [Fact]
     public void ListConnected_StartsEmpty()
