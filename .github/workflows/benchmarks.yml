@@ -23,9 +23,13 @@ on:
           - default
           - short
 
+permissions:
+  contents: read
+
 jobs:
   benchmark:
     name: benchmark
+    timeout-minutes: 30
     # Pinned to one OS on purpose. A benchmark number is only meaningful against
     # another number from the same machine shape, and comparing a run on a Windows
     # runner with a baseline taken on a Linux one would produce a "regression" that
