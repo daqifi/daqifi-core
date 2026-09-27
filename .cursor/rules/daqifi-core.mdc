@@ -44,13 +44,7 @@ First-class parsers: SCPI (line-based) and protobuf. JSON is a device stream-for
 - File-scoped namespaces (IDE0161).
 - No underscores in `Daqifi.Core` public member names (CA1707; test method names are exempt).
 
-## Don't use `git stash`
+## Git guardrails
 
-The stash stack is shared by every worktree of this repo, and parallel sessions each work in their own worktree. A `stash pop` can hand you someone else's changes. Set work aside with a WIP commit instead.
-
-## If you started work on `main`
-
-```bash
-git switch -c fix/description       # keep the work on a new branch
-git branch -f main origin/main      # put local main back where the remote is
-```
+- No `git stash`: the stash stack is shared by every worktree of this repo, and parallel sessions each work in their own worktree, so a `stash pop` can hand you someone else's changes. Set work aside with a WIP commit.
+- Started work on local `main`? `git switch -c fix/description` keeps it on a new branch, then `git branch -f main origin/main` puts local `main` back where the remote is.
