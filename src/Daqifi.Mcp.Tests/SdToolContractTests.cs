@@ -285,6 +285,23 @@ public class ToolErrorTranslationTests
     }
 
     [Fact]
+    public async Task PwmFrequencyOutsideRange_IsNotRewrittenAsADutyError()
+    {
+        // The duty rewrite must stay scoped to the duty check: a different out-of-range
+        // argument on the same tool call still reaches the model as Core's own message.
+        var (agent, _) = AgentHarness.WithConnectedDevice();
+
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => DaqifiTools.SetPwmOutput(
+                agent, AgentHarness.DeviceId, channel: 4, dutyCyclePercent: 50, frequencyHz: 5));
+
+        Assert.Contains("PWM frequency must be", ex.Message);
+        Assert.DoesNotContain("disable_pwm", ex.Message);
+        var core = Assert.IsType<ArgumentOutOfRangeException>(ex.InnerException);
+        Assert.Equal("frequencyHz", core.ParamName);
+    }
+
+    [Fact]
     public async Task Cancellation_IsNotDisguisedAsAToolError()
     {
         // A cancelled call is the host giving up, not the device failing; reporting it as an

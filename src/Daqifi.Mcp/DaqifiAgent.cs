@@ -479,8 +479,10 @@ public sealed class DaqifiAgent
             catch (ArgumentOutOfRangeException ex) when (ex.ParamName == nameof(dutyCyclePercent))
             {
                 // Core's message names SetPwmEnabled(channel, false), an SDK method an MCP caller
-                // cannot invoke. Same rewrite direction/output already do for the PWM-active case:
-                // name disable_pwm, and keep the original exception as the inner.
+                // cannot invoke, so name disable_pwm instead (the goal RequirePwmDisabled serves
+                // for direction/output) and keep Core's exception as the inner, as the SD-card
+                // Rewrite does. The filter keys on Core's parameter name, so any other
+                // out-of-range failure passes through with its own message.
                 throw new InvalidOperationException(
                     "Duty cycle must be 1-100 percent. To stop the output, call disable_pwm.",
                     ex);
