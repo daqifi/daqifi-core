@@ -1247,13 +1247,10 @@ public class DaqifiDeviceOperationSerializationTests
         {
             var inbound = Task.Run(() =>
             {
-                var seen = 0;
                 for (var i = 0; i < 200; i++)
                 {
-                    seen += device.GetChannelsSnapshot().Count;
+                    _ = device.GetChannelsSnapshot();
                 }
-
-                return seen;
             }, ct);
 
             await inbound.WaitAsync(TimeSpan.FromSeconds(5));
