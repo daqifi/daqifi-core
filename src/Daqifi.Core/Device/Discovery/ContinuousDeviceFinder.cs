@@ -21,9 +21,11 @@ namespace Daqifi.Core.Device.Discovery;
 /// continuous discovery (WiFi, Serial, HID), wrap one
 /// <see cref="AllTransportsDeviceFinder"/> rather than creating one
 /// <see cref="ContinuousDeviceFinder"/> per transport — that composite already
-/// fans out and deduplicates, as its remarks describe. Separate instances are
-/// only needed when transports need different <see cref="ContinuousDiscoveryOptions"/>
-/// — their own scan interval, pass timeout or miss threshold.
+/// fans out and deduplicates, as its remarks describe. The trade-off is that
+/// every transport then shares one <see cref="ContinuousDiscoveryOptions"/>
+/// (scan interval, pass timeout, miss threshold, identity selector, inner-finder
+/// ownership), one start/stop lifecycle and one live set; use separate instances
+/// when transports need any of those independently.
 /// </remarks>
 public class ContinuousDeviceFinder : IDisposable
 {

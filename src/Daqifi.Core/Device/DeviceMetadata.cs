@@ -72,7 +72,8 @@ public class DeviceMetadata
     /// power/device status) decoded from a status message. Status is request-only (issue #535):
     /// streaming frames do not carry health, so this holds the last requested reading (the one
     /// captured during <see cref="DaqifiDevice.InitializeAsync"/>, unless something has asked
-    /// since) — call <see cref="DaqifiDevice.RefreshDeviceStatusAsync"/> for a current one.
+    /// since) — call <see cref="DaqifiDevice.RefreshDeviceStatusAsync"/> to request a new one
+    /// (its remarks cover the case where a late reply to an earlier request answers it).
     /// Assigning <c>null</c> is coerced to a fresh instance so <see cref="UpdateFromProtobuf"/>
     /// can never dereference null on the status path.
     /// </summary>
