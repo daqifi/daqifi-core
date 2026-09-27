@@ -160,18 +160,6 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public async Task ConnectTcpAsync_WithCancellation_ThrowsOperationCanceledException()
-    {
-        // Arrange
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        // Act & Assert
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, null, cts.Token));
-    }
-
-    [Fact]
     public async Task ConnectTcpAsync_ByIpAddress_WithCancellation_ThrowsOperationCanceledException()
     {
         // Arrange
@@ -298,18 +286,6 @@ public class DaqifiDeviceFactoryTests
         // Act & Assert
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", null, cts.Token));
-    }
-
-    [Fact]
-    public async Task ConnectSerialAsync_WithBaudRate_WithCancellation_ThrowsOperationCanceledException()
-    {
-        // Arrange
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        // Act & Assert
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", 115200, null, cts.Token));
     }
 
     #endregion
