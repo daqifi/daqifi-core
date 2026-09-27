@@ -36,8 +36,24 @@ public class WiFiDeviceFinderTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
+    {
+        // This overload has no timeout of its own, so cancelling is how a caller ends the browse:
+        // what answered by then is the result, not an OperationCanceledException. The bound turns
+        // a browse that ignored the token into a failure instead of a hung run.
+        using var finder = new WiFiDeviceFinder(0);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var failure = await Record.ExceptionAsync(
+            () => finder.DiscoverAsync(cts.Token).WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Null(failure);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
+        // Cancelled before the pass starts: it never acquires the discovery lock, so it throws.
         using var finder = new WiFiDeviceFinder(0);
         using var cts = new CancellationTokenSource();
         cts.Cancel();

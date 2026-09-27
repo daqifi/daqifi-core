@@ -1081,7 +1081,7 @@ public class DeviceReconnectTests
     [Fact]
     public void DisposingDuringAReconnect_UnwindsTheLoopAndLeavesTheDeviceDisconnected()
     {
-        var transport = new ScriptedReconnectTransport();
+        using var transport = new ScriptedReconnectTransport();
         var device = new ScriptedStreamingDevice("Disposed Device", transport);
         device.ReconnectOptions = FastPolicy(maxAttempts: 20);
 
@@ -1094,15 +1094,13 @@ public class DeviceReconnectTests
         device.Dispose();
 
         // Dispose calls Disconnect, which supersedes the loop and returns without waiting for
-        // it. The loop still has to unwind — same post-condition as a caller Disconnect during
-        // retry, minus the ReconnectFailed wait that Dispose does not subscribe to.
-        WaitUntil(() => !device.IsReconnecting, "the reconnect loop never finished");
-
-        Assert.False(device.IsReconnecting);
+        // it. The loop still has to unwind, and must not overwrite the teardown on its way out:
+        // the same post-conditions as a caller Disconnect during retry.
+        Assert.True(
+            SpinWait.SpinUntil(() => !device.IsReconnecting, EventTimeout),
+            "the reconnect loop never finished");
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.False(transport.IsConnected);
-
-        transport.Dispose();
     }
 
     #endregion

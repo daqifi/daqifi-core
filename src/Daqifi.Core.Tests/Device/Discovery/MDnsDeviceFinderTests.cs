@@ -311,8 +311,24 @@ public class MDnsDeviceFinderTests
     }
 
     [Fact]
+    public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
+    {
+        // A browse runs until cancelled, and every response received before cancellation is the
+        // result (see the class remarks), not an OperationCanceledException. The bound turns a
+        // browse that ignored the token into a failure instead of a hung run.
+        using var finder = new MDnsDeviceFinder();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        var failure = await Record.ExceptionAsync(
+            () => finder.DiscoverAsync(cts.Token).WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Null(failure);
+    }
+
+    [Fact]
     public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
+        // Cancelled before the pass starts: it never acquires the discovery lock, so it throws.
         using var finder = new MDnsDeviceFinder();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
