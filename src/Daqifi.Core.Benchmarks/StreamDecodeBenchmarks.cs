@@ -24,7 +24,9 @@ namespace Daqifi.Core.Benchmarks;
 /// against a sample rate: at 1 kHz with 16 channels the device emits a frame every millisecond.
 /// The allocation column is the one worth watching. Issue #490 removed per-frame allocation from
 /// this path and #531 showed how badly a correctness test measures it; a regression here shows up
-/// as bytes per frame climbing off zero.
+/// as allocation climbing, not as a departure from zero — the baseline is already ~1.38 KB per
+/// 16-channel frame, from the <see cref="DataSample"/> each channel decodes plus the
+/// <see cref="SampleReceivedEventArgs"/> raised for this benchmark's subscriber.
 /// </para>
 /// </remarks>
 [MemoryDiagnoser]

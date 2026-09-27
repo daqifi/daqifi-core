@@ -96,11 +96,6 @@ _ReSharper*/
 *.[Rr]e[Ss]harper
 *.DotSettings.user
 
-# .NET Core
-project.lock.json
-project.fragment.lock.json
-artifacts/
-
 # Files built by Visual Studio
 *_i.c
 *_p.c
