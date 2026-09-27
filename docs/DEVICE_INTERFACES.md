@@ -251,6 +251,9 @@ keep:
   `_daqifi._tcp.local.` on 224.0.0.251:5353 instead, which consumer routers already reflect
   across APs and which also survives WSL2 NAT (broadcast is dropped) and client-isolated
   guest networks.
+- **What the mDNS finder reads.** The device answers with PTR + SRV + TXT + A in one reply;
+  the finder takes the port from SRV, the address from A, and `sn` / `pn` / `fw` /
+  `friendly` from TXT, and reports the result as `ConnectionType.WiFi`.
 - **Same board, two entries.** The default per-transport identity prefers the MAC address,
   which the broadcast reply carries and the mDNS advertisement does not, so a unit answering
   on both paths stays as two connectable entries. Pass `identitySelector: d => d.SerialNumber`
@@ -993,8 +996,16 @@ await streamingDevice.RebootAsync(cancellationToken);
 ### Feature support
 
 Some surfaces are board- or firmware-gated. Branch on `device.Supports(DeviceFeature)` —
-do not compare firmware strings yourself. Calling the gated API anyway throws
-`FeatureNotSupportedException` (feature, required version, reported version, board).
+do not compare firmware strings yourself. `Supports` answers for the device, not for the
+link it is on, and not every gated call enforces its own gate:
+
+- **SD list / download / delete and the storage-space query** enforce theirs, and only on a
+  WiFi/TCP link: there they throw `FeatureNotSupportedException` (feature, required version,
+  reported version, board) unless the device supports `SdFileTransferOverWifi`. Over USB
+  that gate does not apply — the SD card is reachable on any supported firmware.
+- **`SetAnalogOutput`** does not: it sends the command whatever the board, and a board other
+  than Nyquist 3 rejects it on the device without an exception reaching you. Checking
+  `Supports(DeviceFeature.AnalogOutput)` is the only guard.
 
 ```csharp
 await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760);
@@ -1005,16 +1016,17 @@ if (device.Supports(DeviceFeature.AnalogOutput))
     device.SetAnalogOutput(0, 2.5);
 }
 
-// SD list/get/delete over this WiFi connection needs firmware >= 3.7.0 plus SD and WiFi
-// hardware. Over USB the same operations run on any SD-capable firmware and are not gated.
-if (device.Supports(DeviceFeature.SdFileTransferOverWifi))
+// SdFileTransferOverWifi (firmware >= 3.7.0 plus SD and WiFi hardware) is the gate only on a
+// network link. Don't ask it over USB: it would say no for a 3.6.x device whose SD card USB
+// reads fine.
+if (device.IsUsbConnection || device.Supports(DeviceFeature.SdFileTransferOverWifi))
 {
     var files = await device.GetSdCardFilesAsync();
 }
 ```
 
-Or skip the check and let the call tell you — the exception carries everything needed to say
-why, which is usually what a UI wants to show:
+For the SD calls you can also skip the check and let the call tell you — the exception
+carries everything needed to say why, which is usually what a UI wants to show:
 
 ```csharp
 try
@@ -1028,9 +1040,14 @@ catch (FeatureNotSupportedException ex)
 }
 ```
 
+`RequiredVersion` is set only when the firmware is what falls short; a board or hardware
+shortfall leaves it `null`, since no upgrade would help.
+
 `DaqifiDeviceFactory` returns `DaqifiStreamingDevice`, which inherits `Supports` from
-`DaqifiDevice`. The requirement table and `-113` backstop live in
-[ADR 0001](adr/0001-firmware-feature-gating.md) — this is the call-site pattern only.
+`DaqifiDevice` and adds `IsUsbConnection`. Neither is declared on `IStreamingDevice`, so code
+holding only the interface needs the concrete type. The requirement table and `-113`
+backstop live in [ADR 0001](adr/0001-firmware-feature-gating.md) — this is the call-site
+pattern only.
 
 ## SCPI Commands
 

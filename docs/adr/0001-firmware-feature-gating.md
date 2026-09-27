@@ -207,7 +207,7 @@ public enum DeviceFeature
     // supported firmware:
     SdStorageQuery,      // SYSTem:STORage:SD:SPACe?   (fw v3.4.6b1)
     CapabilityDocument,  // CONFigure:CAPabilities:JSON? (fw v3.5.0)
-    SdFileTransferOverWifi, // SYSTem:STORage:SD:LIST? / :GET / :DELete over TCP (fw ≥ v3.7.0)
+    SdFileTransferOverWifi, // SYSTem:STORage:SD:LIST? / :GET / :DELete / :SPACe? over TCP (fw ≥ v3.7.0)
     // Further post-v3.5.0 commands are added here as we consume them.
 }
 
