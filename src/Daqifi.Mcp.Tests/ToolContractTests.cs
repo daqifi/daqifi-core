@@ -615,9 +615,10 @@ public class SampleRateToolContractTests
         var (agent, device) = AgentHarness.WithConnectedDevice();
         device.ClearSent();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.SetSampleRateAsync(AgentHarness.DeviceId, 0));
 
+        Assert.Contains(">= 1", ex.Message);
         Assert.Empty(device.Sent);
     }
 }
@@ -648,23 +649,39 @@ public class ReadOnlyModeContractTests
         var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true, analogOutputs: 2);
         device.ClearSent();
 
-        Task Call() => tool switch
-        {
-            "configure_analog_channels" => agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0 }),
-            "configure_digital_channels" => agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 }),
-            "set_digital_direction" => agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 0, "output"),
-            "set_digital_output" => agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 0, high: true),
-            "set_pwm_output" => agent.SetPwmOutputAsync(AgentHarness.DeviceId, 4, 50, 1000),
-            "disable_pwm" => agent.DisablePwmAsync(AgentHarness.DeviceId, 4),
-            "set_analog_output" => agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 0, 2.5, latch: true),
-            "latch_analog_outputs" => agent.LatchAnalogOutputsAsync(AgentHarness.DeviceId),
-            _ => agent.SetSampleRateAsync(AgentHarness.DeviceId, 100),
-        };
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Call);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CallMutatingTool(agent, tool, AgentHarness.DeviceId));
         Assert.Contains("read-only", ex.Message);
         Assert.Empty(device.Sent);
     }
+
+    [Theory]
+    [MemberData(nameof(MutatingTools))]
+    public async Task MutatingTools_AreRefusedBeforeTheDeviceIsLookedUp(string tool)
+    {
+        // Deliberately a device id that was never connected: the read-only refusal has to win over
+        // "not connected", or a caller is sent to connect_device and only learns afterwards that
+        // permission was the obstacle. SdCardAgentGuardTests pins the same rule for delete_sd_file.
+        var agent = new DaqifiAgent(new ServerOptions { ReadOnly = true });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CallMutatingTool(agent, tool, "serial:NOPE"));
+        Assert.Contains("read-only", ex.Message);
+    }
+
+    private static Task CallMutatingTool(DaqifiAgent agent, string tool, string deviceId) => tool switch
+    {
+        "configure_analog_channels" => agent.ConfigureAnalogChannelsAsync(deviceId, new[] { 0 }),
+        "configure_digital_channels" => agent.ConfigureDigitalChannelsAsync(deviceId, new[] { 0 }),
+        "set_digital_direction" => agent.SetDigitalDirectionAsync(deviceId, 0, "output"),
+        "set_digital_output" => agent.SetDigitalOutputAsync(deviceId, 0, high: true),
+        "set_pwm_output" => agent.SetPwmOutputAsync(deviceId, 4, 50, 1000),
+        "disable_pwm" => agent.DisablePwmAsync(deviceId, 4),
+        "set_analog_output" => agent.SetAnalogOutputAsync(deviceId, 0, 2.5, latch: true),
+        "latch_analog_outputs" => agent.LatchAnalogOutputsAsync(deviceId),
+        "set_sample_rate" => agent.SetSampleRateAsync(deviceId, 100),
+        _ => throw new ArgumentOutOfRangeException(nameof(tool), tool, "No call is wired up for this tool."),
+    };
 
     [Theory]
     [InlineData("status")]
