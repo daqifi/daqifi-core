@@ -1608,7 +1608,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         _operations.TryAcquireForTeardownAsync(TextExchangeTeardownWait, cancellationToken);
 
     /// <summary>
-    /// Unsubscribes, stops and drops the message producer/consumer. Shared by
+    /// Unsubscribes, disposes (which stops) and drops the message producer/consumer. Shared by
     /// <see cref="Disconnect"/> and <see cref="DisconnectAsync"/>.
     /// </summary>
     private void StopMessagePumps()
@@ -1625,21 +1625,58 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _messageProducer.SendFailed -= OnMessageSendFailed;
         }
 
-        // Stop message consumer and producer safely if available
-        _messageConsumer?.StopSafely();
-        _messageProducer?.StopSafely();
+        // Dispose, don't just stop, before dropping the references. These used to be
+        // stopped and then abandoned undisposed, on every disconnect and on every
+        // reconnect attempt, which tears down the same way.
+        //
+        // Dispose does the stop itself (StopSafely, with the same default budget), so
+        // there is deliberately no separate StopSafely first. StreamMessageConsumer.Dispose
+        // joins a running reader through its own StopSafely, and only runs its extra
+        // stale-reader join when it finds the consumer already stopped. Stopping here
+        // first would put every consumer on that second path: a reader wedged in a read
+        // that only the transport close below can release would be joined twice, a
+        // second apart, doubling this teardown to two seconds for nothing.
+        //
+        // Null afterwards so a subsequent Connect() rebuilds them against the
+        // transport's current Stream. SerialStreamTransport.Stream returns
+        // _serialPort.BaseStream, which is a new instance after Disconnect() →
+        // Connect() reopens the port; reusing the old producer/consumer would
+        // leave them bound to the previous (disposed) BaseStream and any Send()
+        // would silently no-op. Surfaced by PR #200's post-reconnect readiness
+        // probe (LAN chip-info returning null on every attempt because Send went
+        // to a dead stream).
+        //
+        // ReleaseResources still disposes whichever instances remain. The abandon
+        // path (MarkDisconnectedWithoutTeardown) never reaches here, so those
+        // fields stay set for that dispose.
+        DisposeMessagePump(ref _messageConsumer);
+        DisposeMessagePump(ref _messageProducer);
+    }
 
-        // Null the producer/consumer so a subsequent Connect()
-        // rebuilds them against the transport's current Stream.
-        // SerialStreamTransport.Stream returns _serialPort.BaseStream,
-        // which is a new instance after Disconnect() → Connect()
-        // reopens the port; reusing the old producer/consumer would
-        // leave them bound to the previous (disposed) BaseStream
-        // and any Send() would silently no-op. Surfaced by PR #200's
-        // post-reconnect readiness probe (LAN chip-info returning
-        // null on every attempt because Send went to a dead stream).
-        _messageConsumer = null;
-        _messageProducer = null;
+    /// <summary>
+    /// Disposes (and so stops) one message pump, then clears the field that held it.
+    /// </summary>
+    /// <remarks>
+    /// The field is cleared even when <see cref="IDisposable.Dispose"/> throws. Leaving it
+    /// set would make the next <see cref="CompleteConnect"/> reuse a pump bound to a dead
+    /// stream, and an exception here would skip the transport close that follows
+    /// <see cref="StopMessagePumps"/>.
+    /// </remarks>
+    private void DisposeMessagePump<T>(ref T? pump) where T : class, IDisposable
+    {
+        var instance = pump;
+        try
+        {
+            instance?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            RaiseDeviceError(DeviceErrorSource.Unknown, ex);
+        }
+        finally
+        {
+            pump = null;
+        }
     }
 
     /// <summary>
@@ -3047,6 +3084,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         }
         finally
         {
+            // Normal disconnect already disposed these in StopMessagePumps and nulled
+            // the fields. They are still set when teardown was abandoned
+            // (MarkDisconnectedWithoutTeardown never stops the pumps), so dispose here.
             _messageConsumer?.Dispose();
             _messageProducer?.Dispose();
             _transport?.Dispose();

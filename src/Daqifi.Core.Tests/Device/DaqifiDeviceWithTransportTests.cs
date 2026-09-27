@@ -1,8 +1,11 @@
+using Daqifi.Core.Communication.Consumers;
+using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 
 namespace Daqifi.Core.Tests.Device;
 
@@ -289,6 +292,268 @@ public class DaqifiDeviceWithTransportTests
         Assert.NotEmpty(secondStreamBytes);
         Assert.NotSame(firstStreamBytes, secondStreamBytes);
     }
+
+    [Fact]
+    public void DaqifiDevice_Disconnect_DisposesMessagePumpsThenNullsThem()
+    {
+        // StopMessagePumps used to StopSafely and then null the fields, so a normal
+        // disconnect (and every reconnect attempt, which tears down the same way) dropped
+        // the producer's wait handles and skipped StreamMessageConsumer.Dispose's stale-reader
+        // join. ReleaseResources only disposes when the fields are still set, which is the
+        // abandon path — it never saw these instances.
+        var transport = new MockStreamTransport();
+        var device = new DaqifiDevice("Mock Device", transport);
+        var errors = new List<Exception>();
+        device.ErrorOccurred += (_, args) => errors.Add(args.Error);
+
+        device.Connect();
+        var producer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
+        var consumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        Assert.NotNull(producer);
+        Assert.NotNull(consumer);
+        Assert.False(IsDisposed(producer));
+        Assert.False(IsDisposed(consumer));
+
+        device.Disconnect();
+
+        Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
+        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.True(IsDisposed(producer));
+        Assert.True(IsDisposed(consumer));
+        Assert.Throws<ObjectDisposedException>(() => producer.Send(ScpiMessageProducer.GetDeviceInfo));
+        Assert.Throws<ObjectDisposedException>(() => consumer.Start());
+
+        // Reconnect builds a fresh pair. The previous instances stay disposed.
+        device.Connect();
+        var reconnectedProducer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
+        var reconnectedConsumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        Assert.NotNull(reconnectedProducer);
+        Assert.NotNull(reconnectedConsumer);
+        Assert.NotSame(producer, reconnectedProducer);
+        Assert.NotSame(consumer, reconnectedConsumer);
+
+        device.Disconnect();
+        Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
+        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.True(IsDisposed(reconnectedProducer));
+        Assert.True(IsDisposed(reconnectedConsumer));
+
+        // Idempotent teardown: a second disconnect, then Dispose, with the pumps already
+        // released. ReleaseResources still disposes when the fields are set (abandon path);
+        // here they are null, so that tail must not throw — and a second Dispose is a no-op.
+        device.Disconnect();
+        device.Dispose();
+        device.Dispose();
+        Assert.Empty(errors);
+        transport.Dispose();
+    }
+
+    [Fact]
+    public async Task DaqifiDevice_DisconnectAsync_DisposesMessagePumpsThenNullsThem()
+    {
+        var transport = new MockStreamTransport();
+        await using var device = new DaqifiDevice("Mock Device", transport);
+
+        device.Connect();
+        var producer = PrivateField<IMessageProducer<string>>(device, "_messageProducer");
+        var consumer = PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer");
+        Assert.NotNull(producer);
+        Assert.NotNull(consumer);
+
+        await device.DisconnectAsync();
+
+        Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
+        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.True(IsDisposed(producer));
+        Assert.True(IsDisposed(consumer));
+
+        // DisposeAsync runs DisconnectAsync again, then ReleaseResources against null pumps.
+        await device.DisposeAsync();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DaqifiDevice_Disconnect_WhenAPumpDisposeThrows_StillClearsBothAndClosesTheTransport(
+        bool consumerThrows)
+    {
+        // A pump whose Dispose throws must not strand the rest of the teardown. The other pump
+        // is still disposed, both fields are cleared so the next Connect rebuilds against the
+        // transport's current stream, the transport still closes, and the failure is reported
+        // through ErrorOccurred instead of escaping Disconnect.
+        var failure = new InvalidOperationException("pump dispose failed");
+        var consumer = new RecordingConsumer(consumerThrows ? failure : null);
+        var producer = new RecordingProducer(consumerThrows ? null : failure);
+        using var transport = new MockStreamTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+        var errors = new List<DeviceErrorEventArgs>();
+        device.ErrorOccurred += (_, args) => errors.Add(args);
+        SetPrivateField(device, "_messageConsumer", consumer);
+        SetPrivateField(device, "_messageProducer", producer);
+        device.Connect();
+        Assert.True(transport.IsConnected);
+
+        device.Disconnect();
+
+        Assert.Equal(1, consumer.DisposeCount);
+        Assert.Equal(1, producer.DisposeCount);
+        Assert.Null(PrivateField<IMessageConsumer<DaqifiOutMessage>>(device, "_messageConsumer"));
+        Assert.Null(PrivateField<IMessageProducer<string>>(device, "_messageProducer"));
+        Assert.False(transport.IsConnected);
+        Assert.Equal(ConnectionStatus.Disconnected, device.Status);
+        var error = Assert.Single(errors);
+        Assert.Same(failure, error.Error);
+        Assert.Equal(DeviceErrorSource.Unknown, error.Source);
+    }
+
+    [Fact]
+    public void DaqifiDevice_Disconnect_LeavesStoppingTheConsumerToItsDispose()
+    {
+        // StreamMessageConsumer.Dispose stops a running consumer itself, and only adds its
+        // stale-reader join when it finds the consumer already stopped. A separate StopSafely
+        // ahead of Dispose puts every disconnect on that second path. A reader wedged in a read
+        // that only the transport close releases is then joined twice, a second each time, and
+        // Disconnect takes two seconds where one did before.
+        var consumer = new RecordingConsumer();
+        using var transport = new MockStreamTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+        SetPrivateField(device, "_messageConsumer", consumer);
+        device.Connect();
+        Assert.True(consumer.IsRunning);
+        consumer.Calls.Clear();
+
+        device.Disconnect();
+
+        Assert.Equal(new[] { nameof(IDisposable.Dispose) }, consumer.Calls);
+    }
+
+    private static T? PrivateField<T>(object instance, string name) where T : class
+    {
+        return (T?)instance.GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(instance);
+    }
+
+    private static void SetPrivateField(object instance, string name, object? value)
+    {
+        instance.GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(instance, value);
+    }
+
+    /// <summary>
+    /// Records the calls the device makes on its consumer, and can throw from
+    /// <see cref="Dispose"/>. Its events are never raised, so they need no backing field.
+    /// </summary>
+    private sealed class RecordingConsumer : IMessageConsumer<DaqifiOutMessage>
+    {
+        private readonly Exception? _disposeFailure;
+
+        public RecordingConsumer(Exception? disposeFailure = null) => _disposeFailure = disposeFailure;
+
+        public List<string> Calls { get; } = new();
+
+        public int DisposeCount { get; private set; }
+
+        public bool IsRunning { get; private set; }
+
+        public int QueuedMessageCount => 0;
+
+        public event EventHandler<MessageReceivedEventArgs<DaqifiOutMessage>>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public event EventHandler<MessageConsumerErrorEventArgs>? ErrorOccurred
+        {
+            add { }
+            remove { }
+        }
+
+        public void Start()
+        {
+            Calls.Add(nameof(Start));
+            IsRunning = true;
+        }
+
+        public void Stop()
+        {
+            Calls.Add(nameof(Stop));
+            IsRunning = false;
+        }
+
+        public bool StopSafely(int timeoutMs = 1000)
+        {
+            Calls.Add(nameof(StopSafely));
+            IsRunning = false;
+            return true;
+        }
+
+        public void ClearBuffer() => Calls.Add(nameof(ClearBuffer));
+
+        public void Dispose()
+        {
+            Calls.Add(nameof(Dispose));
+            DisposeCount++;
+            IsRunning = false;
+            if (_disposeFailure != null)
+            {
+                throw _disposeFailure;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The producer counterpart of <see cref="RecordingConsumer"/>.
+    /// </summary>
+    private sealed class RecordingProducer : IMessageProducer<string>
+    {
+        private readonly Exception? _disposeFailure;
+
+        public RecordingProducer(Exception? disposeFailure = null) => _disposeFailure = disposeFailure;
+
+        public int DisposeCount { get; private set; }
+
+        public bool IsRunning { get; private set; }
+
+        public int QueuedMessageCount => 0;
+
+        public event EventHandler<MessageSendFailedEventArgs<string>>? SendFailed
+        {
+            add { }
+            remove { }
+        }
+
+        public void Start() => IsRunning = true;
+
+        public void Stop() => IsRunning = false;
+
+        public bool StopSafely(int timeoutMs = 1000)
+        {
+            IsRunning = false;
+            return true;
+        }
+
+        public void Send(IOutboundMessage<string> message)
+        {
+        }
+
+        public void Dispose()
+        {
+            DisposeCount++;
+            IsRunning = false;
+            if (_disposeFailure != null)
+            {
+                throw _disposeFailure;
+            }
+        }
+    }
+
+    private static bool IsDisposed(object instance) =>
+        (bool)instance.GetType()
+            .GetField("_disposed", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(instance)!;
 
     // Mock transport that swaps to a fresh MemoryStream on RotateStream(),
     // mirroring the real SerialStreamTransport whose Stream property returns
