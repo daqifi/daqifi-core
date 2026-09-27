@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 #nullable enable
 
@@ -443,21 +444,5 @@ internal sealed class ReconnectSupervisor
         }
 
         _host.RaiseReconnectFailed(new ReconnectFailedEventArgs(attemptsMade, lastError, wasCanceled));
-    }
-
-    /// <summary>
-    /// Runs a log call, swallowing anything it throws — a logger is not permitted to take down a
-    /// reconnect, the same isolation <c>DaqifiDevice.SafeLog</c> gives the rest of the device.
-    /// </summary>
-    private static void SafeLog(Action logAction)
-    {
-        try
-        {
-            logAction();
-        }
-        catch
-        {
-            // A logger that throws is not permitted to take down device operation.
-        }
     }
 }

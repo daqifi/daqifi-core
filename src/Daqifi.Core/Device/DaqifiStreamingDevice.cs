@@ -12,12 +12,12 @@ using Daqifi.Core.Device.SdCard;
 using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 #nullable enable
 
@@ -516,31 +516,6 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         catch (Exception ex)
         {
             SafeTrace($"[{nameof(StreamFrameDiscarded)}] Subscriber threw: {ex}");
-        }
-    }
-
-    /// <summary>
-    /// Writes a diagnostic line, swallowing anything a misbehaving <see cref="TraceListener"/>
-    /// throws.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="Trace"/> dispatches to listeners the consumer installed, so it is consumer
-    /// code and can throw like any other. That matters most in the places that exist purely to
-    /// isolate the frame pipeline from faults: a listener throwing out of the <c>catch</c> that
-    /// was containing a bad subscriber would defeat the containment and take down the very
-    /// frame processing it was protecting. Same reasoning, and the same guarantee, as
-    /// <c>DaqifiDevice.SafeLog</c> — which is private to the base class, hence this local twin.
-    /// </remarks>
-    /// <param name="message">The diagnostic line to write.</param>
-    private static void SafeTrace(string message)
-    {
-        try
-        {
-            Trace.WriteLine(message);
-        }
-        catch
-        {
-            // A trace listener that throws is not permitted to affect device operation.
         }
     }
 
