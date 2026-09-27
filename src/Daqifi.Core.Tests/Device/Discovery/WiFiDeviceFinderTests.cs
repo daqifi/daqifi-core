@@ -41,7 +41,17 @@ public class WiFiDeviceFinderTests
     {
         // This overload has no timeout of its own, so cancelling is how a caller ends the browse:
         // what answered by then is the result, not an OperationCanceledException.
-        using var finder = new WiFiDeviceFinder(0);
+        //
+        // Not port 0: the discovery port is also where the query is sent, Linux rejects a send to
+        // port 0, and a pass whose every send failed ends at once. Borrow a free port instead, so
+        // the query goes out and nothing answers it.
+        int discoveryPort;
+        using (var probe = new UdpClient(0))
+        {
+            discoveryPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
+        }
+
+        using var finder = new WiFiDeviceFinder(discoveryPort);
         using var cts = new CancellationTokenSource();
 
         var browse = finder.DiscoverAsync(cts.Token);
