@@ -598,15 +598,18 @@ public class SampleRateToolContractTests
     public async Task ConfiguringChannels_AlsoEnforcesTheServerWideClamp()
     {
         // The operator's clamp has to bind on the re-validation path too, or a channel change
-        // could leave a rate above it live and reported as adjusted-and-fine.
-        var (agent, _) = AgentHarness.WithConnectedDevice(maxSampleRateHz: 300);
-        await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
-        await agent.SetSampleRateAsync(AgentHarness.DeviceId, 300);
+        // could leave a rate above it live and reported as fine. set_sample_rate cannot put such
+        // a rate there, but the device's own rate can already be one (Core starts every device at
+        // 100 Hz, above any clamp below that), so start from a live rate over the clamp.
+        var (agent, device) = AgentHarness.WithConnectedDevice(maxSampleRateHz: 300);
+        device.StreamingFrequency = 1_000;
 
         var result = await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0, 1 });
 
-        Assert.Null(result.SampleRateAdjustedFromHz);
+        // Two channels leave the device a 10 kHz cap, so only the server clamp can lower 1000 Hz.
+        Assert.Equal(1_000, result.SampleRateAdjustedFromHz);
         Assert.Equal(300, result.SampleRateHz);
+        Assert.Equal(300, agent.GetStatus(AgentHarness.DeviceId).SampleRateHz);
     }
 
     [Fact]
@@ -626,8 +629,11 @@ public class SampleRateToolContractTests
 public class ReadOnlyModeContractTests
 {
     /// <summary>
-    /// Every mutating tool, refused before it reaches a device that is genuinely connected. The
-    /// existing no-device tests cannot tell a real refusal from "there was nothing to do anyway".
+    /// Channel, output, and sample-rate tools, refused before they reach a device that is
+    /// genuinely connected. The existing no-device tests cannot tell a real refusal from "there
+    /// was nothing to do anyway". The SD-card tools have their own: start_sd_logging and
+    /// stop_sd_logging in <see cref="SdCardToolContractTests"/>, delete_sd_file in
+    /// <see cref="SdCardAgentGuardTests"/>.
     /// </summary>
     public static TheoryData<string> MutatingTools() => new()
     {

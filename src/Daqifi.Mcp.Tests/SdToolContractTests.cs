@@ -183,20 +183,34 @@ public class SdCardToolContractTests
         Assert.False(agent.GetStatus(AgentHarness.DeviceId).LoggingToSdCard);
     }
 
-    [Theory]
-    [InlineData("start")]
-    [InlineData("stop")]
-    public async Task LoggingTools_AreRefusedInReadOnlyMode(string tool)
+    [Fact]
+    public async Task StartSdLogging_IsRefusedInReadOnlyMode()
     {
         var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
 
-        Task Call() => tool == "start"
-            ? agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None)
-            : agent.StopLoggingAsync(AgentHarness.DeviceId, CancellationToken.None);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None));
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Call);
         Assert.Contains("read-only", ex.Message);
         Assert.Null(device.StartedSession);
+    }
+
+    [Fact]
+    public async Task StopSdLogging_IsRefusedInReadOnlyMode_AndTheRecordingKeepsRunning()
+    {
+        // A recording this server did not start (the device's own, or an earlier session's) is
+        // what a read-only server must leave alone, and starting from one is what lets a stop
+        // that reached the card show up here.
+        var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
+        var card = (ISdCardOperations)device;
+        await card.StartSdCardLoggingSessionAsync(
+            "log.bin", channelMask: null, SdCardLogFormat.Protobuf, CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.StopLoggingAsync(AgentHarness.DeviceId, CancellationToken.None));
+
+        Assert.Contains("read-only", ex.Message);
+        Assert.True(card.IsLoggingToSdCard);
     }
 
     [Fact]
