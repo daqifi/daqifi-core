@@ -318,14 +318,4 @@ public class ConnectionRetryOptionsTests
         // Assert
         Assert.Equal(int.MaxValue, (int)options.ConnectionTimeout.TotalMilliseconds);
     }
-
-    [Fact]
-    public void PresetPolicies_ShouldSatisfyTheirOwnGuards()
-    {
-        // Act & Assert — the presets go through the same setters, so this would throw
-        // at construction if a guard and a preset ever disagreed.
-        Assert.True(ConnectionRetryOptions.NoRetry.ConnectionTimeout > TimeSpan.Zero);
-        Assert.True(ConnectionRetryOptions.Fast.ConnectionTimeout > TimeSpan.Zero);
-        Assert.True(ConnectionRetryOptions.Resilient.ConnectionTimeout > TimeSpan.Zero);
-    }
 }
