@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Tests.TestSupport;
 using Google.Protobuf;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
@@ -35,20 +36,47 @@ public class WiFiDeviceFinderTests
         Assert.True(elapsed.TotalSeconds <= timeout.TotalSeconds + 1);
     }
 
-    [Fact]
-    public async Task DiscoverAsync_WithCancellationToken_CanBeCancelled()
+    [NetworkBrowseFact]
+    public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
     {
-        // Arrange - Use port 0 to let system assign random port (avoid conflicts)
+        // This overload has no timeout of its own, so cancelling is how a caller ends the browse:
+        // what answered by then is the result, not an OperationCanceledException.
+        //
+        // Not port 0: the discovery port is also where the query is sent, Linux rejects a send to
+        // port 0, and a pass whose every send failed ends at once. Borrow a free port instead, so
+        // the query goes out and nothing answers it.
+        int discoveryPort;
+        using (var probe = new UdpClient(0))
+        {
+            discoveryPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
+        }
+
+        using var finder = new WiFiDeviceFinder(discoveryPort);
+        using var cts = new CancellationTokenSource();
+
+        var browse = finder.DiscoverAsync(cts.Token);
+
+        // A pass that finds nothing to browse on returns at once. Still running after a moment
+        // means it is waiting on replies, so what ends it below is the cancellation.
+        var endedOnItsOwn = await Task.WhenAny(browse, Task.Delay(TimeSpan.FromMilliseconds(200))) == browse;
+        Assert.False(endedOnItsOwn, "the browse ended before it was cancelled");
+
+        cts.Cancel();
+
+        // Bounded, so a browse that ignored the token fails instead of hanging the run.
+        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Null(failure);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
+    {
+        // Cancelled before the pass starts: it never acquires the discovery lock, so it throws.
         using var finder = new WiFiDeviceFinder(0);
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+        cts.Cancel();
 
-        // Act
-        var devices = await finder.DiscoverAsync(cts.Token);
-
-        // Assert
-        Assert.NotNull(devices);
-        // Should return empty or partial results when cancelled
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
     }
 
     [Fact]
@@ -64,17 +92,6 @@ public class WiFiDeviceFinderTests
 
         // Assert
         Assert.True(eventRaised);
-    }
-
-    [Fact]
-    public void WiFiDeviceFinder_Dispose_DoesNotThrow()
-    {
-        // Arrange
-        var finder = new WiFiDeviceFinder();
-
-        // Act & Assert
-        finder.Dispose();
-        // Should not throw
     }
 
     [Fact]
