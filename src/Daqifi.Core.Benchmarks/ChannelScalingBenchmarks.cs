@@ -4,14 +4,15 @@ using Daqifi.Core.Channel;
 namespace Daqifi.Core.Benchmarks;
 
 /// <summary>
-/// Per-sample device calibration (<see cref="AnalogChannel.GetScaledValue"/>) and transducer
-/// scaling (<see cref="ChannelScaling.Apply"/>).
+/// Per-sample device calibration (<see cref="AnalogChannel.GetScaledValue"/>, raw count to volts)
+/// and transducer scaling (<see cref="ChannelScaling.Apply"/>, volts to engineering units).
 /// </summary>
 /// <remarks>
 /// Both run once per sample, so a validity check, unit lookup, or nullable coefficient here adds
-/// a cost nothing else would notice. <see cref="GetScaledValue"/> is measured through the channel,
-/// lock included: that lock stops a concurrent status refresh tearing the calibration coefficients,
-/// so it is part of the sample cost rather than overhead to measure around.
+/// a cost nothing else would notice. Neither should allocate. <see cref="GetScaledValue"/> is
+/// measured through the channel, lock included: that lock stops a concurrent status refresh
+/// tearing the calibration coefficients, so it is part of the sample cost rather than overhead to
+/// measure around.
 /// </remarks>
 [MemoryDiagnoser]
 public class ChannelScalingBenchmarks

@@ -1,6 +1,7 @@
 name: Benchmarks
 
-# workflow_dispatch only.
+# On demand only, never on a pull request (#640): shared-runner timings are too
+# noisy to gate a merge on. See src/Daqifi.Core.Benchmarks/README.md.
 on:
   workflow_dispatch:
     inputs:
