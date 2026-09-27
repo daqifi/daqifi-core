@@ -84,7 +84,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **Record to CSV** | `device.RecordLiveSamplesToCsvAsync(writer)` writes a live stream to CSV as it arrives — no buffering the session in memory — and reports what reached the file and what was dropped |
 | **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
 | **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
-| **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
+| **SD card operations** | List, download, and delete over USB/serial or WiFi/TCP (firmware ≥ 3.7.0); format; start/stop SD logging over USB / serial |
 | **Network configuration** | Push WiFi credentials and static LAN IPs from your app |
 | **Firmware updates** | PIC32 and WiFi-module flashing with progress, cancellation, and automatic recovery to a clean re-flashable bootloader state on mid-flash failure |
 | **Cross-platform** | .NET 9.0 and 10.0 on Windows, macOS, Linux |

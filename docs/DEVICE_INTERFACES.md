@@ -73,7 +73,7 @@ if (device is IStreamingDevice streamingDevice)
 The synchronous methods (`StartStreaming()`, `EnableChannel()`, etc.) remain, unchanged, for existing
 callers — the `Async` members are additive, not a replacement. Unlike `Connect`/`Disconnect`, most of
 this surface has no genuine async machinery underneath: `DaqifiStreamingDevice`'s streaming/channel/DIO
-/PWM/output/reboot commands are fire-and-forget writes with nothing to await, so the `Async` twin is a
+/PWM/output commands are fire-and-forget writes with nothing to await, so the `Async` twin is a
 thin, cancellable wrapper around the same single write.
 
 `IStreamingDevice` also extends `IConfirmingDeviceAdministration`, so the confirming calibration calls
