@@ -56,9 +56,11 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 > device is logging to its SD card — the data goes to the card instead of to this machine, so those
 > calls are refused with that explanation rather than returning nothing.
 >
-> **Retrieve before you stream.** A live streaming session collapses the device's SD buffer
-> (firmware #703), after which downloads come back empty until the device is reconnected or another
-> SD recording re-arms it. Do the SD work first on a fresh connection.
+> **Retrieve before you stream**, unless `discover_devices` reports a `firmwareVersion` of 3.7.3 or
+> later (treat an empty or unknown version as older). On older firmware a live streaming session
+> collapses the device's SD buffer (firmware #703), after which downloads come back empty until the
+> device is power-cycled or another SD recording re-arms it. Firmware 3.7.3 keeps the buffer large
+> enough to read through and reports a failed read instead of going silent.
 
 > **Analog output is Nyquist 3 hardware.** On any other board `set_analog_output` is refused
 > outright, because the firmware would otherwise discard the command without saying so and the call
