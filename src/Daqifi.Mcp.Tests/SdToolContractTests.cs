@@ -159,7 +159,9 @@ public class SdCardToolContractTests
         await agent.SetSampleRateAsync(AgentHarness.DeviceId, 20_000);
 
         // The cap moves under the live rate without any tool call re-validating it — which is the
-        // only way an over-cap rate survives to this point.
+        // only way an over-cap rate survives to this point: set_sample_rate refuses one,
+        // configure_analog_channels lowers one, and configure_digital_channels leaves Core's
+        // analog-only cap where it was.
         device.CapForEnabledAnalogCount = _ => 1_000;
         await device.ReadCapabilityDocumentAsync();
 
