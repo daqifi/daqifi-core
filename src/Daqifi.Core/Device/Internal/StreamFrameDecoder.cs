@@ -430,8 +430,8 @@ internal sealed class StreamFrameDecoder
 
         // Flag dropped samples from the device-clock delta (immune to host arrival jitter).
         // Isolate subscriber exceptions (the device does that) so a throwing GapDetected handler
-        // cannot skip the per-channel decode below — which the caller's broad catch would then
-        // silently drop.
+        // cannot skip the per-channel decode below — which the per-frame catch in EmitStreamFrame
+        // would then drop.
         if (_gapDetector.IsGap(timestampResult.SecondsBetweenMessages))
         {
             _host.RaiseGapDetected(new TimestampGapEventArgs(

@@ -242,13 +242,14 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
     /// <summary>
     /// Initializes a new instance of the SerialDeviceFinder class with an
     /// explicit USB descriptor provider — primarily for tests that mock the
-    /// platform-specific WMI / sysfs lookup.
+    /// platform-specific WMI / sysfs / ioreg lookup.
     /// </summary>
     /// <param name="baudRate">The baud rate to use for serial connections.</param>
     /// <param name="usbPortDescriptorProvider">
     /// Provider used to resolve a port's USB Vendor / Product ID before
     /// opening it. When null, a platform-default provider is used (Windows
-    /// → WMI, Linux → sysfs, others → no-op fallback). Pass
+    /// → WMI, Linux → sysfs, macOS → <c>ioreg</c>, others → no-op fallback;
+    /// see <see cref="UsbPortDescriptorProviderFactory"/>). Pass
     /// <see cref="NullUsbPortDescriptorProvider.Instance"/> explicitly to
     /// force the legacy probe-everything behavior.
     /// </param>
@@ -510,7 +511,7 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
 
                     // Freshly abandoned: the PREVIOUS pass ended by timeout or
                     // caller cancellation and left this claim behind while its
-                    // probe unwinds — measured ~490ms, not wedged. The
+                    // probe unwinds — measured ~57ms, not wedged. The
                     // skip below costs ~1ms, so a caller that retries promptly
                     // (the MCP DaqifiAgent builds a fresh finder per call) would
                     // burn every retry inside the drain window and conclude no
@@ -677,14 +678,12 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
 
         try
         {
-            // Create and configure the serial port
             port = new SerialPort(portName, _baudRate)
             {
                 ReadTimeout = ProbeTimeoutMs,
                 WriteTimeout = ProbeTimeoutMs
             };
 
-            // Try to open the port
             port.Open();
             port.DtrEnable = true;
 
