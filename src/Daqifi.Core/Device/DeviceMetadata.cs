@@ -70,10 +70,11 @@ public class DeviceMetadata
     /// <summary>
     /// Gets or sets the most recent device health telemetry (battery, board temperature,
     /// power/device status) decoded from a status message. Status is request-only (issue #535):
-    /// streaming frames do not carry health, so this holds the last requested reading until
-    /// <see cref="DaqifiDevice.RefreshDeviceStatusAsync"/> asks again. Assigning <c>null</c> is
-    /// coerced to a fresh instance so <see cref="UpdateFromProtobuf"/> can never dereference
-    /// null on the status path.
+    /// streaming frames do not carry health, so this holds the last requested reading (the one
+    /// captured during <see cref="DaqifiDevice.InitializeAsync"/>, unless something has asked
+    /// since) — call <see cref="DaqifiDevice.RefreshDeviceStatusAsync"/> for a current one.
+    /// Assigning <c>null</c> is coerced to a fresh instance so <see cref="UpdateFromProtobuf"/>
+    /// can never dereference null on the status path.
     /// </summary>
     public DeviceHealth Health
     {

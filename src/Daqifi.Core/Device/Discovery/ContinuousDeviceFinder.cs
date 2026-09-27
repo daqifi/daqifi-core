@@ -22,7 +22,8 @@ namespace Daqifi.Core.Device.Discovery;
 /// <see cref="AllTransportsDeviceFinder"/> rather than creating one
 /// <see cref="ContinuousDeviceFinder"/> per transport — that composite already
 /// fans out and deduplicates, as its remarks describe. Separate instances are
-/// only needed when each finder must use its own scan interval.
+/// only needed when transports need different <see cref="ContinuousDiscoveryOptions"/>
+/// — their own scan interval, pass timeout or miss threshold.
 /// </remarks>
 public class ContinuousDeviceFinder : IDisposable
 {
