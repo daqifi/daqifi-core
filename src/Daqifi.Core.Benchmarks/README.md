@@ -74,12 +74,22 @@ If a gate is ever wanted, gate on allocation rather than time.
 
 ## Baseline
 
-Non-protobuf rows are the `2a59fd1` run on `main` (the table that filed #697). The protobuf
-SD-card rows are the post-#699 figures for the raw `AnalogInData` path, copied from #699
-rather than re-measured here. No other timing row was hand-edited; those refresh on the next
-`workflow_dispatch` of the Benchmarks workflow. That run also picks up this harness change:
-`DecodeRawAnalogFrame` is the decode baseline, and the framing and consumer buffers are raw
-counts, so the published means for those families still describe the previous harness.
+This table is not one run. Every row except `ProtobufDrainAll` and `ProtobufTimeToFirstSample`
+is the `2a59fd1` run on `main` (the table that filed #697). Those two are the *after* figures
+from #699's own before/after run (default job), a separate invocation, copied here rather than
+re-measured.
+
+The harness has changed since `2a59fd1` and these rows have not been re-measured against it.
+`DecodeRawAnalogFrame` is now the decode baseline, and `DecodeCombinedFrame`, the framing
+buffers and the consumer buffers carry raw counts (`AnalogInData`, what supported firmware
+sends) instead of floats. The framing buffer is also 100 frames instead of 50, so it still
+fills one 4 KB read. The `DecodeCombinedFrame`, framing and consumer rows therefore
+describe float payloads. `DecodeRawAnalogFrame` and `DecodeAnalogFloatFrame` time the same
+frames they did then; only the baseline marker moved.
+
+Nothing refreshes this table automatically. The Benchmarks workflow posts its tables to the run
+summary from an `ubuntu-latest` runner, and those numbers do not compare with these. Replace the
+table with one full run on one machine.
 
 ```
 BenchmarkDotNet v0.15.8, macOS Tahoe 26.5 (25F71) [Darwin 25.5.0]
@@ -91,8 +101,8 @@ Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
-| DecodeAnalogFloatFrame | 257.7 ns | 1.38 KB |
 | DecodeRawAnalogFrame | 329.8 ns | 1.38 KB |
+| DecodeAnalogFloatFrame | 257.7 ns | 1.38 KB |
 | DecodeCombinedFrame | 814.6 ns | 2.78 KB |
 
 **Protobuf framing** — per frame:
@@ -131,6 +141,8 @@ The absolute numbers are a property of this machine, not of the library. What tr
 machines is the shape: the ratios between cases, and the allocation figures.
 
 #699 closed #697: the reader yields each frame as it is decoded instead of parsing a whole 64 KB
-buffer first, and the configuration pre-scan stops once the clock is known. `CsvTimeToFirstSample`
-was 2.0 µs on that run, so first-sample latency is 4.7× CSV rather than 800×. Draining the whole
-file got 2.2× faster as a side effect: the per-chunk list and message wrappers are gone.
+buffer first, and the configuration pre-scan stops once the clock is known. At `2a59fd1` the
+protobuf parser took 1,623 µs and 6,754 KB to hand back its first sample, about 800× CSV. On
+#699's run it took 9.4 µs against `CsvTimeToFirstSample`'s 2.0 µs, 4.7× CSV. Draining the whole
+file got 2.2× faster as a side effect (4,504.4 µs to 2,091.4 µs on that run): the per-chunk list
+and message wrappers are gone.

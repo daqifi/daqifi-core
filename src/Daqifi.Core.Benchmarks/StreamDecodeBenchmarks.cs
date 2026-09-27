@@ -73,7 +73,7 @@ public class StreamDecodeBenchmarks
         _raw = new DecodeCase(CreateDevice(digitalPortCount: 0), BuildFrames(analogFloat: false, digital: false));
         _combined = new DecodeCase(
             CreateDevice(digitalPortCount: DigitalChannelCount),
-            BuildFrames(analogFloat: true, digital: true));
+            BuildFrames(analogFloat: false, digital: true));
     }
 
     /// <summary>
@@ -92,7 +92,7 @@ public class StreamDecodeBenchmarks
     public void DecodeAnalogFloatFrame() => _float.Replay();
 
     /// <summary>
-    /// Analog and digital in one frame, the shape a stream with DIO enabled produces.
+    /// Raw analog counts and digital in one frame, the shape a stream with DIO enabled produces.
     /// </summary>
     [Benchmark(OperationsPerInvoke = FrameCount)]
     public void DecodeCombinedFrame() => _combined.Replay();
@@ -186,7 +186,7 @@ public class StreamDecodeBenchmarks
     /// device looks like one long 1 kHz acquisition — including the genuine 32-bit tick rollover
     /// every ~86 seconds of device time, which is a case the decoder is built to handle rather
     /// than an artefact of the harness. The cost inside the measured loop is one addition and one
-    /// field write per frame, sub-nanosecond against a ~260 ns decode, and it allocates nothing.
+    /// field write per frame, sub-nanosecond against a ~300 ns decode, and it allocates nothing.
     /// </remarks>
     private sealed class DecodeCase(BenchmarkStreamingDevice device, DaqifiOutMessage[] frames)
     {
