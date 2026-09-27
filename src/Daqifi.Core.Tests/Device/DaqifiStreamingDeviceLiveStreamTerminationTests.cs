@@ -240,13 +240,21 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
         using var transport = new DroppableTransport();
         var device = new ThrowingHookDevice("Badly Wired Device", transport);
         device.Connect();
+        var errors = new List<DeviceErrorEventArgs>();
+        device.ErrorOccurred += (_, e) => errors.Add(e);
 
         var escaped = Record.Exception(() => device.Dispose());
 
         // A Dispose that throws hides the handles it did release behind an exception nobody can
         // act on, so the library's own cleanup failure is reported instead.
         Assert.Null(escaped);
-        Assert.False(transport.IsConnected);
+        Assert.Contains(errors, e => e.Source == DeviceErrorSource.Unknown
+            && e.Error.Message == "a badly wired internal release hook");
+
+        // The handles are released regardless. Checked through disposal rather than IsConnected:
+        // the disconnect ahead of the hook already clears that, so it would pass even if the
+        // transport were never disposed.
+        Assert.Throws<ObjectDisposedException>(() => transport.Stream);
     }
 
     #region Helpers
