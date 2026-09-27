@@ -1609,7 +1609,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         _operations.TryAcquireForTeardownAsync(TextExchangeTeardownWait, cancellationToken);
 
     /// <summary>
-    /// Unsubscribes, stops, disposes and drops the message producer/consumer. Shared by
+    /// Unsubscribes, disposes (which stops) and drops the message producer/consumer. Shared by
     /// <see cref="Disconnect"/> and <see cref="DisconnectAsync"/>.
     /// </summary>
     private void StopMessagePumps()
@@ -1626,17 +1626,17 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _messageProducer.SendFailed -= OnMessageSendFailed;
         }
 
-        // Stop message consumer and producer safely if available
-        _messageConsumer?.StopSafely();
-        _messageProducer?.StopSafely();
-
-        // Dispose before dropping the references. StopSafely leaves the producer's
-        // wait handles alive, and when its join times out it returns with the consumer
-        // already stopped but its reader possibly still in an in-flight read.
-        // StreamMessageConsumer.Dispose joins that stale reader only once the consumer
-        // is stopped, which is this order. A reconnect runs this on every attempt, so
-        // nulling without disposing leaks a producer (its wait handles) and skips that
-        // join on each try.
+        // Dispose, don't just stop, before dropping the references. These used to be
+        // stopped and then abandoned undisposed, on every disconnect and on every
+        // reconnect attempt, which tears down the same way.
+        //
+        // Dispose does the stop itself (StopSafely, with the same default budget), so
+        // there is deliberately no separate StopSafely first. StreamMessageConsumer.Dispose
+        // joins a running reader through its own StopSafely, and only runs its extra
+        // stale-reader join when it finds the consumer already stopped. Stopping here
+        // first would put every consumer on that second path: a reader wedged in a read
+        // that only the transport close below can release would be joined twice, a
+        // second apart, doubling this teardown to two seconds for nothing.
         //
         // Null afterwards so a subsequent Connect() rebuilds them against the
         // transport's current Stream. SerialStreamTransport.Stream returns
@@ -1655,7 +1655,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <summary>
-    /// Disposes one message pump, then clears the field that held it.
+    /// Disposes (and so stops) one message pump, then clears the field that held it.
     /// </summary>
     /// <remarks>
     /// The field is cleared even when <see cref="IDisposable.Dispose"/> throws. Leaving it
