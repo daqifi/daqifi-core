@@ -70,7 +70,7 @@ jobs:
       run: dotnet restore Daqifi.Core.sln
 
     - name: Build
-      run: dotnet build --no-restore Daqifi.Core.sln
+      run: dotnet build -c Release --no-restore Daqifi.Core.sln
 
     # --no-build because the step above already built it. Without that flag every
     # leg compiled the solution a second time, which the matrix would have tripled.
@@ -79,7 +79,7 @@ jobs:
     # --no-build. This step can now only fail on a test failure — the post-test
     # MSBuild step that used to fail it after a fully green run is gone (#689).
     - name: Test
-      run: dotnet test --no-build --no-restore Daqifi.Core.sln
+      run: dotnet test -c Release --no-build --no-restore Daqifi.Core.sln
 
     # The baseline is only as good as it is current. ApiCompat can only report a
     # member the baseline package actually contains, so every API added since the
@@ -134,9 +134,9 @@ jobs:
     #
     # Ubuntu only: the packaged shape is identical on all three legs, so the other
     # two would pay to compute the same answer. `dotnet pack` defaults to Release,
-    # so this does compile Daqifi.Core once more rather than reusing the Debug
-    # output above - one project, a few seconds, on one leg. The package itself is
-    # thrown away; only the validation result matters.
+    # the configuration the Build step compiled, so without --no-build it still runs
+    # the build targets but finds Daqifi.Core up to date and skips the compile. The
+    # package itself is thrown away; only the validation result matters.
     - name: Validate packaged API against the last published release
       if: matrix.os == 'ubuntu-latest'
       run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --no-restore --output "${{ runner.temp }}/api-validation"
