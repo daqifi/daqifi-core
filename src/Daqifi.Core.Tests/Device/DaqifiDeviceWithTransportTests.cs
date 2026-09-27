@@ -114,6 +114,8 @@ public class DaqifiDeviceWithTransportTests
 
         public event EventHandler<TransportStatusEventArgs>? StatusChanged;
 
+        public string GetWrittenContent() => System.Text.Encoding.UTF8.GetString(_stream.ToArray());
+
         public Task ConnectAsync()
         {
             return ConnectAsync(null);
@@ -188,6 +190,61 @@ public class DaqifiDeviceWithTransportTests
         var memoryStream = (MemoryStream)transport.Stream;
         var streamContent = System.Text.Encoding.UTF8.GetString(memoryStream.ToArray());
         Assert.Contains("SYSTem:SYSInfoPB?", streamContent);
+    }
+
+    [Fact]
+    public void DaqifiDevice_Disconnect_FlushesEveryQueuedCommandInOrder()
+    {
+        // Commands queued back-to-back can still be sitting in the producer's queue when
+        // Disconnect runs, so this pins that Disconnect drains the queue (StopSafely) rather than
+        // dropping it, and that the device's send path keeps them in order. A single send, as
+        // above, may already be written by the time Disconnect runs, so it cannot reliably tell
+        // a draining Disconnect from one that clears the queue.
+        using var transport = new MockStreamTransport();
+        using var device = new DaqifiDevice("Mock Device", transport);
+
+        device.Connect();
+        device.Send(ScpiMessageProducer.GetDeviceInfo);
+        device.Send(ScpiMessageProducer.RebootDevice);
+        device.Send(ScpiMessageProducer.StartStreaming(1000));
+        device.Send(ScpiMessageProducer.StopStreaming);
+        device.Disconnect();
+
+        var written = transport.GetWrittenContent();
+        var positions = new[]
+        {
+            written.IndexOf("SYSTem:SYSInfoPB?", StringComparison.Ordinal),
+            written.IndexOf("SYSTem:REboot", StringComparison.Ordinal),
+            written.IndexOf("SYSTem:StartStreamData 1000", StringComparison.Ordinal),
+            written.IndexOf("SYSTem:StopStreamData", StringComparison.Ordinal),
+        };
+        Assert.All(positions, p => Assert.True(p >= 0, $"A queued command never reached the stream: '{written}'"));
+        Assert.Equal(positions.Order(), positions);
+    }
+
+    [Fact]
+    public void DaqifiDevice_TwoDevicesOnSeparateTransports_EachWritesOnlyToItsOwnStream()
+    {
+        // Two devices connected at once: any producer, queue or stream shared between instances
+        // would land one device's command on the other's wire.
+        using var transport1 = new MockStreamTransport();
+        using var transport2 = new MockStreamTransport();
+        using var device1 = new DaqifiDevice("Device 1", transport1);
+        using var device2 = new DaqifiDevice("Device 2", transport2);
+
+        device1.Connect();
+        device2.Connect();
+        device1.Send(ScpiMessageProducer.GetDeviceInfo);
+        device2.Send(ScpiMessageProducer.RebootDevice);
+        device1.Disconnect();
+        device2.Disconnect();
+
+        var content1 = transport1.GetWrittenContent();
+        var content2 = transport2.GetWrittenContent();
+        Assert.Contains("SYSTem:SYSInfoPB?", content1);
+        Assert.DoesNotContain("SYSTem:REboot", content1);
+        Assert.Contains("SYSTem:REboot", content2);
+        Assert.DoesNotContain("SYSTem:SYSInfoPB?", content2);
     }
 
     [Fact]
