@@ -325,6 +325,13 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(async ct =>
         {
+            // The last point a cancel is honored. Once the mask below goes out, the capability
+            // re-read and the rate check after it have to land with it, or a widened channel set
+            // is left live under a rate the firmware will not stream at. The re-read is a bounded
+            // text exchange, so it is not handed the token: cancelling it part-way would skip the
+            // rate check and abandon the exchange with the device's reply still arriving.
+            ct.ThrowIfCancellationRequested();
+
             var analog = Snapshot(device).Where(c => c.Type == ChannelType.Analog).ToList();
             var validNumbers = analog.Select(c => c.ChannelNumber).ToHashSet();
 
@@ -350,7 +357,7 @@ public sealed class DaqifiAgent
             // The device's authoritative rate cap (CapabilityStreaming.CurrentMaximumRateHz) is
             // scoped to the channel set enabled when the document was read — refresh it now so
             // set_sample_rate validates against the configuration that is actually live.
-            await RefreshCapabilityDocumentAsync(device, streaming, ct).ConfigureAwait(false);
+            await RefreshCapabilityDocumentAsync(device, streaming).ConfigureAwait(false);
 
             var adjustedFromHz = EnforceSampleRateCap(streaming);
 
@@ -1486,9 +1493,9 @@ public sealed class DaqifiAgent
     internal async Task HoldRegistryGateAsync(TaskCompletionSource acquired, Task release)
     {
         await _gate.WaitAsync().ConfigureAwait(false);
-        acquired.SetResult();
         try
         {
+            acquired.SetResult();
             await release.ConfigureAwait(false);
         }
         finally
@@ -1540,8 +1547,7 @@ public sealed class DaqifiAgent
     // runs a text-mode exchange that pauses the protobuf consumer, which Core documents as unsafe
     // to call while streaming (SD logging sets IsStreaming too) — leaving the cap stale here is
     // preferable to disrupting an active session.
-    private async Task RefreshCapabilityDocumentAsync(
-        DaqifiDevice device, IStreamingDevice streaming, CancellationToken cancellationToken)
+    private async Task RefreshCapabilityDocumentAsync(DaqifiDevice device, IStreamingDevice streaming)
     {
         if (streaming.IsStreaming)
         {
@@ -1550,7 +1556,7 @@ public sealed class DaqifiAgent
 
         try
         {
-            await device.ReadCapabilityDocumentAsync(cancellationToken).ConfigureAwait(false);
+            await device.ReadCapabilityDocumentAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

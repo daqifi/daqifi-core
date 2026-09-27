@@ -46,7 +46,7 @@ internal sealed class FakeStreamingDevice : DaqifiStreamingDevice, ISdCardOperat
 
     /// <summary>
     /// When set, runs before the document is applied, with the token the tool passed into the
-    /// refresh. A cancelled configure should abort here rather than sitting out the wait.
+    /// re-read. Lets a test hold the re-read open, the way a real text exchange takes time.
     /// </summary>
     internal Func<CancellationToken, Task>? BeforeCapabilityRead { get; set; }
 
