@@ -1,0 +1,45 @@
+---
+description: DAQiFi Core agent checklist — TFMs, layout, PublicAPI, analyzers, git
+alwaysApply: true
+---
+
+# DAQiFi Core
+
+.NET SDK + MCP tool for DAQiFi hardware. PublicAPI, CA2007, IDE0161, CA1707, and the documented Git workflow (branch names, PRs against `main`) live in **CONTRIBUTING.md**. Never push `main`: it is gated by a merge queue (squash-only), so everything lands through a PR. Commit and PR titles follow the conventional-commit style already in `git log`: `type(scope): summary`, e.g. `fix(sdcard): ...`, `feat(mcp): ...`, `chore(api): ...`, with `!` for a breaking change.
+
+## TFMs
+
+- Library, MCP tool, tests (`Daqifi.Core`, `Daqifi.Mcp`, `Daqifi.Core.Tests`, `Daqifi.Mcp.Tests`): `net9.0;net10.0`
+- Benchmarks (`Daqifi.Core.Benchmarks`): `net10.0` only
+- Not .NET 8. Do not multi-target the benchmark host.
+
+## Layout — types that exist
+
+```
+src/Daqifi.Core/
+  Device/                    IDevice, IStreamingDevice, DaqifiDevice, DaqifiStreamingDevice, ConnectionStatus
+  Device/Discovery/          IDeviceFinder (not IDiscoveryService / DeviceDiscoveryService)
+  Communication/Messages/    IOutboundMessage<T>, IInboundMessage<T>, ScpiMessage, ProtobufMessage
+  Communication/Producers/   ScpiMessageProducer
+  Communication/Consumers/   LineBasedMessageParser, ProtobufMessageParser
+  Communication/Transport/   Tcp / Serial / Hid / Udp
+  Channel/, Firmware/, Logging/
+```
+
+No `src/Daqifi.Core/Discovery/` and no `Connection/` tree. Connection lives on Device + Transport. Do not invent types.
+
+## Messages
+
+First-class parsers: SCPI (line-based) and protobuf. JSON is a device stream-format SCPI option (`ScpiMessageProducer.SetJsonStreamFormat`), not a library `IMessageParser`.
+
+## ConnectionStatus
+
+`Disconnected`, `Connecting`, `Connected`, `Lost`, `Retrying`, `Failed`.
+
+## Build already owns this
+
+- Nullable is on in `Directory.Build.props`. New files normally do not need `#nullable enable`; leave existing file-level directives unless a deliberate cleanup.
+- New public API → `src/Daqifi.Core/PublicAPI.Unshipped.txt` (RS0016/RS0017). Intentional removal of shipped API → delete from `PublicAPI.Shipped.txt` + ApiCompat suppression. Do not send removals/renames only to Unshipped. Renaming a shipped member → keep an `[Obsolete]` forwarder instead of removing it. Details: CONTRIBUTING.md.
+- Awaits in `Daqifi.Core` → `ConfigureAwait(false)` (CA2007; tests exempt).
+- File-scoped namespaces (IDE0161).
+- No underscores in `Daqifi.Core` public member names (CA1707; test method names are exempt).

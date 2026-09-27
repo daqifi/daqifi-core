@@ -115,9 +115,66 @@ public class MessageProducerTests
         
         // Assert
         Assert.True(result);
+        Assert.True(producer.IsIdle);
+        Assert.False(producer.IsRunning);
         var written = Encoding.UTF8.GetString(stream.ToArray());
         Assert.Contains("COMMAND1", written);
         Assert.Contains("COMMAND2", written);
+    }
+
+    [Fact]
+    public void MessageProducer_StopSafely_ShouldDrainAQueuedMessageBehindAnInFlightWrite()
+    {
+        // The 10 ms poll was sitting here: one message dequeued and blocking in Write, another
+        // still queued. StopSafely has to wait for both without Sleep-polling the queue.
+        using var stream = new BlockingWriteStream();
+        using var producer = new MessageProducer<string>(stream);
+
+        producer.Start();
+        producer.Send(new ScpiMessage("FIRST"));
+        Assert.True(stream.WaitForWriteStarted(TimeSpan.FromSeconds(5)), "The first write never started.");
+        producer.Send(new ScpiMessage("SECOND"));
+        Assert.Equal(1, producer.QueuedMessageCount);
+        Assert.False(producer.IsIdle);
+
+        var stopped = false;
+        var stopper = new Thread(() => stopped = producer.StopSafely(2000)) { IsBackground = true };
+        stopper.Start();
+
+        Assert.False(
+            stopper.Join(50),
+            "StopSafely returned while a write was still in flight and a message was still queued.");
+
+        stream.ReleaseWrite();
+
+        Assert.True(stopper.Join(2000), "StopSafely did not return after the in-flight write was released.");
+        Assert.True(stopped);
+        Assert.False(producer.IsRunning);
+        Assert.True(producer.IsIdle);
+        Assert.Equal(0, producer.QueuedMessageCount);
+        Assert.Equal(2L, producer.StartedWriteCount);
+        Assert.False(stream.HoldExpired);
+    }
+
+    [Fact]
+    public void MessageProducer_StopSafely_WhenAWriteNeverCompletes_TimesOut()
+    {
+        // Waiting on the queue being empty would return true here: the in-flight message has
+        // already been dequeued. Waiting on idle is what makes the timeout mean "pending
+        // messages were not sent".
+        using var stream = new BlockingWriteStream();
+        using var producer = new MessageProducer<string>(stream);
+
+        producer.Start();
+        producer.Send(new ScpiMessage("TEST:COMMAND"));
+        Assert.True(stream.WaitForWriteStarted(TimeSpan.FromSeconds(5)), "The write never started.");
+
+        var stopped = producer.StopSafely(50);
+
+        Assert.False(stopped, "StopSafely should time out while a write is still in flight, not treat an empty queue as drained.");
+        Assert.False(producer.IsRunning);
+
+        stream.ReleaseWrite();
     }
 
     [Fact]
@@ -156,8 +213,6 @@ public class MessageProducerTests
             producer.Send(new ScpiMessage($"MESSAGE{i}"));
         }
         
-        // Wait for processing
-        Thread.Sleep(50);
         producer.StopSafely();
         
         // Assert - All messages should be written
@@ -182,10 +237,7 @@ public class MessageProducerTests
         producer.Start(); // Call again
         Assert.True(producer.IsRunning); // Should still be running
         
-        // Should work normally
         producer.Send(new ScpiMessage("TEST"));
-        Thread.Sleep(20);
-        
         producer.StopSafely();
         
         // Assert
@@ -225,7 +277,9 @@ public class MessageProducerTests
 
         // Act & Assert - a failing write on the background thread must not surface to the caller
         producer.Send(new ScpiMessage("TEST:COMMAND"));
-        Thread.Sleep(50);
+        Assert.True(
+            SpinWait.SpinUntil(() => producer.StartedWriteCount == 1 && producer.IsIdle, TimeSpan.FromSeconds(2)),
+            "The failing write never ran.");
         Assert.True(producer.IsRunning);
         Assert.True(producer.StopSafely());
     }
