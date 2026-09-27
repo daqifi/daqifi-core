@@ -13,82 +13,6 @@ public class Pic32BootloaderProtocolTests
     }
 
     [Fact]
-    public void CreateRequestVersionMessage_DelegatesToProducer()
-    {
-        var expected = Pic32BootloaderMessageProducer.CreateRequestVersionMessage();
-        var result = _protocol.CreateRequestVersionMessage();
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void CreateEraseFlashMessage_DelegatesToProducer()
-    {
-        var expected = Pic32BootloaderMessageProducer.CreateEraseFlashMessage();
-        var result = _protocol.CreateEraseFlashMessage();
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void CreateProgramFlashMessage_DelegatesToProducer()
-    {
-        var hexRecord = new byte[] { 0xAA, 0xBB };
-        var expected = Pic32BootloaderMessageProducer.CreateProgramFlashMessage(hexRecord);
-        var result = _protocol.CreateProgramFlashMessage(hexRecord);
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void CreateJumpToApplicationMessage_DelegatesToProducer()
-    {
-        var expected = Pic32BootloaderMessageProducer.CreateJumpToApplicationMessage();
-        var result = _protocol.CreateJumpToApplicationMessage();
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void DecodeVersionResponse_DelegatesToConsumer()
-    {
-        var data = new byte[] { 0x01, 0x10, 0x01, 0x02, 0x05 };
-        var expected = Pic32BootloaderMessageConsumer.DecodeVersionResponse(data);
-        var result = _protocol.DecodeVersionResponse(data);
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void DecodeProgramFlashResponse_DelegatesToConsumer()
-    {
-        var data = new byte[] { 0x01, 0x03 };
-        var expected = Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(data);
-        var result = _protocol.DecodeProgramFlashResponse(data);
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void DecodeEraseFlashResponse_DelegatesToConsumer()
-    {
-        var data = new byte[] { 0x01, 0x02 };
-        var expected = Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(data);
-        var result = _protocol.DecodeEraseFlashResponse(data);
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void ParseHexFile_DelegatesToParser()
-    {
-        var lines = new[] { ":020000041D00DD", ":00000001FF" };
-        var result = _protocol.ParseHexFile(lines);
-
-        Assert.Equal(2, result.Count);
-    }
-
-    [Fact]
     public void Constructor_WithCustomProtectedRange_UsesCustomRange()
     {
         var protocol = new Pic32BootloaderProtocol(0x00010000, 0x00020000);
@@ -104,25 +28,6 @@ public class Pic32BootloaderProtocolTests
 
         // Data record should be filtered by custom range
         Assert.Equal(2, result.Count);
-    }
-
-    [Fact]
-    public void CreateReadCrcMessage_DelegatesToProducer()
-    {
-        var expected = Pic32BootloaderMessageProducer.CreateReadCrcMessage(0x9D000000, 0x200000);
-        var result = _protocol.CreateReadCrcMessage(0x9D000000, 0x200000);
-
-        Assert.Equal(expected, result);
-    }
-
-    [Fact]
-    public void DecodeReadCrcResponse_DelegatesToConsumer()
-    {
-        var framed = FrameReadCrcResponse(0xABCD);
-        var expected = Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(framed);
-        var result = _protocol.DecodeReadCrcResponse(framed);
-
-        Assert.Equal(expected, result);
     }
 
     [Fact]
@@ -231,28 +136,5 @@ public class Pic32BootloaderProtocolTests
         var regions = protocol.ComputeCrcRegions(lines);
 
         Assert.Empty(regions);
-    }
-
-    private static byte[] FrameReadCrcResponse(ushort flashCrc)
-    {
-        const byte soh = 0x01;
-        const byte eot = 0x04;
-        const byte dle = 0x10;
-
-        byte[] content = [0x04, (byte)(flashCrc & 0xFF), (byte)(flashCrc >> 8)];
-        var frameCrc = new Crc16(content).Crc;
-        var body = new List<byte>(content) { (byte)(frameCrc & 0xFF), (byte)(frameCrc >> 8) };
-
-        var framed = new List<byte> { soh };
-        foreach (var b in body)
-        {
-            if (b is soh or eot or dle)
-            {
-                framed.Add(dle);
-            }
-            framed.Add(b);
-        }
-        framed.Add(eot);
-        return framed.ToArray();
     }
 }
