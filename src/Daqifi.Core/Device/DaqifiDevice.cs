@@ -3061,9 +3061,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             // already-waiting async waiters on the floor without faulting them, so a second
             // refresh sitting behind a first would stop being woken when the first released,
             // and would sit there until the caller's own deadline expired and report a timeout.
-            // Leaving the gate alone, that caller is handed the gate immediately, sends, and
-            // gets the DeviceNotConnectedException SendViaProducer raises for a disposed
-            // producer — the fast, accurate answer. _operations makes the opposite trade
+            // Leaving the gate alone, that caller is handed the gate immediately, reaches Send,
+            // and gets the DeviceNotConnectedException its connectivity guard raises on a
+            // disposed device — the fast, accurate answer. _operations makes the opposite trade
             // because OperationSerializer is built for it: every one of its touchpoints already
             // catches ObjectDisposedException. This gate has no such contract, and the object
             // is collected with the device anyway.

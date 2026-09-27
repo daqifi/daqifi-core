@@ -130,13 +130,14 @@ public class ScpiMessageProducerTests
     [InlineData("   ")]
     public void GetSdFile_WithNullOrEmptyFileName_Throws(string? fileName)
     {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName!));
+        var ex = Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName!));
+        Assert.Equal("fileName", ex.ParamName);
     }
 
     // The newline cases are the ones that matter most: the transport frames commands by line,
     // so anything after a \n in an interpolated filename arrives at the device as a command of
-    // its own ("log.bin\nSYSTem:REboot" would reboot it). Same rejected set as
-    // SdCardOperations.ValidateSdCardFileName, which guards the device-facing entry points.
+    // its own ("log.bin\nSYSTem:REboot" would reboot it). The SdCardOperations entry points
+    // call the same validator, so this is the whole definition of a legal SD filename.
     [Theory]
     [InlineData("a\"b")]
     [InlineData("a;b")]
@@ -144,7 +145,8 @@ public class ScpiMessageProducerTests
     [InlineData("log.bin\rSYSTem:REboot")]
     public void GetSdFile_WithInjectionChars_Throws(string fileName)
     {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName));
+        var ex = Assert.Throws<ArgumentException>(() => ScpiMessageProducer.GetSdFile(fileName));
+        Assert.Equal("fileName", ex.ParamName);
     }
 
     [Theory]
@@ -153,7 +155,8 @@ public class ScpiMessageProducerTests
     [InlineData("   ")]
     public void SetSdLoggingFileName_WithNullOrEmptyFileName_Throws(string? fileName)
     {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetSdLoggingFileName(fileName!));
+        var ex = Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetSdLoggingFileName(fileName!));
+        Assert.Equal("fileName", ex.ParamName);
     }
 
     [Theory]
@@ -163,7 +166,8 @@ public class ScpiMessageProducerTests
     [InlineData("log.bin\rSYSTem:REboot")]
     public void SetSdLoggingFileName_WithInjectionChars_Throws(string fileName)
     {
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetSdLoggingFileName(fileName));
+        var ex = Assert.Throws<ArgumentException>(() => ScpiMessageProducer.SetSdLoggingFileName(fileName));
+        Assert.Equal("fileName", ex.ParamName);
     }
 
     [Theory]
@@ -175,7 +179,33 @@ public class ScpiMessageProducerTests
     {
         // DELete interpolates into the same quoted argument as GET and FILE, so it goes
         // through the same validator rather than keeping its own weaker null/empty-only check.
-        Assert.Throws<ArgumentException>(() => ScpiMessageProducer.DeleteSdFile(fileName));
+        var ex = Assert.Throws<ArgumentException>(() => ScpiMessageProducer.DeleteSdFile(fileName));
+        Assert.Equal("fileName", ex.ParamName);
+    }
+
+    // The other side of the guard: names the device writes itself (log_yyyyMMdd_HHmmss plus
+    // each format's extension), and the ordinary characters a user-chosen name carries --
+    // spaces, extra dots, underscores, hyphens, a directory prefix, a long name -- are all
+    // still passed through verbatim inside the quotes by every filename command.
+    public static TheoryData<string> LegitimateSdFileNames => new()
+    {
+        "log_20260927_103158.bin",
+        "log_20260927_103158.json",
+        "log_20260927_103158.csv",
+        "my run 2.bin",
+        "bench.test.v2.bin",
+        "run-01_final.csv",
+        "Daqifi/log_20260927_103158.bin",
+        new string('a', 200) + ".bin",
+    };
+
+    [Theory]
+    [MemberData(nameof(LegitimateSdFileNames))]
+    public void SdFileCommands_WithLegitimateFileName_PassItThroughVerbatim(string fileName)
+    {
+        Assert.Equal($"SYSTem:STORage:SD:GET \"{fileName}\"", ScpiMessageProducer.GetSdFile(fileName).Data);
+        Assert.Equal($"SYSTem:STORage:SD:FILE \"{fileName}\"", ScpiMessageProducer.SetSdLoggingFileName(fileName).Data);
+        Assert.Equal($"SYSTem:STORage:SD:DELete \"{fileName}\"", ScpiMessageProducer.DeleteSdFile(fileName).Data);
     }
 
     [Fact]
@@ -885,8 +915,9 @@ public class ScpiMessageProducerTests
     [InlineData("   ")]
     public void DeleteSdFile_WithNullOrEmptyFileName_Throws(string? fileName)
     {
-        Assert.Throws<ArgumentException>(
+        var ex = Assert.Throws<ArgumentException>(
             () => ScpiMessageProducer.DeleteSdFile(fileName!));
+        Assert.Equal("fileName", ex.ParamName);
     }
 
     [Fact]

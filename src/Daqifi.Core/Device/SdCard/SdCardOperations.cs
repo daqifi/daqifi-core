@@ -732,7 +732,8 @@ internal sealed class SdCardOperations
             // deterministic in a test instead of whatever second the run landed on.
             : $"log_{Clock.GetLocalNow().DateTime:yyyyMMdd_HHmmss}{extension}";
 
-        ValidateSdCardFileName(logFileName);
+        // Before the first send: a bad name must not leave LAN switched off behind it.
+        ScpiMessageProducer.ValidateSdFileName(logFileName);
 
         // SdCardLogFormat integer values map 1:1 to the SYSTem:STReam:FORmat SCPI argument
         var formatCommand = ScpiMessageProducer.SetStreamFormat((int)format);
@@ -831,12 +832,7 @@ internal sealed class SdCardOperations
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
-        }
-
-        ValidateSdCardFileName(fileName);
+        ScpiMessageProducer.ValidateSdFileName(fileName);
 
         var wasStreaming = PauseStreamingForSdOperation();
 
@@ -1188,12 +1184,7 @@ internal sealed class SdCardOperations
         // FeatureNotSupportedException instead of the old blanket USB-only rejection (ADR 0001).
         EnsureSdFileTransferSupportedOnTransport();
 
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            throw new ArgumentException("Filename cannot be null or empty.", nameof(fileName));
-        }
-
-        ValidateSdCardFileName(fileName);
+        ScpiMessageProducer.ValidateSdFileName(fileName);
         ArgumentNullException.ThrowIfNull(destinationStream);
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -1746,20 +1737,5 @@ internal sealed class SdCardOperations
         // No error lines and no content lines — empty directory. Caller continues.
         // Safe to treat as empty rather than as a lost reply: GetSdCardFilesAsync only reaches
         // this point once the device has answered the end-of-listing terminator (#396).
-    }
-
-    /// <summary>
-    /// Validates an SD card filename to prevent SCPI command injection.
-    /// </summary>
-    /// <param name="fileName">The filename to validate.</param>
-    /// <exception cref="ArgumentException">Thrown when the filename contains invalid characters.</exception>
-    private static void ValidateSdCardFileName(string fileName)
-    {
-        if (fileName.IndexOfAny(new[] { '"', '\n', '\r', ';' }) >= 0)
-        {
-            throw new ArgumentException(
-                "Filename contains invalid characters. Quotes, newlines, and semicolons are not allowed.",
-                nameof(fileName));
-        }
     }
 }

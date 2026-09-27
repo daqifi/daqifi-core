@@ -786,12 +786,12 @@ public class ScpiMessageProducer
 
     // SD filenames are interpolated into a quoted SCPI argument. Empty names are never useful,
     // and `"` / `;` / CR / LF break out of the quoted string, inject a second command, or end
-    // the line-delimited frame early and expose whatever follows as its own command. The
-    // rejected set is deliberately the same one SdCardOperations.ValidateSdCardFileName applies
-    // at the device-facing entry points, so a name that clears one layer cannot be rejected --
-    // or worse, accepted -- by the other. Shared across the three filename commands here so
-    // they cannot drift from each other either.
-    private static void ValidateSdFileName(string fileName)
+    // the line-delimited frame early and expose whatever follows as its own command. This is
+    // the one definition of a legal SD filename: the three filename commands here use it, and
+    // so do the device-facing SdCardOperations entry points, which call it up front so a bad
+    // name is refused before any of their setup commands (LAN off, SD on, ...) are sent.
+    // Internal for that reason only.
+    internal static void ValidateSdFileName(string fileName)
     {
         if (string.IsNullOrWhiteSpace(fileName))
         {
