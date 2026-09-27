@@ -20,8 +20,7 @@ namespace Daqifi.Core.Device;
 /// during streaming"; there are none, and a consumer who believed it would display a battery
 /// percentage frozen at connect.
 /// </para>
-/// </remarks>
-/// <remarks>
+/// <para>
 /// The underlying protobuf fields are proto3 scalars with no explicit presence, so a
 /// value of <c>0</c> is indistinguishable from "not reported". To avoid dropping a known
 /// reading when a partial status frame omits a field, each value is <b>sticky</b>: it holds
@@ -29,6 +28,7 @@ namespace Daqifi.Core.Device;
 /// <see cref="BatteryPercent"/> and <see cref="BoardTemperatureCelsius"/> are therefore
 /// nullable — <c>null</c> means "never reported since this instance was created" — and the raw
 /// <see cref="PowerStatus"/> and <see cref="DeviceStatus"/> codes default to <c>0</c>.
+/// </para>
 /// </remarks>
 public class DeviceHealth
 {

@@ -9,6 +9,11 @@ namespace Daqifi.Core.Tests.Integration;
 /// Integration tests that verify the complete end-to-end flow:
 /// Transport -> MessageProducer -> Device -> SCPI Commands
 /// </summary>
+/// <remarks>
+/// No sleeps: <see cref="DaqifiDevice.Disconnect"/> stops the message producer with
+/// <c>StopSafely</c>, which drains every queued message before returning, so the
+/// transport content is complete by the time each test reads it.
+/// </remarks>
 public class EndToEndTests
 {
     [Fact]
@@ -23,16 +28,12 @@ public class EndToEndTests
         
         // Act - Complete connection and command flow
         device.Connect();
-        Thread.Sleep(100); // Allow message producer to start
         
         // Send multiple SCPI commands
         device.Send(ScpiMessageProducer.GetDeviceInfo);
         device.Send(ScpiMessageProducer.RebootDevice);
         device.Send(ScpiMessageProducer.StartStreaming(1000));
         device.Send(ScpiMessageProducer.StopStreaming);
-        
-        // Allow background processing
-        Thread.Sleep(300);
         
         device.Disconnect();
         
@@ -58,10 +59,8 @@ public class EndToEndTests
         
         // Act
         device.Connect();
-        Thread.Sleep(100);
         
         device.Send(ScpiMessageProducer.GetDeviceInfo);
-        Thread.Sleep(200);
         
         device.Disconnect();
         
@@ -82,11 +81,9 @@ public class EndToEndTests
         // Act - Connect and use both devices
         device1.Connect();
         device2.Connect();
-        Thread.Sleep(100);
         
         device1.Send(ScpiMessageProducer.GetDeviceInfo);
         device2.Send(ScpiMessageProducer.RebootDevice);
-        Thread.Sleep(300);
         
         device1.Disconnect();
         device2.Disconnect();
@@ -112,13 +109,11 @@ public class EndToEndTests
         // Act - Multiple connect/disconnect cycles
         device.Connect();
         device.Send(ScpiMessageProducer.GetDeviceInfo);
-        Thread.Sleep(100);
         device.Disconnect();
         
         // Reconnect
         device.Connect();
         device.Send(ScpiMessageProducer.RebootDevice);
-        Thread.Sleep(100);
         device.Disconnect();
         
         // Assert - Both messages should be present
