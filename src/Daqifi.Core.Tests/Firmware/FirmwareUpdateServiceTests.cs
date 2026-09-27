@@ -4949,11 +4949,20 @@ public class FirmwareUpdateServiceTests
         try
         {
             // Hard timeout so a regression of the guard fails fast instead of hanging
-            // the run on the non-reentrant _operationLock.
+            // the run on the non-reentrant _operationLock. The first progress report
+            // fires before UpdateFirmwareAsync returns its task, so the update runs off
+            // the test thread: called inline, a deadlock would block here before the
+            // timeout was ever attached. The timeout surfaces as a cancellation that
+            // ThrowsAny<Exception> would accept, so it is recorded and rejected by token.
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await Assert.ThrowsAnyAsync<Exception>(
-                () => service.UpdateFirmwareAsync(device, hexPath, progress)
+            var outerFailure = await Record.ExceptionAsync(
+                () => Task.Run(() => service.UpdateFirmwareAsync(device, hexPath, progress))
                     .WaitAsync(timeoutCts.Token));
+
+            Assert.False(
+                outerFailure is OperationCanceledException canceled
+                    && canceled.CancellationToken == timeoutCts.Token,
+                "UpdateFirmwareAsync hit the test's own timeout — reentry deadlocked on the operation lock instead of throwing.");
         }
         finally
         {
@@ -4961,6 +4970,9 @@ public class FirmwareUpdateServiceTests
         }
 
         Assert.True(reentryAttempted, "Progress callback never fired — test setup wrong.");
+
+        // The callback records the reentrant call's own exception, so it never escapes
+        // into the update: the reentry failure is asserted where it happened.
         var failure = Assert.IsType<InvalidOperationException>(reentrantFailure);
         Assert.Contains("in-flight firmware operation", failure.Message, StringComparison.Ordinal);
     }
