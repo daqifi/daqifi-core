@@ -5,21 +5,22 @@ on:
     types: [published]
 
 env:
-  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     
     - name: Setup .NET
-      uses: actions/setup-dotnet@v6
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
       with:
         dotnet-version: |
           9.0.x
@@ -44,20 +45,24 @@ jobs:
     - name: Test
       run: dotnet test --configuration Release --no-build
     
+    # Pack both nupkgs before either push. If MCP pack fails after Core is already
+    # on nuget.org, the tag is half-published; `--skip-duplicate` only helps a retry
+    # of the same push, not the missing second package.
+
     - name: Pack
       run: dotnet pack src/Daqifi.Core/Daqifi.Core.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
 
+    - name: Pack MCP server (dotnet tool)
+      run: dotnet pack src/Daqifi.Mcp/Daqifi.Mcp.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
+
     - name: NuGet login (OIDC -> temp API key)
-      uses: NuGet/login@v1
+      uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
       id: login
       with:
         user: tylerkron
 
     - name: Push to NuGet
       run: dotnet nuget push nupkgs/Daqifi.Core.*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
-
-    - name: Pack MCP server (dotnet tool)
-      run: dotnet pack src/Daqifi.Mcp/Daqifi.Mcp.csproj --configuration Release --no-build -p:PackageVersion=${VERSION} --output nupkgs
 
     - name: Push MCP server to NuGet
       run: dotnet nuget push nupkgs/Daqifi.Mcp.*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
