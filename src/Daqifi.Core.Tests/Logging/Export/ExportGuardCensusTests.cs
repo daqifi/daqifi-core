@@ -44,7 +44,8 @@ public class ExportGuardCensusTests
     /// <param name="Site">Human-readable name, so a failure says which guard drifted.</param>
     /// <param name="SourceFile">
     /// The file the guard is written in. The completeness scan pairs it with the sentence the
-    /// guard actually threw, so a duplicated row cannot pad a file's count for a throw no entry
+    /// guard actually threw and allows each sentence only one file, so neither a duplicated row
+    /// nor one copied from another file and relabelled can pad a file's count for a throw no entry
     /// reaches.
     /// </param>
     /// <param name="Method">
@@ -275,17 +276,33 @@ public class ExportGuardCensusTests
         // sites, so that pad is possible. A distinct sentence has to be earned by actually reaching
         // a distinct throw.
         //
-        // Treating the sentence as the identity holds while the throw sites in one file say
+        // The file is still a label the table hands itself, so it is held to one rule: a sentence
+        // is one throw and a throw lives in one file, so no sentence may carry two labels. Without
+        // that, a row copied from another file and relabelled is a new (file, sentence) pair and
+        // pads this file's count exactly as a plain duplicate used to. With it, every file's count
+        // is a count of distinct sentences, and the totals only agree if every throw was reached.
+        //
+        // Treating the sentence as the identity holds while the throw sites in the folder say
         // different things, which they do today. Should two ever collide, this reads one sentence
-        // short and fails — the safe direction: it asks for a look rather than passing on a guard
-        // nobody exercises. The fix is to give them distinct messages, which a caller wants anyway.
+        // short, or finds one sentence under two labels, and fails — the safe direction: it asks
+        // for a look rather than passing on a guard nobody exercises. The fix is to give them
+        // distinct messages, which a caller wants anyway.
         var found = RangeGuardSourceScanner.ThrowSitesIn(ExportSourceDirectory);
 
-        var reached = (await ObserveGuards()).Distinct().Select(g => g.SourceFile);
+        var reached = (await ObserveGuards()).Distinct().ToList();
+
+        var relabelled = reached
+            .GroupBy(g => g.Message, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => $"'{g.Key}' is labelled {string.Join(" and ", g.Select(s => s.SourceFile))}")
+            .ToList();
+
+        Assert.True(relabelled.Count == 0,
+            "One sentence cannot live in two files: " + string.Join("; ", relabelled));
 
         Assert.Equal(
             RangeGuardSourceScanner.SummarizeByFile(found.Select(s => s.File)),
-            RangeGuardSourceScanner.SummarizeByFile(reached));
+            RangeGuardSourceScanner.SummarizeByFile(reached.Select(g => g.SourceFile)));
     }
 
     [Fact]
