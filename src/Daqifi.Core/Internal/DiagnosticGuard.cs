@@ -9,8 +9,8 @@ namespace Daqifi.Core.Internal;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Replaces a dozen byte-identical <c>SafeLog</c> / <c>SafeTrace</c> twins that had accumulated
-/// across the device, producer, and transport types.
+/// Use this rather than a private try/catch copy in each type, so the guarantee and the contract
+/// below live in one place.
 /// </para>
 /// <para>
 /// The empty <c>catch</c> is deliberate, and the contract that makes it defensible is worth
@@ -49,7 +49,7 @@ internal static class DiagnosticGuard
         }
         catch
         {
-            // A logger that throws is not permitted to take down device operation.
+            // Consumer code that throws is not permitted to take down device operation.
         }
     }
 
