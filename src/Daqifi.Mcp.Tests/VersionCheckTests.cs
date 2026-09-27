@@ -144,6 +144,18 @@ internal sealed class CancelOnceThenAnswerSource(string latest) : ILatestVersion
     }
 }
 
+/// <summary>
+/// First call fails with the supplied exception; later calls answer. A test that expects the
+/// failure to be reported (not retried) can then fail on the call count instead of hanging.
+/// </summary>
+internal sealed class FailOnceThenAnswerSource(Exception first, string latest) : ILatestVersionSource
+{
+    internal int CallCount { get; private set; }
+
+    public Task<string?> GetLatestStableVersionAsync(CancellationToken cancellationToken) =>
+        ++CallCount == 1 ? Task.FromException<string?>(first) : Task.FromResult<string?>(latest);
+}
+
 public class VersionStatusTests
 {
     private static VersionStatus NewStatus(ILatestVersionSource source, bool versionCheck = true) =>
@@ -289,6 +301,58 @@ public class VersionStatusTests
 
         Assert.Equal("ok", info.VersionCheck);
         Assert.Equal(2, source.CallCount);
+    }
+
+    [Fact]
+    public async Task AStartupCheckCancelledByShutdown_DoesNotFailACallerWaitingOnIt()
+    {
+        // get_server_info joins the check Start() began with the host stopping token. That token
+        // firing is not this caller cancelling, so it must get a real answer, not an OCE.
+        var source = new CancelOnceThenAnswerSource(ServerVersion.Current);
+        var status = NewStatus(source);
+        using var hostCts = new CancellationTokenSource();
+        status.Start(hostCts.Token);
+        await source.Started;
+
+        var waiting = status.GetAsync();
+        hostCts.Cancel();
+        var info = await waiting.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("ok", info.VersionCheck);
+        Assert.Equal(2, source.CallCount);
+    }
+
+    [Fact]
+    public async Task GetServerInfoTool_ARequestTimeout_StillAnswersRatherThanFailing()
+    {
+        // HttpClient.Timeout surfaces as TaskCanceledException with no caller token cancelled.
+        // Caller cancellation leaves the check as an OCE; a timeout must not be mistaken for one:
+        // it means "nuget.org did not answer", reported as unavailable and not retried.
+        var source = new FailOnceThenAnswerSource(
+            new TaskCanceledException("timed out", new TimeoutException()), ServerVersion.Current);
+        using var cts = new CancellationTokenSource();
+
+        var info = await DaqifiTools.GetServerInfo(NewStatus(source), cts.Token);
+
+        Assert.Equal("unavailable", info.VersionCheck);
+        Assert.Equal(ServerVersion.Current, info.Version);
+        Assert.Equal(1, source.CallCount);
+    }
+
+    [Fact]
+    public async Task GetServerInfoTool_CallerCancelMidCheck_Throws()
+    {
+        // The tool must hand its call token to the check, and GuardAsync must let the
+        // cancellation out as-is rather than wrap it in an McpException.
+        var source = new HangingLatestVersionSource();
+        using var cts = new CancellationTokenSource();
+
+        var call = DaqifiTools.GetServerInfo(NewStatus(source), cts.Token);
+        await source.Started;
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => call.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]

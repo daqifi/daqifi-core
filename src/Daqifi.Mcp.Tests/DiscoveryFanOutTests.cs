@@ -211,18 +211,18 @@ public class DiscoveryFanOutTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_AlreadyCancelled_ThrowsWithoutWaitingTheWindow()
+    public async Task DiscoverAsync_HandsTheCallerTokenToTheFanOut()
     {
+        // Pins the public entry point's wiring, not the mid-listen cancel (that is
+        // DiscoverAcrossTransports_CallerCancel_ThrowsBeforeTimeoutElapses, at the seam where a
+        // finder can be faked). No transport is enabled, so nothing listens: a DiscoverAsync
+        // that dropped its token would answer this with an empty list instead of throwing.
         var agent = new DaqifiAgent(new ServerOptions());
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var started = Stopwatch.StartNew();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => agent.DiscoverAsync(timeoutMs: 30_000, wifi: false, serial: false, cts.Token));
-        Assert.True(
-            started.Elapsed < TimeSpan.FromSeconds(5),
-            $"already-cancelled discover waited {started.Elapsed}");
     }
 
     [Fact]
@@ -365,8 +365,23 @@ public class DiscoveryFanOutTests
             return _devices;
         }
 
-        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout) =>
-            DiscoverAsync(CancellationToken.None);
+        /// <summary>
+        /// Mirrors <see cref="DeviceFinderBase"/>: the timeout ends the pass and a finder that
+        /// throws on it comes back empty. Honouring the timeout here means a regression back to
+        /// Core's timeout overload fails the cancellation tests instead of hanging them.
+        /// </summary>
+        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                return await DiscoverAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                return Array.Empty<IDeviceInfo>();
+            }
+        }
 
         public void Dispose() => Disposed = true;
     }
