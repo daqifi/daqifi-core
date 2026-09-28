@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Device.Discovery;
 
@@ -219,18 +219,6 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
             // results. Message stays generic since the cause is not necessarily the timeout.
             SafeTrace($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed during a timed pass: {ex}");
             return Enumerable.Empty<IDeviceInfo>();
-        }
-    }
-
-    private static void SafeTrace(string message)
-    {
-        try
-        {
-            Trace.WriteLine(message);
-        }
-        catch
-        {
-            // Best-effort logging: a misbehaving TraceListener must never affect discovery.
         }
     }
 

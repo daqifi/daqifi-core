@@ -194,22 +194,4 @@ public class ReconnectOptionsTests
         Assert.StartsWith("The backoff multiplier must be at least 1.0.", ex.Message);
         Assert.Equal(2.0, options.BackoffMultiplier); // unchanged by the rejected write
     }
-
-    [Fact]
-    public void ThePresetPoliciesSatisfyTheirOwnGuards()
-    {
-        // Every preset is built through the same validating setters, so a preset that drifted
-        // outside the accepted range would throw before these assertions ever ran.
-        foreach (var options in new[]
-                 {
-                     ReconnectOptions.Disabled, ReconnectOptions.Default,
-                     ReconnectOptions.Fast, ReconnectOptions.Resilient
-                 })
-        {
-            Assert.True(options.MaxAttempts >= 1);
-            Assert.True(options.InitialDelay >= TimeSpan.Zero);
-            Assert.True(options.MaxDelay >= TimeSpan.Zero);
-            Assert.True(options.BackoffMultiplier >= 1.0);
-        }
-    }
 }

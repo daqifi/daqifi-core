@@ -15,8 +15,7 @@ using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-
-#nullable enable
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Device;
 
@@ -1609,7 +1608,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         _operations.TryAcquireForTeardownAsync(TextExchangeTeardownWait, cancellationToken);
 
     /// <summary>
-    /// Unsubscribes, stops and drops the message producer/consumer. Shared by
+    /// Unsubscribes, disposes (which stops) and drops the message producer/consumer. Shared by
     /// <see cref="Disconnect"/> and <see cref="DisconnectAsync"/>.
     /// </summary>
     private void StopMessagePumps()
@@ -1626,21 +1625,58 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
             _messageProducer.SendFailed -= OnMessageSendFailed;
         }
 
-        // Stop message consumer and producer safely if available
-        _messageConsumer?.StopSafely();
-        _messageProducer?.StopSafely();
+        // Dispose, don't just stop, before dropping the references. These used to be
+        // stopped and then abandoned undisposed, on every disconnect and on every
+        // reconnect attempt, which tears down the same way.
+        //
+        // Dispose does the stop itself (StopSafely, with the same default budget), so
+        // there is deliberately no separate StopSafely first. StreamMessageConsumer.Dispose
+        // joins a running reader through its own StopSafely, and only runs its extra
+        // stale-reader join when it finds the consumer already stopped. Stopping here
+        // first would put every consumer on that second path: a reader wedged in a read
+        // that only the transport close below can release would be joined twice, a
+        // second apart, doubling this teardown to two seconds for nothing.
+        //
+        // Null afterwards so a subsequent Connect() rebuilds them against the
+        // transport's current Stream. SerialStreamTransport.Stream returns
+        // _serialPort.BaseStream, which is a new instance after Disconnect() →
+        // Connect() reopens the port; reusing the old producer/consumer would
+        // leave them bound to the previous (disposed) BaseStream and any Send()
+        // would silently no-op. Surfaced by PR #200's post-reconnect readiness
+        // probe (LAN chip-info returning null on every attempt because Send went
+        // to a dead stream).
+        //
+        // ReleaseResources still disposes whichever instances remain. The abandon
+        // path (MarkDisconnectedWithoutTeardown) never reaches here, so those
+        // fields stay set for that dispose.
+        DisposeMessagePump(ref _messageConsumer);
+        DisposeMessagePump(ref _messageProducer);
+    }
 
-        // Null the producer/consumer so a subsequent Connect()
-        // rebuilds them against the transport's current Stream.
-        // SerialStreamTransport.Stream returns _serialPort.BaseStream,
-        // which is a new instance after Disconnect() → Connect()
-        // reopens the port; reusing the old producer/consumer would
-        // leave them bound to the previous (disposed) BaseStream
-        // and any Send() would silently no-op. Surfaced by PR #200's
-        // post-reconnect readiness probe (LAN chip-info returning
-        // null on every attempt because Send went to a dead stream).
-        _messageConsumer = null;
-        _messageProducer = null;
+    /// <summary>
+    /// Disposes (and so stops) one message pump, then clears the field that held it.
+    /// </summary>
+    /// <remarks>
+    /// The field is cleared even when <see cref="IDisposable.Dispose"/> throws. Leaving it
+    /// set would make the next <see cref="CompleteConnect"/> reuse a pump bound to a dead
+    /// stream, and an exception here would skip the transport close that follows
+    /// <see cref="StopMessagePumps"/>.
+    /// </remarks>
+    private void DisposeMessagePump<T>(ref T? pump) where T : class, IDisposable
+    {
+        var instance = pump;
+        try
+        {
+            instance?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            RaiseDeviceError(DeviceErrorSource.Unknown, ex);
+        }
+        finally
+        {
+            pump = null;
+        }
     }
 
     /// <summary>
@@ -3048,10 +3084,28 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         }
         finally
         {
+            // Normal disconnect already disposed these in StopMessagePumps and nulled
+            // the fields. They are still set when teardown was abandoned
+            // (MarkDisconnectedWithoutTeardown never stops the pumps), so dispose here.
             _messageConsumer?.Dispose();
             _messageProducer?.Dispose();
             _transport?.Dispose();
             _operations.Dispose();
+
+            // _statusRefreshGate is deliberately NOT disposed here, which is the one place in
+            // this method that breaks the "dispose what you own" habit — so it is worth saying
+            // why. SemaphoreSlim only owns an OS handle once somebody reads AvailableWaitHandle,
+            // and nothing in this library ever does, so disposing it reclaims nothing; it only
+            // poisons the instance. What it would cost is real: Dispose() drops the queue of
+            // already-waiting async waiters on the floor without faulting them, so a second
+            // refresh sitting behind a first would stop being woken when the first released,
+            // and would sit there until the caller's own deadline expired and report a timeout.
+            // Leaving the gate alone, that caller is handed the gate immediately, reaches Send,
+            // and gets the DeviceNotConnectedException its connectivity guard raises on a
+            // disposed device — the fast, accurate answer. _operations makes the opposite trade
+            // because OperationSerializer is built for it: every one of its touchpoints already
+            // catches ObjectDisposedException. This gate has no such contract, and the object
+            // is collected with the device anyway.
             _disposed = true;
         }
     }
@@ -3517,6 +3571,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         }
         finally
         {
+            // Unconditional, and safe to be so only because ReleaseResources leaves this gate
+            // alone — see the note there. If the gate ever starts being disposed, this release
+            // has to be contained, or a teardown racing an in-flight refresh throws over the
+            // top of a status that already arrived and was already applied to Metadata.
             _statusRefreshGate.Release();
         }
     }
@@ -3725,24 +3783,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         catch (Exception ex)
         {
             SafeLog(() => _logger.LogWarning(ex, "[{EventName}] classified-event subscriber threw", eventName));
-        }
-    }
-
-    /// <summary>
-    /// Runs a logging call, swallowing any exception a misbehaving <see cref="ILogger"/> throws.
-    /// A consumer-supplied logger must never affect device operation — least of all in
-    /// <see cref="RaiseClassifiedEvent"/>, whose whole purpose is to isolate frame processing
-    /// from faults. Mirrors <c>MessageProducer.SafeLog</c>.
-    /// </summary>
-    private static void SafeLog(Action logAction)
-    {
-        try
-        {
-            logAction();
-        }
-        catch
-        {
-            // A logger that throws is not permitted to take down device operation.
         }
     }
 

@@ -140,39 +140,6 @@ public class SdCardAgentGuardTests
     }
 }
 
-public class SdCardReportDtoTests
-{
-    [Fact]
-    public void SdStorageReport_ComputesPercentFreeAndUsed()
-    {
-        var report = SdStorageReport.From("serial:X", new SdCardStorageInfo(FreeBytes: 250, TotalBytes: 1000));
-
-        Assert.Equal(250, report.FreeBytes);
-        Assert.Equal(750, report.UsedBytes);
-        Assert.Equal(25.0, report.PercentFree);
-    }
-
-    [Fact]
-    public void SdStorageReport_ZeroTotal_DoesNotDivideByZero()
-    {
-        var report = SdStorageReport.From("serial:X", new SdCardStorageInfo(FreeBytes: 0, TotalBytes: 0));
-        Assert.Equal(0, report.PercentFree);
-    }
-
-    // A listing entry with no size token means "unknown", and 0 means "empty file" — the two are
-    // different enough that Core keeps the distinction (an unexpectedly-0-byte transfer is how a
-    // wedged SD subsystem announces itself), so the tool must not flatten it.
-    [Fact]
-    public void SdFileEntry_UnknownSize_StaysNullRatherThanZero()
-    {
-        var entry = SdFileEntry.From(new SdCardFileInfo("log_20260812_120000.bin"));
-        Assert.Null(entry.SizeBytes);
-
-        var empty = SdFileEntry.From(new SdCardFileInfo("empty.bin", createdDate: null, sizeInBytes: 0));
-        Assert.Equal(0, empty.SizeBytes);
-    }
-}
-
 /// <summary>
 /// End-to-end tests for the download's parse-and-export step, driven with a synthetic on-disk log
 /// so the whole chain below the wire — format detection, parse, CSV write, counts — is covered

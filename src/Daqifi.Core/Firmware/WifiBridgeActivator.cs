@@ -39,10 +39,11 @@ public static class WifiBridgeActivator
     private static readonly TimeSpan ApplySettleDelay = TimeSpan.FromMilliseconds(300);
 
     /// <summary>
-    /// Pause between the transparent-mode exit and the command that follows it. Shared with
-    /// <c>WifiModuleUpdater</c>'s managed-connection twin of <see cref="Deactivate"/> so the two
-    /// paths that walk a device out of bridge mode cannot pace it differently: the delay is a
-    /// property of the firmware's mode transition, not of the transport used to drive it.
+    /// Pause between the transparent-mode exit and the command that follows it on the raw-serial
+    /// path. <see cref="FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay"/> defaults to
+    /// this value, so a host that leaves the option alone paces the managed-connection exit
+    /// (success and failure) the same way. The delay is a property of the firmware's mode
+    /// transition, not of the transport used to drive it.
     /// </summary>
     internal static readonly TimeSpan InterCommandDelay = TimeSpan.FromMilliseconds(100);
 
@@ -99,7 +100,8 @@ public static class WifiBridgeActivator
     /// machine, not of the direction being driven, which is why entering and leaving bridge mode
     /// are paced identically. Single-sourcing the sequence keeps it that way: a step added or
     /// re-ordered for one direction can no longer silently miss the other. (Same reasoning as
-    /// <see cref="InterCommandDelay"/>, which is already shared with <c>WifiModuleUpdater</c>.)
+    /// <see cref="InterCommandDelay"/>, which
+    /// <see cref="FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay"/> defaults to.)
     /// </remarks>
     /// <param name="portName">The serial port name.</param>
     /// <param name="modeCommand">The direction-specific command sent before <c>LAN:APPLY</c>.</param>

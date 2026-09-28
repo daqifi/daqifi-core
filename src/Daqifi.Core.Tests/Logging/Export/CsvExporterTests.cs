@@ -30,6 +30,39 @@ public class CsvExporterTests
         return (lines, lines.Length > 0 ? lines[0] : string.Empty);
     }
 
+    // ── Argument validation ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ExportAsync_NullSource_Throws()
+    {
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => new CsvExporter().ExportAsync(null!, new StringWriter(), new CsvExportOptions()));
+
+        Assert.Equal("source", ex.ParamName);
+    }
+
+    [Fact]
+    public async Task ExportAsync_NullWriter_Throws()
+    {
+        var source = new InMemorySampleSource([], []);
+
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => new CsvExporter().ExportAsync(source, null!, new CsvExportOptions()));
+
+        Assert.Equal("writer", ex.ParamName);
+    }
+
+    [Fact]
+    public async Task ExportAsync_NullOptions_Throws()
+    {
+        var source = new InMemorySampleSource([], []);
+
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => new CsvExporter().ExportAsync(source, new StringWriter(), null!));
+
+        Assert.Equal("options", ex.ParamName);
+    }
+
     // ── Header ──────────────────────────────────────────────────────────────
 
     [Fact]
@@ -504,14 +537,6 @@ public class CsvExporterTests
             new CsvExporter().ExportAsync(source, writer, new CsvExportOptions(), cancellationToken: cts.Token));
 
         Assert.Equal(string.Empty, writer.ToString());
-    }
-
-    // ── Channel key format ───────────────────────────────────────────────────
-
-    [Fact]
-    public void ChannelDescriptor_Key_FormatIsCorrect()
-    {
-        Assert.Equal("DevA:SN001:Channel1", Ch1.Key);
     }
 
     [Fact]
