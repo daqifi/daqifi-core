@@ -69,8 +69,7 @@ public class DeviceErrorThrottleTests
     {
         // The assertion a wall clock cannot make. "At most once every five seconds" has an edge,
         // and testing where that edge actually is means landing a call an instant before it and an
-        // instant after it — which on a real clock is a race with the scheduler, and is why the
-        // sleeping tests above settled for "well past the interval" instead. Stepping the clock
+        // instant after it — which on a real clock is a race with the scheduler. Stepping the clock
         // makes the boundary exact.
         var clock = new FakeTimeProvider();
         var throttle = new DeviceErrorThrottle(DeviceErrorThrottle.DefaultInterval, clock);

@@ -232,13 +232,10 @@ internal sealed class FakeFirmwareDownloadService : IFirmwareDownloadService
 internal sealed class FakeLanChipInfoDevice(string name) : FakeStreamingDevice(name), ILanChipInfoProvider
 {
     /// <summary>
-    /// Scripted per-attempt outcomes. Each query dequeues one; returning null models an
-    /// unparseable response and throwing models a device-reported failure. Once drained,
-    /// <see cref="DefaultChipInfoResponse"/> answers every further query, so a test asserting
-    /// <see cref="ChipInfoQueryCount"/> still notices unexpected extra attempts.
+    /// Outcome of every chip-info query. Returning null models an unparseable response;
+    /// throwing models a device-reported failure. Tests that assert
+    /// <see cref="ChipInfoQueryCount"/> still notice unexpected extra attempts.
     /// </summary>
-    public Queue<Func<LanChipInfo?>> ChipInfoResponses { get; } = new();
-
     public Func<LanChipInfo?> DefaultChipInfoResponse { get; set; } = () => null;
 
     public int ChipInfoQueryCount { get; private set; }
@@ -248,13 +245,11 @@ internal sealed class FakeLanChipInfoDevice(string name) : FakeStreamingDevice(n
         cancellationToken.ThrowIfCancellationRequested();
         ChipInfoQueryCount++;
 
-        var next = ChipInfoResponses.Count > 0 ? ChipInfoResponses.Dequeue() : DefaultChipInfoResponse;
-
         // Faulted task rather than a synchronous throw: the real provider is async, and the retry
         // loop's `catch` clauses must be exercised through an awaited task like production.
         try
         {
-            return Task.FromResult(next());
+            return Task.FromResult(DefaultChipInfoResponse());
         }
         catch (Exception ex)
         {

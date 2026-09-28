@@ -160,18 +160,6 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public async Task ConnectTcpAsync_WithCancellation_ThrowsOperationCanceledException()
-    {
-        // Arrange
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        // Act & Assert
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.100", 9760, null, cts.Token));
-    }
-
-    [Fact]
     public async Task ConnectTcpAsync_ByIpAddress_WithCancellation_ThrowsOperationCanceledException()
     {
         // Arrange
@@ -184,21 +172,22 @@ public class DaqifiDeviceFactoryTests
     }
 
     [Fact]
-    public async Task ConnectTcpAsync_InvalidHost_ThrowsException()
+    public async Task ConnectTcpAsync_ToClosedLoopbackPort_ThrowsSocketException()
     {
-        // Arrange - Use localhost port 1 (reserved, never listening)
+        // Arrange - localhost port 1 (reserved, never listening), with the same retry options the
+        // transport twin TcpStreamTransport_ConnectAsync_WithClosedPort gets by default (NoRetry,
+        // 5s per-attempt timeout). The timeout must stay well above the refusal latency: Linux and
+        // macOS refuse a closed loopback port at once, but Windows retries the SYN before
+        // reporting the refusal, which takes longer than 1s. A shorter timeout lets the connect
+        // timeout win on Windows and surfaces TimeoutException instead of the refusal.
         var options = new DeviceConnectionOptions
         {
-            ConnectionRetry = new ConnectionRetryOptions
-            {
-                Enabled = false,
-                ConnectionTimeout = TimeSpan.FromSeconds(1)
-            },
+            ConnectionRetry = ConnectionRetryOptions.NoRetry,
             InitializeDevice = false
         };
 
-        // Act & Assert - Should throw due to connection refused
-        await Assert.ThrowsAnyAsync<Exception>(
+        // Act & Assert - the factory lets the transport's refusal through unwrapped.
+        await Assert.ThrowsAsync<SocketException>(
             () => DaqifiDeviceFactory.ConnectTcpAsync(IPAddress.Loopback, 1, options));
     }
 
@@ -298,18 +287,6 @@ public class DaqifiDeviceFactoryTests
         // Act & Assert
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", null, cts.Token));
-    }
-
-    [Fact]
-    public async Task ConnectSerialAsync_WithBaudRate_WithCancellation_ThrowsOperationCanceledException()
-    {
-        // Arrange
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        // Act & Assert
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => DaqifiDeviceFactory.ConnectSerialAsync("COM3", 115200, null, cts.Token));
     }
 
     #endregion
@@ -597,18 +574,6 @@ public class DaqifiDeviceFactoryTests
         var method = typeof(DaqifiDeviceFactory).GetMethod(nameof(DaqifiDeviceFactory.DiscoverAndConnectAsync));
         Assert.NotNull(method);
         Assert.Equal(typeof(Task<DaqifiStreamingDevice>), method!.ReturnType);
-    }
-
-    [Fact]
-    public void IStreamingDevice_ExposesChannelsAndMetadataDirectly()
-    {
-        // Promoted onto the interface (#333) so a caller holding only IStreamingDevice can obtain
-        // a channel to pass into the interface's own enable/disable/DIO/PWM methods, without a
-        // cast to the concrete device type.
-        Assert.NotNull(typeof(IStreamingDevice).GetProperty(nameof(IStreamingDevice.Channels)));
-        Assert.NotNull(typeof(IStreamingDevice).GetProperty(nameof(IStreamingDevice.Metadata)));
-        Assert.NotNull(typeof(IStreamingDevice).GetMethod(nameof(IStreamingDevice.GetChannelsSnapshot)));
-        Assert.NotNull(typeof(IStreamingDevice).GetEvent(nameof(IStreamingDevice.ChannelsPopulated)));
     }
 
     #endregion

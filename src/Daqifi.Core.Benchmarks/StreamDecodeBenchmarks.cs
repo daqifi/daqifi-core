@@ -22,10 +22,9 @@ namespace Daqifi.Core.Benchmarks;
 /// Every case reports per <em>frame</em>, not per invocation
 /// (<see cref="BenchmarkAttribute.OperationsPerInvoke"/>), so the numbers can be read directly
 /// against a sample rate: at 1 kHz with 16 channels the device emits a frame every millisecond.
-/// The allocation column is the one worth watching. Issue #490 removed per-frame allocation from
-/// this path and #531 showed how badly a correctness test measures it; a regression here shows up
-/// as allocation climbing, not as a departure from zero — the baseline is already ~1.38 KB per
-/// 16-channel frame, from the <see cref="DataSample"/> each channel decodes plus the
+/// The allocation column is the one worth watching. A regression shows up as allocation climbing,
+/// not as a departure from zero — the baseline is already ~1.38 KB per 16-channel frame, from the
+/// <see cref="DataSample"/> each channel decodes plus the
 /// <see cref="SampleReceivedEventArgs"/> raised for this benchmark's subscriber.
 /// </para>
 /// </remarks>
@@ -73,24 +72,26 @@ public class StreamDecodeBenchmarks
         _raw = new DecodeCase(CreateDevice(digitalPortCount: 0), BuildFrames(analogFloat: false, digital: false));
         _combined = new DecodeCase(
             CreateDevice(digitalPortCount: DigitalChannelCount),
-            BuildFrames(analogFloat: true, digital: true));
+            BuildFrames(analogFloat: false, digital: true));
     }
 
     /// <summary>
-    /// The common shape: the firmware's fast streaming encoder sends calibrated floats.
+    /// The hot path. Every supported firmware sends raw ADC counts, on every transport, and
+    /// each value is scaled through <see cref="IAnalogChannel.GetScaledValue"/>.
     /// </summary>
     [Benchmark(Baseline = true, OperationsPerInvoke = FrameCount)]
-    public void DecodeAnalogFloatFrame() => _float.Replay();
-
-    /// <summary>
-    /// The same frame carrying raw ADC counts instead, which routes each value through
-    /// <see cref="IAnalogChannel.GetScaledValue"/> — the per-sample calibration arithmetic.
-    /// </summary>
-    [Benchmark(OperationsPerInvoke = FrameCount)]
     public void DecodeRawAnalogFrame() => _raw.Replay();
 
     /// <summary>
-    /// Analog and digital in one frame, the shape a stream with DIO enabled produces.
+    /// Defensive protocol branch. The protocol still defines a pre-scaled float payload
+    /// (<c>AnalogInDataFloat</c>) and a frame that carries one is used as-is, but no supported
+    /// firmware fills it, so this is not the hot path.
+    /// </summary>
+    [Benchmark(OperationsPerInvoke = FrameCount)]
+    public void DecodeAnalogFloatFrame() => _float.Replay();
+
+    /// <summary>
+    /// Raw analog counts and digital in one frame, the shape a stream with DIO enabled produces.
     /// </summary>
     [Benchmark(OperationsPerInvoke = FrameCount)]
     public void DecodeCombinedFrame() => _combined.Replay();
@@ -184,7 +185,7 @@ public class StreamDecodeBenchmarks
     /// device looks like one long 1 kHz acquisition — including the genuine 32-bit tick rollover
     /// every ~86 seconds of device time, which is a case the decoder is built to handle rather
     /// than an artefact of the harness. The cost inside the measured loop is one addition and one
-    /// field write per frame, sub-nanosecond against a ~260 ns decode, and it allocates nothing.
+    /// field write per frame, sub-nanosecond against a ~300 ns decode, and it allocates nothing.
     /// </remarks>
     private sealed class DecodeCase(BenchmarkStreamingDevice device, DaqifiOutMessage[] frames)
     {

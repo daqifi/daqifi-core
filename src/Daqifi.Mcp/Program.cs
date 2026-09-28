@@ -30,11 +30,18 @@ builder.Services.AddSingleton<VersionStatus>();
 builder.Services
     // Name the running version in the initialization handshake. Clients log and display it, so
     // "which daqifi-mcp am I talking to?" has an answer without calling a tool (issue #727).
-    .AddMcpServer(o => o.ServerInfo = new Implementation
+    .AddMcpServer(o =>
     {
-        Name = "daqifi-mcp",
-        Title = "DAQiFi",
-        Version = ServerVersion.Current,
+        o.ServerInfo = new Implementation
+        {
+            Name = "daqifi-mcp",
+            Title = "DAQiFi",
+            Version = ServerVersion.Current,
+        };
+        // The session rules the README opens with, sent once at initialize. Clients hand these to
+        // the model as context, so they are the one place a rule can be stated without paying for
+        // it on every tools/list.
+        o.ServerInstructions = options.Instructions;
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();

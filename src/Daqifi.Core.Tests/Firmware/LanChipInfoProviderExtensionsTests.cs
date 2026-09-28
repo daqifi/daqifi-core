@@ -378,19 +378,31 @@ public class LanChipInfoProviderExtensionsTests
     }
 
     [Fact]
-    public async Task GetLanChipInfoWithRetryAsync_WithoutOptions_UsesCoreDefaults()
+    public void LanChipInfoRetryOptions_RecordDefaults_MatchTheCoreWifiProbe()
     {
-        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
-
-        var result = await device.GetLanChipInfoWithRetryAsync();
-
-        Assert.True(result.Succeeded);
-
+        // The record's own defaults, not a probe that happens to construct one. A failing first
+        // read would sleep RetryDelay (2s) before the next attempt; this fact never calls the probe.
         var defaults = new LanChipInfoRetryOptions();
+
         Assert.Equal(3, defaults.MaxAttempts);
         Assert.Equal(TimeSpan.FromSeconds(2), defaults.RetryDelay);
         Assert.Equal(TimeSpan.FromSeconds(8), defaults.TotalTimeout);
         Assert.True(defaults.KickLanApplyOnNotInitialized);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WithoutOptions_ReturnsScriptedChipInfoOnTheFirstAttempt()
+    {
+        // A successful first read returns immediately. The default 2s RetryDelay is only the pause
+        // between attempts, so this must not sleep it.
+        var chipInfo = SampleChipInfo;
+        var device = new ScriptedLanChipInfoDevice(chipInfo);
+
+        var result = await device.GetLanChipInfoWithRetryAsync();
+
+        Assert.Same(chipInfo, result.ChipInfo);
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, device.GetLanChipInfoCallCount);
     }
 
     [Fact]

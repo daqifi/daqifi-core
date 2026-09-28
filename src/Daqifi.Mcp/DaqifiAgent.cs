@@ -394,8 +394,7 @@ public sealed class DaqifiAgent
             return Task.FromResult(new ConfigureDigitalResult(
                 deviceId,
                 EnabledDigital(device),
-                streaming.StreamingFrequency,
-                SampleRateAdjustedFromHz: null));
+                streaming.StreamingFrequency));
         }).ConfigureAwait(false);
     }
 
@@ -472,7 +471,22 @@ public sealed class DaqifiAgent
             // that value" rather than requiring special-casing here.
             var desiredFrequencyHz = frequencyHz != 0 ? frequencyHz : streaming.PwmFrequencyHz;
 
-            streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
+            try
+            {
+                streaming.SetPwmDutyCycle(ch, dutyCyclePercent);
+            }
+            catch (ArgumentOutOfRangeException ex) when (ex.ParamName == nameof(dutyCyclePercent))
+            {
+                // Core's message names SetPwmEnabled(channel, false), an SDK method an MCP caller
+                // cannot invoke, so name disable_pwm instead (the goal RequirePwmDisabled serves
+                // for direction/output) and keep Core's exception as the inner, as the SD-card
+                // Rewrite does. The filter keys on Core's parameter name, so any other
+                // out-of-range failure passes through with its own message.
+                throw new InvalidOperationException(
+                    "Duty cycle must be 1-100 percent. To stop the output, call disable_pwm.",
+                    ex);
+            }
+
             _pwmDutyCommanded.AddOrUpdate(ch, PwmCommandedMarker);
 
             // Reprogram the shared device-wide timer. Core skips the SCPI round-trip when the
@@ -745,12 +759,13 @@ public sealed class DaqifiAgent
 
         return await device.RunExclusiveAsync(async ct =>
         {
-            // Use-time backstop for #447: EnforceSampleRateCap already keeps the live rate at or
-            // under the cap through every configure_* call, but re-check here too, since this is
-            // the point an out-of-range rate would actually reach the firmware. The firmware's
-            // response to an over-cap rate is a silent one — it refuses with "Data out of range"
-            // and streams zero samples, with no exception and no ErrorOccurred — so failing loudly
-            // here is the only way an agent finds out before a logging session comes back empty.
+            // Use-time backstop for #447: set_sample_rate refuses an over-cap rate and
+            // EnforceSampleRateCap lowers one when configure_analog_channels moves the cap, but
+            // re-check here too, since this is the point an out-of-range rate would actually
+            // reach the firmware. The firmware's response to an over-cap rate is a silent one —
+            // it refuses with "Data out of range" and streams zero samples, with no exception and
+            // no ErrorOccurred — so failing loudly here is the only way an agent finds out before
+            // a logging session comes back empty.
             var cap = ComputeSampleRateCapHz(streaming);
             if (cap > 0 && streaming.StreamingFrequency > cap)
             {

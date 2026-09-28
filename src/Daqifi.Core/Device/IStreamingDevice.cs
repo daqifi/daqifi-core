@@ -5,8 +5,6 @@ using System.Threading.Tasks;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Device.Capabilities;
 
-#nullable enable
-
 namespace Daqifi.Core.Device;
 
 /// <summary>
