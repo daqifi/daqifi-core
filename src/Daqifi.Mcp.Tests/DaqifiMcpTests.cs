@@ -51,6 +51,20 @@ public class ServerOptionsTests
         Assert.Contains("--read-onyl", ex.Message);
     }
 
+    // An option in the rate's value slot is a missing value. Consumed as a malformed rate it would
+    // never reach its own case, so "--read-only" would be dropped and writes left enabled.
+    [Theory]
+    [InlineData("--read-only")]
+    [InlineData("--read-onyl")]
+    [InlineData("--no-version-check")]
+    public void Parse_MaxSampleRate_FollowedByAnOption_Throws(string next)
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => ServerOptions.Parse(new[] { "--max-sample-rate-hz", next }));
+        Assert.Contains("requires a value", ex.Message);
+        Assert.Contains(next, ex.Message);
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("-5")]

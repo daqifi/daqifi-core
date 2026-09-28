@@ -37,7 +37,8 @@ public sealed class ServerOptions
     /// <param name="args">Process arguments, excluding the executable name.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="args"/> contains an unrecognized token, or <c>--max-sample-rate-hz</c>
-    /// is not followed by a value. A non-numeric or non-positive rate is ignored.
+    /// is not followed by a value (the end of the arguments, or another <c>--</c> option).
+    /// A non-numeric or non-positive rate is ignored.
     /// </exception>
     public static ServerOptions Parse(string[] args)
     {
@@ -59,6 +60,15 @@ public sealed class ServerOptions
                     if (i + 1 >= args.Length)
                     {
                         throw new ArgumentException("Option '--max-sample-rate-hz' requires a value.");
+                    }
+
+                    // An option in the value slot means the value is missing. Consuming it as a
+                    // malformed rate would drop it unparsed: "--max-sample-rate-hz --read-only"
+                    // would start the server with writes enabled.
+                    if (args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        throw new ArgumentException(
+                            $"Option '--max-sample-rate-hz' requires a value, but was followed by '{args[i + 1]}'.");
                     }
 
                     // Ignore non-positive values; a cap of <= 0 would otherwise reject every rate.
