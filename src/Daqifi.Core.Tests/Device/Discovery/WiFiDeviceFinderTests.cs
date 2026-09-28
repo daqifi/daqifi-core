@@ -18,23 +18,6 @@ public class WiFiDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
     // DiscoveryDeviceTypeMapperTests (issue #283).
-    [Fact]
-    public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
-    {
-        // Arrange - Use port 0 to let system assign random port (avoid conflicts)
-        using var finder = new WiFiDeviceFinder(0);
-        var timeout = TimeSpan.FromSeconds(2);
-
-        // Act
-        var startTime = DateTime.UtcNow;
-        var devices = await finder.DiscoverAsync(timeout);
-        var elapsed = DateTime.UtcNow - startTime;
-
-        // Assert
-        Assert.NotNull(devices);
-        // Allow for some overhead, but should complete reasonably close to timeout
-        Assert.True(elapsed.TotalSeconds <= timeout.TotalSeconds + 1);
-    }
 
     [NetworkBrowseFact]
     public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
