@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Tests.TestSupport;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -84,7 +85,10 @@ public class StreamMessageConsumerStallingReaderTests
         Assert.Equal(1, stream.ReadCount);
 
         stream.Release();
-        Assert.True(WaitUntil(() => !IsConsumerThreadAlive(consumer), TimeSpan.FromSeconds(2)));
+        WaitUntil.That(
+            () => !IsConsumerThreadAlive(consumer),
+            "the stalled reader never exited after Release",
+            TimeSpan.FromSeconds(2));
     }
 
     [Fact]
@@ -102,7 +106,10 @@ public class StreamMessageConsumerStallingReaderTests
         consumer.ErrorOccurred += (_, _) => Interlocked.Increment(ref errors);
 
         consumer.Start();
-        Assert.True(WaitUntil(() => stream.ReadCount >= 3, TimeSpan.FromSeconds(2)));
+        WaitUntil.That(
+            () => stream.ReadCount >= 3,
+            "the reader never issued timeout reads",
+            TimeSpan.FromSeconds(2));
         Assert.True(consumer.StopSafely(timeoutMs: 2000));
 
         Assert.Equal(0, Volatile.Read(ref errors));
@@ -120,7 +127,10 @@ public class StreamMessageConsumerStallingReaderTests
         consumer.ErrorOccurred += (_, e) => captured ??= e.Error;
 
         consumer.Start();
-        Assert.True(WaitUntil(() => captured != null, TimeSpan.FromSeconds(2)));
+        WaitUntil.That(
+            () => captured != null,
+            "the non-timeout I/O fault never reached ErrorOccurred",
+            TimeSpan.FromSeconds(2));
         Assert.True(consumer.StopSafely(timeoutMs: 2000));
 
         Assert.IsType<IOException>(captured);
@@ -239,9 +249,10 @@ public class StreamMessageConsumerStallingReaderTests
             // Wait for the starter to actually block rather than sleeping a guessed interval: its
             // only work is Start(), so WaitSleepJoin means it has reached the lock or the grace
             // join. Deterministic, and fails fast if it never gets there.
-            Assert.True(
-                WaitUntil(() => starter.ThreadState.HasFlag(System.Threading.ThreadState.WaitSleepJoin), TimeSpan.FromSeconds(5)),
-                "starter thread never reached the grace join");
+            WaitUntil.That(
+                () => starter.ThreadState.HasFlag(System.Threading.ThreadState.WaitSleepJoin),
+                "starter thread never reached the grace join",
+                TimeSpan.FromSeconds(5));
 
             stream.Release();            // its join can now complete
             consumer.Dispose();          // races the starter's publish
@@ -382,22 +393,6 @@ public class StreamMessageConsumerStallingReaderTests
             .GetField("_consumerThread", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .GetValue(consumer);
         return thread is { IsAlive: true };
-    }
-
-    private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            Thread.Sleep(10);
-        }
-
-        return condition();
     }
 
     /// <summary>

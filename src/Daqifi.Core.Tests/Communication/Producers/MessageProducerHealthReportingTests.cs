@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Communication.Producers;
 
@@ -24,12 +25,18 @@ public class MessageProducerHealthReportingTests
             producer.Send(new ScpiMessage($"CMD{i}"));
         }
 
-        Assert.True(WaitUntil(() => sink.FaultCount >= 5, TimeSpan.FromSeconds(5)),
-            $"expected a fault report per failed write, saw {sink.FaultCount}");
+        WaitUntil.That(
+            () => sink.FaultCount >= 5,
+            () => $"expected a fault report per failed write, saw {sink.FaultCount}",
+            TimeSpan.FromSeconds(5));
         Assert.Equal(0, sink.SuccessCount);
 
-        // Failures must not stall the loop: the queue still drains.
-        Assert.True(WaitUntil(() => producer.QueuedMessageCount == 0, TimeSpan.FromSeconds(5)));
+        // Failures must not stall the loop: the queue still drains. IsIdle rather than the queue
+        // count, which reaches zero as the last message is dequeued, before its write has run.
+        WaitUntil.That(
+            () => producer.IsIdle,
+            "the producer never drained the failed writes",
+            TimeSpan.FromSeconds(5));
         Assert.True(producer.IsRunning);
     }
 
@@ -43,7 +50,10 @@ public class MessageProducerHealthReportingTests
         producer.Start();
         producer.Send(new ScpiMessage("CMD"));
 
-        Assert.True(WaitUntil(() => sink.SuccessCount >= 1, TimeSpan.FromSeconds(5)));
+        WaitUntil.That(
+            () => sink.SuccessCount >= 1,
+            "the producer never reported a successful write",
+            TimeSpan.FromSeconds(5));
         Assert.Equal(0, sink.FaultCount);
     }
 
@@ -62,8 +72,14 @@ public class MessageProducerHealthReportingTests
             producer.Send(new ScpiMessage($"CMD{i}"));
         }
 
-        Assert.True(WaitUntil(() => producer.QueuedMessageCount == 0, TimeSpan.FromSeconds(5)));
-        Thread.Sleep(100);
+        // IsIdle, not the queue count: the queue empties as the last message is dequeued, before
+        // its write times out and before anything is (or is wrongly) reported for it. IsIdle
+        // also covers the write in flight, so every outcome has reached the sink once it holds.
+        WaitUntil.That(
+            () => producer.IsIdle,
+            "the producer never drained the timed-out writes",
+            TimeSpan.FromSeconds(5));
+        Assert.Equal(5L, producer.StartedWriteCount);
         Assert.Equal(0, sink.FaultCount);
         Assert.Equal(0, sink.SuccessCount);
     }
@@ -77,24 +93,11 @@ public class MessageProducerHealthReportingTests
         producer.Start();
         producer.Send(new ScpiMessage("CMD"));
 
-        Assert.True(WaitUntil(() => producer.QueuedMessageCount == 0, TimeSpan.FromSeconds(5)));
+        WaitUntil.That(
+            () => producer.IsIdle,
+            "the producer never drained without a health sink",
+            TimeSpan.FromSeconds(5));
         Assert.True(producer.IsRunning);
-    }
-
-    private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            Thread.Sleep(10);
-        }
-
-        return condition();
     }
 
     private sealed class CountingHealthSink : ITransportHealthSink
