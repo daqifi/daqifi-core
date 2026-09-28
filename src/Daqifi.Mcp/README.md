@@ -102,6 +102,11 @@ dotnet run --project src/Daqifi.Mcp
 -h, --help                Show help.
 ```
 
+A flag the server does not recognize — a typo such as `--read-onyl` included — stops it at startup
+with a one-line error on stderr naming the flag, and exit code 2, rather than starting it without
+the setting you meant. If your MCP client reports that the server failed to start, check its server
+log for that line.
+
 `--read-only` blocks anything that changes the device or the card: channel/rate configuration,
 DIO/PWM output, analog output (`set_analog_output`, `latch_analog_outputs`), start/stop logging, and
 `delete_sd_file`. Reading data back is still allowed — `list_sd_files`, `get_sd_storage`,
