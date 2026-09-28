@@ -52,11 +52,14 @@ public class ServerOptionsTests
     }
 
     // An option in the rate's value slot is a missing value. Consumed as a malformed rate it would
-    // never reach its own case, so "--read-only" would be dropped and writes left enabled.
+    // never reach its own case, so "--read-only" would be dropped and writes left enabled. A
+    // single-dash typo is an option too; only a dash-led number ("-5") counts as a value.
     [Theory]
     [InlineData("--read-only")]
     [InlineData("--read-onyl")]
     [InlineData("--no-version-check")]
+    [InlineData("-read-only")]
+    [InlineData("-")]
     public void Parse_MaxSampleRate_FollowedByAnOption_Throws(string next)
     {
         var ex = Assert.Throws<ArgumentException>(
