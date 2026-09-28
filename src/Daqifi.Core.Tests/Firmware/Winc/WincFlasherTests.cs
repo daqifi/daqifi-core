@@ -487,7 +487,8 @@ public class WincFlasherTests
 
             var locator = new WincFlashToolLocator("winc_flash_tool.cmd");
 
-            Assert.ThrowsAny<Exception>(() => locator.TryResolveToolPath(root, out _));
+            // An unreadable tree is a permissions failure, not "tool not found".
+            Assert.Throws<UnauthorizedAccessException>(() => locator.TryResolveToolPath(root, out _));
 
             // IsAvailable stays total: a probe answers yes/no and must not throw.
             Assert.False(locator.IsAvailable(root));

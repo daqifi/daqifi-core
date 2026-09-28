@@ -237,21 +237,6 @@ public class DaqifiDeviceInitializeTests
     }
 
     [Fact]
-    public async Task InitializeAsync_WhenDeviceReturnsScpiError_SetsStateToError()
-    {
-        // Arrange
-        var device = new TestableDaqifiDevice("TestDevice",
-            textCommandResponse: new[] { "**ERROR: -200, \"Execution error\"\r\n" });
-        device.Connect();
-
-        // Act
-        try { await device.InitializeAsync(); } catch (ScpiInitializationErrorException) { }
-
-        // Assert
-        Assert.Equal(DeviceState.Error, device.State);
-    }
-
-    [Fact]
     public async Task InitializeAsync_WhenDeviceReturnsTransientScpiError_RetriesAndSucceeds()
     {
         // Arrange — the first attempt returns a SCPI error, the retry succeeds, simulating

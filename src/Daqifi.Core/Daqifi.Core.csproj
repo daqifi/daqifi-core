@@ -49,15 +49,15 @@
 
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
-    <PackageReference Include="Google.Protobuf" Version="3.36.1" />
+    <PackageReference Include="Google.Protobuf" Version="3.36.2" />
     <!-- USB HID transport. HidSharp backs Windows/Linux. On macOS it enumerates
          0 HID devices (issue #262), so MacOsHidPlatform uses raw IOKit P/Invoke
          instead (no package — IOKit/CoreFoundation are Apple-signed system
          frameworks); HidPlatformFactory selects the backend at runtime. The
          IOKit DllImports compile on every target and only execute on macOS. -->
     <PackageReference Include="HidSharp" Version="2.6.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
-    <PackageReference Include="System.IO.Ports" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.12" />
     <!-- Public API surface tracking (issue #636). ADR 0002 makes source
          compatibility a promise; RS0016/RS0017 turn a change to the public
          surface into a build error until PublicAPI.*.txt is updated in the same
@@ -77,7 +77,7 @@
        WindowsUsbPortDescriptorProvider.cs (compiled on every target)
        can resolve System.Management even during a Linux/macOS build. -->
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="10.0.11" />
+    <PackageReference Include="System.Management" Version="10.0.12" />
   </ItemGroup>
 
 

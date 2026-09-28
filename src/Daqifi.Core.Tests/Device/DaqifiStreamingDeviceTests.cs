@@ -169,6 +169,14 @@ public class DaqifiStreamingDeviceTests
         yield return new object[] { "LoadFactoryAdcCalibration", "CONFigure:ADC:LOADFcal" };
     }
 
+    public static IEnumerable<object[]> NvmPersistenceMethodNames()
+    {
+        foreach (var row in NvmPersistenceCommands())
+        {
+            yield return new object[] { row[0] };
+        }
+    }
+
     private static void InvokeNvmMethod(IStreamingDevice device, string methodName)
     {
         switch (methodName)
@@ -200,11 +208,10 @@ public class DaqifiStreamingDeviceTests
     }
 
     [Theory]
-    [MemberData(nameof(NvmPersistenceCommands))]
-    public void NvmPersistence_WhenDisconnected_ThrowsDeviceNotConnectedException(string methodName, string expectedCommand)
+    [MemberData(nameof(NvmPersistenceMethodNames))]
+    public void NvmPersistence_WhenDisconnected_ThrowsDeviceNotConnectedException(string methodName)
     {
         // Arrange
-        _ = expectedCommand;
         var device = new DaqifiStreamingDevice("TestDevice");
 
         // Act & Assert

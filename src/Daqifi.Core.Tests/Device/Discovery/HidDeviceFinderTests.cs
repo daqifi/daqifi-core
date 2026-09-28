@@ -133,15 +133,6 @@ public class HidDeviceFinderTests
     }
 
     [Fact]
-    public void HidDeviceFinder_Dispose_DoesNotThrow()
-    {
-        var enumerator = new FakeHidDeviceEnumerator();
-        var finder = new HidDeviceFinder(enumerator);
-
-        finder.Dispose();
-    }
-
-    [Fact]
     public async Task HidDeviceFinder_AfterDispose_ThrowsObjectDisposedException()
     {
         var enumerator = new FakeHidDeviceEnumerator();

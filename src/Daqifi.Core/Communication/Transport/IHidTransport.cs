@@ -3,6 +3,13 @@ namespace Daqifi.Core.Communication.Transport;
 /// <summary>
 /// Transport abstraction for USB HID bootloader communication.
 /// </summary>
+/// <remarks>
+/// Drive one instance from one caller at a time. Implementations are not required to be safe
+/// for a connect or disconnect running concurrently with a read or write:
+/// <see cref="HidLibraryTransport"/> serializes connects against each other and reads/writes
+/// against each other, but those are two separate locks, so overlapping a connect with I/O is
+/// still a race.
+/// </remarks>
 public interface IHidTransport : IDisposable
 {
     /// <summary>
