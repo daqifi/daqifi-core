@@ -16,8 +16,10 @@ public static class DaqifiTools
 {
     [McpServerTool(Name = "get_server_info", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Report this server's version and whether a newer Daqifi.Mcp is on NuGet. Call it when a tool you expected is missing — an out-of-date server lacks capabilities, not the hardware.")]
-    public static Task<ServerVersionInfo> GetServerInfo(VersionStatus versionStatus)
-        => GuardAsync(versionStatus.GetAsync);
+    public static Task<ServerVersionInfo> GetServerInfo(
+        VersionStatus versionStatus,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => versionStatus.GetAsync(cancellationToken));
 
     [McpServerTool(Name = "discover_devices", ReadOnly = true, Destructive = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Discover DAQiFi devices on USB/serial and WiFi. Returns device_id values used by the other tools; call this first.")]
