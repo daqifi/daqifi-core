@@ -284,9 +284,9 @@ public sealed class DaqifiAgent
         }
     }
 
-    public async Task<string> DisconnectAsync(string deviceId)
+    public async Task<string> DisconnectAsync(string deviceId, CancellationToken cancellationToken = default)
     {
-        await _gate.WaitAsync().ConfigureAwait(false);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             // Remove owns the teardown: disconnect then dispose.
@@ -317,13 +317,21 @@ public sealed class DaqifiAgent
     /// rest. Configuration is applied through <see cref="IStreamingDevice.EnableChannels"/> /
     /// <see cref="IStreamingDevice.DisableChannel"/>, which recompute the device ADC enable bitmask.
     /// </summary>
-    public async Task<ConfigureResult> ConfigureAnalogChannelsAsync(string deviceId, int[] enabledChannels)
+    public async Task<ConfigureResult> ConfigureAnalogChannelsAsync(
+        string deviceId, int[] enabledChannels, CancellationToken cancellationToken = default)
     {
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
 
-        return await device.RunExclusiveAsync(async _ =>
+        return await device.RunExclusiveAsync(async ct =>
         {
+            // The last point a cancel is honored. Once the mask below goes out, the capability
+            // re-read and the rate check after it have to land with it, or a widened channel set
+            // is left live under a rate the firmware will not stream at. The re-read is a bounded
+            // text exchange, so it is not handed the token: cancelling it part-way would skip the
+            // rate check and abandon the exchange with the device's reply still arriving.
+            ct.ThrowIfCancellationRequested();
+
             var analog = Snapshot(device).Where(c => c.Type == ChannelType.Analog).ToList();
             var validNumbers = analog.Select(c => c.ChannelNumber).ToHashSet();
 
@@ -354,7 +362,7 @@ public sealed class DaqifiAgent
             var adjustedFromHz = EnforceSampleRateCap(streaming);
 
             return new ConfigureResult(deviceId, EnabledAnalog(device), streaming.StreamingFrequency, adjustedFromHz);
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -362,13 +370,16 @@ public sealed class DaqifiAgent
     /// The wire-level DIO enable is global — enabling any digital channel turns the whole port
     /// on — but per-channel enablement determines which channels the streaming decode samples.
     /// </summary>
-    public async Task<ConfigureDigitalResult> ConfigureDigitalChannelsAsync(string deviceId, int[] enabledChannels)
+    public async Task<ConfigureDigitalResult> ConfigureDigitalChannelsAsync(
+        string deviceId, int[] enabledChannels, CancellationToken cancellationToken = default)
     {
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
 
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
+
             var digital = Snapshot(device).Where(c => c.Type == ChannelType.Digital).ToList();
             var validNumbers = digital.Select(c => c.ChannelNumber).ToHashSet();
 
@@ -395,14 +406,15 @@ public sealed class DaqifiAgent
                 deviceId,
                 EnabledDigital(device),
                 streaming.StreamingFrequency));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Sets a digital channel's direction (input or output) via
     /// <see cref="IStreamingDevice.SetDioDirection"/>.
     /// </summary>
-    public async Task<DigitalPinResult> SetDigitalDirectionAsync(string deviceId, int channel, string direction)
+    public async Task<DigitalPinResult> SetDigitalDirectionAsync(
+        string deviceId, int channel, string direction, CancellationToken cancellationToken = default)
     {
         var parsed = ParseDirection(direction);
 
@@ -414,20 +426,22 @@ public sealed class DaqifiAgent
         // concurrent tool call can toggle PWM between the check and the send (#449) — an outer,
         // unlocked check would leave that race open and could let Core's SDK-oriented exception
         // (naming SetPwmEnabled, not an MCP tool) leak through instead of this guard's message.
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
             RequirePwmDisabled(ch);
             streaming.SetDioDirection(ch, parsed);
 
             return Task.FromResult(DigitalPinResult.From(deviceId, ch));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Drives a digital output channel high or low. A channel still in input direction is
     /// switched to output first, so a single call is enough to drive a pin.
     /// </summary>
-    public async Task<DigitalPinResult> SetDigitalOutputAsync(string deviceId, int channel, bool high)
+    public async Task<DigitalPinResult> SetDigitalOutputAsync(
+        string deviceId, int channel, bool high, CancellationToken cancellationToken = default)
     {
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
@@ -436,8 +450,9 @@ public sealed class DaqifiAgent
         // Direction-then-value is the sequence that must not be split: another tool call landing
         // between them could flip the pin back to input before the value is driven. The PWM check
         // runs inside the same exclusive section for the same reason — see SetDigitalDirectionAsync.
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
             RequirePwmDisabled(ch);
 
             if (ch.Direction != ChannelDirection.Output)
@@ -448,7 +463,7 @@ public sealed class DaqifiAgent
             streaming.SetDioValue(ch, high);
 
             return Task.FromResult(DigitalPinResult.From(deviceId, ch));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -456,14 +471,17 @@ public sealed class DaqifiAgent
     /// shared frequency when supplied, then enable. The device's PWM frequency is global (one
     /// hardware timer drives all PWM channels).
     /// </summary>
-    public async Task<PwmResult> SetPwmOutputAsync(string deviceId, int channel, int dutyCyclePercent, int frequencyHz)
+    public async Task<PwmResult> SetPwmOutputAsync(
+        string deviceId, int channel, int dutyCyclePercent, int frequencyHz, CancellationToken cancellationToken = default)
     {
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
         var ch = RequireDigitalChannel(device, channel);
 
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
+
             // Duty before frequency before enable: the firmware applies a stored duty when the
             // frequency is (re)programmed, so this order never leaves a stale compare value.
             // Core.PwmFrequencyHz always holds a commandable value (a session default when
@@ -498,7 +516,7 @@ public sealed class DaqifiAgent
             streaming.SetPwmEnabled(ch, true);
 
             return Task.FromResult(PwmResult.From(deviceId, streaming, ch, dutyCommanded: true, frequencyCommanded: true));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -512,20 +530,23 @@ public sealed class DaqifiAgent
     /// not read the device's error queue back, so this call still succeeds and neither throws nor
     /// reports the rejection in its <see cref="PwmResult"/> (#450).
     /// </summary>
-    public async Task<PwmResult> DisablePwmAsync(string deviceId, int channel)
+    public async Task<PwmResult> DisablePwmAsync(
+        string deviceId, int channel, CancellationToken cancellationToken = default)
     {
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
         var ch = RequireDigitalChannel(device, channel);
 
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
+
             streaming.SetPwmEnabled(ch, false);
 
             var dutyCommanded = _pwmDutyCommanded.TryGetValue(ch, out var dutyMarker);
             var frequencyCommanded = _pwmFrequencyCommanded.TryGetValue(streaming, out var frequencyMarker);
             return Task.FromResult(PwmResult.From(deviceId, streaming, ch, dutyCommanded, frequencyCommanded));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     // ----------------------------------------------------------- analog output
@@ -563,13 +584,16 @@ public sealed class DaqifiAgent
     /// nothing to drive.
     /// </para>
     /// </remarks>
-    public async Task<AnalogOutputResult> SetAnalogOutputAsync(string deviceId, int channel, double volts, bool latch)
+    public async Task<AnalogOutputResult> SetAnalogOutputAsync(
+        string deviceId, int channel, double volts, bool latch, CancellationToken cancellationToken = default)
     {
         RequireControl();
         var (device, streaming) = RequireAnalogOutput(deviceId);
 
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
+
             // Checked inside the exclusive section, with the write it guards: a capability re-read
             // runs under this same lock and rebuilds the analog-output channels, so an outer check
             // could vouch for a channel that no longer exists by the time the value is staged —
@@ -589,7 +613,7 @@ public sealed class DaqifiAgent
                 Applied: latch,
                 RangeChecked: known,
                 State: FindAnalogOutput(device, channel) is { } state ? AnalogOutputState.From(state) : null));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -601,19 +625,22 @@ public sealed class DaqifiAgent
     /// this is not refused when no value is pending; a caller that has lost track of what it staged
     /// can always land the device in a known state.
     /// </remarks>
-    public async Task<AnalogOutputLatchResult> LatchAnalogOutputsAsync(string deviceId)
+    public async Task<AnalogOutputLatchResult> LatchAnalogOutputsAsync(
+        string deviceId, CancellationToken cancellationToken = default)
     {
         RequireControl();
         var (device, streaming) = RequireAnalogOutput(deviceId);
 
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
+
             streaming.LatchAnalogOutputs();
 
             return Task.FromResult(new AnalogOutputLatchResult(
                 deviceId,
                 AnalogOutputs(device).Select(AnalogOutputState.From).ToList()));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -649,7 +676,8 @@ public sealed class DaqifiAgent
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<SampleRateResult> SetSampleRateAsync(string deviceId, int rateHz)
+    public async Task<SampleRateResult> SetSampleRateAsync(
+        string deviceId, int rateHz, CancellationToken cancellationToken = default)
     {
         if (rateHz < 1)
         {
@@ -659,8 +687,10 @@ public sealed class DaqifiAgent
         RequireControl();
         var (device, streaming) = RequireStreaming(deviceId);
 
-        return await device.RunExclusiveAsync(_ =>
+        return await device.RunExclusiveAsync(ct =>
         {
+            ct.ThrowIfCancellationRequested();
+
             var cap = ComputeSampleRateCapHz(streaming);
 
             // A cap of 0 is a real answer ("no channels enabled right now"), not a parsing gap —
@@ -684,7 +714,7 @@ public sealed class DaqifiAgent
 
             streaming.StreamingFrequency = rateHz;
             return Task.FromResult(new SampleRateResult(deviceId, rateHz));
-        }).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1469,6 +1499,25 @@ public sealed class DaqifiAgent
     /// </remarks>
     internal void RegisterConnectedDevice(string deviceId, DaqifiDevice device) =>
         _registry.Register(device, deviceInfo: null, key: deviceId);
+
+    /// <summary>
+    /// Holds the connection-registry gate until <paramref name="release"/> completes, and
+    /// completes <paramref name="acquired"/> once the gate is held. Exists so tests can prove a
+    /// cancelled <see cref="DisconnectAsync"/> does not sit out the wait.
+    /// </summary>
+    internal async Task HoldRegistryGateAsync(TaskCompletionSource acquired, Task release)
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            acquired.SetResult();
+            await release.ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     private DaqifiDevice Require(string deviceId)
     {

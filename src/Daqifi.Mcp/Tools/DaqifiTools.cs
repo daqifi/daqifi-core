@@ -41,8 +41,9 @@ public static class DaqifiTools
     [Description("Disconnect from a connected device and release it.")]
     public static Task<string> DisconnectDevice(
         DaqifiAgent agent,
-        [Description("The device_id to disconnect.")] string deviceId)
-        => GuardAsync(() => agent.DisconnectAsync(deviceId));
+        [Description("The device_id to disconnect.")] string deviceId,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.DisconnectAsync(deviceId, cancellationToken));
 
     [McpServerTool(Name = "list_connected_devices", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("List the devices currently connected to this server. Cheap; safe to call often.")]
@@ -68,16 +69,18 @@ public static class DaqifiTools
     public static Task<ConfigureResult> ConfigureAnalogChannels(
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
-        [Description("Analog channel numbers to enable, e.g. [0,1,2,3]. Channels not listed are disabled.")] int[] enabledChannels)
-        => GuardAsync(() => agent.ConfigureAnalogChannelsAsync(deviceId, enabledChannels));
+        [Description("Analog channel numbers to enable, e.g. [0,1,2,3]. Channels not listed are disabled.")] int[] enabledChannels,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.ConfigureAnalogChannelsAsync(deviceId, enabledChannels, cancellationToken));
 
     [McpServerTool(Name = "configure_digital_channels", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Enable exactly the given digital channels and disable the rest. Enabling any digital channel powers the whole port; pass an empty list to disable all.")]
     public static Task<ConfigureDigitalResult> ConfigureDigitalChannels(
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
-        [Description("Digital channel numbers to enable, e.g. [0,1,2]. Channels not listed are disabled.")] int[] enabledChannels)
-        => GuardAsync(() => agent.ConfigureDigitalChannelsAsync(deviceId, enabledChannels));
+        [Description("Digital channel numbers to enable, e.g. [0,1,2]. Channels not listed are disabled.")] int[] enabledChannels,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.ConfigureDigitalChannelsAsync(deviceId, enabledChannels, cancellationToken));
 
     [McpServerTool(Name = "set_digital_direction", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Set a digital channel's direction: 'input' or 'output'. Rejected while PWM is enabled on the channel — call disable_pwm first.")]
@@ -85,8 +88,9 @@ public static class DaqifiTools
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
         [Description("The digital channel number (e.g. 0-15 on Nyquist).")] int channel,
-        [Description("'input' or 'output'.")] string direction)
-        => GuardAsync(() => agent.SetDigitalDirectionAsync(deviceId, channel, direction));
+        [Description("'input' or 'output'.")] string direction,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.SetDigitalDirectionAsync(deviceId, channel, direction, cancellationToken));
 
     [McpServerTool(Name = "set_digital_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Drive a digital channel high or low, switching it to output if needed. Rejected while PWM is enabled on the channel — call disable_pwm first.")]
@@ -94,8 +98,9 @@ public static class DaqifiTools
         DaqifiAgent agent,
         [Description("The device_id to control.")] string deviceId,
         [Description("The digital channel number (e.g. 0-15 on Nyquist).")] int channel,
-        [Description("true to drive the pin high, false to drive it low.")] bool high)
-        => GuardAsync(() => agent.SetDigitalOutputAsync(deviceId, channel, high));
+        [Description("true to drive the pin high, false to drive it low.")] bool high,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.SetDigitalOutputAsync(deviceId, channel, high, cancellationToken));
 
     [McpServerTool(Name = "set_pwm_output", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Start PWM on a PWM-capable digital channel (Nyquist: 0, 3, 4, 5, 6, 7). Frequency is shared by all PWM channels; digital writes on the channel are rejected until disable_pwm.")]
@@ -104,16 +109,18 @@ public static class DaqifiTools
         [Description("The device_id to control.")] string deviceId,
         [Description("The PWM-capable digital channel number.")] int channel,
         [Description("Duty cycle in whole percent, 1-100. To stop the output use disable_pwm, not duty 0.")] int dutyCyclePercent,
-        [Description("PWM frequency in Hz, 6-50000, applied device-wide. Pass 0 to keep the current session frequency (defaults to 1000 Hz until explicitly set).")] int frequencyHz = 0)
-        => GuardAsync(() => agent.SetPwmOutputAsync(deviceId, channel, dutyCyclePercent, frequencyHz));
+        [Description("PWM frequency in Hz, 6-50000, applied device-wide. Pass 0 to keep the current session frequency (defaults to 1000 Hz until explicitly set).")] int frequencyHz = 0,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.SetPwmOutputAsync(deviceId, channel, dutyCyclePercent, frequencyHz, cancellationToken));
 
     [McpServerTool(Name = "disable_pwm", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Stop PWM on a digital channel and leave the pin high-impedance. Allowed on any digital channel (recovery for a half-armed firmware state); firmware rejection of an unarmed channel is not surfaced.")]
     public static Task<PwmResult> DisablePwm(
         DaqifiAgent agent,
         [Description("The device_id to control.")] string deviceId,
-        [Description("The digital channel number to stop PWM on.")] int channel)
-        => GuardAsync(() => agent.DisablePwmAsync(deviceId, channel));
+        [Description("The digital channel number to stop PWM on.")] int channel,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.DisablePwmAsync(deviceId, channel, cancellationToken));
 
     [McpServerTool(Name = "list_analog_outputs", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("List analog output (DAC) channels with range, resolution, and the volts this server last wrote or read. An empty list means none are modelled — not necessarily that writes are impossible; a null volts is untouched this session, not 0 V.")]
@@ -129,15 +136,17 @@ public static class DaqifiTools
         [Description("The device_id to control.")] string deviceId,
         [Description("The analog output channel number, as list_analog_outputs reports it.")] int channel,
         [Description("The output voltage in volts. Must lie inside the channel's range (commonly 0-10 V).")] double volts,
-        [Description("Apply the value now (default). Pass false to stage it without changing the pin; the next latch_analog_outputs applies it.")] bool latch = true)
-        => GuardAsync(() => agent.SetAnalogOutputAsync(deviceId, channel, volts, latch));
+        [Description("Apply the value now (default). Pass false to stage it without changing the pin; the next latch_analog_outputs applies it.")] bool latch = true,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.SetAnalogOutputAsync(deviceId, channel, volts, latch, cancellationToken));
 
     [McpServerTool(Name = "latch_analog_outputs", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Apply every analog output voltage staged with set_analog_output latch=false. Harmless with nothing staged — the device re-applies what it already holds.")]
     public static Task<AnalogOutputLatchResult> LatchAnalogOutputs(
         DaqifiAgent agent,
-        [Description("The device_id to latch.")] string deviceId)
-        => GuardAsync(() => agent.LatchAnalogOutputsAsync(deviceId));
+        [Description("The device_id to latch.")] string deviceId,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.LatchAnalogOutputsAsync(deviceId, cancellationToken));
 
     [McpServerTool(Name = "read_analog_output", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("Ask the device what voltage a DAC channel was last told to drive — not a pin measurement. Refused while streaming.")]
@@ -153,8 +162,9 @@ public static class DaqifiTools
     public static Task<SampleRateResult> SetSampleRate(
         DaqifiAgent agent,
         [Description("The device_id to configure.")] string deviceId,
-        [Description("Sample rate in Hz. The ceiling varies with the enabled analog channel count.")] int rateHz)
-        => GuardAsync(() => agent.SetSampleRateAsync(deviceId, rateHz));
+        [Description("Sample rate in Hz. The ceiling varies with the enabled analog channel count.")] int rateHz,
+        CancellationToken cancellationToken = default)
+        => GuardAsync(() => agent.SetSampleRateAsync(deviceId, rateHz, cancellationToken));
 
     [McpServerTool(Name = "start_sd_logging", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("Start on-device SD-card logging using the currently enabled channels and sample rate. Requires a USB/serial connection (the SD card and WiFi share a bus). Configure channels and sample rate first.")]
