@@ -819,9 +819,15 @@ internal sealed class WifiModuleUpdater
     /// </summary>
     /// <remarks>
     /// This is the managed-connection twin of <see cref="WifiBridgeActivator.Deactivate"/>, and
-    /// sends the same two commands in the same order with the same pause between them:
+    /// sends the same two commands in the same order:
     /// <c>SYSTem:USB:SetTransparentMode 0</c> hands the port back to the SCPI console, then
-    /// <c>LAN:APPLY</c> kicks the WiFi manager out of its bridge-mode state machine.
+    /// <c>LAN:APPLY</c> kicks the WiFi manager out of its bridge-mode state machine. The pause
+    /// between them is <see cref="FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay"/>,
+    /// the same settle the success path waits before its LAN restore. A host that lengthens the
+    /// option because the bridge is slow to drop is pacing this path too — the one that most
+    /// needs it. The default matches <see cref="WifiBridgeActivator.InterCommandDelay"/>. The
+    /// wait is not cancelled: the caller token is already cancelled on this path, and aborting
+    /// the settle would skip <c>LAN:APPLY</c>.
     /// <para>
     /// Deliberately NOT the success path's full <c>LAN:ENAbled</c>/<c>APPLY</c>/<c>SAVE</c>
     /// restore: that persists a configuration, which has no business running off the back of a
@@ -855,14 +861,20 @@ internal sealed class WifiModuleUpdater
             // Past the reconnect the two-command exit runs to completion instead of re-observing
             // the budget. Half of it is the one outcome worse than not starting: the console is
             // handed back but the WiFi manager is left in its bridge-mode state machine, so the
-            // device looks answerable while its module still is not. The un-cancelled tail is a
-            // fixed pause plus two synchronous writes, so the helper stays bounded either way.
+            // device looks answerable while its module still is not. The un-cancelled tail is the
+            // transparent-mode exit settle plus two synchronous writes, so the helper stays
+            // bounded either way. The caller token is already cancelled on this path and must not
+            // abort the exit — the settle observes neither it nor the recovery budget.
             device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
 
-            // Leaving the bridge is a device-side mode transition, not an instantaneous one:
-            // until the SCPI console path is back, bytes on the port are still forwarded raw to
-            // the WINC, so a command sent immediately after can be swallowed by the bridge.
-            await Task.Delay(WifiBridgeActivator.InterCommandDelay).ConfigureAwait(false);
+            // Same settle as the success path, including the zero escape hatch. Leaving the bridge
+            // is a device-side mode transition: until the SCPI console path is back, bytes on the
+            // port are still forwarded raw to the WINC, so a command sent immediately after can
+            // be swallowed. Uncancelled on purpose — see the remarks above.
+            if (Options.PostUsbTransparentModeExitDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(Options.PostUsbTransparentModeExitDelay).ConfigureAwait(false);
+            }
 
             device.Send(ScpiMessageProducer.ApplyNetworkLan);
 

@@ -6,14 +6,6 @@ namespace Daqifi.Core.Tests.Communication.Transport;
 public class HidPlatformFactoryTests
 {
     [Fact]
-    public void CreateForCurrentPlatform_ReturnsNonNullBackend()
-    {
-        var platform = HidPlatformFactory.CreateForCurrentPlatform();
-
-        Assert.NotNull(platform);
-    }
-
-    [Fact]
     public void CreateForCurrentPlatform_SelectsBackendForOperatingSystem()
     {
         var platform = HidPlatformFactory.CreateForCurrentPlatform();

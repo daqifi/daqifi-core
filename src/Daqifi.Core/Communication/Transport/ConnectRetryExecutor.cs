@@ -47,11 +47,15 @@ internal static class ConnectRetryExecutor
     {
         var options = retryOptions ?? ConnectionRetryOptions.NoRetry;
         var maxAttempts = options.Enabled ? options.MaxAttempts : 1;
-        Exception? lastException = null;
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        // No loop condition on purpose: an iteration returns on success, throws on cancellation
+        // or on the final failure, and continues only while attempt < maxAttempts, so the body
+        // runs at most maxAttempts times and control never falls out of the loop. maxAttempts is
+        // always at least 1 (NoRetry pins it to 1 and the MaxAttempts setter rejects anything
+        // lower), so the first attempt always runs.
+        for (var attempt = 1; ; attempt++)
         {
             try
             {
@@ -85,7 +89,6 @@ internal static class ConnectRetryExecutor
             }
             catch (Exception ex)
             {
-                lastException = ex;
                 onAttemptFailed();
 
                 // If this is not the last attempt and retry is enabled, continue
@@ -100,9 +103,5 @@ internal static class ConnectRetryExecutor
                 throw;
             }
         }
-
-        // Should not reach here, but just in case
-        onStatusChanged(false, lastException);
-        throw lastException ?? new InvalidOperationException("Connection failed after all retry attempts.");
     }
 }

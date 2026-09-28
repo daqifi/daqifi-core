@@ -159,7 +159,9 @@ public class SdCardToolContractTests
         await agent.SetSampleRateAsync(AgentHarness.DeviceId, 20_000);
 
         // The cap moves under the live rate without any tool call re-validating it — which is the
-        // only way an over-cap rate survives to this point, since every configure_* call enforces.
+        // only way an over-cap rate survives to this point: set_sample_rate refuses one,
+        // configure_analog_channels lowers one, and configure_digital_channels leaves Core's
+        // analog-only cap where it was.
         device.CapForEnabledAnalogCount = _ => 1_000;
         await device.ReadCapabilityDocumentAsync();
 
@@ -183,20 +185,34 @@ public class SdCardToolContractTests
         Assert.False(agent.GetStatus(AgentHarness.DeviceId).LoggingToSdCard);
     }
 
-    [Theory]
-    [InlineData("start")]
-    [InlineData("stop")]
-    public async Task LoggingTools_AreRefusedInReadOnlyMode(string tool)
+    [Fact]
+    public async Task StartSdLogging_IsRefusedInReadOnlyMode()
     {
         var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
 
-        Task Call() => tool == "start"
-            ? agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None)
-            : agent.StopLoggingAsync(AgentHarness.DeviceId, CancellationToken.None);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.StartLoggingAsync(AgentHarness.DeviceId, "log.bin", "protobuf", CancellationToken.None));
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Call);
         Assert.Contains("read-only", ex.Message);
         Assert.Null(device.StartedSession);
+    }
+
+    [Fact]
+    public async Task StopSdLogging_IsRefusedInReadOnlyMode_AndTheRecordingKeepsRunning()
+    {
+        // A recording this server did not start (the device's own, or an earlier session's) is
+        // what a read-only server must leave alone, and starting from one is what lets a stop
+        // that reached the card show up here.
+        var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true);
+        var card = (ISdCardOperations)device;
+        await card.StartSdCardLoggingSessionAsync(
+            "log.bin", channelMask: null, SdCardLogFormat.Protobuf, CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => agent.StopLoggingAsync(AgentHarness.DeviceId, CancellationToken.None));
+
+        Assert.Contains("read-only", ex.Message);
+        Assert.True(card.IsLoggingToSdCard);
     }
 
     [Fact]
@@ -228,8 +244,10 @@ public class ToolErrorTranslationTests
         var ex = Assert.Throws<McpException>(() => DaqifiTools.GetDeviceStatus(agent, "serial:NOPE"));
 
         // Not a generic "An error occurred": the whole point is that "call connect_device first"
-        // survives the trip to the model.
+        // survives the trip to the model. The original failure stays attached so a host that
+        // logs the exception still has the cause.
         Assert.Contains("connect_device", ex.Message);
+        Assert.IsType<InvalidOperationException>(ex.InnerException);
     }
 
     [Fact]
@@ -241,6 +259,7 @@ public class ToolErrorTranslationTests
             () => DaqifiTools.SetSampleRate(agent, "serial:NOPE", 100));
 
         Assert.Contains("not connected", ex.Message);
+        Assert.IsType<InvalidOperationException>(ex.InnerException);
     }
 
     [Fact]
@@ -254,6 +273,48 @@ public class ToolErrorTranslationTests
             () => DaqifiTools.SetPwmOutput(agent, AgentHarness.DeviceId, channel: 1, dutyCyclePercent: 50));
 
         Assert.Contains("does not support PWM", ex.Message);
+        Assert.IsType<ArgumentException>(ex.InnerException);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(101)]
+    public async Task PwmDutyOutsideRange_NamesDisablePwmAndKeepsTheCause(int dutyCyclePercent)
+    {
+        // Core rejects a duty outside 1-100 with ArgumentOutOfRangeException whose message says
+        // "SetPwmEnabled(channel, false)". Guard used to forward that text, so the model was
+        // told to call an SDK method it has no tool for.
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        device.ClearSent();
+
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => DaqifiTools.SetPwmOutput(
+                agent, AgentHarness.DeviceId, channel: 4, dutyCyclePercent: dutyCyclePercent));
+
+        Assert.Contains("disable_pwm", ex.Message);
+        Assert.DoesNotContain("SetPwmEnabled", ex.Message);
+
+        var rewritten = Assert.IsType<InvalidOperationException>(ex.InnerException);
+        var core = Assert.IsType<ArgumentOutOfRangeException>(rewritten.InnerException);
+        Assert.Contains("SetPwmEnabled", core.Message);
+        Assert.Empty(device.Sent);
+    }
+
+    [Fact]
+    public async Task PwmFrequencyOutsideRange_IsNotRewrittenAsADutyError()
+    {
+        // The duty rewrite must stay scoped to the duty check: a different out-of-range
+        // argument on the same tool call still reaches the model as Core's own message.
+        var (agent, _) = AgentHarness.WithConnectedDevice();
+
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => DaqifiTools.SetPwmOutput(
+                agent, AgentHarness.DeviceId, channel: 4, dutyCyclePercent: 50, frequencyHz: 5));
+
+        Assert.Contains("PWM frequency must be", ex.Message);
+        Assert.DoesNotContain("disable_pwm", ex.Message);
+        var core = Assert.IsType<ArgumentOutOfRangeException>(ex.InnerException);
+        Assert.Equal("frequencyHz", core.ParamName);
     }
 
     [Fact]

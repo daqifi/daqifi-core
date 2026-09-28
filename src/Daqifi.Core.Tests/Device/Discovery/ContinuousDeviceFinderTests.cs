@@ -743,9 +743,18 @@ public class ContinuousDeviceFinderTests
     [Fact]
     public void Dispose_IsIdempotent()
     {
-        var finder = NewFinder(new StubDeviceFinder());
+        var inner = new StubDeviceFinder();
+        var finder = NewFinder(inner);
+
         finder.Dispose();
-        finder.Dispose(); // should not throw
+        Assert.Equal(1, inner.DisposeCount);
+
+        // The second dispose returns early: the inner finder is not disposed a second time, and
+        // the finder stays disposed, so Start still throws (DeviceFinderBaseTests' post-dispose
+        // contract).
+        finder.Dispose();
+        Assert.Equal(1, inner.DisposeCount);
+        Assert.Throws<ObjectDisposedException>(() => finder.Start());
     }
 
     #endregion
@@ -909,7 +918,9 @@ public class ContinuousDeviceFinderTests
     /// </summary>
     private sealed class StubDeviceFinder : IDeviceFinder, IDisposable
     {
-        public bool Disposed { get; private set; }
+        public int DisposeCount { get; private set; }
+
+        public bool Disposed => DisposeCount > 0;
 
 #pragma warning disable CS0067 // Events are part of the interface but unused by this stub.
         public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
@@ -922,7 +933,7 @@ public class ContinuousDeviceFinderTests
         public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
             => Task.FromResult(Enumerable.Empty<IDeviceInfo>());
 
-        public void Dispose() => Disposed = true;
+        public void Dispose() => DisposeCount++;
     }
 
     /// <summary>

@@ -65,6 +65,7 @@ nunit-*.xml
 *.code-workspace
 
 # User-specific files
+.vs/
 *.rsuser
 *.suo
 *.user

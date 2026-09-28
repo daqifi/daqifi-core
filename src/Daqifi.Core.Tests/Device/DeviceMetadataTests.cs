@@ -396,6 +396,22 @@ public class DeviceMetadataTests
     }
 
     [Fact]
+    public void Capabilities_SetToNull_IsCoercedToInstance_AndStatusUpdateDoesNotThrow()
+    {
+        // Capabilities has a public setter too, and the status path writes channel counts
+        // straight into it; a consumer assigning null must not break that.
+        var metadata = new DeviceMetadata { Capabilities = null! };
+
+        Assert.NotNull(metadata.Capabilities);
+
+        var exception = Record.Exception(() =>
+            metadata.UpdateFromProtobuf(new DaqifiOutMessage { AnalogInPortNum = 8 }));
+
+        Assert.Null(exception);
+        Assert.Equal(8, metadata.Capabilities.AnalogInputChannels);
+    }
+
+    [Fact]
     public void UpdateFromProtobuf_NegativeBoardTemperature_IsPreserved()
     {
         // TempStatus is a signed field; sub-zero board temperatures must round-trip.
@@ -607,19 +623,5 @@ public class DeviceMetadataTests
 
         // Act & Assert
         Assert.Throws<ArgumentNullException>(() => target.CopyFrom(null!));
-    }
-
-    [Fact]
-    public void CopyFrom_SourceWithNullCapabilities_DefaultsToNewCapabilities()
-    {
-        // Arrange
-        var source = new DeviceMetadata { Capabilities = null! };
-        var target = new DeviceMetadata();
-
-        // Act
-        target.CopyFrom(source);
-
-        // Assert
-        Assert.NotNull(target.Capabilities);
     }
 }

@@ -288,7 +288,25 @@ public class DigitalConfigurationToolContractTests
 
         Assert.Equal(before, device.CapabilityReads);
         Assert.Equal(device.StreamingFrequency, result.SampleRateHz);
-        Assert.Null(result.SampleRateAdjustedFromHz);
+    }
+
+    [Fact]
+    public async Task ConfigureDigitalChannels_NeverAdjustsTheLiveRate()
+    {
+        // ConfigureDigitalResult has no field to report an adjustment, so this path must never
+        // make one: were it to re-validate against the cap like configure_analog_channels, the
+        // rate would drop silently. Start from a live rate the cap has already moved under — the
+        // one case where re-validating would change it.
+        var (agent, device) = AgentHarness.WithConnectedDevice();
+        await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
+        await agent.SetSampleRateAsync(AgentHarness.DeviceId, 20_000);
+        device.CapForEnabledAnalogCount = _ => 1_000;
+        await device.ReadCapabilityDocumentAsync();
+
+        var result = await agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
+
+        Assert.Equal(20_000, result.SampleRateHz);
+        Assert.Equal(20_000, device.StreamingFrequency);
     }
 }
 
@@ -598,15 +616,18 @@ public class SampleRateToolContractTests
     public async Task ConfiguringChannels_AlsoEnforcesTheServerWideClamp()
     {
         // The operator's clamp has to bind on the re-validation path too, or a channel change
-        // could leave a rate above it live and reported as adjusted-and-fine.
-        var (agent, _) = AgentHarness.WithConnectedDevice(maxSampleRateHz: 300);
-        await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0 });
-        await agent.SetSampleRateAsync(AgentHarness.DeviceId, 300);
+        // could leave a rate above it live and reported as fine. set_sample_rate cannot put such
+        // a rate there, but the device's own rate can already be one (Core starts every device at
+        // 100 Hz, above any clamp below that), so start from a live rate over the clamp.
+        var (agent, device) = AgentHarness.WithConnectedDevice(maxSampleRateHz: 300);
+        device.StreamingFrequency = 1_000;
 
         var result = await agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0, 1 });
 
-        Assert.Null(result.SampleRateAdjustedFromHz);
+        // Two channels leave the device a 10 kHz cap, so only the server clamp can lower 1000 Hz.
+        Assert.Equal(1_000, result.SampleRateAdjustedFromHz);
         Assert.Equal(300, result.SampleRateHz);
+        Assert.Equal(300, agent.GetStatus(AgentHarness.DeviceId).SampleRateHz);
     }
 
     [Fact]
@@ -615,9 +636,10 @@ public class SampleRateToolContractTests
         var (agent, device) = AgentHarness.WithConnectedDevice();
         device.ClearSent();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => agent.SetSampleRateAsync(AgentHarness.DeviceId, 0));
 
+        Assert.Contains(">= 1", ex.Message);
         Assert.Empty(device.Sent);
     }
 }
@@ -625,8 +647,11 @@ public class SampleRateToolContractTests
 public class ReadOnlyModeContractTests
 {
     /// <summary>
-    /// Every mutating tool, refused before it reaches a device that is genuinely connected. The
-    /// existing no-device tests cannot tell a real refusal from "there was nothing to do anyway".
+    /// Channel, output, and sample-rate tools, refused before they reach a device that is
+    /// genuinely connected. The existing no-device tests cannot tell a real refusal from "there
+    /// was nothing to do anyway". The SD-card tools have their own: start_sd_logging and
+    /// stop_sd_logging in <see cref="SdCardToolContractTests"/>, delete_sd_file in
+    /// <see cref="SdCardAgentGuardTests"/>.
     /// </summary>
     public static TheoryData<string> MutatingTools() => new()
     {
@@ -648,23 +673,39 @@ public class ReadOnlyModeContractTests
         var (agent, device) = AgentHarness.WithConnectedDevice(readOnly: true, analogOutputs: 2);
         device.ClearSent();
 
-        Task Call() => tool switch
-        {
-            "configure_analog_channels" => agent.ConfigureAnalogChannelsAsync(AgentHarness.DeviceId, new[] { 0 }),
-            "configure_digital_channels" => agent.ConfigureDigitalChannelsAsync(AgentHarness.DeviceId, new[] { 0 }),
-            "set_digital_direction" => agent.SetDigitalDirectionAsync(AgentHarness.DeviceId, 0, "output"),
-            "set_digital_output" => agent.SetDigitalOutputAsync(AgentHarness.DeviceId, 0, high: true),
-            "set_pwm_output" => agent.SetPwmOutputAsync(AgentHarness.DeviceId, 4, 50, 1000),
-            "disable_pwm" => agent.DisablePwmAsync(AgentHarness.DeviceId, 4),
-            "set_analog_output" => agent.SetAnalogOutputAsync(AgentHarness.DeviceId, 0, 2.5, latch: true),
-            "latch_analog_outputs" => agent.LatchAnalogOutputsAsync(AgentHarness.DeviceId),
-            _ => agent.SetSampleRateAsync(AgentHarness.DeviceId, 100),
-        };
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Call);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CallMutatingTool(agent, tool, AgentHarness.DeviceId));
         Assert.Contains("read-only", ex.Message);
         Assert.Empty(device.Sent);
     }
+
+    [Theory]
+    [MemberData(nameof(MutatingTools))]
+    public async Task MutatingTools_AreRefusedBeforeTheDeviceIsLookedUp(string tool)
+    {
+        // Deliberately a device id that was never connected: the read-only refusal has to win over
+        // "not connected", or a caller is sent to connect_device and only learns afterwards that
+        // permission was the obstacle. SdCardAgentGuardTests pins the same rule for delete_sd_file.
+        var agent = new DaqifiAgent(new ServerOptions { ReadOnly = true });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CallMutatingTool(agent, tool, "serial:NOPE"));
+        Assert.Contains("read-only", ex.Message);
+    }
+
+    private static Task CallMutatingTool(DaqifiAgent agent, string tool, string deviceId) => tool switch
+    {
+        "configure_analog_channels" => agent.ConfigureAnalogChannelsAsync(deviceId, new[] { 0 }),
+        "configure_digital_channels" => agent.ConfigureDigitalChannelsAsync(deviceId, new[] { 0 }),
+        "set_digital_direction" => agent.SetDigitalDirectionAsync(deviceId, 0, "output"),
+        "set_digital_output" => agent.SetDigitalOutputAsync(deviceId, 0, high: true),
+        "set_pwm_output" => agent.SetPwmOutputAsync(deviceId, 4, 50, 1000),
+        "disable_pwm" => agent.DisablePwmAsync(deviceId, 4),
+        "set_analog_output" => agent.SetAnalogOutputAsync(deviceId, 0, 2.5, latch: true),
+        "latch_analog_outputs" => agent.LatchAnalogOutputsAsync(deviceId),
+        "set_sample_rate" => agent.SetSampleRateAsync(deviceId, 100),
+        _ => throw new ArgumentOutOfRangeException(nameof(tool), tool, "No call is wired up for this tool."),
+    };
 
     [Theory]
     [InlineData("status")]

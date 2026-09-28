@@ -2,8 +2,6 @@ using System;
 using System.Globalization;
 using Daqifi.Core.Communication.Producers;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
