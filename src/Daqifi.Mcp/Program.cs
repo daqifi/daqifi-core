@@ -1,4 +1,5 @@
 using Daqifi.Mcp;
+using Daqifi.Mcp.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -44,7 +45,7 @@ builder.Services
         o.ServerInstructions = options.Instructions;
     })
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithDaqifiTools();
 
 var host = builder.Build();
 

@@ -106,7 +106,7 @@ public class ToolAnnotationContractTests
 
     /// <summary>
     /// The tools exactly as the server advertises them: registered through the same
-    /// <c>WithToolsFromAssembly</c> call Program.cs makes, so every tool the server can list is
+    /// <c>WithDaqifiTools</c> call Program.cs makes, so every tool the server can list is
     /// covered here — whatever class it lives in — and nothing it would not list is.
     /// </summary>
     private static readonly IReadOnlyList<Tool> AdvertisedTools = BuildAdvertisedTools();
@@ -114,7 +114,7 @@ public class ToolAnnotationContractTests
     private static IReadOnlyList<Tool> BuildAdvertisedTools()
     {
         var services = new ServiceCollection();
-        services.AddMcpServer().WithToolsFromAssembly(typeof(DaqifiTools).Assembly);
+        services.AddMcpServer().WithDaqifiTools();
         using var provider = services.BuildServiceProvider();
         return provider.GetServices<McpServerTool>().Select(t => t.ProtocolTool).ToList();
     }
