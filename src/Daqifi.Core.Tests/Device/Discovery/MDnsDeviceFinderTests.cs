@@ -5,6 +5,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Device.Discovery;
 
@@ -310,24 +311,37 @@ public class MDnsDeviceFinderTests
         Assert.True(completed);
     }
 
-    [Fact]
-    public async Task DiscoverAsync_WithCancellationToken_ReturnsWithoutThrowing()
+    [NetworkBrowseFact(requireMulticast: true)]
+    public async Task DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing()
     {
+        // A browse runs until cancelled, and every response received before cancellation is the
+        // result (see the class remarks), not an OperationCanceledException.
         using var finder = new MDnsDeviceFinder();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        using var cts = new CancellationTokenSource();
 
-        var devices = await finder.DiscoverAsync(cts.Token);
+        var browse = finder.DiscoverAsync(cts.Token);
 
-        Assert.NotNull(devices);
+        // A pass that finds nothing to browse on returns at once. Still running after a moment
+        // means it is waiting on replies, so what ends it below is the cancellation.
+        var endedOnItsOwn = await Task.WhenAny(browse, Task.Delay(TimeSpan.FromMilliseconds(200))) == browse;
+        Assert.False(endedOnItsOwn, "the browse ended before it was cancelled");
+
+        cts.Cancel();
+
+        // Bounded, so a browse that ignored the token fails instead of hanging the run.
+        var failure = await Record.ExceptionAsync(() => browse.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Null(failure);
     }
 
     [Fact]
-    public void Dispose_IsIdempotent()
+    public async Task DiscoverAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
-        var finder = new MDnsDeviceFinder();
+        // Cancelled before the pass starts: it never acquires the discovery lock, so it throws.
+        using var finder = new MDnsDeviceFinder();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
 
-        finder.Dispose();
-        finder.Dispose();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
     }
 
     [Fact]

@@ -169,21 +169,6 @@ public class NetworkAddressHelperTests
         Assert.Equal(string.Empty, NetworkAddressHelper.GetSecondaryDnsString(message));
     }
 
-    [Fact]
-    public void DefaultMessage_AllMethodsReturnEmpty()
-    {
-        // Arrange
-        var message = new DaqifiOutMessage();
-
-        // Act & Assert
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetIpAddressString(message));
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetMacAddressString(message));
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetSubnetMaskString(message));
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetGatewayString(message));
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetPrimaryDnsString(message));
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetSecondaryDnsString(message));
-    }
-
     #endregion
 
     #region Invalid Lengths

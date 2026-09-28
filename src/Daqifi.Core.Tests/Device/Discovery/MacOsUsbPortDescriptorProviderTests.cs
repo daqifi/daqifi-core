@@ -73,6 +73,33 @@ public class MacOsUsbPortDescriptorProviderTests
         Assert.Equal(new UsbPortDescriptor(1240, 63380), result["/dev/cu.usbserial-1420B"]);
     }
 
+    [Fact]
+    public void Parse_VidPidCarryForwardSurvivesTheCloseOfASiblingChildNode()
+    {
+        // The nested shape real ioreg prints: each serial interface's callout sits in its own
+        // child { } block under the USB device node, so the second callout comes after the first
+        // child's closing brace. The flat fixture above has no braces at all, so it cannot tell
+        // this apart from a parser that scopes VID/PID to the enclosing block and drops them on
+        // "}"; this one can.
+        var output = string.Join('\n',
+            "  | {",
+            "  |   \"idVendor\" = 1240",
+            "  |   \"idProduct\" = 63380",
+            "  |   {",
+            "  |     \"IOCalloutDevice\" = \"/dev/cu.usbmodem1011\"",
+            "  |   }",
+            "  |   {",
+            "  |     \"IOCalloutDevice\" = \"/dev/cu.usbmodem1013\"",
+            "  |   }",
+            "  | }");
+
+        var result = MacOsUsbPortDescriptorProvider.Parse(output);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(new UsbPortDescriptor(1240, 63380), result["/dev/cu.usbmodem1011"]);
+        Assert.Equal(new UsbPortDescriptor(1240, 63380), result["/dev/cu.usbmodem1013"]);
+    }
+
     #endregion
 
     #region Parse — malformed or absent input

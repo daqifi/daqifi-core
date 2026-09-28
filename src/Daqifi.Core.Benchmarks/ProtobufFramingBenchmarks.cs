@@ -26,9 +26,10 @@ namespace Daqifi.Core.Benchmarks;
 public class ProtobufFramingBenchmarks
 {
     /// <summary>
-    /// Frames per buffer. A 4 KB read off a USB CDC port at 16 channels holds roughly this many.
+    /// Frames per buffer. A 16-channel raw-count frame is about 40 bytes on the wire, so a 4 KB
+    /// read off a USB CDC port holds roughly this many.
     /// </summary>
-    private const int FrameCount = 50;
+    private const int FrameCount = 100;
 
     private readonly ProtobufMessageParser _parser = new();
 

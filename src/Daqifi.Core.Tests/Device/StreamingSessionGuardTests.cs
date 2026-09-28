@@ -16,7 +16,6 @@ namespace Daqifi.Core.Tests.Device;
 /// onto the wire.
 /// </summary>
 /// <remarks>
-/// <para>
 /// These exist because the surrounding tests assert the observable end state and stop there.
 /// <c>StreamingFrequency_OutOfRange_ThrowsArgumentOutOfRangeException</c> checks the exception
 /// type and that the ceiling appears in the message, but never the <c>ParamName</c> — so the
@@ -25,11 +24,6 @@ namespace Daqifi.Core.Tests.Device;
 /// <c>IsStreaming</c> after the call returns, which cannot distinguish "flag set before the
 /// send" from "flag set after it" — an ordering the SD-card operations depend on and document
 /// (see <c>SdCardOperations</c>, issue #118).
-/// </para>
-/// <para>
-/// Written and run against the unchanged code before the streaming-session state was moved onto
-/// a collaborator (#344), so they are a baseline rather than a description of the new shape.
-/// </para>
 /// </remarks>
 public class StreamingSessionGuardTests
 {

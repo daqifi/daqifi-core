@@ -82,6 +82,20 @@ in place.
   guarantee — acceptable today because DAQiFi's own consumers are the only known integrators,
   but worth revisiting if that changes.
 
+**Pack gate**
+- A PR that appends a parameter to a public positional record will fail `dotnet pack` (and
+  CI's package-validation step): `EnablePackageValidation` reports `CP0002` for the old-arity
+  constructor and `Deconstruct`, on both target frameworks, against the
+  `PackageValidationBaselineVersion` package from nuget.org. That is expected under this
+  decision, not a reason for a major-version bump. The same PR handles it as the intentional
+  break `CONTRIBUTING.md` ("The published package is the second opinion") describes: remove the
+  old signatures from `PublicAPI.Shipped.txt` and check in the `CompatibilitySuppressions.xml`
+  that `-p:ApiCompatGenerateSuppressionFile=true` generates.
+- Remove those suppressions in the change that bumps `PackageValidationBaselineVersion` to a
+  release containing the new constructor. This is required, not tidying: once the baseline no
+  longer has the old signatures the entries suppress nothing, and ApiCompat fails the pack with
+  "Unnecessary suppressions found".
+
 ## Out of scope
 
 This ADR does not cover breaking changes to non-record public types, method signature changes,

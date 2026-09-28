@@ -15,7 +15,6 @@ namespace Daqifi.Core.Tests.Firmware.Winc;
 internal sealed class FakeWincSerialPort : IWincSerialPort
 {
     private readonly Queue<byte> _toHost = new();
-    private readonly List<byte> _fromHost = [];
 
     private State _state = State.WaitOpCode;
     private byte[] _header = [];
@@ -102,8 +101,6 @@ internal sealed class FakeWincSerialPort : IWincSerialPort
     /// <summary>Drives the emulated bridge one received byte at a time.</summary>
     private void Feed(byte b)
     {
-        _fromHost.Add(b);
-
         switch (_state)
         {
             case State.WaitOpCode:

@@ -7,7 +7,7 @@
 [![NuGet](https://img.shields.io/nuget/v/Daqifi.Core?style=flat-square&logo=nuget)](https://www.nuget.org/packages/Daqifi.Core)
 [![Downloads](https://img.shields.io/nuget/dt/Daqifi.Core?style=flat-square)](https://www.nuget.org/packages/Daqifi.Core)
 [![Build](https://img.shields.io/github/actions/workflow/status/daqifi/daqifi-core/ci.yml?style=flat-square&label=build)](https://github.com/daqifi/daqifi-core/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/github/license/daqifi/daqifi-core?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/daqifi/daqifi-core?style=flat-square)](https://github.com/daqifi/daqifi-core/blob/main/LICENSE)
 ![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0-512BD4?style=flat-square&logo=dotnet)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)
 
@@ -23,7 +23,7 @@ DAQiFi builds wireless data acquisition hardware designed to get out of the way 
 
 Prefer a ready-made GUI? Check out [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop), which is built on top of this library.
 
-Want to drive a device from an AI assistant? The repo also ships an **[MCP server](src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O, PWM and analog outputs, set the sample rate, and run SD-card logging — then list, download, and CSV the recorded data back — through plain conversation.
+Want to drive a device from an AI assistant? The repo also ships an **[MCP server](https://github.com/daqifi/daqifi-core/tree/main/src/Daqifi.Mcp)** — point Claude, Cursor, Codex, or any MCP-aware client at it to discover, configure channels, drive digital I/O, PWM and analog outputs, set the sample rate, and run SD-card logging — then list, download, and CSV the recorded data back — through plain conversation.
 
 ## See it in 30 seconds
 
@@ -49,7 +49,7 @@ device.StartStreaming();
 ```
 
 A real, working program — no GUI required. Prefer the raw protobuf frame instead? Subscribe to
-`device.MessageReceived` — see [Streaming Data](docs/DEVICE_INTERFACES.md#streaming-data).
+`device.MessageReceived` — see [Streaming Data](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#streaming-data).
 
 ## Common applications
 
@@ -70,7 +70,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | Hardware | Nyquist 1 / Nyquist 3 — wireless DAQ devices (and their on-device firmware) |
 | **SDK** | **DAQiFi Core — this library** |
 | App | [DAQiFi Desktop](https://github.com/daqifi/daqifi-desktop) — GUI built on this SDK |
-| Agent | [MCP server](src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM/analog output, SD logging, and SD data retrieval |
+| Agent | [MCP server](https://github.com/daqifi/daqifi-core/tree/main/src/Daqifi.Mcp) — drive a device from Claude / Cursor / any MCP client: discover, configure channels, DIO/PWM/analog output, SD logging, and SD data retrieval |
 | Your code | Custom apps, dashboards, pipelines, test rigs |
 
 ## What you can do
@@ -84,7 +84,7 @@ More examples at [daqifi.com](https://daqifi.com).
 | **Record to CSV** | `device.RecordLiveSamplesToCsvAsync(writer)` writes a live stream to CSV as it arrives — no buffering the session in memory — and reports what reached the file and what was dropped |
 | **Digital I/O** | Set any DIO pin as input or output and drive outputs high/low; inputs stream alongside analog data |
 | **PWM outputs** | Drive PWM on capable DIO pins with per-channel duty cycle and a shared, device-wide frequency |
-| **SD card operations** | List, download, delete, format, and start/stop SD logging over USB / serial |
+| **SD card operations** | List, download, and delete files over USB / serial, or over WiFi / TCP on firmware ≥ 3.7.0; format the card; start (USB / serial only) and stop SD logging |
 | **Network configuration** | Push WiFi credentials and static LAN IPs from your app |
 | **Firmware updates** | PIC32 and WiFi-module flashing with progress, cancellation, and automatic recovery to a clean re-flashable bootloader state on mid-flash failure |
 | **Cross-platform** | .NET 9.0 and 10.0 on Windows, macOS, Linux |
@@ -141,7 +141,7 @@ await using var device = await DaqifiDeviceFactory.ConnectTcpAsync("192.168.1.10
 > silently ends that session's data. Use `DeviceConnectionOptions.Observing` for a secondary session
 > that only needs to look, and `DaqifiDeviceRegistry` to avoid opening the same unit twice in one
 > process. See
-> [Connecting stops any stream already running](docs/DEVICE_INTERFACES.md#connecting-stops-any-stream-already-running).
+> [Connecting stops any stream already running](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#connecting-stops-any-stream-already-running).
 
 ### Device discovery
 
@@ -284,7 +284,7 @@ device.SetDioDirection(dio3, ChannelDirection.Input); // back to a streamed inpu
 
 Every `IStreamingDevice` method above (and the rest of the channel/PWM/analog-output/reboot surface)
 has a cancellable `...Async` twin declared on the interface — see
-[IStreamingDevice](docs/DEVICE_INTERFACES.md#istreamingdevice) for the full list.
+[IStreamingDevice](https://github.com/daqifi/daqifi-core/blob/main/docs/DEVICE_INTERFACES.md#istreamingdevice) for the full list.
 
 ### PWM output
 
@@ -361,20 +361,27 @@ Don't have one yet? **[See the DAQiFi lineup →](https://daqifi.com)**
 
 ## Connection types
 
-- **WiFi** — discovered via UDP broadcast (port 30303)
+- **WiFi** — discovered via UDP broadcast (port 30303), and via mDNS (`_daqifi._tcp.local.`,
+  UDP 5353 multicast) when you add `MDnsDeviceFinder`
 - **Serial** — USB-connected, enumerated as serial ports
-- **HID** — used during firmware updates (HidSharp backend)
+- **HID** — used during firmware updates; HidSharp on Windows and Linux, native IOKit on macOS
+  (HidSharp enumerates no HID devices there —
+  [#262](https://github.com/daqifi/daqifi-core/issues/262))
 
 ## Requirements
 
 - .NET 9.0 or .NET 10.0 on Windows, macOS, or Linux
-- WiFi discovery: UDP port 30303 reachable (firewall may need configuring; admin may be required on Windows)
+- WiFi discovery: UDP port 30303 (broadcast) reachable, plus UDP 5353 multicast (224.0.0.251)
+  if you use `MDnsDeviceFinder` — firewall may need configuring; admin may be required on Windows
 - Serial discovery: appropriate USB drivers for your platform
 
 ## Community & support
 
 - [Open an issue](https://github.com/daqifi/daqifi-core/issues) for bugs or feature requests
 - Reach the team via [daqifi.com](https://daqifi.com) for commercial integrations and custom hardware needs
+- Sending a patch? [CONTRIBUTING.md](https://github.com/daqifi/daqifi-core/blob/main/CONTRIBUTING.md)
+  covers how `main` is gated, the style rules the build enforces, and PublicAPI tracking;
+  [SECURITY.md](https://github.com/daqifi/daqifi-core/blob/main/SECURITY.md) covers reporting a vulnerability
 
 ## For maintainers
 
@@ -396,5 +403,5 @@ for the reasoning.
 ---
 
 <p align="center">
-  Built by <a href="https://daqifi.com">DAQiFi</a> · Licensed under <a href="LICENSE">MIT</a>
+  Built by <a href="https://daqifi.com">DAQiFi</a> · Licensed under <a href="https://github.com/daqifi/daqifi-core/blob/main/LICENSE">MIT</a>
 </p>

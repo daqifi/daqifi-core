@@ -3,8 +3,6 @@ using Daqifi.Core.Communication.Producers;
 using Microsoft.Extensions.Logging;
 using System;
 
-#nullable enable
-
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>
