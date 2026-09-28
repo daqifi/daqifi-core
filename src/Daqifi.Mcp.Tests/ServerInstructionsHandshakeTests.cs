@@ -50,16 +50,13 @@ public class ServerInstructionsHandshakeTests
 
     private static async Task<string?> InstructionsFromHandshakeAsync(params string[] serverArgs)
     {
-        // The test project references Daqifi.Mcp, so its build (and runtimeconfig) sits beside
-        // the tests for whichever framework is running them.
-        var server = Path.Combine(AppContext.BaseDirectory, "daqifi-mcp.dll");
-        Assert.True(File.Exists(server), $"The server build is not next to the tests: {server}");
+        var server = ServerProcess.ServerAssembly();
 
         using var timeout = new CancellationTokenSource(HandshakeBudget);
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = "daqifi-mcp",
-            Command = DotnetHost(),
+            Command = ServerProcess.DotnetHost(),
             Arguments = [server, .. serverArgs],
             // On dispose the SDK waits this long for the server to exit before it closes stdin,
             // the thing that would make it exit, and then kills it. Nothing here needs a graceful
@@ -69,26 +66,5 @@ public class ServerInstructionsHandshakeTests
 
         await using var client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
         return client.ServerInstructions;
-    }
-
-    /// <summary>
-    /// The muxer that is running these tests, which is known to have the runtime the server needs.
-    /// </summary>
-    private static string DotnetHost()
-    {
-        var fromCli = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
-        if (!string.IsNullOrEmpty(fromCli) && File.Exists(fromCli))
-        {
-            return fromCli;
-        }
-
-        var self = Environment.ProcessPath;
-        if (self is not null
-            && string.Equals(Path.GetFileNameWithoutExtension(self), "dotnet", StringComparison.OrdinalIgnoreCase))
-        {
-            return self;
-        }
-
-        return "dotnet";
     }
 }
