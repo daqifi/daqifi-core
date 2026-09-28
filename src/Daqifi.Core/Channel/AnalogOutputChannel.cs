@@ -10,6 +10,9 @@ namespace Daqifi.Core.Channel;
 /// changing the pin, and a latch applies every staged channel at once. This class models both, so
 /// <see cref="OutputVoltage"/> only ever reports a voltage the hardware is actually driving and
 /// <see cref="PendingVoltage"/> reports one that is waiting.
+/// <para>
+/// Instance members are thread-safe: bookkeeping is serialized on a private lock.
+/// </para>
 /// </remarks>
 public sealed class AnalogOutputChannel : IAnalogOutputChannel
 {
@@ -53,10 +56,15 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     public int ChannelNumber { get; }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException">The assigned value is <see langword="null"/>.</exception>
     public string Name
     {
         get { lock (_lock) { return _name; } }
-        set { lock (_lock) { _name = value; } }
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (_lock) { _name = value; }
+        }
     }
 
     /// <summary>
@@ -274,6 +282,7 @@ public sealed class AnalogOutputChannel : IAnalogOutputChannel
     /// <see cref="SampleReceived"/>.
     /// </summary>
     /// <param name="sample">The sample to record.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="sample"/> is <see langword="null"/>.</exception>
     public void SetActiveSample(IDataSample sample)
     {
         Internal.ActiveSampleAssignment.StoreUnderLock(_lock, sample, ref _activeSample);

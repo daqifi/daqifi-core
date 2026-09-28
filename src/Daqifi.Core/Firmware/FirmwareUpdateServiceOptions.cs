@@ -90,16 +90,19 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostWifiReconnectDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// Delay after the post-flash recovery sequence sends
-    /// <see cref="Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode"/> <c>0</c>
-    /// and before the LAN restore commands that follow it. Leaving the USB-to-WINC transparent
-    /// bridge is a device-side mode transition, not an instantaneous one: until the SCPI console
-    /// path is re-established, bytes arriving on the port are still forwarded to the WINC as raw
-    /// data, so a LAN command sent too soon is swallowed by the bridge and the configuration
-    /// silently fails to restore. <see cref="WifiBridgeActivator.Deactivate(string, System.Threading.CancellationToken)"/>
-    /// already paces the same transition by the same amount over a raw serial port; this is the
-    /// managed-connection equivalent. Set to <see cref="TimeSpan.Zero"/> to skip the wait (e.g.
-    /// unit tests).
+    /// Delay after <see cref="Communication.Producers.ScpiMessageProducer.SetUsbTransparencyMode"/>
+    /// <c>0</c> and before the LAN command that follows it. Applies to both the successful
+    /// post-flash restore (<c>LAN:ENAbled</c> / <c>APPLY</c> / <c>SAVE</c>) and the failure-path
+    /// bridge exit (<c>LAN:APPLY</c> only). Leaving the USB-to-WINC transparent bridge is a
+    /// device-side mode transition, not an instantaneous one: until the SCPI console path is
+    /// re-established, bytes arriving on the port are still forwarded to the WINC as raw data, so
+    /// a LAN command sent too soon is swallowed by the bridge. The failure-path wait does not
+    /// observe the caller token — that token is already cancelled when a flash is cancelled, and
+    /// cancelling the settle would skip the exit.
+    /// <see cref="WifiBridgeActivator.Deactivate(string, System.Threading.CancellationToken)"/>
+    /// paces the same transition over a raw serial port; this is the managed-connection equivalent
+    /// and defaults to that pace. Set to <see cref="TimeSpan.Zero"/> to skip the wait (e.g. unit
+    /// tests).
     /// </summary>
     public TimeSpan PostUsbTransparentModeExitDelay { get; set; } = TimeSpan.FromMilliseconds(100);
 

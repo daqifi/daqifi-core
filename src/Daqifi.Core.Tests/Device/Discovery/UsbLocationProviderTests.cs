@@ -25,17 +25,6 @@ public class UsbLocationProviderTests
     }
 
     [Fact]
-    public void HidDevicePathParser_ParseInstanceId_LowercaseInput_IsUppercased()
-    {
-        const string devicePath =
-            @"\\?\hid#vid_04d8&pid_003c#7&1a2b3c4d&0&0000#{4d1e55b2-f46c-11d0-894f-00a0c90c8b6e}";
-
-        var result = HidDevicePathParser.ParseInstanceId(devicePath);
-
-        Assert.Equal(result, result?.ToUpperInvariant());
-    }
-
-    [Fact]
     public void HidDevicePathParser_ParseInstanceId_WithoutLeadingPrefix_StillParses()
     {
         // Defensive: some libraries surface the path without the "\\?\" prefix.

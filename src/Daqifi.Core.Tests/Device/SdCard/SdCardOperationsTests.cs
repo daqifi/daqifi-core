@@ -532,8 +532,13 @@ public class SdCardOperationsTests
         device.Connect();
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => device.StartSdCardLoggingAsync(fileName));
+        Assert.Equal("fileName", ex.ParamName);
+
+        // Refused up front. The FILE command builder would reject the name too, but only after
+        // LAN had been switched off and the stream rerouted to the SD card.
+        Assert.Empty(device.SentMessages);
     }
 
     [Fact]
@@ -982,8 +987,10 @@ public class SdCardOperationsTests
         device.Connect();
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => device.DeleteSdCardFileAsync(fileName));
+        Assert.Equal("fileName", ex.ParamName);
+        Assert.Empty(device.SentMessages);
     }
 
     [Fact]
@@ -2246,8 +2253,10 @@ public class SdCardOperationsTests
         using var stream = new MemoryStream();
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => device.DownloadSdCardFileAsync(fileName, stream));
+        Assert.Equal("fileName", ex.ParamName);
+        Assert.Empty(device.SentMessages);
     }
 
     [Fact]

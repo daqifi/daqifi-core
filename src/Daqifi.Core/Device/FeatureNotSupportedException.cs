@@ -1,8 +1,6 @@
 using System;
 using Daqifi.Core.Firmware;
 
-#nullable enable
-
 namespace Daqifi.Core.Device;
 
 /// <summary>

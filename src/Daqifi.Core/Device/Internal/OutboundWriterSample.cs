@@ -1,5 +1,3 @@
-#nullable enable
-
 namespace Daqifi.Core.Device.Internal;
 
 /// <summary>

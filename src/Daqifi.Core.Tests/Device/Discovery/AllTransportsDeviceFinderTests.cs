@@ -177,10 +177,15 @@ public class AllTransportsDeviceFinderTests
     }
 
     [Fact]
-    public void CreateDefault_ReturnsUsableFinder()
+    public async Task CreateDefault_HonorsCallerCancellation()
     {
+        // CreateDefault wires the real WiFi + serial finders; a cancelled token must surface
+        // rather than hanging on the WiFi browse (which otherwise runs until cancelled).
         using var finder = AllTransportsDeviceFinder.CreateDefault();
-        Assert.NotNull(finder);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => finder.DiscoverAsync(cts.Token));
     }
 
     [Fact]

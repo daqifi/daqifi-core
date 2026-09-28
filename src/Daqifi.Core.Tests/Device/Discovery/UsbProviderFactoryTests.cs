@@ -18,12 +18,6 @@ namespace Daqifi.Core.Tests.Device.Discovery;
 public class UsbProviderFactoryTests
 {
     [Fact]
-    public void UsbPortDescriptorProviderFactory_ReturnsAProviderForEveryPlatform()
-    {
-        Assert.NotNull(UsbPortDescriptorProviderFactory.CreateForCurrentPlatform());
-    }
-
-    [Fact]
     public void UsbPortDescriptorProviderFactory_SelectsTheProviderForThisOperatingSystem()
     {
         var provider = UsbPortDescriptorProviderFactory.CreateForCurrentPlatform();
@@ -45,12 +39,6 @@ public class UsbProviderFactoryTests
         {
             Assert.Same(NullUsbPortDescriptorProvider.Instance, provider);
         }
-    }
-
-    [Fact]
-    public void UsbLocationProviderFactory_ReturnsAProviderForEveryPlatform()
-    {
-        Assert.NotNull(UsbLocationProviderFactory.CreateForCurrentPlatform());
     }
 
     [Fact]

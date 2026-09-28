@@ -22,6 +22,9 @@ public class CsvExporter
     /// Reported periodically as samples are processed; always reports 100 on completion.
     /// </param>
     /// <param name="cancellationToken">Token that aborts the export mid-stream.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="source"/>, <paramref name="writer"/>, or <paramref name="options"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <see cref="CsvExportOptions.AverageWindow"/> is set to a value less than or equal to zero.
     /// </exception>
@@ -32,6 +35,10 @@ public class CsvExporter
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(options);
+
         if (options.AverageWindow.HasValue && options.AverageWindow.Value <= 0)
             throw new ArgumentOutOfRangeException(
                 $"{nameof(options)}.{nameof(CsvExportOptions.AverageWindow)}",

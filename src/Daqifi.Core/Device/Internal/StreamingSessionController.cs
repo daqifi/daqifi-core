@@ -1,11 +1,9 @@
 using System;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Producers;
-
-#nullable enable
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Device.Internal;
 
@@ -312,20 +310,4 @@ internal sealed class StreamingSessionController
     }
 
     #endregion
-
-    /// <summary>
-    /// Writes a diagnostic line, swallowing anything a misbehaving <see cref="TraceListener"/>
-    /// throws. Byte-identical twin of the device's own private helper.
-    /// </summary>
-    private static void SafeTrace(string message)
-    {
-        try
-        {
-            Trace.WriteLine(message);
-        }
-        catch
-        {
-            // A trace listener that throws is not permitted to affect device operation.
-        }
-    }
 }
