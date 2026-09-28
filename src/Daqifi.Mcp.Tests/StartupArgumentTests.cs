@@ -31,12 +31,9 @@ public class StartupArgumentTests
 
     private static async Task<(int ExitCode, string Stderr)> RunServerAsync(string[] serverArgs)
     {
-        // The test project references Daqifi.Mcp, so its build (and runtimeconfig) sits beside
-        // the tests for whichever framework is running them.
-        var server = Path.Combine(AppContext.BaseDirectory, "daqifi-mcp.dll");
-        Assert.True(File.Exists(server), $"The server build is not next to the tests: {server}");
+        var server = ServerProcess.ServerAssembly();
 
-        var startInfo = new ProcessStartInfo(DotnetHost())
+        var startInfo = new ProcessStartInfo(ServerProcess.DotnetHost())
         {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -70,26 +67,5 @@ public class StartupArgumentTests
         // Nothing may reach stdout: it is the MCP JSON-RPC stream.
         Assert.Equal(string.Empty, await stdout);
         return (process.ExitCode, await stderr);
-    }
-
-    /// <summary>
-    /// The muxer that is running these tests, which is known to have the runtime the server needs.
-    /// </summary>
-    private static string DotnetHost()
-    {
-        var fromCli = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
-        if (!string.IsNullOrEmpty(fromCli) && File.Exists(fromCli))
-        {
-            return fromCli;
-        }
-
-        var self = Environment.ProcessPath;
-        if (self is not null
-            && string.Equals(Path.GetFileNameWithoutExtension(self), "dotnet", StringComparison.OrdinalIgnoreCase))
-        {
-            return self;
-        }
-
-        return "dotnet";
     }
 }
