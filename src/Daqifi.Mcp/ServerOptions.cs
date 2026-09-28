@@ -37,8 +37,8 @@ public sealed class ServerOptions
     /// <param name="args">Process arguments, excluding the executable name.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="args"/> contains an unrecognized token, or <c>--max-sample-rate-hz</c>
-    /// is not followed by a value (the end of the arguments, or another <c>--</c> option).
-    /// A non-numeric or non-positive rate is ignored.
+    /// is not followed by a value: it is the last argument, or the next token starts with
+    /// <c>-</c> and is not a number. Any other non-numeric or non-positive rate is ignored.
     /// </exception>
     public static ServerOptions Parse(string[] args)
     {
@@ -62,17 +62,21 @@ public sealed class ServerOptions
                         throw new ArgumentException("Option '--max-sample-rate-hz' requires a value.");
                     }
 
-                    // An option in the value slot means the value is missing. Consuming it as a
-                    // malformed rate would drop it unparsed: "--max-sample-rate-hz --read-only"
-                    // would start the server with writes enabled.
-                    if (args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    var value = args[++i];
+                    var isNumber = int.TryParse(value, out var rate);
+
+                    // A dash-led token that is not a number is an option, so the value is missing.
+                    // Consuming it as a malformed rate would drop it unparsed: "--read-only", or
+                    // the typo "-read-only", after this flag would start the server with writes
+                    // enabled. A negative number such as "-5" is a value, ignored below.
+                    if (!isNumber && value.StartsWith('-'))
                     {
                         throw new ArgumentException(
-                            $"Option '--max-sample-rate-hz' requires a value, but was followed by '{args[i + 1]}'.");
+                            $"Option '--max-sample-rate-hz' requires a value, but was followed by '{value}'.");
                     }
 
                     // Ignore non-positive values; a cap of <= 0 would otherwise reject every rate.
-                    if (int.TryParse(args[++i], out var rate) && rate >= 1)
+                    if (isNumber && rate >= 1)
                     {
                         maxRate = rate;
                     }
