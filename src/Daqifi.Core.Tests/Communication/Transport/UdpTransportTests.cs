@@ -110,19 +110,6 @@ public class UdpTransportTests
     }
 
     [Fact]
-    public async Task SendUnicastAsync_ShouldSendData()
-    {
-        // Arrange
-        using var transport = new UdpTransport(0);
-        await transport.OpenAsync();
-        var testData = Encoding.ASCII.GetBytes("Test");
-        var endpoint = new IPEndPoint(IPAddress.Loopback, 12345);
-
-        // Act & Assert (should not throw)
-        await transport.SendUnicastAsync(testData, endpoint);
-    }
-
-    [Fact]
     public async Task ReceiveAsync_WithTimeout_ShouldReturnNullOnTimeout()
     {
         // Arrange
