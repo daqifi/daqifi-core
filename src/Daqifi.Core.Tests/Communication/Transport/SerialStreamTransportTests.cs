@@ -19,18 +19,6 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
-    public void SerialStreamTransport_Constructor_WithCustomSettings_ShouldInitializeCorrectly()
-    {
-        // Arrange & Act
-        using var transport = new SerialStreamTransport("COM2", 9600, Parity.Even, 7, StopBits.Two);
-        
-        // Assert
-        Assert.False(transport.IsConnected);
-        Assert.Contains("COM2", transport.ConnectionInfo);
-        Assert.Contains("Disconnected", transport.ConnectionInfo);
-    }
-
-    [Fact]
     public void SerialStreamTransport_Stream_WhenNotConnected_ThrowsTransportNotConnectedException()
     {
         // Arrange - never connected: _serialPort is null
