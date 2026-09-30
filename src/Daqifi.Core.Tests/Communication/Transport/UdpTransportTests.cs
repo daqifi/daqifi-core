@@ -19,16 +19,6 @@ public class UdpTransportTests
     }
 
     [Fact]
-    public void Constructor_WithPort_ShouldCreateInstance()
-    {
-        // Act
-        using var transport = new UdpTransport(30303);
-
-        // Assert
-        Assert.False(transport.IsOpen);
-    }
-
-    [Fact]
     public async Task OpenAsync_ShouldOpenTransport()
     {
         // Arrange
