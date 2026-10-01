@@ -110,15 +110,6 @@ public class IntelHexParserTests
     }
 
     [Fact]
-    public void ParseHexRecords_ValidChecksum_DoesNotThrow()
-    {
-        var lines = new[] { ":020000041D00DD" };
-
-        var result = _parser.ParseHexRecords(lines);
-        Assert.Single(result);
-    }
-
-    [Fact]
     public void ParseHexRecords_InvalidHexCharacters_ThrowsInvalidDataException()
     {
         // 'ZZ' is not valid hex

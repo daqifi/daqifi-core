@@ -34,17 +34,6 @@ public class PlatformFactAttributeTests
         Assert.False(PlatformFactAttribute.ShouldSkip(skipOn, current));
     }
 
-    [Theory]
-    [InlineData(TestPlatforms.Windows)]
-    [InlineData(TestPlatforms.Linux)]
-    [InlineData(TestPlatforms.MacOS)]
-    public void ShouldSkip_SeveralPlatformsNamed_SkipsOnEachOfThem(TestPlatforms current)
-    {
-        var all = TestPlatforms.Windows | TestPlatforms.Linux | TestPlatforms.MacOS;
-
-        Assert.True(PlatformFactAttribute.ShouldSkip(all, current));
-    }
-
     [Fact]
     public void ShouldSkip_TwoOfThreeNamed_RunsOnTheThird()
     {

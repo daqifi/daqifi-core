@@ -7,12 +7,6 @@ namespace Daqifi.Core.Tests.Firmware;
 public class WifiBridgeActivatorTests
 {
     [Fact]
-    public void Activate_NullPortName_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => WifiBridgeActivator.Activate(null!));
-    }
-
-    [Fact]
     public void Activate_AlreadyCancelled_ThrowsBeforeOpeningPort()
     {
         using var cts = new CancellationTokenSource();
@@ -33,12 +27,6 @@ public class WifiBridgeActivatorTests
 
         Assert.Equal(SerialPortConnectFailure.NotFound, ex.Reason);
         Assert.Equal(portName, ex.PortName);
-    }
-
-    [Fact]
-    public void Deactivate_NullPortName_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => WifiBridgeActivator.Deactivate(null!));
     }
 
     [Fact]

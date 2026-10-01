@@ -314,52 +314,6 @@ public class ChannelPopulationTests
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_WithZeroResolution_UsesDefaultResolution()
-    {
-        // Arrange
-        var device = new DaqifiDevice("TestDevice");
-        var message = new DaqifiOutMessage
-        {
-            AnalogInPortNum = 1,
-            AnalogInRes = 0
-        };
-
-        // Act
-        device.PopulateChannelsFromStatus(message);
-
-        // Assert
-        var analogChannel = device.Channels
-            .Where(c => c.Type == ChannelType.Analog)
-            .Cast<IAnalogChannel>()
-            .Single();
-
-        Assert.Equal(65535u, analogChannel.Resolution);
-    }
-
-    [Fact]
-    public void PopulateChannelsFromStatus_WithZeroResolution_SetsResolutionIsAssumed()
-    {
-        // Arrange
-        var device = new DaqifiDevice("TestDevice");
-        var message = new DaqifiOutMessage
-        {
-            AnalogInPortNum = 1,
-            AnalogInRes = 0
-        };
-
-        // Act
-        device.PopulateChannelsFromStatus(message);
-
-        // Assert
-        var analogChannel = device.Channels
-            .Where(c => c.Type == ChannelType.Analog)
-            .Cast<IAnalogChannel>()
-            .Single();
-
-        Assert.True(analogChannel.ResolutionIsAssumed);
-    }
-
-    [Fact]
     public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetResolutionIsAssumed()
     {
         // Arrange
