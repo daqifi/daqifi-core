@@ -216,38 +216,6 @@ public class Pic32BootloaderMessageConsumerTests
         Assert.Equal(new ArgumentNullException("data").Message, ex.Message);
     }
 
-    [Fact]
-    public void DecodeVersionResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
-    {
-        // Not "Error": a null frame is the caller's bug, not a bootloader response this decoder
-        // can classify, so the guard has to win over the "Error" string every other bad frame gets.
-        var ex = Assert.Throws<ArgumentNullException>(
-            () => Pic32BootloaderMessageConsumer.DecodeVersionResponse(null!));
-
-        Assert.Equal("data", ex.ParamName);
-    }
-
-    [Fact]
-    public void DecodeProgramFlashResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
-    {
-        // Not false: same reasoning as the version decoder, and the guard sits in the shared
-        // IsAckFor helper, so this also pins that a caller is blamed for its own "data" parameter
-        // rather than for a private one a frame below.
-        var ex = Assert.Throws<ArgumentNullException>(
-            () => Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(null!));
-
-        Assert.Equal("data", ex.ParamName);
-    }
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
-    {
-        var ex = Assert.Throws<ArgumentNullException>(
-            () => Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(null!));
-
-        Assert.Equal("data", ex.ParamName);
-    }
-
     // The point of the change: one catch covers all four decoders, and a caller that learns one
     // decoder's null behavior has learned all of them. Comparing against the exception
     // DecodeReadCrcResponse throws — the one that was always guarded — keeps the three converted

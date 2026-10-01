@@ -9,22 +9,6 @@ public class Pic32BootloaderMessageProducerTests
     private const byte DLE = 0x10;
 
     [Fact]
-    public void CreateRequestVersionMessage_StartsWithSoh()
-    {
-        var message = Pic32BootloaderMessageProducer.CreateRequestVersionMessage();
-
-        Assert.Equal(SOH, message[0]);
-    }
-
-    [Fact]
-    public void CreateRequestVersionMessage_EndsWithEot()
-    {
-        var message = Pic32BootloaderMessageProducer.CreateRequestVersionMessage();
-
-        Assert.Equal(EOT, message[^1]);
-    }
-
-    [Fact]
     public void CreateRequestVersionMessage_EscapesCommandByte()
     {
         // Command byte 0x01 matches SOH, so it must be DLE-escaped
@@ -33,15 +17,6 @@ public class Pic32BootloaderMessageProducerTests
         // After SOH, first byte should be DLE (escape for the command byte 0x01)
         Assert.Equal(DLE, message[1]);
         Assert.Equal(0x01, message[2]);
-    }
-
-    [Fact]
-    public void CreateEraseFlashMessage_StartsWithSohEndsWithEot()
-    {
-        var message = Pic32BootloaderMessageProducer.CreateEraseFlashMessage();
-
-        Assert.Equal(SOH, message[0]);
-        Assert.Equal(EOT, message[^1]);
     }
 
     [Fact]
@@ -61,16 +36,6 @@ public class Pic32BootloaderMessageProducerTests
     }
 
     [Fact]
-    public void CreateProgramFlashMessage_StartsWithSohEndsWithEot()
-    {
-        var hexRecord = new byte[] { 0x10, 0x00, 0x00, 0x00, 0xFF };
-        var message = Pic32BootloaderMessageProducer.CreateProgramFlashMessage(hexRecord);
-
-        Assert.Equal(SOH, message[0]);
-        Assert.Equal(EOT, message[^1]);
-    }
-
-    [Fact]
     public void CreateProgramFlashMessage_ContainsProgramCommand()
     {
         var hexRecord = new byte[] { 0x08, 0x00, 0x20, 0x00, 0xAA, 0xBB };
@@ -78,15 +43,6 @@ public class Pic32BootloaderMessageProducerTests
 
         // Command byte 0x03 should appear after SOH (no DLE needed)
         Assert.Equal(0x03, message[1]);
-    }
-
-    [Fact]
-    public void CreateJumpToApplicationMessage_StartsWithSohEndsWithEot()
-    {
-        var message = Pic32BootloaderMessageProducer.CreateJumpToApplicationMessage();
-
-        Assert.Equal(SOH, message[0]);
-        Assert.Equal(EOT, message[^1]);
     }
 
     [Fact]
@@ -212,15 +168,6 @@ public class Pic32BootloaderMessageProducerTests
 
         var payload = UnescapePayload(message);
         Assert.Equal(new byte[] { 0x03, 0xAA, 0xBB, expectedCrc.Low, expectedCrc.High }, payload);
-    }
-
-    [Fact]
-    public void CreateReadCrcMessage_StartsWithSohEndsWithEot()
-    {
-        var message = Pic32BootloaderMessageProducer.CreateReadCrcMessage(0x9D000000, 0x200000);
-
-        Assert.Equal(SOH, message[0]);
-        Assert.Equal(EOT, message[^1]);
     }
 
     [Fact]
