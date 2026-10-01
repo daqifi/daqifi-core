@@ -31,7 +31,9 @@ public enum DeviceState
     Ready,
 
     /// <summary>
-    /// Device is actively streaming data.
+    /// Named for a device that is actively acquiring samples, but never assigned.
+    /// After initialization, <see cref="DaqifiDevice.State"/> stays <see cref="Ready"/>;
+    /// live acquisition state is <see cref="IStreamingDevice.IsStreaming"/>.
     /// </summary>
     Streaming,
 
