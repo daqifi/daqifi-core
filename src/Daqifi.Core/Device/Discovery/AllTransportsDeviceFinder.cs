@@ -180,8 +180,10 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
         catch (Exception ex)
         {
             // Discovery outcome must not depend on consumer callback correctness (nor on the
-            // logging path — SafeTrace swallows a throwing TraceListener).
-            SafeTrace($"[{nameof(AllTransportsDeviceFinder)}] {eventName} subscriber threw: {ex}");
+            // logging path — SafeTrace swallows a throwing TraceListener). The line is composed
+            // inside the lambda so a throwing Exception.ToString cannot escape this catch either.
+            SafeTrace(() =>
+                $"[{nameof(AllTransportsDeviceFinder)}] {eventName} subscriber threw: {ex}");
         }
     }
 
@@ -200,7 +202,9 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
         catch (Exception ex)
         {
             // One transport failing (e.g. WiFi with no network) must not sink the whole discovery.
-            SafeTrace($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed: {ex}");
+            // Composed inside the lambda so a throwing Exception.ToString stays in the guard.
+            SafeTrace(() =>
+                $"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed: {ex}");
             return Enumerable.Empty<IDeviceInfo>();
         }
     }
@@ -217,7 +221,9 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
             // Timeout is a normal end-of-pass here (no caller token to honor); any failure —
             // timeout, socket error, disposed resource — must not sink the other transports'
             // results. Message stays generic since the cause is not necessarily the timeout.
-            SafeTrace($"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed during a timed pass: {ex}");
+            // Composed inside the lambda so a throwing Exception.ToString stays in the guard.
+            SafeTrace(() =>
+                $"[{nameof(AllTransportsDeviceFinder)}] {finder.GetType().Name} discovery failed during a timed pass: {ex}");
             return Enumerable.Empty<IDeviceInfo>();
         }
     }
