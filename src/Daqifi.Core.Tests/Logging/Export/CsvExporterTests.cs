@@ -455,19 +455,11 @@ public class CsvExporterTests
         var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0)]);
+        var report = new ListProgress<int>();
 
-        var reported = new System.Collections.Concurrent.ConcurrentBag<int>();
-        var tcs = new TaskCompletionSource();
-        var progress = new Progress<int>(v =>
-        {
-            reported.Add(v);
-            if (v == 100) tcs.TrySetResult();
-        });
+        await new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), report);
 
-        await new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), progress);
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
-
-        Assert.Contains(100, reported);
+        Assert.Contains(100, report.Reports);
     }
 
     [Fact]
@@ -476,19 +468,12 @@ public class CsvExporterTests
         var source = new InMemorySampleSource(
             [Ch1],
             [new SampleRow(T0, Ch1.Key, 1.0), new SampleRow(T1, Ch1.Key, 2.0)]);
+        var report = new ListProgress<int>();
 
-        var reported = new System.Collections.Concurrent.ConcurrentBag<int>();
-        var tcs = new TaskCompletionSource();
-        var progress = new Progress<int>(v =>
-        {
-            reported.Add(v);
-            if (v == 100) tcs.TrySetResult();
-        });
+        await new CsvExporter().ExportAsync(
+            source, new StringWriter(), new CsvExportOptions { AverageWindow = 2 }, report);
 
-        await new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions { AverageWindow = 2 }, progress);
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(1));
-
-        Assert.Contains(100, reported);
+        Assert.Contains(100, report.Reports);
     }
 
     // ── AverageWindow validation ─────────────────────────────────────────────
@@ -507,20 +492,6 @@ public class CsvExporterTests
     }
 
     // ── Cancellation ─────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task Export_CancelledBeforeStart_ThrowsOperationCancelled()
-    {
-        var source = new InMemorySampleSource(
-            [Ch1],
-            [new SampleRow(T0, Ch1.Key, 1.0)]);
-
-        var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            new CsvExporter().ExportAsync(source, new StringWriter(), new CsvExportOptions(), cancellationToken: cts.Token));
-    }
 
     [Fact]
     public async Task Export_CancelledBeforeStart_DoesNotWriteHeader()

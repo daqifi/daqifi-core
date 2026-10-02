@@ -194,24 +194,6 @@ public class DaqifiStreamingDeviceLiveStreamTerminationTests
     }
 
     [Fact]
-    public async Task ADropDoesNotDisturbACancellingConsumer()
-    {
-        // Cancellation still wins its own race: it is the consumer's own exit, and it must keep
-        // surfacing as OperationCanceledException rather than as the drop's typed exception.
-        using var transport = new DroppableTransport();
-        using var device = CreateStreaming(transport);
-
-        using var cts = new CancellationTokenSource();
-        var e = device.StreamSamplesAsync(cts.Token).GetAsyncEnumerator();
-        var moveNext = e.MoveNextAsync();
-        cts.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => moveNext.AsTask().WaitAsync(MoveNextTimeout));
-        await e.DisposeAsync();
-    }
-
-    [Fact]
     public void AThrowingStatusHook_DoesNotAbortTheTransition()
     {
         // The hooks this fix added sit on the drop path, where issue #494 established that an

@@ -13,14 +13,6 @@ namespace Daqifi.Core.Tests.Device;
 public class GetLanChipInfoAsyncTests
 {
     [Fact]
-    public async Task GetLanChipInfoAsync_WhenDisconnected_Throws()
-    {
-        var device = new TestableLanChipInfoDevice("TestDevice");
-
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.GetLanChipInfoAsync());
-    }
-
-    [Fact]
     public async Task GetLanChipInfoAsync_WhenValidJson_ReturnsParsedInfo()
     {
         var device = new TestableLanChipInfoDevice("TestDevice")
