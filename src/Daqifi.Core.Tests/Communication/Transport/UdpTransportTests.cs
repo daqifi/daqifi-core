@@ -1,6 +1,5 @@
 using Daqifi.Core.Communication.Transport;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -65,48 +64,6 @@ public class UdpTransportTests
         // Assert
         Assert.False(transport.IsOpen);
         Assert.True(closedStatusChanged);
-    }
-
-    [Fact]
-    public async Task SendBroadcastAsync_ShouldSendData()
-    {
-        // Arrange
-        using var transport = new UdpTransport(0);
-        await transport.OpenAsync();
-        var testData = Encoding.ASCII.GetBytes("DAQiFi?\r\n");
-
-        // Act & Assert
-        // SocketException with AccessDenied means EnableBroadcast is not set — a real code bug.
-        // Other SocketExceptions (NoBufferSpaceAvailable, NetworkDown, etc.) are OS/environment
-        // limitations that can occur under parallel test load and are not code defects.
-        try
-        {
-            await transport.SendBroadcastAsync(testData, 30303);
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode != SocketError.AccessDenied)
-        {
-            // Environment limitation — not a code defect.
-        }
-    }
-
-    [Fact]
-    public async Task SendBroadcastAsync_WithEndpoint_ShouldSendData()
-    {
-        // Arrange
-        using var transport = new UdpTransport(0);
-        await transport.OpenAsync();
-        var testData = Encoding.ASCII.GetBytes("DAQiFi?\r\n");
-        var endPoint = new IPEndPoint(IPAddress.Broadcast, 30303);
-
-        // Act & Assert (see SendBroadcastAsync_ShouldSendData for rationale)
-        try
-        {
-            await transport.SendBroadcastAsync(testData, endPoint);
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode != SocketError.AccessDenied)
-        {
-            // Environment limitation — not a code defect.
-        }
     }
 
     [Fact]

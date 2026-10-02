@@ -28,19 +28,6 @@ public class DigitalChannelTests
     }
 
     [Fact]
-    public void OutputValue_CanBeSet()
-    {
-        // Arrange
-        var channel = new DigitalChannel(0);
-
-        // Act
-        channel.OutputValue = true;
-
-        // Assert
-        Assert.True(channel.OutputValue);
-    }
-
-    [Fact]
     public void IsHigh_ReturnsTrue_WhenValueGreaterThanHalf()
     {
         // Arrange

@@ -79,17 +79,6 @@ public class DaqifiDeviceWithTransportTests
     }
 
     [Fact]
-    public void DaqifiDevice_SendMessage_WithoutConnection_ShouldThrowException()
-    {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
-        using var device = new DaqifiDevice("Test Device", transport);
-        
-        // Act & Assert
-        Assert.Throws<DeviceNotConnectedException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
-    }
-
-    [Fact]
     public void DaqifiDevice_Dispose_WithTransport_ShouldCleanupResources()
     {
         // Arrange

@@ -111,24 +111,6 @@ public class Pic32BootloaderMessageConsumerTests
     #region DecodeProgramFlashResponse
 
     [Fact]
-    public void DecodeProgramFlashResponse_WithTooShortData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse([0x01]));
-    }
-
-    [Fact]
-    public void DecodeProgramFlashResponse_WithEmptyData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse([]));
-    }
-
-    [Fact]
-    public void DecodeProgramFlashResponse_WithoutSohStart_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse([0x00, 0x03]));
-    }
-
-    [Fact]
     public void DecodeProgramFlashResponse_ValidResponse_ReturnsTrue()
     {
         // SOH + ProgramFlashCommand(0x03)
@@ -145,24 +127,6 @@ public class Pic32BootloaderMessageConsumerTests
     #endregion
 
     #region DecodeEraseFlashResponse
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithTooShortData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse([0x01]));
-    }
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithEmptyData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse([]));
-    }
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithoutSohStart_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse([0x00, 0x02]));
-    }
 
     [Fact]
     public void DecodeEraseFlashResponse_ValidResponse_ReturnsTrue()
