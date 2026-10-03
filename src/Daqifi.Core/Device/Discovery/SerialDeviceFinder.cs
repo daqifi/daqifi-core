@@ -113,12 +113,13 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
     // Hard ceiling on a single port probe. A wedged USB CDC device can hang
     // SerialPort.Open() inside native GetCommState indefinitely — no exception,
     // no cancellation (Open is uncancellable blocking I/O) — observed live on a
-    // hung-firmware Nq1 (#294). The healthy probe worst case is ~1.5s
-    // (DeviceWakeUpDelayMs 200 + EchoDisableSettleMs 250 + ResponseTimeoutMs 1000)
-    // plus Open() itself; 3s gives ~2x headroom for a slow open (fresh
-    // enumeration, parallel opens) while abandoning a genuinely stuck port fast
-    // enough that discovery feels responsive (bench QA feedback 2026-07-13:
-    // 8s felt sluggish next to the 2-3s sweep cadence).
+    // hung-firmware Nq1 (#294). The healthy probe's timed portion is ~1.2s
+    // (DeviceWakeUpDelayMs 200 + ResponseTimeoutMs 1000) plus Open() itself;
+    // DefaultPortProbeHardTimeoutMs (3s) is more than twice that, leaving room
+    // for a slow open (fresh enumeration, parallel opens) while abandoning a
+    // genuinely stuck port fast enough that discovery feels responsive (bench QA
+    // feedback 2026-07-13: an 8s ceiling felt sluggish next to the 2-3s sweep
+    // cadence). The same pair is what DiscoverAsync cites as ~1.2s per port.
     private const int DefaultPortProbeHardTimeoutMs = 3000;
 
     #endregion
@@ -217,7 +218,8 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
         QuarantineRetryTtlMs = DefaultQuarantineRetryTtlMs;
     }
 
-    // Internal so tests can shrink the hard timeout instead of waiting 8s per case.
+    // Internal so tests can shrink the hard timeout instead of waiting out
+    // DefaultPortProbeHardTimeoutMs (3s) per case.
     internal int PortProbeHardTimeoutMs { get; set; } = DefaultPortProbeHardTimeoutMs;
 
     #endregion
