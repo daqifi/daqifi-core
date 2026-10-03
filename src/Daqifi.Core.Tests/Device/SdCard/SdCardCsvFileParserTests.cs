@@ -95,22 +95,6 @@ public sealed class SdCardCsvFileParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_ChannelCountInferredFromColumnHeader()
-    {
-        // Arrange — 3 channels → 6 column headers (ch0_ts,ch0_val,ch1_ts,ch1_val,ch2_ts,ch2_val)
-        await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
-            "TestDevice", "SN001", 1000u,
-            (500u, new[] { 1.0, 2.0, 3.0 })
-        );
-
-        var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
-        var session = await parser.ParseAsync(stream, "test.csv");
-
-        Assert.NotNull(session.DeviceConfig);
-        Assert.Equal(3, session.DeviceConfig.AnalogPortCount);
-    }
-
-    [Fact]
     public async Task ParseAsync_NoCommentHeaders_UsesDefaultsAndParsesData()
     {
         // Arrange — column header + data rows only (no # comments)

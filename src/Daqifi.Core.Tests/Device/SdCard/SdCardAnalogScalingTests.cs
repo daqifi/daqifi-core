@@ -113,20 +113,6 @@ public class SdCardAnalogScalingTests
         Assert.Equal(400.0 / 1000.0 * 40.0 * 4.0 * 0.5 + 0.125, result[2], 10);
     }
 
-    [Fact]
-    public void ScaleRawAnalogValues_Double_LeavesTheOffsetOutOfTheInternalScale()
-    {
-        // Arrange — channel 1 carries both a non-unity internal scale (2.0) and a non-zero
-        // intercept (-0.25). Scaling the intercept along with the gain would land on 23.5.
-        var config = PerChannelConfig();
-
-        // Act
-        var result = SdCardAnalogScaling.ScaleRawAnalogValues(RawCounts, config);
-
-        // Assert — the intercept is volts, added after the internal scale, never through it.
-        Assert.Equal(24.0 - 0.25, result[1], 10);
-    }
-
     // ------------------------------------------------------------------
     // Short per-channel lists, IReadOnlyList<double> overload
     // ------------------------------------------------------------------

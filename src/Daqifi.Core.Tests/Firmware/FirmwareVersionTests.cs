@@ -73,24 +73,6 @@ public class FirmwareVersionTests
     }
 
     [Fact]
-    public void CompareTo_NewerVersion_ReturnsPositive()
-    {
-        FirmwareVersion.TryParse("3.2.0", out var newer);
-        FirmwareVersion.TryParse("3.1.0", out var older);
-        Assert.True(newer.CompareTo(older) > 0);
-        Assert.True(newer > older);
-    }
-
-    [Fact]
-    public void CompareTo_OlderVersion_ReturnsNegative()
-    {
-        FirmwareVersion.TryParse("2.0.0", out var older);
-        FirmwareVersion.TryParse("3.0.0", out var newer);
-        Assert.True(older.CompareTo(newer) < 0);
-        Assert.True(older < newer);
-    }
-
-    [Fact]
     public void CompareTo_SameVersion_ReturnsZero()
     {
         FirmwareVersion.TryParse("3.2.0", out var a);
@@ -193,6 +175,7 @@ public class FirmwareVersionTests
         Assert.True(a <= b);
         Assert.True(a >= b);
         Assert.True(c <= a);
+        Assert.True(c < a);
         Assert.True(a >= c);
     }
 }

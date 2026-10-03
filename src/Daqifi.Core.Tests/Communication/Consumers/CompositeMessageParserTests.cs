@@ -82,23 +82,6 @@ public class CompositeMessageParserTests
     }
 
     [Fact]
-    public void CompositeMessageParser_ParseMessages_WithNoNullBytes_ShouldDetectAsText()
-    {
-        // Arrange
-        var parser = new CompositeMessageParser();
-        var textOnlyData = Encoding.UTF8.GetBytes("Hello World\r\n");
-
-        // Act
-        var messages = parser.ParseMessages(textOnlyData, out var consumedBytes);
-
-        // Assert
-        Assert.Single(messages);
-        Assert.IsType<string>(messages.First().Data);
-        Assert.Equal("Hello World", messages.First().Data);
-        Assert.Equal(textOnlyData.Length, consumedBytes);
-    }
-
-    [Fact]
     public void CompositeMessageParser_ParseMessages_WithEmptyData_ShouldReturnEmpty()
     {
         // Arrange

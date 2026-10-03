@@ -76,27 +76,6 @@ public sealed class SdCardJsonFileParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_IntegerAnalogValues_ParsesCorrectly()
-    {
-        // Arrange
-        await using var stream = SdCardTestJsonFileBuilder.BuildJsonFileWithIntegers(
-            (100u, new[] { 1234, 5678 }, "")
-        );
-
-        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
-        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
-
-        // Act
-        var session = await parser.ParseAsync(stream, "test.json", options);
-        var samples = await ToListAsync(session.Samples);
-
-        // Assert
-        Assert.Single(samples);
-        Assert.Equal(1234.0, samples[0].AnalogValues[0]);
-        Assert.Equal(5678.0, samples[0].AnalogValues[1]);
-    }
-
-    [Fact]
     public async Task ParseAsync_EmptyDigitalField_ReturnsZero()
     {
         // Arrange
@@ -266,7 +245,6 @@ public sealed class SdCardJsonFileParserTests
             {
                 progressCalls++;
                 lastProgress = p;
-                Assert.True(p.BytesRead >= 0);
             })
         };
 

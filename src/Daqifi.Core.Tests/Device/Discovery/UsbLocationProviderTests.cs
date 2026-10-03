@@ -55,16 +55,12 @@ public class UsbLocationProviderTests
         Assert.Null(result);
     }
 
-    [Fact]
-    public void HidDevicePathParser_ParseInstanceId_EmptyInput_ReturnsNull()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void HidDevicePathParser_ParseInstanceId_NullOrEmptyInput_ReturnsNull(string? input)
     {
-        Assert.Null(HidDevicePathParser.ParseInstanceId(string.Empty));
-    }
-
-    [Fact]
-    public void HidDevicePathParser_ParseInstanceId_NullInput_ReturnsNull()
-    {
-        Assert.Null(HidDevicePathParser.ParseInstanceId(null!));
+        Assert.Null(HidDevicePathParser.ParseInstanceId(input!));
     }
 
     [Fact]
