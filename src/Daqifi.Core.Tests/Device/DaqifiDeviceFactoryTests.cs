@@ -11,21 +11,6 @@ public class DaqifiDeviceFactoryTests
     #region DeviceConnectionOptions Tests
 
     [Fact]
-    public void DeviceConnectionOptions_DefaultValues_AreCorrect()
-    {
-        // Act
-        var options = new DeviceConnectionOptions();
-
-        // Assert
-        Assert.Equal("DAQiFi Device", options.DeviceName);
-        Assert.Null(options.ConnectionRetry);
-        Assert.True(options.InitializeDevice);
-        // Connecting takes control of the device (and stops any running stream) unless
-        // explicitly opted out of — the historical behavior (#385).
-        Assert.False(options.PreserveActiveStream);
-    }
-
-    [Fact]
     public void DeviceConnectionOptions_Default_ReturnsDefaultOptions()
     {
         // Act

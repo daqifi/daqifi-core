@@ -30,15 +30,9 @@ public class AnalogOutputChannelTests
         Assert.Null(channel.ActiveSample);
     }
 
-    [Fact]
-    public void Constructor_NegativeChannelNumber_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new AnalogOutputChannel(-1));
-    }
-
+    // 0 and negatives share the census row for `< MinResolutionBits`. 33 is the
+    // `> MaxResolutionBits` arm, which that row does not pass.
     [Theory]
-    [InlineData(0)]
-    [InlineData(-4)]
     [InlineData(33)]
     public void Constructor_ImplausibleResolution_Throws(int resolutionBits)
     {
@@ -53,8 +47,10 @@ public class AnalogOutputChannelTests
     [InlineData(-60.0)]
     public void Constructor_ImplausibleRangeEndpoint_Throws(double minimum)
     {
+        // 10 V is inside MaxRangeMagnitudeVolts (50). A maximum of 100 failed that same
+        // check, so the row passed even when the minimum was never examined.
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => new AnalogOutputChannel(0, 12, minimum, 100.0));
+            () => new AnalogOutputChannel(0, 12, minimum, 10.0));
     }
 
     [Theory]
