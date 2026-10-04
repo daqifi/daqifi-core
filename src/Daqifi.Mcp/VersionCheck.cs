@@ -157,12 +157,11 @@ public sealed class VersionStatus
             // live check, and nulling that would start a third request for no reason.
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // Being offline is not an error worth shouting about; the server works either way.
             // HttpClient.Timeout also lands here: it throws TaskCanceledException without
             // the caller token being cancelled, which must stay "unavailable" not OCE.
-            _logger?.LogDebug(ex, "Could not check nuget.org for a newer {Package}.", ServerVersion.PackageId);
             return ServerVersionInfo.CheckUnavailable(current);
         }
 

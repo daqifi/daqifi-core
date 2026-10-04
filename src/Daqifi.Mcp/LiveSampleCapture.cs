@@ -43,11 +43,10 @@ internal interface ILiveSampleSink
 /// <param name="SampleCount">Samples read off the live stream, including any the sink did not want.</param>
 /// <param name="Elapsed">Wall-clock time the capture actually ran for.</param>
 /// <param name="DataElapsed">
-/// Wall-clock time between the first sample and the last — <see cref="Elapsed"/> without the wait
-/// for the device to get going, which is 85-110 ms when the capture had to start the stream itself.
-/// This is what a measured rate has to be divided by; dividing by <see cref="Elapsed"/> would
-/// under-report the device by that wait, which on a short capture is most of it. Zero when fewer
-/// than two samples arrived.
+/// Wall-clock time between the first sample and the last — <see cref="Elapsed"/> without the
+/// wait for the device to start sending. A measured rate has to be divided by this; dividing
+/// by <see cref="Elapsed"/> under-reports the device by that wait. Zero when fewer than two
+/// samples arrived.
 /// </param>
 internal readonly record struct LiveCaptureOutcome(long SampleCount, TimeSpan Elapsed, TimeSpan DataElapsed);
 
