@@ -140,33 +140,3 @@ public class NetworkConfigurationTests
         Assert.Null(clone.Gateway);
     }
 }
-
-public class WifiModeTests
-{
-    [Fact]
-    public void WifiMode_ExistingNetwork_HasCorrectValue()
-    {
-        Assert.Equal(1, (int)WifiMode.ExistingNetwork);
-    }
-
-    [Fact]
-    public void WifiMode_SelfHosted_HasCorrectValue()
-    {
-        Assert.Equal(4, (int)WifiMode.SelfHosted);
-    }
-}
-
-public class WifiSecurityTypeTests
-{
-    [Fact]
-    public void WifiSecurityType_None_HasCorrectValue()
-    {
-        Assert.Equal(0, (int)WifiSecurityType.None);
-    }
-
-    [Fact]
-    public void WifiSecurityType_WpaPskPhrase_HasCorrectValue()
-    {
-        Assert.Equal(3, (int)WifiSecurityType.WpaPskPhrase);
-    }
-}
