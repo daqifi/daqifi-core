@@ -179,7 +179,10 @@ public class DigitalChannel : IDigitalChannel, IChannelEnablementNotifier
     public DigitalChannel(int channelNumber, bool isPwmCapable = false)
     {
         if (channelNumber < 0)
-            throw new ArgumentOutOfRangeException(nameof(channelNumber), "Channel number must be non-negative.");
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(channelNumber), channelNumber, "Channel number must be non-negative.");
+        }
 
         ChannelNumber = channelNumber;
         _isPwmCapable = isPwmCapable;

@@ -268,7 +268,10 @@ public class AnalogChannel : IAnalogChannel, IScaledChannel, IChannelEnablementN
     public AnalogChannel(int channelNumber, uint resolution = 65535, bool resolutionIsAssumed = false)
     {
         if (channelNumber < 0)
-            throw new ArgumentOutOfRangeException(nameof(channelNumber), "Channel number must be non-negative.");
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(channelNumber), channelNumber, "Channel number must be non-negative.");
+        }
 
         ValidateResolution(resolution, nameof(resolution));
 

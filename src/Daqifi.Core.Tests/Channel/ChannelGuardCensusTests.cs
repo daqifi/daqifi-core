@@ -13,10 +13,10 @@ namespace Daqifi.Core.Tests.Channel;
 /// <remarks>
 /// <para>
 /// Channel is the folder a library user meets first — constructing channels, setting calibration
-/// coefficients and ranges — so it is the next one worth pinning. It is also where the census has
-/// something to say: two of these guards report a null
-/// <see cref="ArgumentOutOfRangeException.ActualValue"/> while a third guard with the same message,
-/// on the same concept, reports the value. See <see cref="GuardsThatOmitActualValue"/>.
+/// coefficients and ranges — so it is the next one worth pinning. The three channel constructors
+/// reject a negative channel number with the same sentence, and all three report that number as
+/// <see cref="ArgumentOutOfRangeException.ActualValue"/>. <see cref="GuardsThatOmitActualValue"/>
+/// stays empty so a guard that stops reporting the rejected value fails here.
 /// </para>
 /// <para>
 /// A guard here is not the same thing as a public entry point. Five of the twelve throw sites live
@@ -48,8 +48,8 @@ public class ChannelGuardCensusTests
     /// </param>
     /// <param name="ParamName">Expected <see cref="ArgumentException.ParamName"/>, exactly.</param>
     /// <param name="ActualValue">
-    /// Expected <see cref="ArgumentOutOfRangeException.ActualValue"/>, or <c>null</c> for the two
-    /// legacy guards listed in <see cref="GuardsThatOmitActualValue"/>.
+    /// Expected <see cref="ArgumentOutOfRangeException.ActualValue"/>. Null only for a site still
+    /// listed in <see cref="GuardsThatOmitActualValue"/>.
     /// </param>
     /// <param name="Message">
     /// The guard's own sentence, exactly, before the framework's decoration. Also serves as the
@@ -68,28 +68,16 @@ public class ChannelGuardCensusTests
         Action Act);
 
     /// <summary>
-    /// The two guards that throw the two-argument <see cref="ArgumentOutOfRangeException"/> and so
-    /// hand the caller a null <c>ActualValue</c>.
+    /// Sites allowed to throw the two-argument <see cref="ArgumentOutOfRangeException"/> and hand
+    /// the caller a null <c>ActualValue</c>. Empty.
     /// </summary>
     /// <remarks>
-    /// This is drift, not a design decision, and naming it is the point of a census. All three
-    /// channel constructors reject a negative channel number with the same sentence, but
-    /// <see cref="AnalogOutputChannel"/> — the newest of them — also reports the number that was
-    /// rejected, while the two older ones do not. A caller debugging a bad argument gets strictly
-    /// less from the older two.
+    /// <see cref="AnalogChannel"/> and <see cref="DigitalChannel"/> used to omit the channel number
+    /// that <see cref="AnalogOutputChannel"/> reports. They now pass it as <c>actualValue</c>. The
+    /// set stays empty so a new guard that omits <c>ActualValue</c> is not on it and fails, rather
+    /// than quietly starting the list again.
     /// </remarks>
-    /// <remarks>
-    /// Pinned rather than fixed here: adding <c>ActualValue</c> changes what an existing caller
-    /// observes, which is a production change and belongs in its own reviewable commit, not
-    /// smuggled in under a test. Listing them exactly is what makes that follow-up findable — and
-    /// keeps the list from growing, since a new guard that omits <c>ActualValue</c> is not on it
-    /// and fails.
-    /// </remarks>
-    private static readonly HashSet<string> GuardsThatOmitActualValue = new(StringComparer.Ordinal)
-    {
-        "AnalogChannel..ctor(channelNumber)",
-        "DigitalChannel..ctor(channelNumber)",
-    };
+    private static readonly HashSet<string> GuardsThatOmitActualValue = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Runs every censused guard and reports the file it is declared in alongside the sentence it
@@ -175,7 +163,7 @@ public class ChannelGuardCensusTests
                 "AnalogChannel.cs",
                 analogCtor,
                 "channelNumber",
-                null,
+                -1,
                 NonNegative,
                 () => _ = new AnalogChannel(-1)),
 
@@ -308,7 +296,7 @@ public class ChannelGuardCensusTests
                 "DigitalChannel.cs",
                 digitalCtor,
                 "channelNumber",
-                null,
+                -1,
                 NonNegative,
                 () => _ = new DigitalChannel(-1)),
         ];
@@ -340,8 +328,8 @@ public class ChannelGuardCensusTests
             Assert.Equal(site.Message.Trim(), site.Message);
 
             // Reporting the rejected value is the whole reason to use the three-argument
-            // constructor, so a null ActualValue is only tolerated for the two guards that already
-            // drifted. A new one fails here rather than quietly joining them.
+            // constructor. A null ActualValue is tolerated only for a name still on
+            // GuardsThatOmitActualValue. That set is empty, so a new omission fails here.
             Assert.True(
                 site.ActualValue is not null || GuardsThatOmitActualValue.Contains(site.Site),
                 $"{site.Site}: a range guard must report the rejected value as ActualValue. " +
