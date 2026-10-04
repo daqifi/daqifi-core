@@ -218,6 +218,6 @@ public class StreamDecodeBenchmarks
     {
         public void InjectStreamFrame(DaqifiOutMessage message) => OnStreamMessageReceived(message);
 
-        public override void Send<T>(IOutboundMessage<T> message) { /* no transport */ }
+        public override void Send<T>(IOutboundMessage<T> message) { }
     }
 }

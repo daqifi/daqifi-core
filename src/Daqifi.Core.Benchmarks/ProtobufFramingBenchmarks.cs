@@ -46,10 +46,6 @@ public class ProtobufFramingBenchmarks
         _framesWithTrailingPartial = SyntheticFrames.BuildFrameBuffer(FrameCount + 1, truncateLastFrame: true);
     }
 
-    /// <summary>
-    /// A buffer that ends exactly on a frame boundary: every frame is consumed and nothing is left
-    /// over.
-    /// </summary>
     [Benchmark(Baseline = true, OperationsPerInvoke = FrameCount)]
     public int ParseWholeFrames()
     {
@@ -57,11 +53,6 @@ public class ProtobufFramingBenchmarks
         return Count(messages);
     }
 
-    /// <summary>
-    /// The same buffer with its last frame cut in half — what a read that lands mid-frame looks
-    /// like. The parser must recognize the tail as incomplete, leave it unconsumed, and still
-    /// return everything before it.
-    /// </summary>
     [Benchmark(OperationsPerInvoke = FrameCount)]
     public int ParseWithTrailingPartialFrame()
     {
