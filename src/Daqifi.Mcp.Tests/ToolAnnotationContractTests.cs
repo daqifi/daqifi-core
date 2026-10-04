@@ -1,7 +1,5 @@
 using Daqifi.Mcp.Tools;
-using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Protocol;
-using ModelContextProtocol.Server;
 
 namespace Daqifi.Mcp.Tests;
 
@@ -89,7 +87,7 @@ public class ToolAnnotationContractTests
     [Fact]
     public void EveryAdvertisedTool_HasARowInTheHintTable()
     {
-        var advertised = AdvertisedTools
+        var advertised = AdvertisedMcpTools.All
             .Select(t => t.Name)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
@@ -102,20 +100,5 @@ public class ToolAnnotationContractTests
     }
 
     private static Tool Advertised(string name) =>
-        AdvertisedTools.Single(t => t.Name == name);
-
-    /// <summary>
-    /// The tools exactly as the server advertises them: registered through the same
-    /// <c>WithDaqifiTools</c> call Program.cs makes, so every tool the server can list is
-    /// covered here — whatever class it lives in — and nothing it would not list is.
-    /// </summary>
-    private static readonly IReadOnlyList<Tool> AdvertisedTools = BuildAdvertisedTools();
-
-    private static IReadOnlyList<Tool> BuildAdvertisedTools()
-    {
-        var services = new ServiceCollection();
-        services.AddMcpServer().WithDaqifiTools();
-        using var provider = services.BuildServiceProvider();
-        return provider.GetServices<McpServerTool>().Select(t => t.ProtocolTool).ToList();
-    }
+        AdvertisedMcpTools.All.Single(t => t.Name == name);
 }
