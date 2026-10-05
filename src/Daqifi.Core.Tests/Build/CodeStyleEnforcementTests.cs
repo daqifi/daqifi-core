@@ -1,5 +1,5 @@
-using System.Reflection;
 using System.Xml.Linq;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Build;
 
@@ -35,17 +35,10 @@ namespace Daqifi.Core.Tests.Build;
 /// </remarks>
 public class CodeStyleEnforcementTests
 {
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(CodeStyleEnforcementTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
     private static string DirectoryBuildPropsPath =>
-        Path.Combine(RepositoryRoot, "Directory.Build.props");
+        Path.Combine(RepositoryRoot.FullPath, "Directory.Build.props");
 
-    private static string EditorConfigPath => Path.Combine(RepositoryRoot, ".editorconfig");
+    private static string EditorConfigPath => Path.Combine(RepositoryRoot.FullPath, ".editorconfig");
 
     /// <summary>
     /// The severities a rule is given in <c>.editorconfig</c>, across every section that mentions
