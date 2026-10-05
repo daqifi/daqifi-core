@@ -21,10 +21,8 @@ public class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardFilesAsync_WhenDisconnected_Throws()
     {
-        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
-        // Act & Assert
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.GetSdCardFilesAsync());
     }
@@ -32,12 +30,10 @@ public class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardFilesAsync_WhenConnected_SendsCorrectCommands()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "Daqifi/log_20240115_103000.bin" };
         device.Connect();
 
-        // Act
         await device.GetSdCardFilesAsync();
 
         // Assert - verify SD interface prep and file list commands were sent via setup action
@@ -50,7 +46,6 @@ public class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardFilesAsync_ParsesResponseCorrectly()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string>
         {
@@ -59,10 +54,8 @@ public class SdCardOperationsTests
         };
         device.Connect();
 
-        // Act
         var files = await device.GetSdCardFilesAsync();
 
-        // Assert
         Assert.Equal(2, files.Count);
         Assert.Equal("log_20240115_103000.bin", files[0].FileName);
         Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), files[0].CreatedDate);
@@ -201,12 +194,10 @@ public class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardFilesAsync_RestoresLanInterface()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
         device.Connect();
 
-        // Act
         await device.GetSdCardFilesAsync();
 
         // Assert - verify LAN interface restoration commands were sent
@@ -218,15 +209,12 @@ public class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardFilesAsync_UpdatesSdCardFilesProperty()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
         device.Connect();
 
-        // Act
         await device.GetSdCardFilesAsync();
 
-        // Assert
         Assert.Single(device.SdCardFiles);
         Assert.Equal("test.bin", device.SdCardFiles[0].FileName);
     }
@@ -296,14 +284,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_SendsCorrectCommandSequence()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync("mylog.bin");
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Equal(6, sentCommands.Count);
         Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
@@ -321,7 +306,6 @@ public class SdCardOperationsTests
         var device = new TestableNonUsbStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => device.StartSdCardLoggingAsync("test.bin"));
         Assert.Contains("USB", ex.Message);
@@ -330,14 +314,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithCustomFileName_UsesProvidedName()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync("custom_data.bin");
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:STORage:SD:FILE \"custom_data.bin\"", sentCommands);
     }
@@ -345,14 +326,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithNullFileName_GeneratesTimestampedName()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync();
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
         Assert.NotNull(loggingCommand);
@@ -363,11 +341,9 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithCustomFileName_ReturnsSessionWithThatName()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         var session = await device.StartSdCardLoggingSessionAsync("custom_data.bin", format: SdCardLogFormat.Protobuf);
 
         // Assert: the returned name is exactly what was sent to the device.
@@ -380,11 +356,9 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithNullFileName_ReturnsGeneratedNameSentToDevice()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         var session = await device.StartSdCardLoggingSessionAsync(format: SdCardLogFormat.Json);
 
         // Assert: the auto-generated name the caller receives is the one that reached the device,
@@ -399,14 +373,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_SetsIsLoggingToTrue()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync("test.bin");
 
-        // Assert
         Assert.True(device.IsLoggingToSdCard);
         Assert.True(device.IsStreaming);
     }
@@ -414,16 +385,13 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StopSdCardLoggingAsync_SendsCorrectCommands()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
         await device.StartSdCardLoggingAsync("test.bin");
         device.SentMessages.Clear();
 
-        // Act
         await device.StopSdCardLoggingAsync();
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Equal(4, sentCommands.Count);
         Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
@@ -442,7 +410,6 @@ public class SdCardOperationsTests
         device.StopStreaming(); // Sets IsStreaming = false
         device.SentMessages.Clear();
 
-        // Act
         await device.StopSdCardLoggingAsync();
 
         // Assert - stop command should still be sent defensively
@@ -453,15 +420,12 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StopSdCardLoggingAsync_SetsIsLoggingToFalse()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
         await device.StartSdCardLoggingAsync("test.bin");
 
-        // Act
         await device.StopSdCardLoggingAsync();
 
-        // Assert
         Assert.False(device.IsLoggingToSdCard);
         Assert.False(device.IsStreaming);
     }
@@ -469,34 +433,27 @@ public class SdCardOperationsTests
     [Fact]
     public void IsLoggingToSdCard_DefaultsToFalse()
     {
-        // Arrange & Act
         var device = new DaqifiStreamingDevice("TestDevice");
 
-        // Assert
         Assert.False(device.IsLoggingToSdCard);
     }
 
     [Fact]
     public void SdCardFiles_DefaultsToEmpty()
     {
-        // Arrange & Act
         var device = new DaqifiStreamingDevice("TestDevice");
 
-        // Assert
         Assert.Empty(device.SdCardFiles);
     }
 
     [Fact]
     public async Task StartSdCardLoggingAsync_WithEmptyFileName_GeneratesTimestampedName()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync("");
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
         Assert.NotNull(loggingCommand);
@@ -506,14 +463,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithWhitespaceFileName_GeneratesTimestampedName()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync("   ");
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
         Assert.NotNull(loggingCommand);
@@ -527,11 +481,9 @@ public class SdCardOperationsTests
     [InlineData("file;.bin")]
     public async Task StartSdCardLoggingAsync_WithInvalidCharacters_ThrowsArgumentException(string fileName)
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => device.StartSdCardLoggingAsync(fileName));
         Assert.Equal("fileName", ex.ParamName);
@@ -544,14 +496,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithJsonFormat_SendsJsonFormatCommand()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync("mylog.json", format: SdCardLogFormat.Json);
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Equal(6, sentCommands.Count);
         Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
@@ -565,14 +514,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithCsvFormat_SendsCsvFormatCommand()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync("mylog.csv", format: SdCardLogFormat.Csv);
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Equal(6, sentCommands.Count);
         Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands[0]);
@@ -586,14 +532,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithNullFileName_JsonFormat_GeneratesJsonExtension()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Json);
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
         Assert.NotNull(loggingCommand);
@@ -605,14 +548,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithNullFileName_CsvFormat_GeneratesCsvExtension()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.StartSdCardLoggingAsync(null, format: SdCardLogFormat.Csv);
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var loggingCommand = sentCommands.FirstOrDefault(c => c.StartsWith("SYSTem:STORage:SD:FILE"));
         Assert.NotNull(loggingCommand);
@@ -624,7 +564,6 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WithProtobufFormat_SendsProtobufFormatCommand()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
@@ -632,7 +571,6 @@ public class SdCardOperationsTests
         await device.StartSdCardLoggingAsync("mylog.bin", format: SdCardLogFormat.Protobuf);
 
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:STReam:FORmat 0", sentCommands);
     }
@@ -640,10 +578,8 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StartSdCardLoggingAsync_WhenDisconnected_Throws()
     {
-        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
-        // Act & Assert
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.StartSdCardLoggingAsync());
     }
@@ -651,10 +587,8 @@ public class SdCardOperationsTests
     [Fact]
     public async Task StopSdCardLoggingAsync_WhenDisconnected_Throws()
     {
-        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
-        // Act & Assert
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.StopSdCardLoggingAsync());
     }
@@ -662,12 +596,10 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DeleteSdCardFileAsync_WhenConnected_SendsCorrectCommands()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
         device.Connect();
 
-        // Act
         await device.DeleteSdCardFileAsync("data.bin");
 
         // Assert - verify SD interface prep, delete, and file list refresh via setup action
@@ -681,15 +613,12 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DeleteSdCardFileAsync_UpdatesSdCardFilesProperty()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string> { "Daqifi/remaining.bin" };
         device.Connect();
 
-        // Act
         await device.DeleteSdCardFileAsync("data.bin");
 
-        // Assert
         Assert.Single(device.SdCardFiles);
         Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
     }
@@ -922,15 +851,12 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DeleteSdCardFileAsync_RestoresLanInterface()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.CannedTextResponse = new List<string>();
         device.Connect();
 
-        // Act
         await device.DeleteSdCardFileAsync("data.bin");
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:STORage:SD:ENAble 0", sentCommands); // DisableStorageSd (PrepareLanInterface)
         Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (PrepareLanInterface)
@@ -939,10 +865,8 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DeleteSdCardFileAsync_WhenDisconnected_Throws()
     {
-        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
-        // Act & Assert
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.DeleteSdCardFileAsync("data.bin"));
     }
@@ -950,12 +874,10 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DeleteSdCardFileAsync_WhenLogging_ThrowsSdCardBusyException()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
         await device.StartSdCardLoggingAsync("test.bin");
 
-        // Act & Assert
         await Assert.ThrowsAsync<SdCardBusyException>(
             () => device.DeleteSdCardFileAsync("data.bin"));
     }
@@ -966,11 +888,9 @@ public class SdCardOperationsTests
     [InlineData("   ")]
     public async Task DeleteSdCardFileAsync_WithNullOrEmptyFileName_ThrowsArgumentException(string? fileName)
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act & Assert
         await Assert.ThrowsAsync<ArgumentException>(
             () => device.DeleteSdCardFileAsync(fileName!));
     }
@@ -982,11 +902,9 @@ public class SdCardOperationsTests
     [InlineData("file;.bin")]
     public async Task DeleteSdCardFileAsync_WithInvalidCharacters_ThrowsArgumentException(string fileName)
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => device.DeleteSdCardFileAsync(fileName));
         Assert.Equal("fileName", ex.ParamName);
@@ -1002,7 +920,6 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string> { "Daqifi/log_20240115_103000.bin" });
         device.Connect();
 
-        // Act
         var files = await device.GetSdCardFilesAsync();
 
         // Assert - should have retried and returned files from second attempt
@@ -1023,7 +940,6 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
         device.Connect();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardOperationException>(
             () => device.GetSdCardFilesAsync());
         Assert.Equal(2, device.ExecuteTextCommandCallCount);
@@ -1046,7 +962,6 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string>(response));
         device.Connect();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardNotPresentException>(
             () => device.GetSdCardFilesAsync());
         Assert.Contains("**ERROR", ex.LastScpiError);
@@ -1136,7 +1051,6 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string>(response));
         device.Connect();
 
-        // Act & Assert
         // Note: there is no SCPI error line in this response, but there are also
         // no file lines, so the classifier treats it as a filesystem error.
         var ex = await Assert.ThrowsAsync<SdCardFilesystemException>(
@@ -1159,7 +1073,6 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string>(response));
         device.Connect();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardFilesystemException>(
             () => device.GetSdCardFilesAsync());
         Assert.Contains("Failed to open directory", ex.DeviceMessage);
@@ -1184,10 +1097,8 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string>(mixed));
         device.Connect();
 
-        // Act
         var files = await device.GetSdCardFilesAsync();
 
-        // Assert
         Assert.Single(files);
         Assert.Equal("log_20240115_103000.bin", files[0].FileName);
     }
@@ -1202,10 +1113,8 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string>());
         device.Connect();
 
-        // Act
         var files = await device.GetSdCardFilesAsync();
 
-        // Assert
         Assert.Empty(files);
         Assert.Equal(1, device.ExecuteTextCommandCallCount);
     }
@@ -1415,7 +1324,6 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string>(response));
         device.Connect();
 
-        // Act
         var ex = await Assert.ThrowsAsync<SdCardNotPresentException>(
             () => device.GetSdCardFilesAsync());
 
@@ -1438,11 +1346,9 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string>(response));
         device.Connect();
 
-        // Act
         var ex = await Assert.ThrowsAsync<SdCardOperationException>(
             () => device.GetSdCardFilesAsync());
 
-        // Assert
         Assert.Null(ex.LastScpiError);
         Assert.Contains("Some unfamiliar firmware error", ex.Message);
     }
@@ -1456,7 +1362,6 @@ public class SdCardOperationsTests
         device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected", "**ERROR: -200" });
         device.Connect();
 
-        // Act
         await Assert.ThrowsAsync<SdCardNotPresentException>(
             () => device.GetSdCardFilesAsync());
 
@@ -1469,16 +1374,13 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DeleteSdCardFileAsync_WithScpiError_RetriesAndReturnsFiles()
     {
-        // Arrange
         var device = new RetryableSdCardStreamingDevice("TestDevice");
         device.ResponseSequence.Enqueue(new List<string> { "**ERROR: -200, \"Execution error\"" });
         device.ResponseSequence.Enqueue(new List<string> { "Daqifi/remaining.bin" });
         device.Connect();
 
-        // Act
         await device.DeleteSdCardFileAsync("data.bin");
 
-        // Assert
         Assert.Single(device.SdCardFiles);
         Assert.Equal("remaining.bin", device.SdCardFiles[0].FileName);
         Assert.Equal(2, device.ExecuteTextCommandCallCount);
@@ -1487,15 +1389,12 @@ public class SdCardOperationsTests
     [Fact]
     public async Task GetSdCardFilesAsync_WithNoError_DoesNotRetry()
     {
-        // Arrange
         var device = new RetryableSdCardStreamingDevice("TestDevice");
         device.ResponseSequence.Enqueue(new List<string> { "Daqifi/test.bin" });
         device.Connect();
 
-        // Act
         var files = await device.GetSdCardFilesAsync();
 
-        // Assert
         Assert.Single(files);
         Assert.Equal(1, device.ExecuteTextCommandCallCount);
     }
@@ -1503,11 +1402,9 @@ public class SdCardOperationsTests
     [Fact]
     public async Task FormatSdCardAsync_WhenConnected_SendsCorrectCommands()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act
         await device.FormatSdCardAsync();
 
         // Assert — defensive stop is always sent first (issue #118)
@@ -1521,10 +1418,8 @@ public class SdCardOperationsTests
     [Fact]
     public async Task FormatSdCardAsync_WhenDisconnected_Throws()
     {
-        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
-        // Act & Assert
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.FormatSdCardAsync());
     }
@@ -1532,12 +1427,10 @@ public class SdCardOperationsTests
     [Fact]
     public async Task FormatSdCardAsync_WhenLogging_ThrowsSdCardBusyException()
     {
-        // Arrange
         var device = new TestableSdCardStreamingDevice("TestDevice");
         device.Connect();
         await device.StartSdCardLoggingAsync("test.bin");
 
-        // Act & Assert
         await Assert.ThrowsAsync<SdCardBusyException>(
             () => device.FormatSdCardAsync());
     }
@@ -1553,7 +1446,6 @@ public class SdCardOperationsTests
         device.Connect();
         Assert.False(device.IsStreaming);
 
-        // Act
         await device.GetSdCardFilesAsync();
 
         // Assert — stop command should still be sent defensively
@@ -1570,7 +1462,6 @@ public class SdCardOperationsTests
         device.Connect();
         Assert.False(device.IsStreaming);
 
-        // Act
         await device.DeleteSdCardFileAsync("data.bin");
 
         // Assert — stop command should still be sent defensively
@@ -1589,7 +1480,6 @@ public class SdCardOperationsTests
 
         using var destinationStream = new MemoryStream();
 
-        // Act
         await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
         // Assert — stop command should still be sent defensively
@@ -1605,7 +1495,6 @@ public class SdCardOperationsTests
         device.Connect();
         Assert.False(device.IsStreaming);
 
-        // Act
         await device.FormatSdCardAsync();
 
         // Assert — stop command should still be sent defensively
@@ -1955,11 +1844,9 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_WhenDisconnected_Throws()
     {
-        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
         using var stream = new MemoryStream();
 
-        // Act & Assert
         await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.DownloadSdCardFileAsync("test.bin", stream));
     }
@@ -1975,7 +1862,6 @@ public class SdCardOperationsTests
         device.Connect();
         using var stream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<FeatureNotSupportedException>(
             () => device.DownloadSdCardFileAsync("test.bin", stream));
         Assert.Equal(DeviceFeature.SdFileTransferOverWifi, ex.Feature);
@@ -2231,12 +2117,10 @@ public class SdCardOperationsTests
     [InlineData("   ")]
     public async Task DownloadSdCardFileAsync_WithNullOrEmptyFileName_ThrowsArgumentException(string? fileName)
     {
-        // Arrange
         var device = new TestableDownloadDevice("TestDevice");
         device.Connect();
         using var stream = new MemoryStream();
 
-        // Act & Assert
         await Assert.ThrowsAsync<ArgumentException>(
             () => device.DownloadSdCardFileAsync(fileName!, stream));
     }
@@ -2247,12 +2131,10 @@ public class SdCardOperationsTests
     [InlineData("file;.bin")]
     public async Task DownloadSdCardFileAsync_WithInvalidCharacters_ThrowsArgumentException(string fileName)
     {
-        // Arrange
         var device = new TestableDownloadDevice("TestDevice");
         device.Connect();
         using var stream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<ArgumentException>(
             () => device.DownloadSdCardFileAsync(fileName, stream));
         Assert.Equal("fileName", ex.ParamName);
@@ -2262,13 +2144,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_WhenLogging_ThrowsSdCardBusyException()
     {
-        // Arrange
         var device = new TestableDownloadDevice("TestDevice");
         device.Connect();
         await device.StartSdCardLoggingAsync("test.bin");
         using var stream = new MemoryStream();
 
-        // Act & Assert
         await Assert.ThrowsAsync<SdCardBusyException>(
             () => device.DownloadSdCardFileAsync("data.bin", stream));
     }
@@ -2276,17 +2156,14 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_SendsCorrectCommands()
     {
-        // Arrange
         var fileData = new byte[] { 0x01, 0x02, 0x03 };
         var device = new TestableDownloadDevice("TestDevice");
         device.CannedFileData = fileData;
         device.Connect();
         using var destinationStream = new MemoryStream();
 
-        // Act
         await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
-        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 0", sentCommands); // PrepareSdInterface
         Assert.Contains("SYSTem:STORage:SD:ENAble 1", sentCommands); // PrepareSdInterface
@@ -2296,17 +2173,14 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_WritesFileDataToDestination()
     {
-        // Arrange
         var fileData = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
         var device = new TestableDownloadDevice("TestDevice");
         device.CannedFileData = fileData;
         device.Connect();
         using var destinationStream = new MemoryStream();
 
-        // Act
         var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
-        // Assert
         Assert.Equal(fileData, destinationStream.ToArray());
         Assert.Equal("data.bin", result.FileName);
         Assert.Equal(fileData.Length, result.FileSize);
@@ -2316,13 +2190,11 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_RestoresLanInterface()
     {
-        // Arrange
         var device = new TestableDownloadDevice("TestDevice");
         device.CannedFileData = new byte[] { 0x01 };
         device.Connect();
         using var destinationStream = new MemoryStream();
 
-        // Act
         await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
         // Assert — LAN interface should be restored after download
@@ -2334,16 +2206,13 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_ToTempFile_ReturnsFilePath()
     {
-        // Arrange
         var fileData = new byte[] { 0x01, 0x02, 0x03 };
         var device = new TestableDownloadDevice("TestDevice");
         device.CannedFileData = fileData;
         device.Connect();
 
-        // Act
         var result = await device.DownloadSdCardFileAsync("data.bin");
 
-        // Assert
         Assert.NotNull(result.FilePath);
         Assert.True(File.Exists(result.FilePath));
         Assert.Equal(fileData, await File.ReadAllBytesAsync(result.FilePath));
@@ -2356,7 +2225,6 @@ public class SdCardOperationsTests
     [Fact]
     public async Task DownloadSdCardFileAsync_StopsStreamingBeforeDownload()
     {
-        // Arrange
         var device = new TestableDownloadDevice("TestDevice");
         device.CannedFileData = new byte[] { 0x01 };
         device.Connect();
@@ -2366,7 +2234,6 @@ public class SdCardOperationsTests
 
         using var destinationStream = new MemoryStream();
 
-        // Act
         await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
         // Assert — stop streaming command should be sent before the download commands
@@ -2382,7 +2249,6 @@ public class SdCardOperationsTests
         device.Connect();
         using var destinationStream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
             () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
         Assert.Equal("data.bin", ex.FileName);
@@ -2402,10 +2268,8 @@ public class SdCardOperationsTests
         device.Connect();
         using var destinationStream = new MemoryStream();
 
-        // Act
         var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
-        // Assert
         Assert.Equal(fileData, destinationStream.ToArray());
         Assert.Equal(fileData.Length, result.FileSize);
 
@@ -2428,10 +2292,8 @@ public class SdCardOperationsTests
 
         using var destinationStream = new MemoryStream();
 
-        // Act
         var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
-        // Assert
         Assert.Equal(0, result.FileSize);
         Assert.Empty(destinationStream.ToArray());
 
@@ -2452,7 +2314,6 @@ public class SdCardOperationsTests
 
         using var destinationStream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
             () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
         Assert.Equal(4096, ex.ListedSizeInBytes);
@@ -2477,7 +2338,6 @@ public class SdCardOperationsTests
 
         using var destinationStream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardTruncatedTransferException>(
             () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
         Assert.Equal("data.bin", ex.FileName);
@@ -2510,7 +2370,6 @@ public class SdCardOperationsTests
 
         using var destinationStream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardTransferErrorException>(
             () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
         Assert.Equal("data.bin", ex.FileName);
@@ -2560,7 +2419,6 @@ public class SdCardOperationsTests
 
         using var destinationStream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
             () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
         Assert.Null(ex.ListedSizeInBytes);
@@ -2575,7 +2433,6 @@ public class SdCardOperationsTests
         device.Connect();
         using var destinationStream = new MemoryStream();
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
             () => device.DownloadSdCardFileAsync("data.bin", destinationStream));
         Assert.Null(ex.ListedSizeInBytes);
@@ -2928,7 +2785,6 @@ public class SdCardOperationsTests
         device.Connect();
         using var destinationStream = new MemoryStream();
 
-        // Act
         var result = await device.DownloadSdCardFileAsync("data.bin", destinationStream);
 
         // Assert — every byte arrived, and the transfer really did take its time getting here.

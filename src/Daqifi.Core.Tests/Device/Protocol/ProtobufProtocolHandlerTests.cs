@@ -12,35 +12,28 @@ public class ProtobufProtocolHandlerTests
     [Fact]
     public void CanHandle_WithDaqifiOutMessage_ReturnsTrue()
     {
-        // Arrange
         var handler = new ProtobufProtocolHandler();
         var message = new GenericInboundMessage<object>(new DaqifiOutMessage());
 
-        // Act
         var result = handler.CanHandle(message);
 
-        // Assert
         Assert.True(result);
     }
 
     [Fact]
     public void CanHandle_WithNonProtobufMessage_ReturnsFalse()
     {
-        // Arrange
         var handler = new ProtobufProtocolHandler();
         var message = new GenericInboundMessage<object>("text message");
 
-        // Act
         var result = handler.CanHandle(message);
 
-        // Assert
         Assert.False(result);
     }
 
     [Fact]
     public async Task HandleAsync_WithStatusMessage_CallsStatusHandler()
     {
-        // Arrange
         var statusHandlerCalled = false;
         DaqifiOutMessage? receivedMessage = null;
 
@@ -58,10 +51,8 @@ public class ProtobufProtocolHandlerTests
         };
         var inboundMessage = new GenericInboundMessage<object>(statusMessage);
 
-        // Act
         await handler.HandleAsync(inboundMessage);
 
-        // Assert
         Assert.True(statusHandlerCalled);
         Assert.NotNull(receivedMessage);
         Assert.Equal(8u, receivedMessage.AnalogInPortNum);
@@ -71,7 +62,6 @@ public class ProtobufProtocolHandlerTests
     [Fact]
     public async Task HandleAsync_WithStreamMessage_CallsStreamHandler()
     {
-        // Arrange
         var streamHandlerCalled = false;
         DaqifiOutMessage? receivedMessage = null;
 
@@ -91,10 +81,8 @@ public class ProtobufProtocolHandlerTests
 
         var inboundMessage = new GenericInboundMessage<object>(streamMessage);
 
-        // Act
         await handler.HandleAsync(inboundMessage);
 
-        // Assert
         Assert.True(streamHandlerCalled);
         Assert.NotNull(receivedMessage);
         Assert.Equal(12345u, receivedMessage.MsgTimeStamp);
@@ -104,7 +92,6 @@ public class ProtobufProtocolHandlerTests
     [Fact]
     public async Task HandleAsync_WithNonProtobufMessage_DoesNotCallHandlers()
     {
-        // Arrange
         var statusHandlerCalled = false;
         var streamHandlerCalled = false;
 
@@ -114,10 +101,8 @@ public class ProtobufProtocolHandlerTests
 
         var textMessage = new GenericInboundMessage<object>("text");
 
-        // Act
         await handler.HandleAsync(textMessage);
 
-        // Assert
         Assert.False(statusHandlerCalled);
         Assert.False(streamHandlerCalled);
     }
@@ -146,10 +131,8 @@ public class ProtobufProtocolHandlerTests
 
         var inboundMessage = new GenericInboundMessage<object>(streamMessage);
 
-        // Act
         await handler.HandleAsync(inboundMessage);
 
-        // Assert
         Assert.True(streamHandlerCalled, "Stream handler should be called for AnalogInDataFloat messages");
         Assert.NotNull(receivedMessage);
         Assert.Equal(99999u, receivedMessage.MsgTimeStamp);
@@ -174,7 +157,6 @@ public class ProtobufProtocolHandlerTests
         bool hasFloatData,
         ProtobufMessageType expectedType)
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             AnalogInPortNum = analogInPortNum,
@@ -198,26 +180,21 @@ public class ProtobufProtocolHandlerTests
             message.AnalogInDataFloat.Add(1.5f);
         }
 
-        // Act
         var result = ProtobufProtocolHandler.DetectMessageType(message);
 
-        // Assert
         Assert.Equal(expectedType, result);
     }
 
     [Fact]
     public void DetectMessageType_WithDeviceStatus_ReturnsError()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             DeviceStatus = 1
         };
 
-        // Act
         var result = ProtobufProtocolHandler.DetectMessageType(message);
 
-        // Assert
         Assert.Equal(ProtobufMessageType.Error, result);
     }
 
