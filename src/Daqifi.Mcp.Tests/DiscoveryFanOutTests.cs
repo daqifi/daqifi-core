@@ -178,11 +178,19 @@ public class DiscoveryFanOutTests
     public async Task DiscoverAcrossTransports_CallerCancel_ThrowsBeforeTimeoutElapses()
     {
         // The lie this pins: discover_devices used to call Core's timeout overload and only
-        // ThrowIfCancellationRequested() after WiFi had listened out the full window. A 30 s
-        // budget with a cancel at ~entry must not wait that budget out.
+        // ThrowIfCancellationRequested() after WiFi had listened out the full window. A cancel at
+        // ~entry must not wait that window out.
+        //
+        // The window is deliberately huge and the bound a small fraction of it, so the assertion
+        // is "well short of the timeout" rather than "under N seconds": a loaded CI runner can
+        // take seconds to schedule the continuation (a fixed 5 s bound failed at 5.08 s), but no
+        // amount of jitter gets near minutes, while the regression takes the whole window. The
+        // race keeps that regression from hanging the run for the full window — it fails at the
+        // bound instead.
         var hanging = new ListDeviceFinder(Array.Empty<IDeviceInfo>(), hangUntilCancelled: true);
         using var cts = new CancellationTokenSource();
-        var timeout = TimeSpan.FromSeconds(30);
+        var timeout = TimeSpan.FromMinutes(10);
+        var bound = timeout / 10;
 
         var discover = DaqifiAgent.DiscoverAcrossTransportsAsync(
             new IDeviceFinder[] { hanging }, timeout, cts.Token);
@@ -191,10 +199,11 @@ public class DiscoveryFanOutTests
         var started = Stopwatch.StartNew();
         cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => discover);
+        var completed = await Task.WhenAny(discover, Task.Delay(bound));
         Assert.True(
-            started.Elapsed < TimeSpan.FromSeconds(5),
-            $"caller cancel waited {started.Elapsed} for a {timeout} discovery window");
+            completed == discover,
+            $"caller cancel had not returned after {started.Elapsed} of a {timeout} discovery window");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => discover);
         Assert.True(hanging.Disposed);
     }
 
