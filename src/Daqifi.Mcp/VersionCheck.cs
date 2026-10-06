@@ -74,26 +74,67 @@ public sealed class VersionStatus
     private readonly ServerOptions _options;
     private readonly ILatestVersionSource _source;
     private readonly ILogger<VersionStatus>? _logger;
-    private readonly Lazy<Task<ServerVersionInfo>> _check;
+    private readonly object _checkGate = new();
+    private Task<ServerVersionInfo>? _check;
 
     public VersionStatus(ServerOptions options, ILatestVersionSource source, ILogger<VersionStatus>? logger = null)
     {
         _options = options;
         _source = source;
         _logger = logger;
-        _check = new Lazy<Task<ServerVersionInfo>>(RunCheckAsync);
     }
 
     /// <summary>Begins the check without waiting for it. Safe to call more than once.</summary>
-    public void Start() => _ = _check.Value;
+    /// <param name="cancellationToken">
+    /// Cancels the nuget.org GET if this call is the one that starts it. Startup passes the
+    /// host stopping token so a shutdown in flight does not wait out the request timeout.
+    /// </param>
+    public void Start(CancellationToken cancellationToken = default) => _ = GetOrStart(cancellationToken);
 
     /// <summary>
     /// The version report, awaiting the in-flight check if it has not finished. Bounded by the
     /// source's own timeout, so this cannot hang a tool call indefinitely.
     /// </summary>
-    public Task<ServerVersionInfo> GetAsync() => _check.Value;
+    /// <param name="cancellationToken">
+    /// Cancels waiting for the report, and cancels the nuget.org GET when this call is the one
+    /// that starts it. A cancelled attempt is not cached, so the next caller gets a real check.
+    /// </param>
+    public async Task<ServerVersionInfo> GetAsync(CancellationToken cancellationToken = default)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return await GetOrStart(cancellationToken).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A previous attempt was cancelled; do not inherit that as this caller's result.
+            }
+        }
+    }
 
-    private async Task<ServerVersionInfo> RunCheckAsync()
+    private Task<ServerVersionInfo> GetOrStart(CancellationToken cancellationToken)
+    {
+        var existing = Volatile.Read(ref _check);
+        if (existing is { IsCanceled: false })
+        {
+            return existing;
+        }
+
+        lock (_checkGate)
+        {
+            if (_check is { IsCanceled: false })
+            {
+                return _check;
+            }
+
+            return _check = RunCheckAsync(cancellationToken);
+        }
+    }
+
+    private async Task<ServerVersionInfo> RunCheckAsync(CancellationToken cancellationToken)
     {
         var current = ServerVersion.Current;
 
@@ -105,11 +146,22 @@ public sealed class VersionStatus
         string? latest;
         try
         {
-            latest = await _source.GetLatestStableVersionAsync(CancellationToken.None).ConfigureAwait(false);
+            latest = await _source.GetLatestStableVersionAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A cancelled GET is not "nuget.org was unreachable" — let it surface as a
+            // cancellation so it is not cached as a verdict. GetOrStart treats a cancelled
+            // task as "no check has run", so the next caller starts a real one. Deliberately
+            // not clearing _check here: another caller may already have replaced it with a
+            // live check, and nulling that would start a third request for no reason.
+            throw;
         }
         catch (Exception ex)
         {
             // Being offline is not an error worth shouting about; the server works either way.
+            // HttpClient.Timeout also lands here: it throws TaskCanceledException without
+            // the caller token being cancelled, which must stay "unavailable" not OCE.
             _logger?.LogDebug(ex, "Could not check nuget.org for a newer {Package}.", ServerVersion.PackageId);
             return ServerVersionInfo.CheckUnavailable(current);
         }
