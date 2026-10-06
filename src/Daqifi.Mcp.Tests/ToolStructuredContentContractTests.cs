@@ -16,82 +16,35 @@ namespace Daqifi.Mcp.Tests;
 public class ToolStructuredContentContractTests
 {
     /// <summary>
-    /// Every tool that must advertise structured content. A tool added to
-    /// <see cref="DaqifiTools"/> without a row here fails
-    /// <see cref="EveryAdvertisedTool_HasARowInTheStructuredContentTable"/> rather than shipping
-    /// as a text blob; a row whose tool never set the flag fails
-    /// <see cref="Tool_AdvertisesAnOutputSchema"/>.
+    /// Every tool the server registers. All of them return records or lists, so all of them need
+    /// the flag — this is not a place to opt out. The names come from
+    /// <see cref="AdvertisedMcpTools"/>, not a copied list, so a tool added through
+    /// <c>WithDaqifiTools</c> is covered here without a second edit.
     /// </summary>
-    public static TheoryData<string> ExpectedTools()
+    public static TheoryData<string> AdvertisedToolNames()
     {
         var data = new TheoryData<string>();
-        foreach (var name in Expected)
+        foreach (var tool in AdvertisedMcpTools.All)
         {
-            data.Add(name);
+            data.Add(tool.Name);
         }
 
         return data;
     }
 
-    // All 26 tools return records or lists; all of them need the flag. The table is the
-    // completeness check, not a place to opt out — a new tool belongs here and on the attribute.
-    private static readonly string[] Expected =
-    {
-        "get_server_info",
-        "discover_devices",
-        "connect_device",
-        "disconnect_device",
-        "list_connected_devices",
-        "get_device_status",
-        "list_channels",
-        "configure_analog_channels",
-        "configure_digital_channels",
-        "set_digital_direction",
-        "set_digital_output",
-        "set_pwm_output",
-        "disable_pwm",
-        "list_analog_outputs",
-        "set_analog_output",
-        "latch_analog_outputs",
-        "read_analog_output",
-        "set_sample_rate",
-        "start_sd_logging",
-        "stop_sd_logging",
-        "list_sd_files",
-        "get_sd_storage",
-        "download_sd_file",
-        "delete_sd_file",
-        "read_channel_values",
-        "capture_samples",
-    };
-
     [Theory]
-    [MemberData(nameof(ExpectedTools))]
+    [MemberData(nameof(AdvertisedToolNames))]
     public void Tool_AdvertisesAnOutputSchema(string name)
     {
         // Read from the registered tool, i.e. what a client sees in tools/list. The attribute
         // getter can tell unset (false) from true, but it cannot tell us the schema actually made
         // it onto the wire.
-        var schema = Advertised(name).OutputSchema;
+        var schema = AdvertisedMcpTools.All.Single(t => t.Name == name).OutputSchema;
 
         Assert.True(
             schema.HasValue,
             $"{name} has no OutputSchema; set UseStructuredContent = true on [McpServerTool].");
         Assert.Equal(JsonValueKind.Object, schema.Value.ValueKind);
-    }
-
-    [Fact]
-    public void EveryAdvertisedTool_HasARowInTheStructuredContentTable()
-    {
-        var advertised = AdvertisedTools
-            .Select(t => t.Name)
-            .OrderBy(n => n, StringComparer.Ordinal)
-            .ToArray();
-        var tabulated = Expected
-            .OrderBy(n => n, StringComparer.Ordinal)
-            .ToArray();
-
-        Assert.Equal(tabulated, advertised);
     }
 
     [Fact]
@@ -145,23 +98,5 @@ public class ToolStructuredContentContractTests
         var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
         using var textJson = JsonDocument.Parse(text);
         Assert.Equal(JsonValueKind.Null, textJson.RootElement.GetProperty("latestVersion").ValueKind);
-    }
-
-    private static Tool Advertised(string name) =>
-        AdvertisedTools.Single(t => t.Name == name);
-
-    /// <summary>
-    /// The tools exactly as the server advertises them: registered through the same
-    /// <c>WithDaqifiTools</c> call Program.cs makes, so every tool the server can list is
-    /// covered here — whatever class it lives in — and nothing it would not list is.
-    /// </summary>
-    private static readonly IReadOnlyList<Tool> AdvertisedTools = BuildAdvertisedTools();
-
-    private static IReadOnlyList<Tool> BuildAdvertisedTools()
-    {
-        var services = new ServiceCollection();
-        services.AddMcpServer().WithDaqifiTools();
-        using var provider = services.BuildServiceProvider();
-        return provider.GetServices<McpServerTool>().Select(t => t.ProtocolTool).ToList();
     }
 }
