@@ -57,12 +57,11 @@ internal sealed class WifiModuleUpdater
 
         // Read only by the failure paths at the bottom of this method. Once the update-mode command
         // is on the wire the device may be sitting in LAN firmware-update / USB-transparent bridge
-        // mode, where the SCPI console is bypassed. Cancel and failure both call
-        // TryLeaveLanUpdateModeAfterFailureAsync: best-effort SetUsbTransparencyMode(0), then
-        // PostUsbTransparentModeExitDelay, then LAN:APPLY. That sequence leaves LAN:ENAbled/SAVE
-        // unpersisted (see the method remarks). A recovery that cannot reach the device is logged
-        // and does not replace the original failure. Armed inside the prepare step, at the one
-        // point where "may be bridged" becomes true.
+        // mode, where the SCPI console is bypassed until something takes it back out. The cancel
+        // and failure paths both hand this flag to TryLeaveLanUpdateModeAfterFailureAsync, which
+        // sends the bridge-exit sequence when it is set (see that method for what it does and does
+        // not restore). Armed inside the prepare step, at the one point where "may be bridged"
+        // becomes true.
         var mayBeInLanUpdateMode = false;
 
         try
