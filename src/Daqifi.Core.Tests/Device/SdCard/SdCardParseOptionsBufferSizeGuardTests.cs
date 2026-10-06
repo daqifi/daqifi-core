@@ -144,11 +144,9 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
         string entryPointKey,
         int bufferSize)
     {
-        // Arrange
         var entryPoint = EntryPoints().Single(e => e.Key == entryPointKey);
         var options = new Sd.SdCardParseOptions { BufferSize = bufferSize };
 
-        // Act
         var ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => entryPoint.Call(this, options));
 
@@ -175,7 +173,6 @@ public sealed class SdCardParseOptionsBufferSizeGuardTests : IDisposable
         var missing = Path.Combine(_directory, "no-such-directory", fileName);
         var options = new Sd.SdCardParseOptions { BufferSize = 0 };
 
-        // Act & Assert
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => Sd.SdCardFileParserFactory.ParseFileAsync(missing, options));
     }
