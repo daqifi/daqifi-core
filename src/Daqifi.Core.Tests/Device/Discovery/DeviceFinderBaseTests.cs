@@ -82,6 +82,15 @@ public class DeviceFinderBaseTests
         }
     }
 
+    /// <summary>
+    /// An exception whose <see cref="object.ToString"/> throws, so an isolation catch cannot
+    /// render it into its trace line.
+    /// </summary>
+    private sealed class UnrenderableException : Exception
+    {
+        public override string ToString() => throw new InvalidOperationException("cannot render");
+    }
+
     [Fact]
     public async Task DiscoverAsync_RaisesDeviceDiscoveredAndDiscoveryCompleted()
     {
@@ -130,6 +139,24 @@ public class DeviceFinderBaseTests
         var result = await finder.DiscoverAsync();
 
         Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task OnDeviceDiscovered_SubscriberExceptionThatCannotRenderItself_IsIsolated()
+    {
+        var device = new DeviceInfo { Name = "Nq1", SerialNumber = "SN1" };
+        using var finder = new TestFinder(device);
+
+        // The isolation catch writes the exception into a trace line. That line has to be
+        // composed inside the guard, or a throwing ToString escapes the catch.
+        finder.DeviceDiscovered += (_, _) => throw new UnrenderableException();
+        var completedCount = 0;
+        finder.DiscoveryCompleted += (_, _) => completedCount++;
+
+        var result = (await finder.DiscoverAsync()).ToList();
+
+        Assert.Single(result);
+        Assert.Equal(1, completedCount);
     }
 
     [Fact]
