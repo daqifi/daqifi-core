@@ -17,8 +17,10 @@ public class NetworkConfigurableTests
     [Fact]
     public void NetworkConfiguration_InitializedOnConstruction()
     {
+        // Act
         var device = new DaqifiStreamingDevice("TestDevice");
 
+        // Assert
         Assert.NotNull(device.NetworkConfiguration);
         Assert.Equal(WifiMode.SelfHosted, device.NetworkConfiguration.Mode);
         Assert.Equal(WifiSecurityType.WpaPskPhrase, device.NetworkConfiguration.SecurityType);
@@ -27,6 +29,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WhenDisconnected_ThrowsDeviceNotConnectedException()
     {
+        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -34,6 +37,7 @@ public class NetworkConfigurableTests
             "TestNetwork",
             "TestPassword");
 
+        // Act & Assert
         var exception = await Assert.ThrowsAsync<DeviceNotConnectedException>(
             () => device.UpdateNetworkConfigurationAsync(config));
         Assert.Equal("Device is not connected.", exception.Message);
@@ -42,9 +46,11 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithNullConfiguration_ThrowsArgumentNullException()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
 
+        // Act & Assert
         await Assert.ThrowsAsync<ArgumentNullException>(
             () => device.UpdateNetworkConfigurationAsync(null!));
     }
@@ -52,6 +58,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_ExistingNetworkMode_SendsCorrectCommands()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -60,8 +67,10 @@ public class NetworkConfigurableTests
             "TestNetwork",
             "TestPassword");
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         Assert.Contains("SYSTem:COMMunicate:LAN:NETType 1", sentCommands); // ExistingNetwork mode
@@ -75,6 +84,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_SelfHostedMode_SendsCorrectCommands()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -83,8 +93,10 @@ public class NetworkConfigurableTests
             "DAQiFi_Device",
             "");
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         Assert.Contains("SYSTem:COMMunicate:LAN:NETType 4", sentCommands); // SelfHosted mode
@@ -97,6 +109,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WhenStreaming_StopsStreamingFirst()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         device.StartStreaming();
@@ -108,8 +121,10 @@ public class NetworkConfigurableTests
             "TestNetwork",
             "TestPassword");
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         var firstCommand = device.SentMessages.First().Data;
         Assert.Equal(ScpiMessageProducer.StopStreaming.Data, firstCommand);
         Assert.False(device.IsStreaming);
@@ -118,6 +133,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_UpdatesLocalConfiguration()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -126,8 +142,10 @@ public class NetworkConfigurableTests
             "UpdatedNetwork",
             "UpdatedPassword");
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         Assert.Equal(WifiMode.ExistingNetwork, device.NetworkConfiguration.Mode);
         Assert.Equal(WifiSecurityType.WpaPskPhrase, device.NetworkConfiguration.SecurityType);
         Assert.Equal("UpdatedNetwork", device.NetworkConfiguration.Ssid);
@@ -137,6 +155,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithStaticIP_SendsAddressMaskGatewayBeforeApply()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -148,8 +167,10 @@ public class NetworkConfigurableTests
             IPAddress.Parse("255.255.255.0"),
             IPAddress.Parse("10.0.0.1"));
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         Assert.Contains("SYSTem:COMMunicate:LAN:ADDRess \"10.0.0.5\"", sentCommands);
@@ -172,6 +193,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithoutStaticIP_DoesNotSendAddressMaskGateway()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -180,8 +202,10 @@ public class NetworkConfigurableTests
             "Net",
             "Pass");
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         Assert.DoesNotContain(sentCommands, c => c.StartsWith("SYSTem:COMMunicate:LAN:ADDRess "));
@@ -192,6 +216,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithPartialStaticIP_OnlySendsNonNullFields()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -203,8 +228,10 @@ public class NetworkConfigurableTests
             subnetMask: null,
             gateway: null);
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         Assert.Contains("SYSTem:COMMunicate:LAN:ADDRess \"10.0.0.5\"", sentCommands);
@@ -238,6 +265,7 @@ public class NetworkConfigurableTests
             "OtherNet",
             "OtherPass"));
 
+        // Assert
         Assert.Equal(originalStaticIP, device.NetworkConfiguration.StaticIP);
         Assert.Equal(originalSubnet, device.NetworkConfiguration.SubnetMask);
         Assert.Equal(originalGateway, device.NetworkConfiguration.Gateway);
@@ -246,6 +274,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithStaticIP_UpdatesLocalConfiguration()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var staticIP = IPAddress.Parse("10.0.0.5");
@@ -260,8 +289,10 @@ public class NetworkConfigurableTests
             subnet,
             gateway);
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         Assert.Equal(staticIP, device.NetworkConfiguration.StaticIP);
         Assert.Equal(subnet, device.NetworkConfiguration.SubnetMask);
         Assert.Equal(gateway, device.NetworkConfiguration.Gateway);
@@ -270,6 +301,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_PreparesLanInterface()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -278,8 +310,10 @@ public class NetworkConfigurableTests
             "TestNetwork",
             "TestPassword");
 
+        // Act
         await device.UpdateNetworkConfigurationAsync(config);
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         // LAN interface preparation (disable SD, enable LAN)
@@ -445,8 +479,10 @@ public class NetworkConfigurableTests
     [Fact]
     public void PrepareSdInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
     {
+        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
+        // Act & Assert
         var exception = Assert.Throws<DeviceNotConnectedException>(() => device.PrepareSdInterface());
         Assert.Equal("Device is not connected.", exception.Message);
     }
@@ -454,11 +490,14 @@ public class NetworkConfigurableTests
     [Fact]
     public void PrepareSdInterface_WhenConnected_SendsCorrectCommands()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
 
+        // Act
         device.PrepareSdInterface();
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         Assert.Equal(2, sentCommands.Count);
@@ -469,8 +508,10 @@ public class NetworkConfigurableTests
     [Fact]
     public void PrepareLanInterface_WhenDisconnected_ThrowsDeviceNotConnectedException()
     {
+        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
+        // Act & Assert
         var exception = Assert.Throws<DeviceNotConnectedException>(() => device.PrepareLanInterface());
         Assert.Equal("Device is not connected.", exception.Message);
     }
@@ -478,11 +519,14 @@ public class NetworkConfigurableTests
     [Fact]
     public void PrepareLanInterface_WhenConnected_SendsCorrectCommands()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
 
+        // Act
         device.PrepareLanInterface();
 
+        // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
 
         Assert.Equal(2, sentCommands.Count);
@@ -524,6 +568,7 @@ public class NetworkConfigurableTests
     [Fact]
     public void NetworkConfiguration_ReturnsClone_PreventingExternalModification()
     {
+        // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
         var config1 = device.NetworkConfiguration;
         var config2 = device.NetworkConfiguration;
@@ -539,6 +584,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WhenCanceled_ThrowsOperationCanceledException()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration(
@@ -549,6 +595,7 @@ public class NetworkConfigurableTests
         var cts = new CancellationTokenSource();
         cts.Cancel();
 
+        // Act & Assert
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => device.UpdateNetworkConfigurationAsync(config, cts.Token));
     }
@@ -556,6 +603,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithUnsupportedWifiMode_ThrowsArgumentOutOfRangeException()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration
@@ -566,6 +614,7 @@ public class NetworkConfigurableTests
             Password = ""
         };
 
+        // Act & Assert
         var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => device.UpdateNetworkConfigurationAsync(config));
         Assert.Contains("Unsupported WiFi mode", exception.Message);
@@ -574,6 +623,7 @@ public class NetworkConfigurableTests
     [Fact]
     public async Task UpdateNetworkConfigurationAsync_WithUnsupportedSecurityType_ThrowsArgumentOutOfRangeException()
     {
+        // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
         device.Connect();
         var config = new NetworkConfiguration
@@ -584,6 +634,7 @@ public class NetworkConfigurableTests
             Password = ""
         };
 
+        // Act & Assert
         var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => device.UpdateNetworkConfigurationAsync(config));
         Assert.Contains("Unsupported WiFi security type", exception.Message);

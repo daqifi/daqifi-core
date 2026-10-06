@@ -171,11 +171,14 @@ public class CompositeMessageParserBenchCaptureTests
         // buffer ending in a line ending as text, so LineBasedMessageParser consumed all
         // 588 bytes as a single garbage "line" and the protobuf frame was destroyed.
 
+        // Arrange
         var parser = new CompositeMessageParser();
         var capture = BuildStatusReplyCapture();
 
+        // Act
         var messages = parser.ParseMessages(capture, out var consumedBytes).ToList();
 
+        // Assert
         var message = Assert.IsType<DaqifiOutMessage>(Assert.Single(messages).Data);
         Assert.Equal("Nq1", message.DevicePn);
         Assert.Equal(1234567UL, message.DeviceSn);
@@ -204,11 +207,14 @@ public class CompositeMessageParserBenchCaptureTests
         // that failed the printable test is not plausibly SCPI text, and handing it to
         // the line parser risks losing frames to a stray CRLF-shaped byte pair.
 
+        // Arrange
         var parser = new CompositeMessageParser();
         var capture = BuildSingleChannelStreamCapture();
 
+        // Act
         var messages = parser.ParseMessages(capture, out var consumedBytes).ToList();
 
+        // Assert
         Assert.Equal(15, messages.Count);
         Assert.All(messages, m => Assert.IsType<DaqifiOutMessage>(m.Data));
         Assert.Equal(capture.Length, consumedBytes);
@@ -231,11 +237,14 @@ public class CompositeMessageParserBenchCaptureTests
     [Fact]
     public void FourChannelStreamCapture_RoutesToProtobuf()
     {
+        // Arrange
         var parser = new CompositeMessageParser();
         var capture = BuildFourChannelStreamCapture();
 
+        // Act
         var messages = parser.ParseMessages(capture, out var consumedBytes).ToList();
 
+        // Assert
         Assert.Equal(260, messages.Count);
         Assert.All(messages, m => Assert.IsType<DaqifiOutMessage>(m.Data));
         Assert.Equal(capture.Length, consumedBytes);
@@ -248,12 +257,15 @@ public class CompositeMessageParserBenchCaptureTests
         // The SYSTem:INFO? style reply captured alongside the binary frames. Several
         // CRLF-terminated key=value lines, each of which must arrive as its own string.
 
+        // Arrange
         var parser = new CompositeMessageParser();
         var capture = Encoding.ASCII.GetBytes(
             "HeapTotal=75000\r\nHeapFree=7544\r\nStackTotal=8192\r\nStackFree=6120\r\n");
 
+        // Act
         var messages = parser.ParseMessages(capture, out var consumedBytes).ToList();
 
+        // Assert
         Assert.Equal(4, messages.Count);
         Assert.All(messages, m => Assert.IsType<string>(m.Data));
         Assert.Equal(
@@ -268,11 +280,14 @@ public class CompositeMessageParserBenchCaptureTests
         // The negative control from the bench pass: SYSTem:NOTAREALCOMMAND? answered with
         // an error line. The leading '*' is also the SCPI marker the classifier looks for.
 
+        // Arrange
         var parser = new CompositeMessageParser();
         var capture = Encoding.ASCII.GetBytes("**ERROR: -113, \"Undefined header\"\r\n");
 
+        // Act
         var messages = parser.ParseMessages(capture, out var consumedBytes).ToList();
 
+        // Assert
         var message = Assert.IsType<string>(Assert.Single(messages).Data);
         Assert.Equal("**ERROR: -113, \"Undefined header\"", message);
         Assert.Equal(capture.Length, consumedBytes);
@@ -292,11 +307,14 @@ public class CompositeMessageParserBenchCaptureTests
         // would consume the reply and destroy it. Line endings are framing, not content:
         // by content these replies are 100% printable and must classify as text outright.
 
+        // Arrange
         var parser = new CompositeMessageParser();
         var capture = Encoding.ASCII.GetBytes(reply);
 
+        // Act
         var messages = parser.ParseMessages(capture, out var consumedBytes).ToList();
 
+        // Assert
         Assert.Equal(expected, Assert.IsType<string>(Assert.Single(messages).Data));
         Assert.Equal(capture.Length, consumedBytes);
     }
@@ -309,14 +327,17 @@ public class CompositeMessageParserBenchCaptureTests
         // with a text-shaped tail while still being ~40% null bytes — the leading SCPI
         // marker must not outrank that null density.
 
+        // Arrange
         var parser = new CompositeMessageParser();
         var capture = Encoding.ASCII.GetBytes("SYSTem:SYSInfoPB?\r\n")
             .Concat(Delimited(BuildStatusMessage()))
             .Concat(Encoding.ASCII.GetBytes("\r\nDAQIFI>"))
             .ToArray();
 
+        // Act
         var messages = parser.ParseMessages(capture, out _).ToList();
 
+        // Assert
         var message = Assert.IsType<DaqifiOutMessage>(Assert.Single(messages).Data);
         Assert.Equal("Nq1", message.DevicePn);
     }

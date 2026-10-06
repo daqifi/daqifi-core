@@ -39,6 +39,7 @@ public class SdCardTimestampFrequencyTests
             TimestampFreq = DeviceFrequencyHz
         });
 
+        // Act
         var config = SdCardDeviceConfiguration.FromDevice(device);
 
         // Assert — the one field the live device is uniquely able to supply is carried across.
@@ -57,6 +58,7 @@ public class SdCardTimestampFrequencyTests
             DigitalPortNum = 2
         });
 
+        // Act
         var config = SdCardDeviceConfiguration.FromDevice(device);
 
         // Assert — zero means "unknown", which leaves the parser's fallback in charge.
@@ -67,6 +69,7 @@ public class SdCardTimestampFrequencyTests
     [Fact]
     public void FromDevice_WithNoAnalogChannels_ReturnsNull()
     {
+        // Arrange
         var device = new DaqifiDevice("TestDevice");
         device.PopulateChannelsFromStatus(new DaqifiOutMessage
         {
@@ -74,6 +77,7 @@ public class SdCardTimestampFrequencyTests
             TimestampFreq = DeviceFrequencyHz
         });
 
+        // Act & Assert
         Assert.Null(SdCardDeviceConfiguration.FromDevice(device));
     }
 
@@ -124,6 +128,7 @@ public class SdCardTimestampFrequencyTests
 
         using var stream = builder.Build();
 
+        // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
             ConfigurationOverride = DeviceOverride(DeviceFrequencyHz)
@@ -140,11 +145,13 @@ public class SdCardTimestampFrequencyTests
         // Arrange — a FW 3.7.2-shaped log: stream messages only, no TimestampFreq anywhere.
         using var stream = BuildTwoSampleLogWithoutFrequency();
 
+        // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
             ConfigurationOverride = DeviceOverride(DeviceFrequencyHz)
         });
 
+        // Assert
         Assert.Equal(DeviceFrequencyHz, session.TimestampFrequency);
         Assert.Equal(SdCardTimestampSource.Device, session.TimestampFrequencySource);
     }
@@ -155,6 +162,7 @@ public class SdCardTimestampFrequencyTests
         // Arrange — no file frequency, no connected device.
         using var stream = BuildTwoSampleLogWithoutFrequency();
 
+        // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
             FallbackTimestampFrequency = 50_000_000
@@ -168,13 +176,16 @@ public class SdCardTimestampFrequencyTests
     [Fact]
     public async Task ParseAsync_WithFallbackDisabled_ReportsNoFrequency()
     {
+        // Arrange
         using var stream = BuildTwoSampleLogWithoutFrequency();
 
+        // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
             FallbackTimestampFrequency = 0
         });
 
+        // Assert
         Assert.Equal(0u, session.TimestampFrequency);
         Assert.Equal(SdCardTimestampSource.None, session.TimestampFrequencySource);
     }
@@ -190,6 +201,7 @@ public class SdCardTimestampFrequencyTests
         // bench Nq1 writes them.
         using var stream = BuildTwoSampleLogWithoutFrequency();
 
+        // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
             ConfigurationOverride = DeviceOverride(DeviceFrequencyHz)
@@ -210,6 +222,7 @@ public class SdCardTimestampFrequencyTests
         // Arrange — the same file parsed offline, where the 50 MHz guess is all there is.
         using var stream = BuildTwoSampleLogWithoutFrequency();
 
+        // Act
         var session = await _parser.ParseAsync(stream, "log_20240115_103000.bin", new SdCardParseOptions
         {
             FallbackTimestampFrequency = 50_000_000

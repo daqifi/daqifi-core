@@ -30,6 +30,7 @@ public class SdCardConfigurationMergeTests
         // Arrange — a log parsed with no connected device to fall back on.
         var parsed = Empty() with { AnalogPortCount = 4, DeviceSerialNumber = "SN-FILE" };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, null);
 
         // Assert — no gap filling to do, and nothing is rebuilt or defaulted along the way.
@@ -55,6 +56,7 @@ public class SdCardConfigurationMergeTests
             Resolution = 65_535u
         };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
         // Assert — the log describes itself; a live device never overrides better information.
@@ -78,6 +80,7 @@ public class SdCardConfigurationMergeTests
             Resolution = 65_535u
         };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
         // Assert — each zero is filled from its own matching field, not a neighbouring one.
@@ -98,8 +101,10 @@ public class SdCardConfigurationMergeTests
         var parsed = Empty() with { AnalogPortCount = negativeCount, DigitalPortCount = negativeCount };
         var overrideConfig = Empty() with { AnalogPortCount = 16, DigitalPortCount = 8 };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
+        // Assert
         Assert.Equal(16, merged.AnalogPortCount);
         Assert.Equal(8, merged.DigitalPortCount);
     }
@@ -122,8 +127,10 @@ public class SdCardConfigurationMergeTests
             InternalScaleM = internalScale
         };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(Empty(), overrideConfig);
 
+        // Assert
         Assert.Equal("SN-DEVICE", merged.DeviceSerialNumber);
         Assert.Equal("PN-DEVICE", merged.DevicePartNumber);
         Assert.Equal("1.2.3", merged.FirmwareRevision);
@@ -158,6 +165,7 @@ public class SdCardConfigurationMergeTests
             InternalScaleM = new[] { 99.0 }
         };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
         // Assert — scaling a log with the wrong board's calibration is exactly the failure this
@@ -192,6 +200,7 @@ public class SdCardConfigurationMergeTests
             CalibrationValues = calibration
         };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
         // Assert — neither input alone describes the session; the merge is what makes it parseable.
@@ -214,8 +223,10 @@ public class SdCardConfigurationMergeTests
         // fields are all empty; filling a gap with another gap must not invent a value.
         var parsed = Empty() with { AnalogPortCount = 4 };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, Empty());
 
+        // Assert
         Assert.Equal(4, merged.AnalogPortCount);
         Assert.Equal(0, merged.DigitalPortCount);
         Assert.Equal(0u, merged.TimestampFrequency);
@@ -251,8 +262,10 @@ public class SdCardConfigurationMergeTests
             FirmwareRevision = "1.2.3"
         };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
+        // Assert
         Assert.Equal("SN-DEVICE", merged.DeviceSerialNumber);
         Assert.Equal("PN-DEVICE", merged.DevicePartNumber);
         Assert.Equal("1.2.3", merged.FirmwareRevision);
@@ -273,6 +286,7 @@ public class SdCardConfigurationMergeTests
             FirmwareRevision = ""
         };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
         // Assert — a blank left over from an empty header is normalized to the record's documented
@@ -290,8 +304,10 @@ public class SdCardConfigurationMergeTests
         var parsed = Empty() with { DeviceSerialNumber = "SN-FILE", DevicePartNumber = "PN-FILE" };
         var overrideConfig = Empty() with { DeviceSerialNumber = "", DevicePartNumber = "   " };
 
+        // Act
         var merged = SdCardConfigurationMerge.Merge(parsed, overrideConfig);
 
+        // Assert
         Assert.Equal("SN-FILE", merged.DeviceSerialNumber);
         Assert.Equal("PN-FILE", merged.DevicePartNumber);
     }
