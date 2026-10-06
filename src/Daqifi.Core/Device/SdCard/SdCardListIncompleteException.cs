@@ -9,12 +9,15 @@ namespace Daqifi.Core.Device.SdCard;
 /// </summary>
 /// <remarks>
 /// <para>
-/// An empty directory produces no file lines, so "no listing bytes" is byte-for-byte identical
-/// to a healthy empty card on the wire. Core therefore appends a <c>SYSTem:ERRor?</c> query to
-/// the same text exchange and uses its reply as a terminator: the transport is ordered, so a
-/// terminator reply proves both that the device is answering and that everything it had to say
-/// about the listing arrived first. This exception is raised when that terminator never came
-/// back — which previously surfaced as a healthy-looking "empty SD card" (closes #396).
+/// An empty directory produces no file lines. Firmware before #794 sends nothing else, so on that
+/// firmware a reply that never arrived is byte-for-byte identical to a healthy empty card; current
+/// firmware sends an end-of-listing marker, but a missing marker is also what a lost or truncated
+/// reply looks like, so the marker alone cannot prove the device answered. Core therefore appends a
+/// <c>SYSTem:ERRor?</c> query to the same text exchange and uses its reply as a terminator: the
+/// transport is ordered, so a terminator reply proves both that the device is answering and that
+/// everything it had to say about the listing arrived first. This exception is raised when that
+/// terminator never came back — which previously surfaced as a healthy-looking "empty SD card"
+/// (closes #396).
 /// </para>
 /// <para>
 /// It is also raised when the terminator did come back and the device's own end-of-listing

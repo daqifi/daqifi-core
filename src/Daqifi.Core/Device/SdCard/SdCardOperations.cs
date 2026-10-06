@@ -200,11 +200,13 @@ internal sealed class SdCardOperations
     /// </exception>
     /// <remarks>
     /// <para>
-    /// An empty directory produces no file lines, so a lost or truncated reply is byte-for-byte
-    /// indistinguishable from a healthy empty card. Core closes that gap by appending a
-    /// <c>SYSTem:ERRor?</c> query to the same text exchange: the transport delivers in order and
-    /// the firmware does not process the next command until the listing has been handed to the
-    /// output, so receiving the reply proves both that the device is answering and that the
+    /// An empty directory produces no file lines. Firmware before #794 sends nothing else, so a lost
+    /// or truncated reply is byte-for-byte indistinguishable from a healthy empty card; current
+    /// firmware adds an end-of-listing marker, but a missing marker is also what a truncated reply
+    /// looks like, so the marker alone cannot prove the device answered. Core closes that gap by
+    /// appending a <c>SYSTem:ERRor?</c> query to the same text exchange: the transport delivers in
+    /// order and the firmware does not process the next command until the listing has been handed
+    /// to the output, so receiving the reply proves both that the device is answering and that the
     /// listing ahead of it is complete. Its absence means the response is incomplete, and the
     /// caller gets an exception instead of a plausible-looking empty list.
     /// </para>
