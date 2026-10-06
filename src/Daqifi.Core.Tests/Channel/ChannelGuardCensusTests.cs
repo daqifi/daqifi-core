@@ -15,8 +15,8 @@ namespace Daqifi.Core.Tests.Channel;
 /// Channel is the folder a library user meets first — constructing channels, setting calibration
 /// coefficients and ranges — so it is the next one worth pinning. The three channel constructors
 /// reject a negative channel number with the same sentence, and all three report that number as
-/// <see cref="ArgumentOutOfRangeException.ActualValue"/>. <see cref="GuardsThatOmitActualValue"/>
-/// stays empty so a guard that stops reporting the rejected value fails here.
+/// <see cref="ArgumentOutOfRangeException.ActualValue"/>; every guard here must report the value it
+/// rejected.
 /// </para>
 /// <para>
 /// A guard here is not the same thing as a public entry point. Five of the twelve throw sites live
@@ -48,8 +48,8 @@ public class ChannelGuardCensusTests
     /// </param>
     /// <param name="ParamName">Expected <see cref="ArgumentException.ParamName"/>, exactly.</param>
     /// <param name="ActualValue">
-    /// Expected <see cref="ArgumentOutOfRangeException.ActualValue"/>. Null only for a site still
-    /// listed in <see cref="GuardsThatOmitActualValue"/>.
+    /// Expected <see cref="ArgumentOutOfRangeException.ActualValue"/>. Never null: every guard here
+    /// reports the value it rejected.
     /// </param>
     /// <param name="Message">
     /// The guard's own sentence, exactly, before the framework's decoration. Also serves as the
@@ -66,18 +66,6 @@ public class ChannelGuardCensusTests
         object? ActualValue,
         string Message,
         Action Act);
-
-    /// <summary>
-    /// Sites allowed to throw the two-argument <see cref="ArgumentOutOfRangeException"/> and hand
-    /// the caller a null <c>ActualValue</c>. Empty.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="AnalogChannel"/> and <see cref="DigitalChannel"/> used to omit the channel number
-    /// that <see cref="AnalogOutputChannel"/> reports. They now pass it as <c>actualValue</c>. The
-    /// set stays empty so a new guard that omits <c>ActualValue</c> is not on it and fails, rather
-    /// than quietly starting the list again.
-    /// </remarks>
-    private static readonly HashSet<string> GuardsThatOmitActualValue = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Runs every censused guard and reports the file it is declared in alongside the sentence it
@@ -328,10 +316,9 @@ public class ChannelGuardCensusTests
             Assert.Equal(site.Message.Trim(), site.Message);
 
             // Reporting the rejected value is the whole reason to use the three-argument
-            // constructor. A null ActualValue is tolerated only for a name still on
-            // GuardsThatOmitActualValue. That set is empty, so a new omission fails here.
+            // constructor, so a guard that hands the caller a null ActualValue fails here.
             Assert.True(
-                site.ActualValue is not null || GuardsThatOmitActualValue.Contains(site.Site),
+                site.ActualValue is not null,
                 $"{site.Site}: a range guard must report the rejected value as ActualValue. " +
                 "Use the three-argument ArgumentOutOfRangeException constructor.");
 
