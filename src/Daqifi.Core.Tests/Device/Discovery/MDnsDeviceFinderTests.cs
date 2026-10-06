@@ -301,8 +301,13 @@ public class MDnsDeviceFinderTests
         var completed = false;
         finder.DiscoveryCompleted += (_, _) => completed = true;
 
-        await finder.DiscoverAsync(TimeSpan.FromMilliseconds(500));
+        var timeout = TimeSpan.FromMilliseconds(500);
+        var startedAt = DateTime.UtcNow;
+        var devices = await finder.DiscoverAsync(timeout);
+        var elapsed = DateTime.UtcNow - startedAt;
 
+        Assert.NotNull(devices);
+        Assert.True(elapsed < timeout + TimeSpan.FromSeconds(2), $"took {elapsed}");
         Assert.True(completed);
     }
 
