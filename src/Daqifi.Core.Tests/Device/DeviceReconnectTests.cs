@@ -730,13 +730,10 @@ public class DeviceReconnectTests
         Assert.True(result.WasCanceled);
 
         // The caller's teardown owns the outcome: the loop must not have overwritten it, nor
-        // re-opened the transport behind it.
-        WaitUntil.That(
-            () => device.Status == ConnectionStatus.Disconnected
-                && !transport.IsConnected
-                && !device.IsReconnecting,
-            "the device never settled at Disconnected after the caller tore it down",
-            EventTimeout);
+        // re-opened the transport behind it. Wait only for the loop to exit, then assert: folding
+        // the post-conditions into the wait would turn a wrong final state into a fifteen-second
+        // timeout instead of an assertion that names it.
+        WaitUntil.That(() => !device.IsReconnecting, "the reconnect loop never finished", EventTimeout);
         Assert.Equal(ConnectionStatus.Disconnected, device.Status);
         Assert.False(transport.IsConnected);
         Assert.False(device.IsReconnecting);
