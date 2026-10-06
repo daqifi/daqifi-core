@@ -298,8 +298,8 @@ public class SampleRateCapTests
     [Fact]
     public void EnforceStreamingFrequencyCap_RateAboveTheCap_LowersItAndReportsThePreviousRate()
     {
-        // Held as IStreamingDevice: EnforceStreamingFrequencyCap is what a consumer of the
-        // interface calls, with no downcast to the concrete device.
+        // Held as IStreamingDevice: the cap and its enforcement are what a consumer of the
+        // interface (the MCP server, the desktop app) calls, with no downcast.
         IStreamingDevice device = CreateDevice();
         device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 7746));
         device.StreamingFrequency = 7746;
@@ -307,6 +307,7 @@ public class SampleRateCapTests
         // The channel set grew, so the device's next document read reports a lower cap.
         device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518));
 
+        Assert.Equal(3518, device.MaximumStreamingFrequencyHz);
         Assert.Equal(7746, device.EnforceStreamingFrequencyCap());
         Assert.Equal(3518, device.StreamingFrequency);
     }
