@@ -1129,7 +1129,7 @@ public class ScpiMessageProducer
     public static IOutboundMessage<string> SetLanFirmwareUpdateMode => new ScpiMessage("SYSTem:COMMUnicate:LAN:FWUpdate");
 
     /// <summary>
-    /// Creates a command message to set the USB transparency mode (bypassing the SCPI consle layer).
+    /// Creates a command message to set the USB transparency mode (bypassing the SCPI console layer).
     /// </summary>
     /// <param name="mode">The transparency mode (0 = disabled, 1 = enabled).</param>
     /// <remarks>
