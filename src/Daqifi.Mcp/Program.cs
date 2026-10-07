@@ -11,7 +11,21 @@ if (args.Contains("--help") || args.Contains("-h"))
     return;
 }
 
-var options = ServerOptions.Parse(args);
+ServerOptions options;
+try
+{
+    options = ServerOptions.Parse(args);
+}
+catch (ArgumentException ex)
+{
+    // A bad flag stops the server rather than starting it without a setting the operator asked
+    // for (a mistyped --read-only would otherwise leave writes enabled). Say which flag as a
+    // usage error on stderr; left unhandled it aborts the process with a stack trace.
+    Console.Error.WriteLine($"daqifi-mcp: {ex.Message}");
+    Console.Error.WriteLine("Run 'daqifi-mcp --help' to list the supported options.");
+    Environment.ExitCode = 2;
+    return;
+}
 
 // Do not pass args to the host builder: the command-line config provider would choke on
 // value-less switches like "--read-only". Options are parsed above instead.
