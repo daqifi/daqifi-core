@@ -1,6 +1,6 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Build;
 
@@ -33,20 +33,13 @@ public class CoverageReportingTests
     /// <summary>The collector's friendly name, as VSTest knows it.</summary>
     private const string CollectorName = "XPlat Code Coverage";
 
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(CoverageReportingTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
     private static string TestProjectPath =>
-        Path.Combine(RepositoryRoot, "src", "Daqifi.Core.Tests", "Daqifi.Core.Tests.csproj");
+        Path.Combine(RepositoryRoot.FullPath, "src", "Daqifi.Core.Tests", "Daqifi.Core.Tests.csproj");
 
     private static XDocument TestProject => XDocument.Load(TestProjectPath);
 
     private static string WorkflowText =>
-        File.ReadAllText(Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
+        File.ReadAllText(Path.Combine(RepositoryRoot.FullPath, ".github", "workflows", "ci.yml"));
 
     /// <summary>
     /// The value of an MSBuild property declared in the test project, or <c>null</c>.
@@ -193,7 +186,7 @@ public class CoverageReportingTests
         Assert.NotNull(settingsPath);
 
         var resolved = Path.Combine(
-            RepositoryRoot,
+            RepositoryRoot.FullPath,
             "src",
             "Daqifi.Core.Tests",
             settingsPath!.Replace("$(MSBuildThisFileDirectory)", string.Empty, StringComparison.Ordinal));

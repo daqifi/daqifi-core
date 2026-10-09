@@ -1,6 +1,6 @@
-using System.Reflection;
 using System.Xml.Linq;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Build;
 
@@ -38,21 +38,14 @@ namespace Daqifi.Core.Tests.Build;
 /// </remarks>
 public class PublicApiTrackingTests
 {
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(PublicApiTrackingTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
     private static string CoreProjectPath =>
-        Path.Combine(RepositoryRoot, "src", "Daqifi.Core", "Daqifi.Core.csproj");
+        Path.Combine(RepositoryRoot.FullPath, "src", "Daqifi.Core", "Daqifi.Core.csproj");
 
     private static string ApiFilePath(string fileName) =>
-        Path.Combine(RepositoryRoot, "src", "Daqifi.Core", fileName);
+        Path.Combine(RepositoryRoot.FullPath, "src", "Daqifi.Core", fileName);
 
     private static string CiWorkflowText =>
-        File.ReadAllText(Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
+        File.ReadAllText(Path.Combine(RepositoryRoot.FullPath, ".github", "workflows", "ci.yml"));
 
     private const string ShippedFileName = "PublicAPI.Shipped.txt";
     private const string UnshippedFileName = "PublicAPI.Unshipped.txt";
