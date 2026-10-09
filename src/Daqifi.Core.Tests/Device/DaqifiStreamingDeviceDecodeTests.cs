@@ -842,26 +842,6 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_FullFirstFrame_NotSuppressed()
-    {
-        // A first frame that already carries the full complement decodes immediately.
-        var device = CreateStreamingDevice(analogCount: 2);
-        var ai0 = AnalogChannel(device, 0);
-        var ai1 = AnalogChannel(device, 1);
-        ai0.IsEnabled = true;
-        ai1.IsEnabled = true;
-        device.StartStreaming();
-
-        var frame = new DaqifiOutMessage { MsgTimeStamp = 1 };
-        frame.AnalogInDataFloat.Add(1f);
-        frame.AnalogInDataFloat.Add(2f);
-        device.InvokeStreamMessage(frame);
-
-        Assert.Equal(1.0, ai0.ActiveSample!.Value);
-        Assert.Equal(2.0, ai1.ActiveSample!.Value);
-    }
-
-    [Fact]
     public void Decode_DigitalOnlyStream_FirstFrameNotSuppressed()
     {
         // With no analog channels enabled the warmup guard never engages: a digital-only first

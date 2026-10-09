@@ -16,14 +16,8 @@ public class MDnsMessageTests
 
     #region Service type parsing
 
-    [Fact]
-    public void ParseServiceLabels_AppendsImplicitLocalDomain()
-    {
-        var labels = MDnsMessage.ParseServiceLabels("_daqifi._tcp");
-
-        Assert.Equal(["_daqifi", "_tcp", "local"], labels);
-    }
-
+    // The unqualified row is the implicit-local case: "local" is appended only when the
+    // service type does not already end in it. Surrounding space is trimmed first.
     [Theory]
     [InlineData("_daqifi._tcp.local")]
     [InlineData("_daqifi._tcp.local.")]

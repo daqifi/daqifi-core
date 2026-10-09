@@ -19,6 +19,8 @@ public class CapabilityRateModelTests
 
     [Theory]
     // min(22000, -, 110000/(6+4)) — muxed-only selection, budget term binds.
+    // Do not divide the Type-1 term by a zero simultaneous count: that division is undefined,
+    // and treating the term as zero would cap a muxed-only selection at 0 Hz.
     [InlineData(0, 4, 11000)]
     // min(22000, 55000/1, 110000/(6+1)) — one dedicated channel; budget still binds.
     [InlineData(1, 1, 15714)]
@@ -64,23 +66,6 @@ public class CapabilityRateModelTests
 
         Assert.True(model.TryComputeMaxRateHz(4, 16, out var maxRateHz));
         Assert.Equal(16000, maxRateHz);
-    }
-
-    [Fact]
-    public void TryComputeMaxRateHz_MuxedOnlySelection_IsNotCappedByTheType1Term()
-    {
-        // Dividing the Type-1 aggregate by a zero simultaneous count is undefined; treating the
-        // term as zero would cap a muxed-only selection at 0 Hz. It must simply not apply.
-        var model = new CapabilityRateModel
-        {
-            AbsoluteMaximumHz = 22000,
-            Type1AggregateMaximumHz = 55000,
-            PerTickBudgetHz = 110000,
-            PerTickOverhead = 6
-        };
-
-        Assert.True(model.TryComputeMaxRateHz(0, 4, out var maxRateHz));
-        Assert.Equal(11000, maxRateHz);
     }
 
     [Theory]
