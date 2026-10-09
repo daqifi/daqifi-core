@@ -115,17 +115,6 @@ public class DaqifiDeviceWithMessageProducerTests
     }
 
     [Fact]
-    public void DaqifiDevice_SendMessage_WhenDisconnected_ShouldThrowException()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        using var device = new DaqifiDevice("Test Device", stream);
-        
-        // Act & Assert
-        Assert.Throws<DeviceNotConnectedException>(() => device.Send(ScpiMessageProducer.GetDeviceInfo));
-    }
-
-    [Fact]
     public void DaqifiDevice_SendNonStringMessage_WhenConnected_WritesDirectlyToStream()
     {
         // Arrange

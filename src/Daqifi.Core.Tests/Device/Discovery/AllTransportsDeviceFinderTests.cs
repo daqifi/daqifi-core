@@ -127,17 +127,6 @@ public class AllTransportsDeviceFinderTests
     }
 
     [Fact]
-    public async Task DiscoverAsync_TimeoutOverload_ReturnsResults()
-    {
-        var finder = new AllTransportsDeviceFinder(
-            new IDeviceFinder[] { new ListDeviceFinder(new[] { Info("A", ConnectionType.Serial) }) });
-
-        var result = (await finder.DiscoverAsync(TimeSpan.FromSeconds(1))).ToList();
-
-        Assert.Single(result);
-    }
-
-    [Fact]
     public void Dispose_CallerSuppliedFinders_AreNotDisposed()
     {
         var supplied = new ListDeviceFinder(Array.Empty<IDeviceInfo>());

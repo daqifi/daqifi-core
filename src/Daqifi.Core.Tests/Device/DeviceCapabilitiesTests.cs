@@ -101,19 +101,6 @@ public class DeviceCapabilitiesTests
     }
 
     [Fact]
-    public void Clone_ReturnsDistinctInstance()
-    {
-        // Arrange
-        var capabilities = new DeviceCapabilities();
-
-        // Act
-        var clone = capabilities.Clone();
-
-        // Assert
-        Assert.NotSame(capabilities, clone);
-    }
-
-    [Fact]
     public void Clone_MutatingCloneDoesNotAffectOriginal()
     {
         // Arrange

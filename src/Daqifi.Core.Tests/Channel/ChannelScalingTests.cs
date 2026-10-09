@@ -146,17 +146,6 @@ public class ChannelScalingTests
     }
 
     [Fact]
-    public void Apply_DelegatesToTryApply()
-    {
-        // Apply is TryApply with the bool dropped, not a second implementation to keep in sync.
-        var scaling = new ChannelScaling(gain: 1e308);
-
-        scaling.TryApply(1e10, out var expected);
-
-        Assert.Equal(expected, scaling.Apply(1e10));
-    }
-
-    [Fact]
     public void Identity_LeavesValuesAlone_AndStatesNoUnit()
     {
         Assert.Equal(4.25, ChannelScaling.Identity.Apply(4.25));

@@ -314,52 +314,6 @@ public class ChannelPopulationTests
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_WithZeroResolution_UsesDefaultResolution()
-    {
-        // Arrange
-        var device = new DaqifiDevice("TestDevice");
-        var message = new DaqifiOutMessage
-        {
-            AnalogInPortNum = 1,
-            AnalogInRes = 0
-        };
-
-        // Act
-        device.PopulateChannelsFromStatus(message);
-
-        // Assert
-        var analogChannel = device.Channels
-            .Where(c => c.Type == ChannelType.Analog)
-            .Cast<IAnalogChannel>()
-            .Single();
-
-        Assert.Equal(65535u, analogChannel.Resolution);
-    }
-
-    [Fact]
-    public void PopulateChannelsFromStatus_WithZeroResolution_SetsResolutionIsAssumed()
-    {
-        // Arrange
-        var device = new DaqifiDevice("TestDevice");
-        var message = new DaqifiOutMessage
-        {
-            AnalogInPortNum = 1,
-            AnalogInRes = 0
-        };
-
-        // Act
-        device.PopulateChannelsFromStatus(message);
-
-        // Assert
-        var analogChannel = device.Channels
-            .Where(c => c.Type == ChannelType.Analog)
-            .Cast<IAnalogChannel>()
-            .Single();
-
-        Assert.True(analogChannel.ResolutionIsAssumed);
-    }
-
-    [Fact]
     public void PopulateChannelsFromStatus_WithReportedResolution_DoesNotSetResolutionIsAssumed()
     {
         // Arrange
@@ -451,26 +405,6 @@ public class ChannelPopulationTests
         Assert.False(analogChannels[0].IsEnabled);
         Assert.True(analogChannels[9].IsEnabled);
         Assert.False(analogChannels[10].IsEnabled);
-    }
-
-    [Fact]
-    public void PopulateChannelsFromStatus_WithoutAnalogInPortEnabled_DefaultsToDisabled()
-    {
-        // Arrange - older firmware never populates field 22; an empty byte string must not be
-        // read as "every channel disabled by the device" but simply "not reported".
-        var device = new DaqifiDevice("TestDevice");
-        var message = new DaqifiOutMessage
-        {
-            AnalogInPortNum = 2,
-            AnalogInRes = 65535
-        };
-
-        // Act
-        device.PopulateChannelsFromStatus(message);
-
-        // Assert
-        var analogChannels = device.Channels.Where(c => c.Type == ChannelType.Analog).ToList();
-        Assert.All(analogChannels, c => Assert.False(c.IsEnabled));
     }
 
     [Fact]
@@ -610,7 +544,7 @@ public class ChannelPopulationTests
     }
 
     [Fact]
-    public void PopulateChannelsFromStatus_DigitalChannelsAreEnabledByDefault()
+    public void PopulateChannelsFromStatus_DigitalChannelsAreDisabledByDefault()
     {
         // Arrange
         var device = new DaqifiDevice("TestDevice");

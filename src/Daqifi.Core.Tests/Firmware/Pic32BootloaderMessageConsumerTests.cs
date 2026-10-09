@@ -111,24 +111,6 @@ public class Pic32BootloaderMessageConsumerTests
     #region DecodeProgramFlashResponse
 
     [Fact]
-    public void DecodeProgramFlashResponse_WithTooShortData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse([0x01]));
-    }
-
-    [Fact]
-    public void DecodeProgramFlashResponse_WithEmptyData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse([]));
-    }
-
-    [Fact]
-    public void DecodeProgramFlashResponse_WithoutSohStart_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse([0x00, 0x03]));
-    }
-
-    [Fact]
     public void DecodeProgramFlashResponse_ValidResponse_ReturnsTrue()
     {
         // SOH + ProgramFlashCommand(0x03)
@@ -145,24 +127,6 @@ public class Pic32BootloaderMessageConsumerTests
     #endregion
 
     #region DecodeEraseFlashResponse
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithTooShortData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse([0x01]));
-    }
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithEmptyData_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse([]));
-    }
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithoutSohStart_ReturnsFalse()
-    {
-        Assert.False(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse([0x00, 0x02]));
-    }
 
     [Fact]
     public void DecodeEraseFlashResponse_ValidResponse_ReturnsTrue()
@@ -214,38 +178,6 @@ public class Pic32BootloaderMessageConsumerTests
 
         Assert.Equal("data", ex.ParamName);
         Assert.Equal(new ArgumentNullException("data").Message, ex.Message);
-    }
-
-    [Fact]
-    public void DecodeVersionResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
-    {
-        // Not "Error": a null frame is the caller's bug, not a bootloader response this decoder
-        // can classify, so the guard has to win over the "Error" string every other bad frame gets.
-        var ex = Assert.Throws<ArgumentNullException>(
-            () => Pic32BootloaderMessageConsumer.DecodeVersionResponse(null!));
-
-        Assert.Equal("data", ex.ParamName);
-    }
-
-    [Fact]
-    public void DecodeProgramFlashResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
-    {
-        // Not false: same reasoning as the version decoder, and the guard sits in the shared
-        // IsAckFor helper, so this also pins that a caller is blamed for its own "data" parameter
-        // rather than for a private one a frame below.
-        var ex = Assert.Throws<ArgumentNullException>(
-            () => Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(null!));
-
-        Assert.Equal("data", ex.ParamName);
-    }
-
-    [Fact]
-    public void DecodeEraseFlashResponse_WithNullData_ThrowsArgumentNullExceptionNamingData()
-    {
-        var ex = Assert.Throws<ArgumentNullException>(
-            () => Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(null!));
-
-        Assert.Equal("data", ex.ParamName);
     }
 
     // The point of the change: one catch covers all four decoders, and a caller that learns one

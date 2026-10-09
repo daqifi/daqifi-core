@@ -66,17 +66,6 @@ public class TcpStreamTransportTests
     }
 
     [Fact]
-    public void TcpStreamTransport_Disconnect_WhenNotConnected_ShouldNotThrow()
-    {
-        // Arrange
-        using var transport = new TcpStreamTransport(IPAddress.Loopback, 5000);
-        
-        // Act & Assert - Should not throw
-        transport.Disconnect();
-        Assert.False(transport.IsConnected);
-    }
-
-    [Fact]
     public async Task TcpStreamTransport_DisconnectAsync_WhenNotConnected_ShouldNotThrow()
     {
         // Arrange

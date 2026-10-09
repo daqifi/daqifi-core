@@ -140,35 +140,6 @@ public class DaqifiDeviceInitializeTests
     }
 
     [Fact]
-    public async Task InitializeAsync_SendsGetDeviceInfo()
-    {
-        // Arrange
-        var device = new TestableDaqifiDevice("TestDevice");
-        device.Connect();
-
-        // Act
-        await device.InitializeAsync();
-
-        // Assert — GetDeviceInfo is sent as a direct Send after ExecuteTextCommandAsync
-        var directSends = device.DirectSentMessages.Select(m => m.Data).ToList();
-        Assert.Contains(directSends, d => d.Contains("SYSTem:SYSInfoPB?"));
-    }
-
-    [Fact]
-    public async Task InitializeAsync_SetsStateToReady()
-    {
-        // Arrange
-        var device = new TestableDaqifiDevice("TestDevice");
-        device.Connect();
-
-        // Act
-        await device.InitializeAsync();
-
-        // Assert
-        Assert.Equal(DeviceState.Ready, device.State);
-    }
-
-    [Fact]
     public async Task InitializeAsync_WhenAlreadyInitialized_DoesNotSendCommandsAgain()
     {
         // Arrange

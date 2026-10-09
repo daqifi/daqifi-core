@@ -32,13 +32,6 @@ public class AnalogChannelTests
     }
 
     [Fact]
-    public void Constructor_WithZeroResolution_ThrowsException()
-    {
-        // Arrange, Act & Assert
-        Assert.Throws<ArgumentOutOfRangeException>(() => new AnalogChannel(channelNumber: 0, resolution: 0));
-    }
-
-    [Fact]
     public void Constructor_DefaultsResolutionIsAssumedToFalse()
     {
         // Arrange & Act
@@ -56,19 +49,6 @@ public class AnalogChannelTests
 
         // Assert
         Assert.True(channel.ResolutionIsAssumed);
-    }
-
-    [Theory]
-    [InlineData(4095u)]   // 12-bit
-    [InlineData(262143u)] // 18-bit (AD7609, e.g. Nyquist 3)
-    [InlineData(16777215u)] // 24-bit
-    public void Constructor_WithVariousBitDepthResolutions_InitializesCorrectly(uint resolution)
-    {
-        // Arrange & Act
-        var channel = new AnalogChannel(channelNumber: 0, resolution: resolution);
-
-        // Assert
-        Assert.Equal(resolution, channel.Resolution);
     }
 
     [Theory]

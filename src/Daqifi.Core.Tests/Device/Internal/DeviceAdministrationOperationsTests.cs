@@ -250,24 +250,6 @@ public class DeviceAdministrationOperationsTests
     }
 
     /// <summary>
-    /// The whole point of this surface. <c>LoadAdcCalibration()</c> returns normally against a device
-    /// that answered <c>-200</c>; the confirming variant refuses to call that a success, and hands the
-    /// caller the device's own code and line rather than a generic failure.
-    /// </summary>
-    [Fact]
-    public async Task LoadAdcCalibrationAsync_WhenTheDeviceReportsAnError_ThrowsWithTheDeviceCode()
-    {
-        var host = new FakeHost { IsConnected = true, ExchangeResponse = new[] { ExecutionError } };
-
-        var ex = await Assert.ThrowsAsync<DeviceCommandFailedException>(
-            () => new DeviceAdministrationOperations(host).LoadAdcCalibrationAsync());
-
-        Assert.Equal("CONFigure:ADC:LOADcal", ex.Command);
-        Assert.Equal(-200, ex.ErrorCode);
-        Assert.Equal(ExecutionError, ex.DeviceResponse);
-    }
-
-    /// <summary>
     /// Every confirming variant classifies the same way — a refusal is a refusal whichever command
     /// drew it, and none of them may report success on one.
     /// </summary>

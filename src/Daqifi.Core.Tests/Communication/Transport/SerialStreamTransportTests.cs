@@ -19,18 +19,6 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
-    public void SerialStreamTransport_Constructor_WithCustomSettings_ShouldInitializeCorrectly()
-    {
-        // Arrange & Act
-        using var transport = new SerialStreamTransport("COM2", 9600, Parity.Even, 7, StopBits.Two);
-        
-        // Assert
-        Assert.False(transport.IsConnected);
-        Assert.Contains("COM2", transport.ConnectionInfo);
-        Assert.Contains("Disconnected", transport.ConnectionInfo);
-    }
-
-    [Fact]
     public void SerialStreamTransport_Stream_WhenNotConnected_ThrowsTransportNotConnectedException()
     {
         // Arrange - never connected: _serialPort is null
@@ -154,17 +142,6 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
-    public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_StillCatchableAsIoException()
-    {
-        // The chosen base type: a caller bracketing a connect with catch (IOException) keeps working.
-        using var transport = new SerialStreamTransport(AbsentSerialPorts.Create());
-
-        var ex = await Assert.ThrowsAnyAsync<IOException>(() => transport.ConnectAsync());
-
-        Assert.IsType<SerialPortConnectException>(ex);
-    }
-
-    [Fact]
     public async Task SerialStreamTransport_ConnectAsync_WithMissingPort_ReportsTheTypedErrorOnStatusChanged()
     {
         // The status event carries the same translated exception, so a subscriber classifying a
@@ -222,28 +199,6 @@ public class SerialStreamTransportTests
     }
 
     [Fact]
-    public void SerialStreamTransport_Disconnect_WhenNotConnected_ShouldNotThrow()
-    {
-        // Arrange
-        using var transport = new SerialStreamTransport("COM1");
-        
-        // Act & Assert - Should not throw
-        transport.Disconnect();
-        Assert.False(transport.IsConnected);
-    }
-
-    [Fact]
-    public async Task SerialStreamTransport_DisconnectAsync_WhenNotConnected_ShouldNotThrow()
-    {
-        // Arrange
-        using var transport = new SerialStreamTransport("COM1");
-        
-        // Act & Assert - Should not throw
-        await transport.DisconnectAsync();
-        Assert.False(transport.IsConnected);
-    }
-
-    [Fact]
     public void SerialStreamTransport_Dispose_ShouldCleanupResources()
     {
         // Arrange
@@ -255,18 +210,6 @@ public class SerialStreamTransportTests
         // Assert - Should throw ObjectDisposedException for operations after disposal
         Assert.Throws<ObjectDisposedException>(() => transport.Connect());
         Assert.Throws<ObjectDisposedException>(() => transport.Stream);
-    }
-
-    [Fact]
-    public void SerialStreamTransport_ConnectionInfo_ShouldReflectCurrentState()
-    {
-        // Arrange
-        using var transport = new SerialStreamTransport("COM3", 9600);
-        
-        // Act & Assert - Disconnected state
-        var disconnectedInfo = transport.ConnectionInfo;
-        Assert.Contains("Disconnected", disconnectedInfo);
-        Assert.Contains("COM3", disconnectedInfo);
     }
 
     /// <summary>

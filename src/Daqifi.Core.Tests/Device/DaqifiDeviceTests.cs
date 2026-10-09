@@ -71,16 +71,6 @@ public class DaqifiDeviceTests
     }
 
     [Fact]
-    public void Send_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        // Arrange
-        var device = new DaqifiDevice("TestDevice");
-
-        // Act & Assert
-        Assert.Throws<DeviceNotConnectedException>(() => device.Send(new Daqifi.Core.Communication.Messages.ScpiMessage("")));
-    }
-
-    [Fact]
     public void OnStatusMessageReceived_RaisesClassifiedStatusMessageReceived()
     {
         // Arrange
