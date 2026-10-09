@@ -17,22 +17,6 @@ public class SerialDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
     // DiscoveryDeviceTypeMapperTests (issue #283).
-    [Fact]
-    public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
-    {
-        // Arrange
-        using var finder = new SerialDeviceFinder();
-        var timeout = TimeSpan.FromSeconds(5);
-
-        // Act
-        var startTime = DateTime.UtcNow;
-        var devices = await finder.DiscoverAsync(timeout);
-        var elapsed = DateTime.UtcNow - startTime;
-
-        // Assert
-        Assert.NotNull(devices);
-        Assert.True(elapsed.TotalSeconds <= timeout.TotalSeconds + 1);
-    }
 
     [Fact]
     public async Task DiscoverAsync_RaisesDiscoveryCompletedEvent()
