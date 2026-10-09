@@ -14,112 +14,91 @@ public class NetworkAddressHelperTests
     [Fact]
     public void GetIpAddressString_ValidBytes_ReturnsDottedDecimal()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             IpAddr = ByteString.CopyFrom(new byte[] { 192, 168, 1, 100 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetIpAddressString(message);
 
-        // Assert
         Assert.Equal("192.168.1.100", result);
     }
 
     [Fact]
     public void GetMacAddressString_ValidBytes_ReturnsHyphenSeparatedHex()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             MacAddr = ByteString.CopyFrom(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetMacAddressString(message);
 
-        // Assert
         Assert.Equal("AA-BB-CC-DD-EE-FF", result);
     }
 
     [Fact]
     public void GetSubnetMaskString_ValidBytes_ReturnsDottedDecimal()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             NetMask = ByteString.CopyFrom(new byte[] { 255, 255, 255, 0 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetSubnetMaskString(message);
 
-        // Assert
         Assert.Equal("255.255.255.0", result);
     }
 
     [Fact]
     public void GetGatewayString_ValidBytes_ReturnsDottedDecimal()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             Gateway = ByteString.CopyFrom(new byte[] { 192, 168, 1, 1 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetGatewayString(message);
 
-        // Assert
         Assert.Equal("192.168.1.1", result);
     }
 
     [Fact]
     public void GetPrimaryDnsString_ValidBytes_ReturnsDottedDecimal()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             PrimaryDns = ByteString.CopyFrom(new byte[] { 8, 8, 8, 8 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetPrimaryDnsString(message);
 
-        // Assert
         Assert.Equal("8.8.8.8", result);
     }
 
     [Fact]
     public void GetSecondaryDnsString_ValidBytes_ReturnsDottedDecimal()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             SecondaryDns = ByteString.CopyFrom(new byte[] { 1, 1, 1, 1 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetSecondaryDnsString(message);
 
-        // Assert
         Assert.Equal("1.1.1.1", result);
     }
 
     [Fact]
     public void GetIpAddressString_AllZeroBytes_ReturnsDottedZeros()
     {
-        // Arrange
         var message = new DaqifiOutMessage
         {
             IpAddr = ByteString.CopyFrom(new byte[] { 0, 0, 0, 0 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetIpAddressString(message);
 
-        // Assert
         Assert.Equal("0.0.0.0", result);
     }
 
@@ -127,46 +106,23 @@ public class NetworkAddressHelperTests
 
     #region Empty / Default Data
 
-    [Fact]
-    public void GetIpAddressString_EmptyByteString_ReturnsEmpty()
+    // Name is the failing-row label. Read is the getter that row calls. A default message leaves
+    // every address field an empty ByteString.
+    public static TheoryData<AddressGetter> AddressGetters() => new()
     {
-        var message = new DaqifiOutMessage();
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetIpAddressString(message));
-    }
+        new(nameof(NetworkAddressHelper.GetIpAddressString), NetworkAddressHelper.GetIpAddressString),
+        new(nameof(NetworkAddressHelper.GetMacAddressString), NetworkAddressHelper.GetMacAddressString),
+        new(nameof(NetworkAddressHelper.GetSubnetMaskString), NetworkAddressHelper.GetSubnetMaskString),
+        new(nameof(NetworkAddressHelper.GetGatewayString), NetworkAddressHelper.GetGatewayString),
+        new(nameof(NetworkAddressHelper.GetPrimaryDnsString), NetworkAddressHelper.GetPrimaryDnsString),
+        new(nameof(NetworkAddressHelper.GetSecondaryDnsString), NetworkAddressHelper.GetSecondaryDnsString),
+    };
 
-    [Fact]
-    public void GetMacAddressString_EmptyByteString_ReturnsEmpty()
+    [Theory]
+    [MemberData(nameof(AddressGetters))]
+    public void GetAddress_EmptyByteString_ReturnsEmpty(AddressGetter getter)
     {
-        var message = new DaqifiOutMessage();
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetMacAddressString(message));
-    }
-
-    [Fact]
-    public void GetSubnetMaskString_EmptyByteString_ReturnsEmpty()
-    {
-        var message = new DaqifiOutMessage();
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetSubnetMaskString(message));
-    }
-
-    [Fact]
-    public void GetGatewayString_EmptyByteString_ReturnsEmpty()
-    {
-        var message = new DaqifiOutMessage();
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetGatewayString(message));
-    }
-
-    [Fact]
-    public void GetPrimaryDnsString_EmptyByteString_ReturnsEmpty()
-    {
-        var message = new DaqifiOutMessage();
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetPrimaryDnsString(message));
-    }
-
-    [Fact]
-    public void GetSecondaryDnsString_EmptyByteString_ReturnsEmpty()
-    {
-        var message = new DaqifiOutMessage();
-        Assert.Equal(string.Empty, NetworkAddressHelper.GetSecondaryDnsString(message));
+        Assert.Equal(string.Empty, getter.Read(new DaqifiOutMessage()));
     }
 
     #endregion
@@ -182,10 +138,8 @@ public class NetworkAddressHelperTests
             IpAddr = ByteString.CopyFrom(new byte[] { 192, 168, 1 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetIpAddressString(message);
 
-        // Assert
         Assert.Equal(string.Empty, result);
     }
 
@@ -198,10 +152,8 @@ public class NetworkAddressHelperTests
             IpAddr = ByteString.CopyFrom(new byte[] { 192, 168, 1, 100, 5 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetIpAddressString(message);
 
-        // Assert
         Assert.Equal(string.Empty, result);
     }
 
@@ -214,10 +166,8 @@ public class NetworkAddressHelperTests
             MacAddr = ByteString.CopyFrom(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetMacAddressString(message);
 
-        // Assert
         Assert.Equal(string.Empty, result);
     }
 
@@ -230,10 +180,8 @@ public class NetworkAddressHelperTests
             MacAddr = ByteString.CopyFrom(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11 })
         };
 
-        // Act
         var result = NetworkAddressHelper.GetMacAddressString(message);
 
-        // Assert
         Assert.Equal(string.Empty, result);
     }
 
@@ -285,41 +233,20 @@ public class NetworkAddressHelperTests
 
     #region Null Message
 
-    [Fact]
-    public void GetIpAddressString_NullMessage_ThrowsArgumentNullException()
+    [Theory]
+    [MemberData(nameof(AddressGetters))]
+    public void GetAddress_NullMessage_ThrowsArgumentNullException(AddressGetter getter)
     {
-        Assert.Throws<ArgumentNullException>(() => NetworkAddressHelper.GetIpAddressString(null!));
-    }
-
-    [Fact]
-    public void GetMacAddressString_NullMessage_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => NetworkAddressHelper.GetMacAddressString(null!));
-    }
-
-    [Fact]
-    public void GetSubnetMaskString_NullMessage_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => NetworkAddressHelper.GetSubnetMaskString(null!));
-    }
-
-    [Fact]
-    public void GetGatewayString_NullMessage_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => NetworkAddressHelper.GetGatewayString(null!));
-    }
-
-    [Fact]
-    public void GetPrimaryDnsString_NullMessage_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => NetworkAddressHelper.GetPrimaryDnsString(null!));
-    }
-
-    [Fact]
-    public void GetSecondaryDnsString_NullMessage_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => NetworkAddressHelper.GetSecondaryDnsString(null!));
+        Assert.Throws<ArgumentNullException>(() => getter.Read(null!));
     }
 
     #endregion
+
+    /// <summary>
+    /// One <see cref="NetworkAddressHelper"/> getter. <see cref="ToString"/> is the row name.
+    /// </summary>
+    public sealed record AddressGetter(string Name, Func<DaqifiOutMessage, string> Read)
+    {
+        public override string ToString() => Name;
+    }
 }
