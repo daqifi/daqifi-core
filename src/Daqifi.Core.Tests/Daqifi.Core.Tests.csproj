@@ -26,7 +26,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="10.0.1" />
+    <PackageReference Include="coverlet.collector" Version="10.1.0" />
     <!-- FakeTimeProvider, for the deadlines the production code now reads through
          TimeProvider (issue #637): it makes a multi-second timeout a stepped clock rather than a
          slept-through one. Test-only; Daqifi.Core itself takes no new dependency, since
