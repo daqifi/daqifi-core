@@ -630,14 +630,21 @@ public class DeviceReconnectTests
         Assert.Equal("Gone Device", reconnectFailure.DeviceName);
         Assert.NotNull(reconnectFailure.InnerException);
 
-        // It really did stop: no further attempts after the report.
+        // It really did stop: no further attempts after the report. The loop's running flag
+        // clears right after ReconnectFailed, and the supervisor's post-loop retrigger runs
+        // after that, so waiting for the flag alone can't see a loop restarted from Failed.
+        // Watch over the window this test has always used.
         var connectsAtGiveUp = transport.ConnectCount;
         WaitUntil.That(
             () => !device.IsReconnecting,
             "the reconnect loop never stopped after giving up",
             EventTimeout);
-        Assert.Equal(connectsAtGiveUp, transport.ConnectCount);
-        Assert.False(device.IsReconnecting);
+        WaitUntil.HoldsFor(
+            () => device.Status == ConnectionStatus.Failed
+                && !device.IsReconnecting
+                && transport.ConnectCount == connectsAtGiveUp,
+            "a reconnect started again after the device gave up",
+            TimeSpan.FromMilliseconds(300));
     }
 
     [Fact]
