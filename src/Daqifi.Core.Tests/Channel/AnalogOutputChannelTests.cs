@@ -30,9 +30,10 @@ public class AnalogOutputChannelTests
         Assert.Null(channel.ActiveSample);
     }
 
-    // 0 and negatives share the census row for `< MinResolutionBits`. 33 is the
-    // `> MaxResolutionBits` arm, which that row does not pass.
+    // The census row covers 0. -4 pins negatives to the same `< MinResolutionBits` arm, and
+    // 33 is the `> MaxResolutionBits` arm, which the census row does not pass.
     [Theory]
+    [InlineData(-4)]
     [InlineData(33)]
     public void Constructor_ImplausibleResolution_Throws(int resolutionBits)
     {
