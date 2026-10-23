@@ -313,6 +313,19 @@ public class SampleRateCapTests
     }
 
     [Fact]
+    public void StreamingFrequency_AboveAnAlreadyReportedCap_IsKeptUntilEnforced()
+    {
+        // The setter checks only the board ceiling, so "set the rate, then enable the
+        // channels" keeps working; lowering to the cap is EnforceStreamingFrequencyCap's job.
+        var device = CreateDevice();
+        device.Metadata.ApplyCapabilityDocument(BenchDocument(currentMaximumRateHz: 3518));
+
+        device.StreamingFrequency = 7746;
+
+        Assert.Equal(7746, device.StreamingFrequency);
+    }
+
+    [Fact]
     public void EnforceStreamingFrequencyCap_RateUnderTheCap_ChangesNothing()
     {
         var device = CreateDevice();
