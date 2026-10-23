@@ -14,6 +14,20 @@ namespace Daqifi.Core.Tests.Firmware;
 public class FirmwareUpdateServiceTests
 {
     [Fact]
+    public void Constructor_WithoutLogger_UsesNullLogger_DoesNotThrow()
+    {
+        // #340: the service is usable without wiring a logger (falls back to NullLogger).
+        // The only construction in the suite that omits the logger, so it is what keeps the
+        // parameter optional.
+        var ex = Record.Exception(() => new FirmwareUpdateService(
+            new FakeHidTransport(),
+            new FakeFirmwareDownloadService(),
+            new FakeExternalProcessRunner()));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
     public async Task UpdateFirmwareAsync_HappyPath_TransitionsThroughExpectedStatesAndReportsProgress()
     {
         var device = new FakeStreamingDevice("COM3");
