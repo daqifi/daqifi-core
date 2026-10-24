@@ -7,10 +7,8 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void Constructor_ShouldSetDefaultValues()
     {
-        // Act
         var options = new ConnectionRetryOptions();
 
-        // Assert
         Assert.Equal(3, options.MaxAttempts);
         Assert.Equal(TimeSpan.FromSeconds(1), options.InitialDelay);
         Assert.Equal(TimeSpan.FromSeconds(30), options.MaxDelay);
@@ -22,10 +20,8 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void NoRetry_ShouldCreateDisabledOptions()
     {
-        // Act
         var options = ConnectionRetryOptions.NoRetry;
 
-        // Assert
         Assert.False(options.Enabled);
         Assert.Equal(1, options.MaxAttempts);
     }
@@ -33,10 +29,8 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void Fast_ShouldCreateFastReconnectOptions()
     {
-        // Act
         var options = ConnectionRetryOptions.Fast;
 
-        // Assert
         Assert.Equal(3, options.MaxAttempts);
         Assert.Equal(TimeSpan.FromMilliseconds(500), options.InitialDelay);
         Assert.Equal(TimeSpan.FromSeconds(5), options.MaxDelay);
@@ -47,10 +41,8 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void Resilient_ShouldCreateResilientOptions()
     {
-        // Act
         var options = ConnectionRetryOptions.Resilient;
 
-        // Assert
         Assert.Equal(5, options.MaxAttempts);
         Assert.Equal(TimeSpan.FromSeconds(2), options.InitialDelay);
         Assert.Equal(TimeSpan.FromSeconds(60), options.MaxDelay);
@@ -61,37 +53,21 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void CalculateDelay_FirstAttempt_ShouldReturnZero()
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
-        // Act
         var delay = options.CalculateDelay(1);
 
-        // Assert
         Assert.Equal(TimeSpan.Zero, delay);
     }
 
-    [Fact]
-    public void CalculateDelay_SecondAttempt_ShouldReturnInitialDelay()
+    // delay = InitialDelay * BackoffMultiplier^(attempt-2). MaxDelay is 60s, above every row
+    // (1s, 2s, 4s), so these pin the backoff. The cap is CalculateDelay_ShouldRespectMaxDelay.
+    [Theory]
+    [InlineData(2, 1)] // 1 * 2^0
+    [InlineData(3, 2)] // 1 * 2^1
+    [InlineData(4, 4)] // 1 * 2^2
+    public void CalculateDelay_LaterAttempts_ShouldApplyExponentialBackoff(int attempt, int expectedSeconds)
     {
-        // Arrange
-        var options = new ConnectionRetryOptions
-        {
-            InitialDelay = TimeSpan.FromSeconds(1),
-            BackoffMultiplier = 2.0
-        };
-
-        // Act
-        var delay = options.CalculateDelay(2);
-
-        // Assert
-        Assert.Equal(TimeSpan.FromSeconds(1), delay);
-    }
-
-    [Fact]
-    public void CalculateDelay_ThirdAttempt_ShouldApplyExponentialBackoff()
-    {
-        // Arrange
         var options = new ConnectionRetryOptions
         {
             InitialDelay = TimeSpan.FromSeconds(1),
@@ -99,35 +75,12 @@ public class ConnectionRetryOptionsTests
             MaxDelay = TimeSpan.FromSeconds(60)
         };
 
-        // Act
-        var delay = options.CalculateDelay(3);
-
-        // Assert
-        Assert.Equal(TimeSpan.FromSeconds(2), delay); // 1 * 2^1 = 2
-    }
-
-    [Fact]
-    public void CalculateDelay_FourthAttempt_ShouldApplyExponentialBackoff()
-    {
-        // Arrange
-        var options = new ConnectionRetryOptions
-        {
-            InitialDelay = TimeSpan.FromSeconds(1),
-            BackoffMultiplier = 2.0,
-            MaxDelay = TimeSpan.FromSeconds(60)
-        };
-
-        // Act
-        var delay = options.CalculateDelay(4);
-
-        // Assert
-        Assert.Equal(TimeSpan.FromSeconds(4), delay); // 1 * 2^2 = 4
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), options.CalculateDelay(attempt));
     }
 
     [Fact]
     public void CalculateDelay_ShouldRespectMaxDelay()
     {
-        // Arrange
         var options = new ConnectionRetryOptions
         {
             InitialDelay = TimeSpan.FromSeconds(10),
@@ -135,17 +88,14 @@ public class ConnectionRetryOptionsTests
             MaxDelay = TimeSpan.FromSeconds(15)
         };
 
-        // Act
         var delay = options.CalculateDelay(5); // Would be 10 * 2^3 = 80 seconds
 
-        // Assert
         Assert.Equal(TimeSpan.FromSeconds(15), delay); // Capped at MaxDelay
     }
 
     [Fact]
     public void CalculateDelay_WithCustomMultiplier_ShouldWork()
     {
-        // Arrange
         var options = new ConnectionRetryOptions
         {
             InitialDelay = TimeSpan.FromSeconds(1),
@@ -153,11 +103,9 @@ public class ConnectionRetryOptionsTests
             MaxDelay = TimeSpan.FromSeconds(60)
         };
 
-        // Act
         var delay2 = options.CalculateDelay(2);
         var delay3 = options.CalculateDelay(3);
 
-        // Assert
         Assert.Equal(TimeSpan.FromSeconds(1), delay2); // 1 * 1.5^0 = 1
         Assert.Equal(TimeSpan.FromMilliseconds(1500), delay3); // 1 * 1.5^1 = 1.5
     }
@@ -168,13 +116,10 @@ public class ConnectionRetryOptionsTests
     [InlineData(int.MinValue)]
     public void MaxAttempts_BelowOne_ShouldThrowNamingTheProperty(int value)
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
-        // Act
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxAttempts = value);
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.MaxAttempts), ex.ParamName);
         Assert.Equal(3, options.MaxAttempts); // unchanged
     }
@@ -182,14 +127,11 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void InitialDelay_Negative_ShouldThrowNamingTheProperty()
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
-        // Act
         var ex = Assert.Throws<ArgumentOutOfRangeException>(
             () => options.InitialDelay = TimeSpan.FromMilliseconds(-1));
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.InitialDelay), ex.ParamName);
     }
 
@@ -199,7 +141,6 @@ public class ConnectionRetryOptionsTests
         // Arrange & Act — zero means "retry immediately", which the executor supports.
         var options = new ConnectionRetryOptions { InitialDelay = TimeSpan.Zero };
 
-        // Assert
         Assert.Equal(TimeSpan.Zero, options.InitialDelay);
         Assert.Equal(TimeSpan.Zero, options.CalculateDelay(2));
     }
@@ -207,14 +148,11 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void MaxDelay_Negative_ShouldThrowNamingTheProperty()
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
-        // Act
         var ex = Assert.Throws<ArgumentOutOfRangeException>(
             () => options.MaxDelay = TimeSpan.FromSeconds(-1));
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.MaxDelay), ex.ParamName);
     }
 
@@ -225,20 +163,16 @@ public class ConnectionRetryOptionsTests
     [InlineData(double.NaN)]
     public void BackoffMultiplier_BelowOne_ShouldThrowNamingTheProperty(double value)
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
-        // Act
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => options.BackoffMultiplier = value);
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.BackoffMultiplier), ex.ParamName);
     }
 
     [Fact]
     public void ConnectionTimeout_Zero_ShouldThrowNamingTheProperty()
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
         // Act — the bench repro: the platform used to answer this with an
@@ -246,7 +180,6 @@ public class ConnectionRetryOptionsTests
         var ex = Assert.Throws<ArgumentOutOfRangeException>(
             () => options.ConnectionTimeout = TimeSpan.Zero);
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
         Assert.Contains("at least 1 millisecond", ex.Message);
         Assert.Equal(TimeSpan.FromSeconds(5), options.ConnectionTimeout); // unchanged
@@ -255,21 +188,17 @@ public class ConnectionRetryOptionsTests
     [Fact]
     public void ConnectionTimeout_Negative_ShouldThrowNamingTheProperty()
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
-        // Act
         var ex = Assert.Throws<ArgumentOutOfRangeException>(
             () => options.ConnectionTimeout = TimeSpan.FromSeconds(-1));
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
     }
 
     [Fact]
     public void ConnectionTimeout_SubMillisecond_ShouldThrowNamingTheProperty()
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
         // Act — positive, but both transports narrow the timeout to a millisecond int, where a
@@ -277,7 +206,6 @@ public class ConnectionRetryOptionsTests
         var ex = Assert.Throws<ArgumentOutOfRangeException>(
             () => options.ConnectionTimeout = TimeSpan.FromTicks(1));
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
     }
 
@@ -287,14 +215,12 @@ public class ConnectionRetryOptionsTests
         // Arrange & Act — the smallest value that survives the narrowing intact.
         var options = new ConnectionRetryOptions { ConnectionTimeout = TimeSpan.FromMilliseconds(1) };
 
-        // Assert
         Assert.Equal(1, (int)options.ConnectionTimeout.TotalMilliseconds);
     }
 
     [Fact]
     public void ConnectionTimeout_BeyondIntMaxMilliseconds_ShouldThrowNamingTheProperty()
     {
-        // Arrange
         var options = new ConnectionRetryOptions();
 
         // Act — both transports narrow this to a millisecond int, so a longer span would
@@ -302,20 +228,17 @@ public class ConnectionRetryOptionsTests
         var ex = Assert.Throws<ArgumentOutOfRangeException>(
             () => options.ConnectionTimeout = TimeSpan.FromMilliseconds((double)int.MaxValue + 1));
 
-        // Assert
         Assert.Equal(nameof(ConnectionRetryOptions.ConnectionTimeout), ex.ParamName);
     }
 
     [Fact]
     public void ConnectionTimeout_AtIntMaxMilliseconds_ShouldBeAccepted()
     {
-        // Arrange & Act
         var options = new ConnectionRetryOptions
         {
             ConnectionTimeout = TimeSpan.FromMilliseconds(int.MaxValue)
         };
 
-        // Assert
         Assert.Equal(int.MaxValue, (int)options.ConnectionTimeout.TotalMilliseconds);
     }
 }
