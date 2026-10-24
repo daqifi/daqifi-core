@@ -18,22 +18,31 @@ public class WiFiDeviceFinderTests
 {
     // The part-number to DeviceType mapping this finder uses is covered by
     // DiscoveryDeviceTypeMapperTests (issue #283).
-    [Fact]
+    [NetworkBrowseFact]
     public async Task DiscoverAsync_WithTimeout_CompletesWithinTimeout()
     {
-        // Arrange - Use port 0 to let system assign random port (avoid conflicts)
-        using var finder = new WiFiDeviceFinder(0);
+        // Not port 0, for the reason given in DiscoverAsync_CancelledMidBrowse_ReturnsInsteadOfThrowing:
+        // on port 0 the pass ended at once on Linux, so the timeout was never what ended it.
+        int discoveryPort;
+        using (var probe = new UdpClient(0))
+        {
+            discoveryPort = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
+        }
+
+        using var finder = new WiFiDeviceFinder(discoveryPort);
         var timeout = TimeSpan.FromSeconds(2);
 
-        // Act
-        var startTime = DateTime.UtcNow;
-        var devices = await finder.DiscoverAsync(timeout);
-        var elapsed = DateTime.UtcNow - startTime;
+        var browse = finder.DiscoverAsync(timeout);
 
-        // Assert
+        // Still running after a moment means it is waiting on replies, so what ends it is the timeout.
+        var endedOnItsOwn = await Task.WhenAny(browse, Task.Delay(TimeSpan.FromMilliseconds(200))) == browse;
+        Assert.False(endedOnItsOwn, "the browse ended before its timeout");
+
+        // Bounds a browse the timeout never ends, not how promptly it ends: the timeout reaches the
+        // receive loops through thread-pool hops, which a busy test process can hold for seconds.
+        // "Within a second of the timeout" lost that race on CI.
+        var devices = await browse.WaitAsync(timeout + TimeSpan.FromSeconds(10));
         Assert.NotNull(devices);
-        // Allow for some overhead, but should complete reasonably close to timeout
-        Assert.True(elapsed.TotalSeconds <= timeout.TotalSeconds + 1);
     }
 
     [NetworkBrowseFact]
