@@ -435,6 +435,7 @@ await device.InitializeAsync();
 | `SYSTem:StopStreamData` | sent | **skipped** — this is what kills the other session |
 | `SYSTem:POWer:STATe 1` | sent | **skipped** |
 | `SYSTem:STReam:FORmat 0` | sent | **skipped** |
+| `SYSTem:ERRor?` | sent | **skipped** — would pop the other session's error |
 | `SYSTem:STReam:INTerface` (USB routing) | sent | **skipped** — would steal the stream |
 | `SYSTem:SYSInfoPB?` + capability query | sent | sent — read-only |
 
@@ -797,10 +798,7 @@ Three ways to consume streamed data: decoded per-channel samples via `IChannel.S
 
 While a stream is active, `DaqifiStreamingDevice` decodes every frame and raises `SampleReceived` on
 each enabled channel — no protobuf field names or ADC bitmasks to interpret client-side. Decoding is
-gated on the device's own `IsStreaming` flag and each channel's `IsEnabled` flag, so this only fires
-when streaming is started via `StartStreaming()`/channels are enabled via `EnableChannel(s)` — sending
-the equivalent raw SCPI commands directly (as in the raw-frame example below) drives the hardware but
-never sets that local state, so `SampleReceived` would not fire.
+gated on the device's own `IsStreaming` flag and each channel's `IsEnabled` flag.
 
 ```csharp
 using Daqifi.Core.Channel;

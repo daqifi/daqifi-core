@@ -79,9 +79,6 @@ public class StreamConsumerBenchmarks
         _stream.Dispose();
     }
 
-    /// <summary>
-    /// Start the reader and wait for every frame to come back out.
-    /// </summary>
     [Benchmark(OperationsPerInvoke = FrameCount)]
     public void ConsumeScriptedStream()
     {
