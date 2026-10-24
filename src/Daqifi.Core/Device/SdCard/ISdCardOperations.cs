@@ -39,9 +39,13 @@ public interface ISdCardOperations
     /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (e.g. corrupt card, unreadable directory).</exception>
     /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. An empty directory returns an empty list rather than throwing.</exception>
     /// <exception cref="SdCardListIncompleteException">
-    /// Thrown when the device did not answer the listing query, or stopped answering part-way
-    /// through it. An empty result therefore always means an empty card — never an unreachable
-    /// device — so callers can render it as such (closes #396).
+    /// Thrown when the listing cannot be trusted as complete. Either the device did not answer
+    /// — the <c>SYSTem:ERRor?</c> terminator appended to the listing query never came back — or
+    /// it did answer and its own end-of-listing marker reported the walk as incomplete or failed
+    /// (<c>__END_OF_LIST__</c> with <c>INCOMPLETE</c>, <c>FAILED</c>, or any status other than
+    /// <c>OK</c>; firmware #794). An empty result therefore always means an empty card — never
+    /// an unreachable device or a walk the device itself called short — so callers can render it
+    /// as such (closes #396).
     /// </exception>
     Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default);
 
@@ -105,7 +109,7 @@ public interface ISdCardOperations
     /// <param name="fileName">
     /// The name of the log file. If null or empty, a timestamped name is generated automatically
     /// using the pattern "log_YYYYMMDD_HHMMSS" with an extension matching <paramref name="format"/>
-    /// (.bin for Protobuf, .json for JSON, .dat for TestData).
+    /// (.bin for Protobuf, .json for JSON, .csv for CSV).
     /// </param>
     /// <param name="channelMask">
     /// Optional decimal bitmask string to enable specific ADC channels (e.g. "3" enables channels 0 and 1).

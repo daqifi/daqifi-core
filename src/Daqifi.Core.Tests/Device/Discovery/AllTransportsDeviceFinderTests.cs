@@ -225,6 +225,50 @@ public class AllTransportsDeviceFinderTests
         Assert.Equal(1, completed);
     }
 
+    // The isolation catches write the caught exception into a trace line. Composed eagerly, an
+    // exception whose ToString throws escaped the very catch meant to contain it.
+
+    [Fact]
+    public async Task DiscoverAsync_SubscriberExceptionThatCannotRenderItself_StillReturnsAllAndCompletes()
+    {
+        var a = new ListDeviceFinder(new[] { Info("A", ConnectionType.WiFi) });
+        var b = new ListDeviceFinder(new[] { Info("B", ConnectionType.Serial) });
+        var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { a, b });
+
+        finder.DeviceDiscovered += (_, _) => throw new UnrenderableException();
+        var completed = 0;
+        finder.DiscoveryCompleted += (_, _) => completed++;
+
+        var result = (await finder.DiscoverAsync()).ToList();
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_FinderExceptionThatCannotRenderItself_OthersStillReturned()
+    {
+        var bad = new ListDeviceFinder(Array.Empty<IDeviceInfo>(), throwOnDiscover: new UnrenderableException());
+        var good = new ListDeviceFinder(new[] { Info("OK", ConnectionType.Serial) });
+        var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { bad, good });
+
+        var result = (await finder.DiscoverAsync()).ToList();
+
+        Assert.Equal("OK", Assert.Single(result).SerialNumber);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_Timeout_FinderExceptionThatCannotRenderItself_OthersStillReturned()
+    {
+        var bad = new ListDeviceFinder(Array.Empty<IDeviceInfo>(), throwOnDiscover: new UnrenderableException());
+        var good = new ListDeviceFinder(new[] { Info("OK", ConnectionType.Serial) });
+        var finder = new AllTransportsDeviceFinder(new IDeviceFinder[] { bad, good });
+
+        var result = (await finder.DiscoverAsync(TimeSpan.FromMilliseconds(50))).ToList();
+
+        Assert.Equal("OK", Assert.Single(result).SerialNumber);
+    }
+
     // ---- DaqifiDeviceFactory.DiscoverAndConnectAsync selection paths ----
 
     [Fact]
@@ -389,6 +433,15 @@ public class AllTransportsDeviceFinderTests
         public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout) => DiscoverAsync(CancellationToken.None);
 
         public void Dispose() => Disposed = true;
+    }
+
+    /// <summary>
+    /// An exception whose <see cref="object.ToString"/> throws, so an isolation catch cannot
+    /// render it into its trace line.
+    /// </summary>
+    private sealed class UnrenderableException : Exception
+    {
+        public override string ToString() => throw new InvalidOperationException("cannot render");
     }
 
     private sealed class FakeDeviceInfo : IDeviceInfo

@@ -57,11 +57,11 @@ internal sealed class WifiModuleUpdater
 
         // Read only by the failure paths at the bottom of this method. Once the update-mode command
         // is on the wire the device may be sitting in LAN firmware-update / USB-transparent bridge
-        // mode, where the SCPI console is bypassed and the module stays unusable until something
-        // takes it back out — a power cycle, or the bridge-exit below. Today only the *successful*
-        // path restores it, so a failed or canceled flash strands the device; that is exactly why
-        // daqifi-desktop still wraps this call in its own recovery finally (part of #269).
-        // Armed inside the prepare step, at the one point where "may be bridged" becomes true.
+        // mode, where the SCPI console is bypassed until something takes it back out. The cancel
+        // and failure paths both hand this flag to TryLeaveLanUpdateModeAfterFailureAsync, which
+        // sends the bridge-exit sequence when it is set (see that method for what it does and does
+        // not restore). Armed inside the prepare step, at the one point where "may be bridged"
+        // becomes true.
         var mayBeInLanUpdateMode = false;
 
         try

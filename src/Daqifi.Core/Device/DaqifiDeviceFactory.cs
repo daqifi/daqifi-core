@@ -345,6 +345,37 @@ public static class DaqifiDeviceFactory
     }
 
     /// <summary>
+    /// Copies <paramref name="options"/> and, when the caller left
+    /// <see cref="DeviceConnectionOptions.DeviceName"/> at its default, substitutes
+    /// <paramref name="discoveredName"/>. Direct TCP and serial connect pass the caller's
+    /// instance through; discovery connect is the only path that clones, so every settable
+    /// property is copied here. A property added to <see cref="DeviceConnectionOptions"/>
+    /// has to be copied in this one place or discovery connect drops it.
+    /// </summary>
+    private static DeviceConnectionOptions CopyOptionsWithNameOverride(
+        DeviceConnectionOptions? options,
+        string? discoveredName)
+    {
+        var effectiveOptions = options ?? DeviceConnectionOptions.Default;
+
+        // Use the device name from the discovery info if not overridden in options.
+        var deviceName = effectiveOptions.DeviceName == DeviceConnectionOptions.Default.DeviceName
+            && !string.IsNullOrWhiteSpace(discoveredName)
+            ? discoveredName
+            : effectiveOptions.DeviceName;
+
+        return new DeviceConnectionOptions
+        {
+            DeviceName = deviceName,
+            ConnectionRetry = effectiveOptions.ConnectionRetry,
+            InitializeDevice = effectiveOptions.InitializeDevice,
+            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout,
+            PreserveActiveStream = effectiveOptions.PreserveActiveStream,
+            Logger = effectiveOptions.Logger
+        };
+    }
+
+    /// <summary>
     /// Connects to a WiFi device using the provided device info.
     /// </summary>
     private static async Task<DaqifiStreamingDevice> ConnectWiFiDeviceAsync(
@@ -368,23 +399,7 @@ public static class DaqifiDeviceFactory
 
         ValidatePort(deviceInfo.Port.Value);
 
-        var effectiveOptions = options ?? DeviceConnectionOptions.Default;
-
-        // Use the device name from the discovery info if not overridden in options
-        var deviceName = effectiveOptions.DeviceName == DeviceConnectionOptions.Default.DeviceName
-            && !string.IsNullOrWhiteSpace(deviceInfo.Name)
-            ? deviceInfo.Name
-            : effectiveOptions.DeviceName;
-
-        var modifiedOptions = new DeviceConnectionOptions
-        {
-            DeviceName = deviceName,
-            ConnectionRetry = effectiveOptions.ConnectionRetry,
-            InitializeDevice = effectiveOptions.InitializeDevice,
-            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout,
-            PreserveActiveStream = effectiveOptions.PreserveActiveStream,
-            Logger = effectiveOptions.Logger
-        };
+        var modifiedOptions = CopyOptionsWithNameOverride(options, deviceInfo.Name);
 
         // Honor LocalInterfaceAddress so multi-homed hosts egress on the NIC that
         // discovered the device, not whichever NIC the OS routing table prefers.
@@ -412,23 +427,7 @@ public static class DaqifiDeviceFactory
                 nameof(deviceInfo));
         }
 
-        var effectiveOptions = options ?? DeviceConnectionOptions.Default;
-
-        // Use the device name from the discovery info if not overridden in options
-        var deviceName = effectiveOptions.DeviceName == DeviceConnectionOptions.Default.DeviceName
-            && !string.IsNullOrWhiteSpace(deviceInfo.Name)
-            ? deviceInfo.Name
-            : effectiveOptions.DeviceName;
-
-        var modifiedOptions = new DeviceConnectionOptions
-        {
-            DeviceName = deviceName,
-            ConnectionRetry = effectiveOptions.ConnectionRetry,
-            InitializeDevice = effectiveOptions.InitializeDevice,
-            ChannelPopulationTimeout = effectiveOptions.ChannelPopulationTimeout,
-            PreserveActiveStream = effectiveOptions.PreserveActiveStream,
-            Logger = effectiveOptions.Logger
-        };
+        var modifiedOptions = CopyOptionsWithNameOverride(options, deviceInfo.Name);
 
         return await ConnectSerialAsync(
             deviceInfo.PortName,

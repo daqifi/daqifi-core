@@ -111,6 +111,29 @@ public class DaqifiStreamingDeviceDecodeTests
         Assert.Equal(20000u, ai0.ActiveSample.DeviceTimestamp);
     }
 
+    [Fact]
+    public void GapDetected_SubscriberExceptionThatCannotRenderItself_DoesNotSkipFrameDecode()
+    {
+        // The isolation catch writes the subscriber's exception into a trace line. Composed
+        // eagerly, a throwing ToString escaped that catch and the per-frame catch dropped the frame.
+        var device = CreateStreamingDevice(analogCount: 1);
+        var ai0 = AnalogChannel(device, 0);
+        ai0.IsEnabled = true;
+        device.StartStreaming();
+
+        device.GapDetected += (_, _) => throw new UnrenderableException();
+
+        for (uint ts = 1000; ts <= 11000; ts += 1000)
+        {
+            device.InvokeStreamMessage(AnalogFrame(ts, 1.0f));
+        }
+        device.InvokeStreamMessage(AnalogFrame(20000, 7.5f)); // 9x jump -> gap -> throwing handler
+
+        Assert.NotNull(ai0.ActiveSample);
+        Assert.Equal(7.5, ai0.ActiveSample!.Value);
+        Assert.Equal(20000u, ai0.ActiveSample.DeviceTimestamp);
+    }
+
     #endregion
 
     #region Analog decoding
@@ -735,6 +758,37 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
+    public void Decode_DiscardSubscriberExceptionThatCannotRenderItself_DoesNotEscape()
+    {
+        // The isolation catch writes the subscriber's exception into a trace line. Composed
+        // eagerly, a throwing ToString escaped that catch; it must stay contained like the throw.
+        var device = CreateStreamingDevice(analogCount: 2);
+        AnalogChannel(device, 0).IsEnabled = true;
+        AnalogChannel(device, 1).IsEnabled = true;
+        device.StartStreaming();
+
+        var calls = 0;
+        device.StreamFrameDiscarded += (_, _) =>
+        {
+            calls++;
+            throw new UnrenderableException();
+        };
+
+        var warmup = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        warmup.AnalogInDataFloat.Add(0.1f);
+
+        Assert.Null(Record.Exception(() => device.InvokeStreamMessage(warmup)));
+        Assert.Equal(1, calls);
+
+        var full = new DaqifiOutMessage { MsgTimeStamp = 2000 };
+        full.AnalogInDataFloat.Add(4f);
+        full.AnalogInDataFloat.Add(8f);
+        Assert.Null(Record.Exception(() => device.InvokeStreamMessage(full)));
+        Assert.Equal(4.0, AnalogChannel(device, 0).ActiveSample!.Value);
+        Assert.Equal(8.0, AnalogChannel(device, 1).ActiveSample!.Value);
+    }
+
+    [Fact]
     public void Decode_WellFormedFirstFrame_PassesThroughCompletelyUnchanged()
     {
         // The guard is meant to be safe to leave in permanently, including on firmware that no
@@ -1101,6 +1155,15 @@ public class DaqifiStreamingDeviceDecodeTests
         var frame = new DaqifiOutMessage { MsgTimeStamp = timestamp };
         frame.AnalogInDataFloat.Add(value);
         return frame;
+    }
+
+    /// <summary>
+    /// An exception whose <see cref="object.ToString"/> throws, so an isolation catch cannot
+    /// render it into its trace line.
+    /// </summary>
+    private sealed class UnrenderableException : Exception
+    {
+        public override string ToString() => throw new InvalidOperationException("cannot render");
     }
 
     /// <summary>

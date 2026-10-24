@@ -181,12 +181,6 @@ public class CompositeMessageParser : IMessageParser<object>
             return MessageTypeHint.LikelyText;
         }
 
-        // Heuristic 4: Check for protobuf-like patterns (be more conservative)
-        if (nullByteRatio > 0.05 && IsLikelyProtobufData(data)) // Only if some null bytes present
-        {
-            return MessageTypeHint.LikelyProtobuf;
-        }
-
         return MessageTypeHint.Uncertain;
     }
 
@@ -259,32 +253,6 @@ public class CompositeMessageParser : IMessageParser<object>
                head.StartsWith("SYST", StringComparison.OrdinalIgnoreCase) ||
                head.StartsWith("CONF", StringComparison.OrdinalIgnoreCase) ||
                head.StartsWith("READ", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Checks if the data has protobuf-like characteristics.
-    /// </summary>
-    /// <param name="data">The data to check.</param>
-    /// <returns>True if it looks like protobuf data.</returns>
-    private static bool IsLikelyProtobufData(byte[] data)
-    {
-        if (data.Length < 2)
-            return false;
-
-        // Protobuf messages often start with field tags (varint encoded)
-        // Check for patterns that suggest protobuf field encoding
-        for (int i = 0; i < Math.Min(data.Length - 1, 5); i++)
-        {
-            var byte1 = data[i];
-            // Look for varint patterns (field number + wire type)
-            if ((byte1 & 0x07) <= 5 && // Valid wire type (0-5)
-                (byte1 >> 3) > 0)      // Non-zero field number
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 }
 

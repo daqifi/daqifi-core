@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using static Daqifi.Core.Internal.DiagnosticGuard;
 
 namespace Daqifi.Core.Device.Discovery;
 
@@ -100,16 +101,11 @@ public abstract class DeviceFinderBase : IDeviceFinder, IDisposable
         }
         catch (Exception ex)
         {
-            // Best-effort trace only; the logging path must not fault discovery either
-            // (a throwing TraceListener is swallowed).
-            try
-            {
-                System.Diagnostics.Trace.WriteLine($"[{GetType().Name}] {eventName} subscriber threw: {ex}");
-            }
-            catch
-            {
-                // ignore
-            }
+            // Discovery outcome must not depend on consumer callback correctness (nor on the
+            // logging path — SafeTrace swallows a throwing TraceListener). The line is composed
+            // inside the guard: `ex` came from the subscriber, so a throwing ToString must not
+            // escape this catch either.
+            SafeTrace(() => $"[{GetType().Name}] {eventName} subscriber threw: {ex}");
         }
     }
 

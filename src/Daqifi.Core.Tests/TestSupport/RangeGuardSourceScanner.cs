@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text;
 
 namespace Daqifi.Core.Tests.TestSupport;
@@ -25,24 +24,11 @@ namespace Daqifi.Core.Tests.TestSupport;
 internal static class RangeGuardSourceScanner
 {
     /// <summary>
-    /// The repository this test assembly was built from, taken from the <c>RepositoryRoot</c>
-    /// assembly-metadata attribute that <c>Directory.Build.props</c> stamps in. Reading source from
-    /// a test needs a path that does not depend on where the test binary happens to run from;
-    /// <c>DirectoryBuildPropsTests</c> set the precedent.
-    /// </summary>
-    internal static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(RangeGuardSourceScanner).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
-    /// <summary>
     /// The absolute path of a folder under <c>src/Daqifi.Core</c>, named by its path segments —
     /// for example <c>SourceDirectory("Logging", "Export")</c>.
     /// </summary>
     internal static string SourceDirectory(params string[] segments) =>
-        Path.Combine([RepositoryRoot, "src", "Daqifi.Core", .. segments]);
+        Path.Combine([RepositoryRoot.FullPath, "src", "Daqifi.Core", .. segments]);
 
     /// <summary>
     /// Every line under <paramref name="directory"/> that raises an

@@ -31,6 +31,15 @@ public sealed class ServerOptions
     /// </remarks>
     public bool VersionCheck { get; init; } = true;
 
+    /// <summary>
+    /// Parses MCP server launch flags.
+    /// </summary>
+    /// <param name="args">Process arguments, excluding the executable name.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="args"/> contains an unrecognized token, or <c>--max-sample-rate-hz</c>
+    /// is not followed by a value: it is the last argument, or the next token starts with
+    /// <c>-</c> and is not a number. Any other non-numeric or non-positive rate is ignored.
+    /// </exception>
     public static ServerOptions Parse(string[] args)
     {
         var readOnly = false;
@@ -47,13 +56,34 @@ public sealed class ServerOptions
                 case "--no-version-check":
                     versionCheck = false;
                     break;
-                case "--max-sample-rate-hz" when i + 1 < args.Length:
+                case "--max-sample-rate-hz":
+                    if (i + 1 >= args.Length)
+                    {
+                        throw new ArgumentException("Option '--max-sample-rate-hz' requires a value.");
+                    }
+
+                    var value = args[++i];
+                    var isNumber = int.TryParse(value, out var rate);
+
+                    // A dash-led token that is not a number is an option, so the value is missing.
+                    // Consuming it as a malformed rate would drop it unparsed: "--read-only", or
+                    // the typo "-read-only", after this flag would start the server with writes
+                    // enabled. A negative number such as "-5" is a value, ignored below.
+                    if (!isNumber && value.StartsWith('-'))
+                    {
+                        throw new ArgumentException(
+                            $"Option '--max-sample-rate-hz' requires a value, but was followed by '{value}'.");
+                    }
+
                     // Ignore non-positive values; a cap of <= 0 would otherwise reject every rate.
-                    if (int.TryParse(args[++i], out var rate) && rate >= 1)
+                    if (isNumber && rate >= 1)
                     {
                         maxRate = rate;
                     }
+
                     break;
+                default:
+                    throw new ArgumentException($"Unrecognized option '{args[i]}'.");
             }
         }
 

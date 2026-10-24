@@ -1,5 +1,5 @@
-using System.Reflection;
 using System.Xml.Linq;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Build;
 
@@ -24,15 +24,8 @@ namespace Daqifi.Core.Tests.Build;
 /// </remarks>
 public class TargetFrameworkTests
 {
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(TargetFrameworkTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
     private static string ProjectPath(string project) =>
-        Path.Combine(RepositoryRoot, "src", project, $"{project}.csproj");
+        Path.Combine(RepositoryRoot.FullPath, "src", project, $"{project}.csproj");
 
     /// <summary>
     /// The target frameworks a project declares, from either <c>&lt;TargetFramework&gt;</c> or
