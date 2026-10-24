@@ -64,7 +64,15 @@ public class ServerInstructionsHandshakeTests
             ShutdownTimeout = TimeSpan.FromSeconds(1),
         });
 
-        await using var client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
+        // The client probes with server/discover and, if that takes longer than
+        // DiscoverProbeTimeout (5 s by default), falls back to initialize. The fallback races the
+        // probe: when the server answers the probe just as it times out, the session is already
+        // on 2026-07-28 and the server rejects initialize. A cold server start on a Windows
+        // runner lands right on 5 s. This server always answers server/discover, so wait for it
+        // under the handshake budget instead of falling back.
+        var options = new McpClientOptions { DiscoverProbeTimeout = Timeout.InfiniteTimeSpan };
+
+        await using var client = await McpClient.CreateAsync(transport, options, cancellationToken: timeout.Token);
         return client.ServerInstructions;
     }
 }
