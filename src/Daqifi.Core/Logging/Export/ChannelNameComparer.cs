@@ -1,8 +1,9 @@
 namespace Daqifi.Core.Logging.Export;
 
 /// <summary>
-/// Orders channel names the way a person reads them — <c>AI2</c> before <c>AI10</c> — by splitting a
-/// trailing run of digits off the name and comparing it as a number rather than as text.
+/// Orders channel names the way a person reads them — <c>AI2</c> before <c>AI10</c>, and
+/// <c>Tank 2 Pressure</c> before <c>Tank 10 Pressure</c> — by comparing every run of digits in the
+/// name as a number rather than as text.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,15 +14,21 @@ namespace Daqifi.Core.Logging.Export;
 /// individually correct (issue #675).
 /// </para>
 /// <para>
-/// The comparison is <b>ordinal on the prefix, numeric on the trailing digits</b>. Ordinal is
-/// load-bearing rather than incidental: <see cref="ISampleSource"/> implementations backed by SQLite
-/// order their channels in the database using BINARY collation, and only an ordinal prefix
-/// comparison agrees with it — a culture-sensitive one would let the same session export different
-/// bytes depending on the machine's locale.
+/// Each name is walked as alternating runs of text and digits. The comparison is <b>ordinal on the
+/// text runs, numeric on the digit runs</b>. Every digit run counts, not only a trailing one:
+/// device-synthesized names always end in their index, but channel names are user-editable in the
+/// consuming applications, and <c>AI1_Temp</c> or <c>Tank 1 Pressure</c> would otherwise fall back
+/// to byte-wise order and reintroduce #675 (issue #732).
 /// </para>
 /// <para>
-/// Names with no trailing digits are compared ordinally end to end, so they behave exactly as they
-/// did before this type existed.
+/// Ordinal is load-bearing rather than incidental: <see cref="ISampleSource"/> implementations
+/// backed by SQLite order their channels in the database using BINARY collation, and only an ordinal
+/// text comparison agrees with it — a culture-sensitive one would let the same session export
+/// different bytes depending on the machine's locale.
+/// </para>
+/// <para>
+/// Names with no digits are compared ordinally end to end, so they behave exactly as they did before
+/// this type existed.
 /// </para>
 /// </remarks>
 public sealed class ChannelNameComparer : IComparer<string>
@@ -36,7 +43,7 @@ public sealed class ChannelNameComparer : IComparer<string>
     }
 
     /// <summary>
-    /// Compares two channel names, ordering a shared prefix ordinally and a trailing number
+    /// Compares two channel names, ordering their text runs ordinally and their digit runs
     /// numerically.
     /// </summary>
     /// <param name="x">The first name. Null sorts before every non-null name.</param>
@@ -62,47 +69,55 @@ public sealed class ChannelNameComparer : IComparer<string>
             return 1;
         }
 
-        var xDigits = TrailingDigitStart(x);
-        var yDigits = TrailingDigitStart(y);
+        var xRest = x.AsSpan();
+        var yRest = y.AsSpan();
 
-        var prefix = x.AsSpan(0, xDigits).CompareTo(y.AsSpan(0, yDigits), StringComparison.Ordinal);
-        if (prefix != 0)
+        while (!xRest.IsEmpty || !yRest.IsEmpty)
         {
-            return prefix;
+            // Text runs are compared whole, so one that is a prefix of the other sorts first
+            // ("AI" before "AIx", and therefore "AI1x" before "AIx").
+            var text = TakeRun(ref xRest, isDigit: false)
+                .CompareTo(TakeRun(ref yRest, isDigit: false), StringComparison.Ordinal);
+            if (text != 0)
+            {
+                return text;
+            }
+
+            var number = CompareNumbers(TakeRun(ref xRest, isDigit: true), TakeRun(ref yRest, isDigit: true));
+            if (number != 0)
+            {
+                return number;
+            }
         }
 
-        var number = CompareTrailingNumbers(x.AsSpan(xDigits), y.AsSpan(yDigits));
-        if (number != 0)
-        {
-            return number;
-        }
-
-        // Same prefix and the same numeric value, so the names can still differ only by leading
-        // zeros ("AI01" vs "AI1"). Fall back to ordinal over the whole name rather than calling two
-        // distinct columns equal: the order has to be total, or a sort's output depends on the input
-        // order it happened to be given.
+        // Every run matched, so the names can still differ only by leading zeros ("AI01" vs
+        // "AI1"). Fall back to ordinal over the whole name rather than calling two distinct
+        // columns equal: the order has to be total, or a sort's output depends on the input order
+        // it happened to be given.
         return string.CompareOrdinal(x, y);
     }
 
     /// <summary>
-    /// Returns the index at which <paramref name="value"/>'s trailing run of digits begins, or its
-    /// length when it does not end in a digit.
+    /// Splits the leading run of digits — or of non-digits — off <paramref name="rest"/> and returns
+    /// it. The run is empty when <paramref name="rest"/> is empty or starts with the other kind.
     /// </summary>
     /// <remarks>
-    /// Only ASCII <c>'0'</c>–<c>'9'</c> count. <see cref="char.IsDigit(char)"/> also accepts the
-    /// decimal digits of other scripts, which would be split off here and then compared as text
-    /// anyway — a worse answer than leaving them in the prefix, where they at least sort
+    /// Only ASCII <c>'0'</c>–<c>'9'</c> count as digits. <see cref="char.IsDigit(char)"/> also
+    /// accepts the decimal digits of other scripts, which would be split off here and then compared
+    /// as text anyway — a worse answer than leaving them in the text run, where they at least sort
     /// consistently.
     /// </remarks>
-    private static int TrailingDigitStart(string value)
+    private static ReadOnlySpan<char> TakeRun(ref ReadOnlySpan<char> rest, bool isDigit)
     {
-        var start = value.Length;
-        while (start > 0 && value[start - 1] is >= '0' and <= '9')
+        var length = 0;
+        while (length < rest.Length && (rest[length] is >= '0' and <= '9') == isDigit)
         {
-            start--;
+            length++;
         }
 
-        return start;
+        var run = rest[..length];
+        rest = rest[length..];
+        return run;
     }
 
     /// <summary>
@@ -113,9 +128,10 @@ public sealed class ChannelNameComparer : IComparer<string>
     /// name may carry an arbitrarily long run of digits, and parsing one into a
     /// <see cref="long"/> would overflow on a name a device is free to report.
     /// </remarks>
-    private static int CompareTrailingNumbers(ReadOnlySpan<char> x, ReadOnlySpan<char> y)
+    private static int CompareNumbers(ReadOnlySpan<char> x, ReadOnlySpan<char> y)
     {
-        // An unnumbered name sorts before a numbered one that shares its prefix ("AI" before "AI0").
+        // A name that ends where the other carries on with a number sorts first ("AI" before
+        // "AI0", "Tank " before "Tank 1").
         if (x.IsEmpty || y.IsEmpty)
         {
             return x.Length.CompareTo(y.Length);

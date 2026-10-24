@@ -37,13 +37,59 @@ public class ChannelNameComparerTests
         Assert.Equal(names, shuffled.OrderBy(n => n, Comparer).ToArray());
     }
 
-    // ── Names without a trailing number behave exactly as before ────────────
+    // ── A number with text after it sorts the same way (issue #732) ─────────
+
+    [Theory]
+    [InlineData("Tank 1 Pressure", "Tank 2 Pressure", "Tank 10 Pressure", "Tank 16 Pressure")]
+    [InlineData("AI1 (spare)", "AI2 (spare)", "AI10 (spare)")]
+    [InlineData("AI1_Temp", "AI2_Temp", "AI10_Temp", "AI11_Temp")]
+    public void Sort_NumberFollowedByText_OrdersThemNumerically(params string[] names)
+    {
+        var shuffled = names.OrderBy(n => n, StringComparer.Ordinal).ToArray();
+
+        // Guard the premise — plain ordinal really does misorder these.
+        Assert.NotEqual(names, shuffled);
+
+        Assert.Equal(names, shuffled.OrderBy(n => n, Comparer).ToArray());
+    }
+
+    [Theory]
+    [InlineData("AI2 Tank9", "AI10 Tank1")]
+    [InlineData("Tank 1 Pressure 9", "Tank 1 Pressure 10")]
+    [InlineData("1a2", "1a10")]
+    public void Compare_EveryDigitRun_IsComparedNumerically(string smaller, string larger)
+    {
+        // The first run that differs decides, wherever in the name it sits.
+        Assert.Equal(-1, Sign(Comparer.Compare(smaller, larger)));
+        Assert.Equal(1, Sign(Comparer.Compare(larger, smaller)));
+    }
+
+    [Theory]
+    [InlineData("AI1", "AI1x")]
+    [InlineData("AI1x", "AIx")]
+    [InlineData("AI1!", "AI!")]
+    [InlineData("Tank ", "Tank 1")]
+    public void Compare_TextRunThatIsAPrefixOfTheOther_SortsFirst(string smaller, string larger)
+    {
+        // Text runs are compared whole, as the prefix was before #732: "AI" before "AIx" and "AI!",
+        // so the name whose number comes sooner sorts first even where '!' < '1' byte-wise.
+        Assert.Equal(-1, Sign(Comparer.Compare(smaller, larger)));
+        Assert.Equal(1, Sign(Comparer.Compare(larger, smaller)));
+    }
+
+    [Fact]
+    public void Compare_TextAfterANumberIsOrdinal_NotCultureSensitive()
+    {
+        Assert.Equal(1, Sign(Comparer.Compare("AI1_temp", "AI1_Temp")));
+    }
+
+    // ── Names without digits behave exactly as before ───────────────────────
 
     [Theory]
     [InlineData("Temperature", "Voltage")]
     [InlineData("AI", "DIO")]
     [InlineData("Alpha", "alpha")]
-    public void Compare_NoTrailingDigits_IsOrdinal(string first, string second)
+    public void Compare_NoDigits_IsOrdinal(string first, string second)
     {
         Assert.Equal(Sign(string.CompareOrdinal(first, second)), Sign(Comparer.Compare(first, second)));
     }
@@ -91,13 +137,14 @@ public class ChannelNameComparerTests
     [Fact]
     public void Compare_DigitRunTooLongForALong_DoesNotOverflowOrThrow()
     {
-        // Parsing the trailing digits would throw or wrap here; counting them does not.
+        // Parsing the digits would throw or wrap here; counting them does not.
         var huge = "AI" + new string('9', 40);
         var huger = "AI1" + new string('0', 41);
 
         Assert.Equal(-1, Sign(Comparer.Compare("AI7", huge)));
         Assert.Equal(-1, Sign(Comparer.Compare(huge, "AI" + new string('9', 41))));
         Assert.Equal(1, Sign(Comparer.Compare(huger, "AI0")));
+        Assert.Equal(-1, Sign(Comparer.Compare(huge + " raw", "AI" + new string('9', 41) + " raw")));
     }
 
     [Fact]
@@ -141,7 +188,8 @@ public class ChannelNameComparerTests
         string[] names =
         [
             "AI0", "AI00", "AI1", "AI01", "AI2", "AI10", "AI11", "AI",
-            "DIO0", "DIO10", "Temperature", "aI0", "", "9", "12"
+            "DIO0", "DIO10", "Temperature", "aI0", "", "9", "12",
+            "AI1_Temp", "AI01_Temp", "AI10_Temp", "AI1x", "AIx", "AI!", "AI1!", "1a2", "1a10"
         ];
 
         foreach (var a in names)
@@ -168,7 +216,7 @@ public class ChannelNameComparerTests
     [Fact]
     public void Compare_DistinctNames_AreNeverReportedEqual()
     {
-        string[] names = ["AI0", "AI00", "AI1", "AI01", "AI", "AI10", "", "0"];
+        string[] names = ["AI0", "AI00", "AI1", "AI01", "AI", "AI10", "", "0", "AI1_Temp", "AI01_Temp", "AI1_temp"];
 
         foreach (var a in names)
         {
