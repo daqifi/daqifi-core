@@ -1170,7 +1170,11 @@ public class DaqifiDeviceOperationSerializationTests
         var probeRan = false;
         var probe = new Thread(() =>
         {
-            probeRan = deepIntoFlush.Wait(PhaseBoundaryWait);
+            // DeadlockBudget, not PhaseBoundaryWait: write 80 is past the per-flush bound, so the
+            // background drain makes it, and that drain is a Task.Run that has to be handed a
+            // thread-pool thread first. A busy test process can hold its pool for seconds, and 5 s
+            // lost that race on CI. Still shorter than the join below.
+            probeRan = deepIntoFlush.Wait(DeadlockBudget);
             if (!probeRan)
             {
                 return;

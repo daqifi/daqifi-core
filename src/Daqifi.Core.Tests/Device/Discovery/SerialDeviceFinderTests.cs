@@ -360,8 +360,11 @@ public class SerialDeviceFinderTests
         SerialDeviceFinder.ResetPortQuarantineForTests();
         // Closes #294 (event half): DeviceDiscovered must fire per-probe, not
         // after Task.WhenAll, so a hung port can't delay/silence healthy ones.
-        // The hung probe here outlives the sweep (released only at the end) and
-        // the healthy device's event is awaited while the hung probe is pending.
+        //
+        // The hard timeout is far past the wait below, so nothing but releasing the
+        // hung probe at the end can settle the sweep: an event that arrives at all
+        // arrived first. This used to race the event against a 1s Task.Delay, which a
+        // busy thread pool lost — the healthy probe is dispatched with Task.Run.
         var hungForever = new TaskCompletionSource<IDeviceInfo?>();
         var discovered = new TaskCompletionSource<IDeviceInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var finder = CreateFinderWithProbes(
@@ -369,21 +372,25 @@ public class SerialDeviceFinderTests
             (port, _) => port == "COM_HUNG"
                 ? hungForever.Task
                 : Task.FromResult<IDeviceInfo?>(FakeDevice(port)),
-            hardTimeoutMs: 2000);
+            hardTimeoutMs: 60_000);
         finder.DeviceDiscovered += (_, args) => discovered.TrySetResult(args.DeviceInfo);
 
         var sweep = finder.DiscoverAsync(CancellationToken.None);
 
-        // The healthy device's event must arrive while COM_HUNG is still pending
-        // (well before the 2s hard timeout settles the sweep).
-        var winner = await Task.WhenAny(discovered.Task, Task.Delay(1000));
-        Assert.Same(discovered.Task, winner);
-        Assert.False(sweep.IsCompleted,
-            "Sweep settled before the hung probe timed out — hang simulation is not wired as intended.");
-        Assert.Equal("COM_OK", (await discovered.Task).PortName);
+        try
+        {
+            // An event held back until the sweep settles never arrives inside this bound.
+            var device = await discovered.Task.WaitAsync(SweepGuard);
+            Assert.Equal("COM_OK", device.PortName);
+            Assert.False(sweep.IsCompleted,
+                "Sweep settled while the hung probe was pending — hang simulation is not wired as intended.");
+        }
+        finally
+        {
+            hungForever.TrySetResult(null);
+        }
 
-        hungForever.TrySetResult(null);
-        await sweep;
+        await sweep.WaitAsync(SweepGuard);
     }
 
     [Fact]

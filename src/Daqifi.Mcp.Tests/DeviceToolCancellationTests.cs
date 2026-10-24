@@ -9,7 +9,13 @@ namespace Daqifi.Mcp.Tests;
 /// </summary>
 public class DeviceToolCancellationTests
 {
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// Bounds a hang, not promptness: every wait below is on something the test itself releases, so
+    /// a cancel that never reaches the wait sits there until the bound. Generous because a cancelled
+    /// <see cref="SemaphoreSlim"/> wait finishes on a thread-pool hop (it force-yields after the
+    /// cancel), and a busy test process can hold its pool for seconds; 5 s lost that race on CI.
+    /// </summary>
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     /// <summary>Every tool that changes device state under the device operation lock.</summary>
     public static TheoryData<string> DeviceLockTools() => new()
