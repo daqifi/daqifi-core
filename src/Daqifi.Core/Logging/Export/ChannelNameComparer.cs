@@ -102,7 +102,8 @@ public sealed class ChannelNameComparer : IComparer<string>
     /// it. The run is empty when <paramref name="rest"/> is empty or starts with the other kind.
     /// </summary>
     /// <remarks>
-    /// Only ASCII <c>'0'</c>–<c>'9'</c> count as digits. <see cref="char.IsDigit(char)"/> also
+    /// Only ASCII <c>'0'</c>–<c>'9'</c> count as digits, hence <see cref="char.IsAsciiDigit(char)"/>.
+    /// <see cref="char.IsDigit(char)"/> also
     /// accepts the decimal digits of other scripts, which would be split off here and then compared
     /// as text anyway — a worse answer than leaving them in the text run, where they at least sort
     /// consistently.
@@ -110,7 +111,7 @@ public sealed class ChannelNameComparer : IComparer<string>
     private static ReadOnlySpan<char> TakeRun(ref ReadOnlySpan<char> rest, bool isDigit)
     {
         var length = 0;
-        while (length < rest.Length && (rest[length] is >= '0' and <= '9') == isDigit)
+        while (length < rest.Length && char.IsAsciiDigit(rest[length]) == isDigit)
         {
             length++;
         }
