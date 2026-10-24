@@ -79,20 +79,6 @@ The timing tables below are not one run. Every row except `ProtobufDrainAll` and
 from #699's own before/after run (default job), a separate invocation, copied here rather than
 re-measured.
 
-The benchmark code has changed since `2a59fd1`, and the numbers below have not been re-measured
-since. The code and the published numbers now describe different payloads for some rows:
-
-| Rows | Benchmark code now | Published numbers measured on |
-| --- | --- | --- |
-| `DecodeRawAnalogFrame` (now the decode baseline) | raw counts | raw counts |
-| `DecodeAnalogFloatFrame` | floats | floats |
-| `DecodeCombinedFrame` | raw counts + DIO | floats + DIO |
-| framing (`ParseWholeFrames`, `ParseWithTrailingPartialFrame`) | raw counts, 100 frames | floats, 50 frames |
-| consumer (`ConsumeScriptedStream`) | raw counts | floats |
-
-Raw counts (`AnalogInData`) are what supported firmware sends. The framing buffer went from 50
-frames to 100 because a raw-count frame is about half the size, and 100 still fills one 4 KB read.
-
 Nothing refreshes these tables automatically. The Benchmarks workflow posts its tables to the run
 summary from an `ubuntu-latest` runner, and those numbers do not compare with these. Replace them
 with one full run on one machine.
@@ -103,28 +89,12 @@ Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
 .NET SDK 10.0.203, .NET 10.0.7, Arm64 RyuJIT armv8.0-a
 ```
 
-**Stream decode** — per frame, 16 analog channels (plus 16 DIO in the combined case).
-`DecodeCombinedFrame` was measured on float frames (see above):
+**Stream decode** — per frame, 16 analog channels:
 
 | Method | Mean | Allocated |
 | --- | ---: | ---: |
 | DecodeRawAnalogFrame | 329.8 ns | 1.38 KB |
 | DecodeAnalogFloatFrame | 257.7 ns | 1.38 KB |
-| DecodeCombinedFrame | 814.6 ns | 2.78 KB |
-
-**Protobuf framing** — per frame, measured on float frames (see above):
-
-| Method | Mean | Allocated |
-| --- | ---: | ---: |
-| ParseWholeFrames | 164.4 ns | 1.22 KB |
-| ParseWithTrailingPartialFrame | 163.0 ns | 1.22 KB |
-
-**Stream consumer** — per frame, end to end through the reader loop, measured on float frames
-(see above):
-
-| Method | Mean | Allocated |
-| --- | ---: | ---: |
-| ConsumeScriptedStream | 197.0 ns | 1.33 KB |
 
 **SD-card parsing** — per 10,000-row file, 8 analog channels:
 
