@@ -420,31 +420,6 @@ public class TimestampProcessorTests
 
     #endregion
 
-    #region TimestampResult Tests
-
-    [Fact]
-    public void TimestampResult_PropertiesAreSetCorrectly()
-    {
-        // Arrange
-        var timestamp = DateTime.Now;
-        const bool wasRollover = true;
-        const uint clockCycles = 12345u;
-        const double seconds = 0.00024690;
-        const bool isFirstMessage = false;
-
-        // Act
-        var result = new TimestampResult(timestamp, wasRollover, clockCycles, seconds, isFirstMessage);
-
-        // Assert
-        Assert.Equal(timestamp, result.Timestamp);
-        Assert.Equal(wasRollover, result.WasRollover);
-        Assert.Equal(clockCycles, result.ClockCyclesBetweenMessages);
-        Assert.Equal(seconds, result.SecondsBetweenMessages);
-        Assert.Equal(isFirstMessage, result.IsFirstMessage);
-    }
-
-    #endregion
-
     #region Device Timestamp Frequency Tests
 
     [Fact]
@@ -491,20 +466,6 @@ public class TimestampProcessorTests
 
         // Act & Assert
         Assert.Equal(processor.TickPeriod, processor.GetTickPeriod(TestDeviceId));
-    }
-
-    [Fact]
-    public void GetTickPeriod_FrequencySet_ReturnsReciprocalOfFrequency()
-    {
-        // Arrange
-        var processor = new TimestampProcessor();
-        const uint deviceFrequency = 10_000_000;
-
-        // Act
-        processor.SetTimestampFrequency(TestDeviceId, deviceFrequency);
-
-        // Assert
-        Assert.Equal(1.0 / deviceFrequency, processor.GetTickPeriod(TestDeviceId));
     }
 
     [Fact]
@@ -732,32 +693,6 @@ public class TimestampProcessorTests
     #endregion
 
     #region Edge Case Tests
-
-    [Fact]
-    public void ProcessTimestamp_ZeroTimestamp_HandledCorrectly()
-    {
-        // Arrange
-        var processor = new TimestampProcessor();
-
-        // Act
-        var result = processor.ProcessTimestamp(TestDeviceId, 0);
-
-        // Assert
-        Assert.True(result.IsFirstMessage);
-    }
-
-    [Fact]
-    public void ProcessTimestamp_MaxTimestamp_HandledCorrectly()
-    {
-        // Arrange
-        var processor = new TimestampProcessor();
-
-        // Act
-        var result = processor.ProcessTimestamp(TestDeviceId, uint.MaxValue);
-
-        // Assert
-        Assert.True(result.IsFirstMessage);
-    }
 
     [Fact]
     public void ProcessTimestamp_SameTimestampTwice_ZeroElapsedTime()

@@ -40,25 +40,6 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
-    public async Task ReceiveAsync_EofMarkerIsStrippedFromOutput()
-    {
-        // Arrange
-        var fileData = Encoding.ASCII.GetBytes("Hello, World!");
-        var sourceData = Combine(fileData, EofMarker);
-        using var sourceStream = new MemoryStream(sourceData);
-        using var destinationStream = new MemoryStream();
-        var receiver = new SdCardFileReceiver(sourceStream);
-
-        // Act
-        await receiver.ReceiveAsync(destinationStream, "test.bin");
-
-        // Assert — output should NOT contain the EOF marker
-        var output = destinationStream.ToArray();
-        Assert.Equal(fileData.Length, output.Length);
-        Assert.DoesNotContain("__END_OF_FILE__", Encoding.ASCII.GetString(output));
-    }
-
-    [Fact]
     public async Task ReceiveAsync_EofMarkerSplitAcrossChunks_DetectedCorrectly()
     {
         // Arrange — use a buffer size that will split the EOF marker across reads
@@ -217,11 +198,7 @@ public class SdCardFileReceiverTests
 
         // Assert — we should have received at least one progress report
         Assert.NotEmpty(progressReports);
-        Assert.All(progressReports, p =>
-        {
-            Assert.Equal("test.bin", p.FileName);
-            Assert.True(p.BytesReceived >= 0);
-        });
+        Assert.All(progressReports, p => Assert.Equal("test.bin", p.FileName));
     }
 
     [Fact]

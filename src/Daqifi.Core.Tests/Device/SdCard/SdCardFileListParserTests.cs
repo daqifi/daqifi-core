@@ -316,19 +316,6 @@ public class SdCardFileListParserTests
     }
 
     [Fact]
-    public void ParseFileList_WithScpiError_SkipsErrorLines()
-    {
-        // Arrange - simulates the error response from issue #119
-        var lines = new[] { "**ERROR: -200, \"Execution error\"" };
-
-        // Act
-        var result = SdCardFileListParser.ParseFileList(lines);
-
-        // Assert
-        Assert.Empty(result);
-    }
-
-    [Fact]
     public void ParseFileList_WithScpiErrorMixedWithFiles_OnlyReturnsFiles()
     {
         // Arrange
@@ -363,36 +350,6 @@ public class SdCardFileListParserTests
         Assert.Empty(result);
     }
 
-    [Fact]
-    public void ParseFileList_WithJsonLogFileName_ParsesDate()
-    {
-        // Arrange
-        var lines = new[] { "log_20240115_103000.json" };
-
-        // Act
-        var result = SdCardFileListParser.ParseFileList(lines);
-
-        // Assert
-        Assert.Single(result);
-        Assert.Equal("log_20240115_103000.json", result[0].FileName);
-        Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), result[0].CreatedDate);
-    }
-
-    [Fact]
-    public void ParseFileList_WithCsvLogFileName_ParsesDate()
-    {
-        // Arrange
-        var lines = new[] { "log_20240115_103000.csv" };
-
-        // Act
-        var result = SdCardFileListParser.ParseFileList(lines);
-
-        // Assert
-        Assert.Single(result);
-        Assert.Equal("log_20240115_103000.csv", result[0].FileName);
-        Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0), result[0].CreatedDate);
-    }
-
     [Theory]
     [InlineData("log_20240115_103000.bin", "log_20240115_103000.bin")]
     [InlineData("log_20240115_103000.json", "log_20240115_103000.json")]
@@ -409,19 +366,6 @@ public class SdCardFileListParserTests
         Assert.Single(result);
         Assert.Equal(expected, result[0].FileName);
         Assert.NotNull(result[0].CreatedDate);
-    }
-
-    [Fact]
-    public void ParseFileList_WithPlainErrorLine_SkipsErrorLine()
-    {
-        // Arrange
-        var lines = new[] { "ERROR: -200, \"Execution error\"" };
-
-        // Act
-        var result = SdCardFileListParser.ParseFileList(lines);
-
-        // Assert
-        Assert.Empty(result);
     }
 
     [Fact]

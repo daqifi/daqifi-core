@@ -312,29 +312,6 @@ public class DeviceMetadataTests
     }
 
     [Fact]
-    public void UpdateFromProtobuf_UpdatesHealthTelemetry()
-    {
-        // Arrange
-        var metadata = new DeviceMetadata();
-        var message = new DaqifiOutMessage
-        {
-            BattStatus = 87,
-            TempStatus = 42,
-            PwrStatus = 2,
-            DeviceStatus = 5
-        };
-
-        // Act
-        metadata.UpdateFromProtobuf(message);
-
-        // Assert
-        Assert.Equal(87, metadata.Health.BatteryPercent);
-        Assert.Equal(42, metadata.Health.BoardTemperatureCelsius);
-        Assert.Equal(2u, metadata.Health.PowerStatus);
-        Assert.Equal(5u, metadata.Health.DeviceStatus);
-    }
-
-    [Fact]
     public void UpdateFromProtobuf_FromSerializedStatusPayload_DecodesHealthTelemetry()
     {
         // Arrange: build a status message, serialize it to the wire bytes a device would send,
