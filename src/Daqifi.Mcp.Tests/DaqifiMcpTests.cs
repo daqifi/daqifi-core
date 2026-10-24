@@ -30,6 +30,44 @@ public class ServerOptionsTests
         Assert.Null(ServerOptions.Parse(new[] { "--max-sample-rate-hz", "fast" }).MaxSampleRateHz);
     }
 
+    [Fact]
+    public void Parse_UnknownFlag_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ServerOptions.Parse(new[] { "--not-a-flag" }));
+        Assert.Contains("--not-a-flag", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MaxSampleRate_MissingValue_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ServerOptions.Parse(new[] { "--max-sample-rate-hz" }));
+        Assert.Contains("requires a value", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_ReadOnlyTypo_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ServerOptions.Parse(new[] { "--read-onyl" }));
+        Assert.Contains("--read-onyl", ex.Message);
+    }
+
+    // An option in the rate's value slot is a missing value. Consumed as a malformed rate it would
+    // never reach its own case, so "--read-only" would be dropped and writes left enabled. A
+    // single-dash typo is an option too; only a dash-led number ("-5") counts as a value.
+    [Theory]
+    [InlineData("--read-only")]
+    [InlineData("--read-onyl")]
+    [InlineData("--no-version-check")]
+    [InlineData("-read-only")]
+    [InlineData("-")]
+    public void Parse_MaxSampleRate_FollowedByAnOption_Throws(string next)
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => ServerOptions.Parse(new[] { "--max-sample-rate-hz", next }));
+        Assert.Contains("requires a value", ex.Message);
+        Assert.Contains(next, ex.Message);
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("-5")]

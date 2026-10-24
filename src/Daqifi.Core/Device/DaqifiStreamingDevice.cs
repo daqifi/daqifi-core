@@ -513,7 +513,10 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         }
         catch (Exception ex)
         {
-            SafeTrace($"[{nameof(StreamFrameDiscarded)}] Subscriber threw: {ex}");
+            // Compose inside the guard. `ex` came from a subscriber, so rendering it is no safer
+            // than raising to it: an eager SafeTrace($"...{ex}") lets a throwing ToString escape
+            // this catch. Same reason as SerialStreamTransport.HandleConnectionLost.
+            SafeTrace(() => $"[{nameof(StreamFrameDiscarded)}] Subscriber threw: {ex}");
         }
     }
 
@@ -537,7 +540,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         }
         catch (Exception ex)
         {
-            SafeTrace($"[{nameof(GapDetected)}] Subscriber threw: {ex}");
+            // Same as RaiseStreamFrameDiscarded: format inside the guard so ToString cannot escape.
+            SafeTrace(() => $"[{nameof(GapDetected)}] Subscriber threw: {ex}");
         }
     }
 

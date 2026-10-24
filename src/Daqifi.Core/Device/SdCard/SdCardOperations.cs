@@ -193,20 +193,22 @@ internal sealed class SdCardOperations
     /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (corrupt card, unreadable directory).</exception>
     /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. Empty directories return an empty list rather than throwing.</exception>
     /// <exception cref="SdCardListIncompleteException">
-    /// Thrown when the listing did not arrive in full — the device never answered, or stopped
-    /// answering part-way through. Distinguishing this from a genuinely empty card is the whole
-    /// point of the terminator probe described in the remarks (closes #396).
+    /// Thrown when the listing cannot be trusted as complete — the <c>SYSTem:ERRor?</c> terminator
+    /// never came back, or the device's <c>__END_OF_LIST__</c> marker reported the walk as
+    /// incomplete or failed. Distinguishing this from a genuinely empty card is the whole point
+    /// of the checks described in the remarks (closes #396).
     /// </exception>
     /// <remarks>
     /// <para>
-    /// The firmware emits no end-of-listing marker, and for an empty directory it writes nothing
-    /// at all, so a lost or truncated reply is byte-for-byte indistinguishable from a healthy
-    /// empty card. Core closes that gap by appending a <c>SYSTem:ERRor?</c> query to the same
-    /// text exchange: the transport delivers in order and the firmware does not process the
-    /// next command until the listing has been handed to the output, so receiving the reply
-    /// proves both that the device is answering and that the listing ahead of it is complete.
-    /// Its absence means the response is incomplete, and the caller gets an exception instead of
-    /// a plausible-looking empty list.
+    /// An empty directory produces no file lines. Firmware before #794 sends nothing else, so a lost
+    /// or truncated reply is byte-for-byte indistinguishable from a healthy empty card; current
+    /// firmware adds an end-of-listing marker, but a missing marker is also what a truncated reply
+    /// looks like, so the marker alone cannot prove the device answered. Core closes that gap by
+    /// appending a <c>SYSTem:ERRor?</c> query to the same text exchange: the transport delivers in
+    /// order and the firmware does not process the next command until the listing has been handed
+    /// to the output, so receiving the reply proves both that the device is answering and that the
+    /// listing ahead of it is complete. Its absence means the response is incomplete, and the
+    /// caller gets an exception instead of a plausible-looking empty list.
     /// </para>
     /// <para>
     /// The terminator is only meaningful if it cannot be confused with a late reply to an
@@ -223,6 +225,16 @@ internal sealed class SdCardOperations
     /// entry from the device's SCPI error queue, so a
     /// <see cref="DaqifiDevice.DrainErrorQueueAsync"/> run afterwards will not see the entry
     /// this listing generated.
+    /// </para>
+    /// <para>
+    /// A reply the terminator closed is then read for the device's own end-of-listing marker
+    /// (<c>__END_OF_LIST__</c>, firmware #794). <c>OK</c> is a finished walk. <c>FAILED</c>,
+    /// <c>INCOMPLETE</c>, and any other status word —
+    /// <see cref="SdCardFileListParser.GetListingStatus"/> treats an unrecognized word as
+    /// incomplete — throw <see cref="SdCardListIncompleteException"/> for the same reason a
+    /// missing terminator does: the list must not be cached as the answer to whether a file is
+    /// on the card. No marker at all is the pre-#794 firmware and is not an error; the
+    /// terminator already showed the exchange completed.
     /// </para>
     /// </remarks>
     internal async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)

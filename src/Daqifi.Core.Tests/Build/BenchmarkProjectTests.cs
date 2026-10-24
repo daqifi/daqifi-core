@@ -1,5 +1,5 @@
-using System.Reflection;
 using System.Xml.Linq;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Build;
 
@@ -17,15 +17,8 @@ namespace Daqifi.Core.Tests.Build;
 /// </remarks>
 public class BenchmarkProjectTests
 {
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(BenchmarkProjectTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
     private static string BenchmarkProjectPath =>
-        Path.Combine(RepositoryRoot, "src", "Daqifi.Core.Benchmarks", "Daqifi.Core.Benchmarks.csproj");
+        Path.Combine(RepositoryRoot.FullPath, "src", "Daqifi.Core.Benchmarks", "Daqifi.Core.Benchmarks.csproj");
 
     /// <summary>
     /// The value of a property in the benchmark project, or <see langword="null"/> if it declares

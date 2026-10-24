@@ -1,7 +1,7 @@
-using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Build;
 
@@ -43,15 +43,8 @@ public class McpRegistryManifestTests
     /// </summary>
     private const string NuGetRegistryBaseUrl = "https://api.nuget.org/v3/index.json";
 
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(McpRegistryManifestTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
-
     private static string PathFromRoot(string relativePath) =>
-        Path.Combine(RepositoryRoot, Path.Combine(relativePath.Split('/')));
+        Path.Combine(RepositoryRoot.FullPath, Path.Combine(relativePath.Split('/')));
 
     private static JsonElement Manifest =>
         JsonDocument.Parse(File.ReadAllText(PathFromRoot(ManifestRelativePath))).RootElement;
