@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Tests.TestSupport;
 using System.Text;
 
 namespace Daqifi.Core.Tests.Communication.Consumers;
@@ -22,8 +23,10 @@ public class StreamMessageConsumerHealthReportingTests
         stream.FailReads = true;
         consumer.Start();
 
-        Assert.True(WaitUntil(() => sink.FaultCount >= 3, TimeSpan.FromSeconds(5)),
-            $"expected repeated fault reports, saw {sink.FaultCount}");
+        WaitUntil.That(
+            () => sink.FaultCount >= 3,
+            () => $"expected repeated fault reports, saw {sink.FaultCount}",
+            TimeSpan.FromSeconds(5));
         Assert.Equal(0, sink.SuccessCount);
         Assert.All(sink.Faults, ex => Assert.IsType<IOException>(ex));
 
@@ -41,14 +44,19 @@ public class StreamMessageConsumerHealthReportingTests
         stream.FailReads = true;
         consumer.Start();
 
-        Assert.True(WaitUntil(() => sink.FaultCount >= 1, TimeSpan.FromSeconds(5)));
+        WaitUntil.That(
+            () => sink.FaultCount >= 1,
+            "the failing stream never reported a fault",
+            TimeSpan.FromSeconds(5));
 
         // The blip ends: reads work again.
         stream.Enqueue("$DAQiFi\r\n");
         stream.FailReads = false;
 
-        Assert.True(WaitUntil(() => sink.SuccessCount >= 1, TimeSpan.FromSeconds(5)),
-            "a successful read must be reported so the transport clears the failure run");
+        WaitUntil.That(
+            () => sink.SuccessCount >= 1,
+            "a successful read must be reported so the transport clears the failure run",
+            TimeSpan.FromSeconds(5));
 
         consumer.StopSafely(timeoutMs: 2000);
     }
@@ -65,7 +73,10 @@ public class StreamMessageConsumerHealthReportingTests
         stream.TimeoutReads = true;
         consumer.Start();
 
-        Assert.True(WaitUntil(() => stream.ReadCount >= 5, TimeSpan.FromSeconds(5)));
+        WaitUntil.That(
+            () => stream.ReadCount >= 5,
+            "the reader never issued idle timeout reads",
+            TimeSpan.FromSeconds(5));
         Assert.Equal(0, sink.FaultCount);
         Assert.Equal(0, sink.SuccessCount);
 
@@ -83,7 +94,10 @@ public class StreamMessageConsumerHealthReportingTests
 
         consumer.Start();
 
-        Assert.True(WaitUntil(() => stream.ReadCount >= 5, TimeSpan.FromSeconds(5)));
+        WaitUntil.That(
+            () => stream.ReadCount >= 5,
+            "the reader never issued zero-byte reads",
+            TimeSpan.FromSeconds(5));
         Assert.Equal(0, sink.FaultCount);
 
         consumer.StopSafely(timeoutMs: 2000);
@@ -102,26 +116,13 @@ public class StreamMessageConsumerHealthReportingTests
         stream.FailReads = true;
         consumer.Start();
 
-        Assert.True(WaitUntil(() => Volatile.Read(ref errors) >= 2, TimeSpan.FromSeconds(5)));
+        WaitUntil.That(
+            () => Volatile.Read(ref errors) >= 2,
+            "the reader never raised ErrorOccurred",
+            TimeSpan.FromSeconds(5));
         Assert.True(consumer.IsRunning);
 
         consumer.StopSafely(timeoutMs: 2000);
-    }
-
-    private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            Thread.Sleep(10);
-        }
-
-        return condition();
     }
 
     /// <summary>

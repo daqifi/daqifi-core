@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Consumers;
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Communication.Consumers;
 
@@ -40,10 +41,9 @@ public class StreamMessageConsumerBackoffTests
 
         consumer.Start();
 
-        Assert.True(
-            WaitUntil(() => sink.FaultCount >= TransportConnectionWatchdog.ConsecutiveFaultThreshold,
-                TimeSpan.FromSeconds(10)),
-            $"a throwing CanRead must be reported to the transport, saw {sink.FaultCount} fault(s)");
+        WaitUntil.That(
+            () => sink.FaultCount >= TransportConnectionWatchdog.ConsecutiveFaultThreshold,
+            () => $"a throwing CanRead must be reported to the transport, saw {sink.FaultCount} fault(s)");
 
         Assert.True(Volatile.Read(ref errors) >= 1, "it must also be visible as a consumer error");
 
@@ -135,7 +135,7 @@ public class StreamMessageConsumerBackoffTests
         // Clear the running flag while the parser is parked inside the try body, then let it throw.
         var stopper = new Thread(() => consumer.StopSafely(timeoutMs: 5000)) { IsBackground = true };
         stopper.Start();
-        Assert.True(WaitUntil(() => !consumer.IsRunning, TimeSpan.FromSeconds(10)));
+        WaitUntil.That(() => !consumer.IsRunning, "the consumer never cleared its running flag");
         parser.Release.Set();
 
         Assert.True(stopper.Join(TimeSpan.FromSeconds(10)), "the consumer never stopped");
@@ -169,7 +169,7 @@ public class StreamMessageConsumerBackoffTests
         // report itself unreadable — the shape of a handle closed underneath an in-flight read.
         var stopper = new Thread(() => consumer.StopSafely(timeoutMs: 5000)) { IsBackground = true };
         stopper.Start();
-        Assert.True(WaitUntil(() => !consumer.IsRunning, TimeSpan.FromSeconds(10)));
+        WaitUntil.That(() => !consumer.IsRunning, "the consumer never cleared its running flag");
         stream.ReleaseProbe.Set();
 
         Assert.True(stopper.Join(TimeSpan.FromSeconds(10)), "the consumer never stopped");
@@ -197,7 +197,7 @@ public class StreamMessageConsumerBackoffTests
 
         var stopper = new Thread(() => consumer.StopSafely(timeoutMs: 5000)) { IsBackground = true };
         stopper.Start();
-        Assert.True(WaitUntil(() => !consumer.IsRunning, TimeSpan.FromSeconds(10)));
+        WaitUntil.That(() => !consumer.IsRunning, "the consumer never cleared its running flag");
         stream.ReleaseRead.Set();
 
         Assert.True(stopper.Join(TimeSpan.FromSeconds(10)), "the consumer never stopped");
@@ -234,20 +234,21 @@ public class StreamMessageConsumerBackoffTests
         consumer.Start();
 
         // Let the failing phase drive the fault path through the throwing subscriber.
-        Assert.True(WaitUntil(() => Volatile.Read(ref errors) >= 2, TimeSpan.FromSeconds(10)),
+        WaitUntil.That(
+            () => Volatile.Read(ref errors) >= 2,
             "the fault path never ran");
 
         // The link recovers. The reader must still be alive and still consuming — this is the
         // assertion that matters, not merely that no exception surfaced in the test.
         stream.Recover("$DAQiFi\r\n");
 
-        Assert.True(WaitUntil(() =>
+        WaitUntil.That(() =>
         {
             lock (received)
             {
                 return received.Count >= 1;
             }
-        }, TimeSpan.FromSeconds(10)), "the reader stopped consuming after a subscriber threw");
+        }, "the reader stopped consuming after a subscriber threw");
 
         Assert.True(consumer.IsRunning);
         consumer.StopSafely(timeoutMs: 2000);
@@ -274,18 +275,19 @@ public class StreamMessageConsumerBackoffTests
 
         consumer.Start();
 
-        Assert.True(WaitUntil(() => sink.FaultCalls >= 2, TimeSpan.FromSeconds(10)),
+        WaitUntil.That(
+            () => sink.FaultCalls >= 2,
             "the fault path never ran");
 
         stream.Recover("$DAQiFi\r\n");
 
-        Assert.True(WaitUntil(() =>
+        WaitUntil.That(() =>
         {
             lock (received)
             {
                 return received.Count >= 1;
             }
-        }, TimeSpan.FromSeconds(10)), "the reader stopped consuming after the health sink threw");
+        }, "the reader stopped consuming after the health sink threw");
 
         Assert.True(sink.SuccessCalls >= 1, "the success path must have been exercised too");
         Assert.True(consumer.IsRunning);
@@ -315,13 +317,13 @@ public class StreamMessageConsumerBackoffTests
         consumer.Start();
         stream.Recover("$DAQiFi\r\n");
 
-        Assert.True(WaitUntil(() =>
+        WaitUntil.That(() =>
         {
             lock (received)
             {
                 return received.Count >= 1;
             }
-        }, TimeSpan.FromSeconds(10)), "the payload never arrived in full");
+        }, "the payload never arrived in full");
 
         lock (received)
         {
@@ -329,22 +331,6 @@ public class StreamMessageConsumerBackoffTests
         }
 
         consumer.StopSafely(timeoutMs: 2000);
-    }
-
-    private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            Thread.Sleep(10);
-        }
-
-        return condition();
     }
 
     /// <summary>

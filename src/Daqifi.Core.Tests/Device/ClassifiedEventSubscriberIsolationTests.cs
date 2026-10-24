@@ -20,7 +20,7 @@ public class ClassifiedEventSubscriberIsolationTests
     [Fact]
     public void AThrowingStatusSubscriber_DoesNotStarveASubscriberAddedAfterIt()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
         var secondSubscriberFrames = 0;
 
         device.StatusMessageReceived += _ => throw new InvalidOperationException("first subscriber misbehaves");
@@ -35,7 +35,7 @@ public class ClassifiedEventSubscriberIsolationTests
     [Fact]
     public void AThrowingStreamSubscriber_DoesNotStarveASubscriberAddedAfterIt()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
         var secondSubscriberFrames = 0;
 
         device.StreamMessageReceived += _ => throw new InvalidOperationException("first subscriber misbehaves");
@@ -50,7 +50,7 @@ public class ClassifiedEventSubscriberIsolationTests
     [Fact]
     public void AThrowingMiddleSubscriber_StillLetsEarlierAndLaterSubscribersRun()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
         var order = new List<string>();
 
         device.StatusMessageReceived += _ => order.Add("first");
@@ -67,7 +67,7 @@ public class ClassifiedEventSubscriberIsolationTests
     {
         // A misbehaving StatusMessageReceived subscriber must not prevent MessageReceived from
         // firing for the same frame.
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
 
         device.StatusMessageReceived += _ => throw new InvalidOperationException("misbehaves");
         device.MessageReceived += (_, _) => device.UndifferentiatedRaisesSeen++;
@@ -83,7 +83,7 @@ public class ClassifiedEventSubscriberIsolationTests
         // The stream half of the pair above. StreamMessageReceived runs on the decode path, so a
         // throwing subscriber there has a second way to swallow the frame before MessageReceived
         // is raised -- which is why this is asserted separately rather than assumed from Status.
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
 
         device.StreamMessageReceived += _ => throw new InvalidOperationException("misbehaves");
         device.MessageReceived += (_, _) => device.UndifferentiatedRaisesSeen++;
@@ -96,7 +96,7 @@ public class ClassifiedEventSubscriberIsolationTests
     [Fact]
     public void MultipleThrowingSubscribers_AllRunAndAllAreContained()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
         var runs = 0;
 
         device.StatusMessageReceived += _ => { runs++; throw new InvalidOperationException("a"); };
@@ -112,7 +112,7 @@ public class ClassifiedEventSubscriberIsolationTests
     [Fact]
     public void ASingleSubscriber_StillWorksUnchanged()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
         var frames = 0;
         device.StatusMessageReceived += _ => frames++;
 

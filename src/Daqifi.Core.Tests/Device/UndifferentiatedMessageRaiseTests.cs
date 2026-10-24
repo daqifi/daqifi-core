@@ -20,7 +20,7 @@ public class UndifferentiatedMessageRaiseTests
     [Fact]
     public void WithNoSubscriber_TheUndifferentiatedEventIsNotRaised()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
 
         device.InvokeStatusMessage(StatusFrame());
         device.InvokeStreamMessage(StreamFrame());
@@ -31,7 +31,7 @@ public class UndifferentiatedMessageRaiseTests
     [Fact]
     public void WithASubscriber_BothStatusAndStreamFramesAreRaised()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
         var received = new List<object?>();
         device.MessageReceived += (_, e) => received.Add(e.Message.Data);
 
@@ -51,7 +51,7 @@ public class UndifferentiatedMessageRaiseTests
     [Fact]
     public void TheClassifiedEventsStillFireWithNoUndifferentiatedSubscriber()
     {
-        var device = new RaiseProbeDevice("TestDevice");
+        using var device = new RaiseProbeDevice("TestDevice");
 
         var statusFrames = 0;
         var streamFrames = 0;
