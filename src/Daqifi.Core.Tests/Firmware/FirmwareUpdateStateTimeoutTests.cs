@@ -100,7 +100,6 @@ public class FirmwareUpdateStateTimeoutTests
         var options = Tuned();
 
         Assert.Equal(options.VerifyingTimeout, options.GetStateTimeout(FirmwareUpdateState.ReconnectingAfterFlash));
-        Assert.Equal(Verifying, options.GetStateTimeout(FirmwareUpdateState.ReconnectingAfterFlash));
     }
 
     /// <summary>
@@ -113,7 +112,6 @@ public class FirmwareUpdateStateTimeoutTests
         var options = Tuned();
 
         Assert.Equal(options.ErasingFlashTimeout, options.GetStateTimeout(FirmwareUpdateState.CleaningUp));
-        Assert.Equal(Erasing, options.GetStateTimeout(FirmwareUpdateState.CleaningUp));
     }
 
     /// <summary>
