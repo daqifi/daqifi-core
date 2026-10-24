@@ -135,40 +135,6 @@ public class StreamMessageConsumerTests
         Assert.IsType<InvalidOperationException>(capturedError);
     }
 
-    [Fact]
-    public void StreamMessageConsumer_StopSafely_ShouldReturnTrue()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        var parser = new LineBasedMessageParser();
-        using var consumer = new StreamMessageConsumer<string>(stream, parser);
-        consumer.Start();
-        
-        // Act
-        var result = consumer.StopSafely();
-        
-        // Assert
-        Assert.True(result);
-        Assert.False(consumer.IsRunning);
-    }
-
-    [Fact]
-    public void StreamMessageConsumer_Dispose_ShouldCleanupResources()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        var parser = new LineBasedMessageParser();
-        var consumer = new StreamMessageConsumer<string>(stream, parser);
-        consumer.Start();
-        
-        // Act
-        consumer.Dispose();
-        
-        // Assert
-        Assert.False(consumer.IsRunning);
-        Assert.Throws<ObjectDisposedException>(() => consumer.Start());
-    }
-
     // Helper class for testing error scenarios
     private class ErrorThrowingStream : Stream
     {

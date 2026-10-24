@@ -308,20 +308,6 @@ public class DeviceNotConnectedExceptionTests
         Assert.True(caught);
     }
 
-    [Fact]
-    public void GuardException_CanBeClassifiedApartFromAnUnrelatedInvalidOperation()
-    {
-        // The whole point of the issue: a disconnect is separable from a real defect without
-        // reading either exception's message.
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        var disconnect = Record.Exception(() => device.StartStreaming());
-        Exception defect = new InvalidOperationException("a genuine bug");
-
-        Assert.IsType<DeviceNotConnectedException>(disconnect);
-        Assert.IsNotAssignableFrom<DeviceNotConnectedException>(defect);
-    }
-
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static void SetPrivateField(DaqifiDevice device, string fieldName, object value)

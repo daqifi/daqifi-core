@@ -119,14 +119,9 @@ public class LiveSampleSourceTests
             [ai0], "Dev", "SN");
         var reported = new List<int>();
 
-        await ExportAsync(source, new CsvExportOptions(), new Progress<int>(p => { lock (reported) { reported.Add(p); } }));
+        await ExportAsync(source, new CsvExportOptions(), new ListProgress(reported));
 
-        // Progress<T> posts asynchronously, so wait for the one report the exporter makes.
-        await WaitForAsync(() => { lock (reported) { return reported.Count > 0; } });
-        lock (reported)
-        {
-            Assert.All(reported, p => Assert.Equal(100, p));
-        }
+        Assert.Equal([100], reported);
     }
 
     // ── Sample translation ──────────────────────────────────────────────────
@@ -390,14 +385,8 @@ public class LiveSampleSourceTests
             .Select(l => l.TrimEnd('\r'))
             .ToArray();
 
-    private static async Task WaitForAsync(Func<bool> condition)
+    private sealed class ListProgress(List<int> reported) : IProgress<int>
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!condition() && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(10);
-        }
-
-        Assert.True(condition(), "Condition was not satisfied within the timeout.");
+        public void Report(int value) => reported.Add(value);
     }
 }

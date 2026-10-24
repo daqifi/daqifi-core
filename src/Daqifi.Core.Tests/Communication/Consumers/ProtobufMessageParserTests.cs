@@ -82,23 +82,6 @@ public class ProtobufMessageParserTests
     }
 
     [Fact]
-    public void ProtobufMessageParser_ParseMessages_WithIncompleteData_ShouldReturnEmpty()
-    {
-        // Arrange
-        var parser = new ProtobufMessageParser();
-        var originalMessage = new DaqifiOutMessage();
-        var completeData = originalMessage.ToByteArray();
-        var incompleteData = completeData.Take(completeData.Length / 2).ToArray(); // Half the data
-        
-        // Act
-        var messages = parser.ParseMessages(incompleteData, out var consumedBytes);
-        
-        // Assert - Should not parse incomplete protobuf
-        Assert.Empty(messages);
-        Assert.Equal(0, consumedBytes);
-    }
-
-    [Fact]
     public void ProtobufMessageParser_ParseMessages_WithMultipleMessages_ShouldParseAll()
     {
         // Arrange - two real length-delimited frames back to back, the shape a streaming

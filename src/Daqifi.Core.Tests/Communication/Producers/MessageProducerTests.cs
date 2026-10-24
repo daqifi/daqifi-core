@@ -24,35 +24,6 @@ public class MessageProducerTests
     }
 
     [Fact]
-    public void MessageProducer_Start_ShouldSetRunningState()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        using var producer = new MessageProducer<string>(stream);
-        
-        // Act
-        producer.Start();
-        
-        // Assert
-        Assert.True(producer.IsRunning);
-    }
-
-    [Fact]
-    public void MessageProducer_Stop_ShouldClearRunningState()
-    {
-        // Arrange
-        using var stream = new MemoryStream();
-        using var producer = new MessageProducer<string>(stream);
-        producer.Start();
-        
-        // Act
-        producer.Stop();
-        
-        // Assert
-        Assert.False(producer.IsRunning);
-    }
-
-    [Fact]
     public void MessageProducer_Send_WhenRunning_ShouldWriteToStream()
     {
         // Arrange

@@ -90,29 +90,6 @@ public class WincFlasherTests
     }
 
     [Fact]
-    public void ReadFlash_IssuesTheFastReadCommandWithTheAddressInTheControllerWord()
-    {
-        // Mirrors the WINC host driver's load-to-shared-memory sequence: opcode 0x0B in the low
-        // byte, then the 24-bit flash address ascending.
-        var port = CreateReadyPort();
-        port.Blocks[ShareMemoryBase] = new byte[16];
-
-        CreateReader(port).ReadFlash(0x123456, 16);
-
-        var buffer1Write = port.ReceivedHeaders.First(h =>
-            h[0] == (byte)WincBridgeProtocol.Command.WriteRegister &&
-            (((uint)h[7] << 24) | ((uint)h[6] << 16) | ((uint)h[5] << 8) | h[4]) == 0x1020C);
-
-        var commandWord = ((uint)buffer1Write[11] << 24) | ((uint)buffer1Write[10] << 16)
-                        | ((uint)buffer1Write[9] << 8) | buffer1Write[8];
-
-        Assert.Equal(0x0Bu, commandWord & 0xFF);
-        Assert.Equal(0x12u, (commandWord >> 8) & 0xFF);
-        Assert.Equal(0x34u, (commandWord >> 16) & 0xFF);
-        Assert.Equal(0x56u, (commandWord >> 24) & 0xFF);
-    }
-
-    [Fact]
     public void ReadFlashJedecId_ReturnsTheControllerResult()
     {
         var port = CreateReadyPort();

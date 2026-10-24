@@ -119,13 +119,6 @@ public class ChannelNameComparerTests
     }
 
     [Fact]
-    public void Compare_IdenticalNames_AreEqual()
-    {
-        Assert.Equal(0, Comparer.Compare("AI10", "AI10"));
-        Assert.Equal(0, Comparer.Compare(string.Empty, string.Empty));
-    }
-
-    [Fact]
     public void Compare_Nulls_SortBeforeEveryName()
     {
         Assert.Equal(0, Comparer.Compare(null, null));

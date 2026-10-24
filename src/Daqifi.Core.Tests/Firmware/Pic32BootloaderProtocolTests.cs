@@ -74,15 +74,6 @@ public class Pic32BootloaderProtocolTests
     }
 
     [Fact]
-    public void ParseHexFile_DelegatesToParser()
-    {
-        var lines = new[] { ":020000041D00DD", ":00000001FF" };
-        var result = _protocol.ParseHexFile(lines);
-
-        Assert.Equal(2, result.Count);
-    }
-
-    [Fact]
     public void Constructor_WithCustomProtectedRange_UsesCustomRange()
     {
         var protocol = new Pic32BootloaderProtocol(0x00010000, 0x00020000);

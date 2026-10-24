@@ -167,7 +167,7 @@ public class TimestampGapDetectorTests
     }
 
     [Fact]
-    public void Reset_BeforeSecondDelta_DoesNotFireOnWhatWouldHaveBeenAGap()
+    public void Reset_AGapAfterReseedIsStillDetectable()
     {
         const double period = 0.01;
         WarmUp(period, count: 10);

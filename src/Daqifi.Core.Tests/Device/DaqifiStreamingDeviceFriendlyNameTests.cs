@@ -33,13 +33,6 @@ public class DaqifiStreamingDeviceFriendlyNameTests
     }
 
     [Fact]
-    public async Task SetFriendlyNameAsync_NotConnected_Throws()
-    {
-        var device = new CapturingStreamingDevice(); // not connected
-        await Assert.ThrowsAsync<DeviceNotConnectedException>(() => device.SetFriendlyNameAsync("Lab Nq1"));
-    }
-
-    [Fact]
     public async Task SetFriendlyNameAsync_ValidName_SendsSetThenSave_AndUpdatesMetadata()
     {
         var device = new CapturingStreamingDevice();

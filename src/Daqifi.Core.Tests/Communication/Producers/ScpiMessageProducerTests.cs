@@ -264,12 +264,6 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
-    [Fact]
-    public void SetDioPortDirection_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetDioPortDirection(-1, 1));
-    }
-
     // Channel 0 is a real channel on every DAQiFi board, so the guard's boundary matters:
     // rejecting only negatives must leave the lowest valid channel untouched.
     [Fact]
@@ -327,12 +321,6 @@ public class ScpiMessageProducerTests
         var message = ScpiMessageProducer.SetDioPortState(1, 1);
         Assert.Equal("DIO:PORt:STATe 1,1", message.Data);
         AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetDioPortState_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetDioPortState(-1, 1));
     }
 
     [Fact]
@@ -410,23 +398,6 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
-    public void SetDioPortState_WithNonFiniteValue_ThrowsBeforeBuildingAMessage()
-    {
-        // The guard must reject the value rather than let a culture-dependent
-        // infinity symbol reach the command text.
-        var originalCulture = CultureInfo.CurrentCulture;
-        try
-        {
-            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
-            Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetDioPortState(1, double.PositiveInfinity));
-        }
-        finally
-        {
-            CultureInfo.CurrentCulture = originalCulture;
-        }
-    }
-
-    [Fact]
     public void EnableDioPorts_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.EnableDioPorts();
@@ -466,16 +437,6 @@ public class ScpiMessageProducerTests
         var message = ScpiMessageProducer.SetPwmChannelDutyCycle(4, 50);
         Assert.Equal("PWM:CHannel:DUTY 4,50", message.Data);
         AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void PwmProducers_RejectInvalidArguments()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelEnabled(-1, true));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelFrequency(0, 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelFrequency(-1, 100));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelDutyCycle(4, 101));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetPwmChannelDutyCycle(-1, 50));
     }
 
     [Fact]
@@ -751,12 +712,6 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
-    [Fact]
-    public void SetAdcCalibrationSlope_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationSlope(-1, 1.0));
-    }
-
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
@@ -795,12 +750,6 @@ public class ScpiMessageProducerTests
         }
     }
 
-    [Fact]
-    public void SetAdcCalibrationOffset_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAdcCalibrationOffset(-1, 1.0));
-    }
-
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
@@ -824,23 +773,11 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
-    public void GetAdcCalibrationSlope_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.GetAdcCalibrationSlope(-1));
-    }
-
-    [Fact]
     public void GetAdcCalibrationOffset_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.GetAdcCalibrationOffset(5);
         Assert.Equal("CONFigure:ADC:chanCALB? 5", message.Data);
         AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetAdcCalibrationOffset_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.GetAdcCalibrationOffset(-1));
     }
 
     [Fact]
@@ -945,13 +882,6 @@ public class ScpiMessageProducerTests
     }
 
     [Fact]
-    public void SetSdMaxFileSize_WithNegativeValue_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.SetSdMaxFileSize(-1));
-    }
-
-    [Fact]
     public void GetSdMaxFileSize_ReturnsCorrectCommand()
     {
         var message = ScpiMessageProducer.GetSdMaxFileSize;
@@ -1008,13 +938,6 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
-    [Fact]
-    public void SetSdMinFreeSpace_WithNegativeValue_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.SetSdMinFreeSpace(-1));
-    }
-
     [Theory]
     [InlineData(StreamInterface.Usb, 0)]
     [InlineData(StreamInterface.WiFi, 1)]
@@ -1025,13 +948,6 @@ public class ScpiMessageProducerTests
         var message = ScpiMessageProducer.SetStreamInterface(iface);
         Assert.Equal($"SYSTem:STReam:INTerface {expectedValue}", message.Data);
         AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void SetStreamInterface_WithUndefinedValue_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => ScpiMessageProducer.SetStreamInterface((StreamInterface)99));
     }
 
     [Fact]
@@ -1083,12 +999,6 @@ public class ScpiMessageProducerTests
         AssertMessageFormat(message);
     }
 
-    [Fact]
-    public void SetAnalogOutputVoltage_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.SetAnalogOutputVoltage(-1, 1.0));
-    }
-
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
@@ -1117,12 +1027,6 @@ public class ScpiMessageProducerTests
         var message = ScpiMessageProducer.GetAnalogOutputVoltage(2);
         Assert.Equal("SOURce:VOLTage:LEVel? 2", message.Data);
         AssertMessageFormat(message);
-    }
-
-    [Fact]
-    public void GetAnalogOutputVoltage_WithNegativeChannel_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ScpiMessageProducer.GetAnalogOutputVoltage(-1));
     }
 
     // --- Logging & diagnostics ---

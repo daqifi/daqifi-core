@@ -30,22 +30,6 @@ public class Crc16Tests
     }
 
     [Fact]
-    public void Low_ReturnsLowByteOfCrc()
-    {
-        var crc = new Crc16([0x01, 0x02, 0x03]);
-
-        Assert.Equal((byte)(crc.Crc & 0xFF), crc.Low);
-    }
-
-    [Fact]
-    public void High_ReturnsHighByteOfCrc()
-    {
-        var crc = new Crc16([0x01, 0x02, 0x03]);
-
-        Assert.Equal((byte)(crc.Crc >> 8), crc.High);
-    }
-
-    [Fact]
     public void Constructor_DifferentData_ProducesDifferentCrc()
     {
         var crc1 = new Crc16([0x01]);

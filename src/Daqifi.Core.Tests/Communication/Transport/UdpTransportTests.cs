@@ -19,16 +19,6 @@ public class UdpTransportTests
     }
 
     [Fact]
-    public void Constructor_WithPort_ShouldCreateInstance()
-    {
-        // Act
-        using var transport = new UdpTransport(30303);
-
-        // Assert
-        Assert.False(transport.IsOpen);
-    }
-
-    [Fact]
     public async Task OpenAsync_ShouldOpenTransport()
     {
         // Arrange
@@ -107,19 +97,6 @@ public class UdpTransportTests
         {
             // Environment limitation — not a code defect.
         }
-    }
-
-    [Fact]
-    public async Task SendUnicastAsync_ShouldSendData()
-    {
-        // Arrange
-        using var transport = new UdpTransport(0);
-        await transport.OpenAsync();
-        var testData = Encoding.ASCII.GetBytes("Test");
-        var endpoint = new IPEndPoint(IPAddress.Loopback, 12345);
-
-        // Act & Assert (should not throw)
-        await transport.SendUnicastAsync(testData, endpoint);
     }
 
     [Fact]

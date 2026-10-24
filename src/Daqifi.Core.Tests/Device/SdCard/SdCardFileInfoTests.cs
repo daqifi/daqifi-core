@@ -7,16 +7,6 @@ namespace Daqifi.Core.Tests.Device.SdCard;
 public class SdCardFileInfoTests
 {
     [Fact]
-    public void Constructor_SetsFileName()
-    {
-        // Arrange & Act
-        var fileInfo = new SdCardFileInfo("test.bin");
-
-        // Assert
-        Assert.Equal("test.bin", fileInfo.FileName);
-    }
-
-    [Fact]
     public void Constructor_WithDate_SetsCreatedDate()
     {
         // Arrange

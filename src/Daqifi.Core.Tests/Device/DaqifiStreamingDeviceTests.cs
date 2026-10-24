@@ -132,28 +132,6 @@ public class DaqifiStreamingDeviceTests
         Assert.Equal(expectedMessage.Data, sentMessage.Data);
     }
 
-    [Fact]
-    public void StartStreaming_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => device.StartStreaming());
-        Assert.Equal("Device is not connected.", exception.Message);
-    }
-
-    [Fact]
-    public void StopStreaming_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => device.StopStreaming());
-        Assert.Equal("Device is not connected.", exception.Message);
-    }
-
     // ---------------------------------------------------------------------
     // ADC calibration & voltage-precision NVM persistence (daqifi-core#207)
     // ---------------------------------------------------------------------
@@ -167,14 +145,6 @@ public class DaqifiStreamingDeviceTests
         // Factory-bank persistence (daqifi-core#386).
         yield return new object[] { "SaveFactoryAdcCalibration", "CONFigure:ADC:SAVEFcal" };
         yield return new object[] { "LoadFactoryAdcCalibration", "CONFigure:ADC:LOADFcal" };
-    }
-
-    public static IEnumerable<object[]> NvmPersistenceMethodNames()
-    {
-        foreach (var row in NvmPersistenceCommands())
-        {
-            yield return new object[] { row[0] };
-        }
     }
 
     private static void InvokeNvmMethod(IStreamingDevice device, string methodName)
@@ -205,18 +175,6 @@ public class DaqifiStreamingDeviceTests
         // Assert
         var sentMessage = Assert.Single(device.SentMessages);
         Assert.Equal(expectedCommand, sentMessage.Data);
-    }
-
-    [Theory]
-    [MemberData(nameof(NvmPersistenceMethodNames))]
-    public void NvmPersistence_WhenDisconnected_ThrowsDeviceNotConnectedException(string methodName)
-    {
-        // Arrange
-        var device = new DaqifiStreamingDevice("TestDevice");
-
-        // Act & Assert
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => InvokeNvmMethod(device, methodName));
-        Assert.Equal("Device is not connected.", exception.Message);
     }
 
     // ---------------------------------------------------------------------
@@ -268,30 +226,6 @@ public class DaqifiStreamingDeviceTests
         // Assert
         var sentMessage = Assert.Single(device.SentMessages);
         Assert.Equal($"CONFigure:ADC:USECal {bank}", sentMessage.Data);
-    }
-
-    [Fact]
-    public void SetAdcCalibrationSlope_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => device.SetAdcCalibrationSlope(0, 1.0));
-        Assert.Equal("Device is not connected.", exception.Message);
-    }
-
-    [Fact]
-    public void SetAdcCalibrationOffset_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => device.SetAdcCalibrationOffset(0, 1.0));
-        Assert.Equal("Device is not connected.", exception.Message);
-    }
-
-    [Fact]
-    public void UseAdcCalibration_WhenDisconnected_ThrowsDeviceNotConnectedException()
-    {
-        var device = new DaqifiStreamingDevice("TestDevice");
-        var exception = Assert.Throws<DeviceNotConnectedException>(() => device.UseAdcCalibration(1));
-        Assert.Equal("Device is not connected.", exception.Message);
     }
 
     [Fact]

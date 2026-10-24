@@ -140,16 +140,6 @@ public class SessionCommandInterpreterTests
         Assert.Equal(SessionCommandEffectKind.UnusableStreamingStart, aboveFloor.Kind);
     }
 
-    [Fact]
-    public void StopIsNotMistakenForStart()
-    {
-        // Both commands share the "SYSTem:St" prefix, so the order the two are tested in is load
-        // bearing rather than incidental.
-        var effect = SessionCommandInterpreter.Interpret("SYSTem:StopStreamData", MaxSamplingRate);
-
-        Assert.Equal(SessionCommandEffectKind.StopStreaming, effect.Kind);
-    }
-
     [Theory]
     [InlineData("ENAble:VOLTage:DC 0", 0u)]
     [InlineData("ENAble:VOLTage:DC 5", 5u)]

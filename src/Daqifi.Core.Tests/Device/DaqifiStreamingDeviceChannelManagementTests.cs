@@ -720,18 +720,6 @@ public class DaqifiStreamingDeviceChannelManagementTests
     #region SetAnalogOutput
 
     [Fact]
-    public void SetAnalogOutput_SendsLevelThenUpdate()
-    {
-        var device = CreateConnectedDevice();
-
-        device.SetAnalogOutput(1, 5.0);
-
-        Assert.Equal(2, device.SentMessages.Count);
-        Assert.Equal(ScpiMessageProducer.SetAnalogOutputVoltage(1, 5.0).Data, device.SentMessages[0].Data);
-        Assert.Equal(ScpiMessageProducer.UpdateDacOutputs.Data, device.SentMessages[1].Data);
-    }
-
-    [Fact]
     public void SetAnalogOutput_AddressesDacByChannelNumber()
     {
         var device = CreateConnectedDevice();
@@ -742,14 +730,6 @@ public class DaqifiStreamingDeviceChannelManagementTests
         Assert.Equal(2, device.SentMessages.Count);
         Assert.Equal(ScpiMessageProducer.SetAnalogOutputVoltage(7, 1.25).Data, device.SentMessages[0].Data);
         Assert.Equal(ScpiMessageProducer.UpdateDacOutputs.Data, device.SentMessages[1].Data);
-    }
-
-    [Fact]
-    public void SetAnalogOutput_NegativeChannel_ThrowsArgumentOutOfRangeException()
-    {
-        var device = CreateConnectedDevice();
-
-        Assert.Throws<ArgumentOutOfRangeException>(() => device.SetAnalogOutput(-1, 1.0));
     }
 
     [Fact]

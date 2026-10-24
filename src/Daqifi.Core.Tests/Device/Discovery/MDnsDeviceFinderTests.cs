@@ -363,19 +363,6 @@ public class MDnsDeviceFinderTests
 
     #region Serial number normalization
 
-    [Fact]
-    public void MapDevices_ReportsTheSerialNumberInTheSameFormAsTheOtherFinders()
-    {
-        // The firmware advertises the board's 64-bit serial as 16 hex digits, while the protobuf
-        // path reports the same integer in decimal. One board must not look like two devices.
-        var packet = MDnsResponseBuilder.DeviceAdvertisement(
-            txtStrings: ["sn=7E2815916200E898", "pn=Nq1"]);
-
-        var device = Assert.Single(MapAdvertisement(packet));
-
-        Assert.Equal("9090539562006014104", device.SerialNumber);
-    }
-
     [Theory]
     // The firmware format, upper and lower case, is converted.
     [InlineData("7E2815916200E898", "9090539562006014104")]

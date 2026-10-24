@@ -9,58 +9,15 @@ using Xunit;
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>
-/// Tests for #186 — ExecuteTextCommandAsync must serialize concurrent
-/// callers (SemaphoreSlim), reject re-entrant calls from the same
-/// async flow (InvalidOperationException, not deadlock), and reject
-/// calls when the device is disposed or disconnecting.
+/// Tests for #186 — a failed <c>ExecuteTextCommandAsync</c> releases its
+/// semaphore and clears the AsyncLocal re-entrancy flag. The disconnected
+/// and re-entrancy exception shapes are covered by
+/// <see cref="DeviceNotConnectedExceptionTests"/>.
 ///
-/// The protected method is exercised via a thin subclass that exposes
-/// it. The disposed/disconnecting guards are tested by setting the
-/// relevant private fields via reflection — those guards run before
-/// any transport / consumer interaction, so this gives faithful
-/// coverage without a transport stack. Re-entrancy is tested by
-/// flipping the AsyncLocal flag from inside the same logical flow.
+/// The protected method is exercised via a thin subclass that exposes it.
 /// </summary>
 public class DaqifiDeviceTextCommandLockTests
 {
-    [Fact]
-    public async Task ExecuteTextCommandAsync_WhenAlreadyInsideAsyncFlow_ThrowsInvalidOperation()
-    {
-        var device = new TextCommandTestableDevice("TestDevice");
-
-        // Simulate "we're already inside ExecuteTextCommandAsync on this
-        // async flow" by setting the AsyncLocal flag. The re-entrancy
-        // guard runs before WaitAsync(), so this check fires immediately
-        // without touching any transport state.
-        GetIsInsideTextExchange(device).Value = true;
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => device.CallExecuteTextCommandAsync(() => { }));
-        Assert.Contains("not re-entrant", ex.Message);
-    }
-
-    [Fact]
-    public async Task ExecuteTextCommandAsync_WhenDisposing_ThrowsDeviceNotConnected()
-    {
-        var device = new TextCommandTestableDevice("TestDevice");
-        SetIsDisconnecting(device, true);
-
-        var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.CallExecuteTextCommandAsync(() => { }));
-        Assert.Contains("disposing or disconnecting", ex.Message);
-    }
-
-    [Fact]
-    public async Task ExecuteTextCommandAsync_WhenDisposed_ThrowsDeviceNotConnected()
-    {
-        var device = new TextCommandTestableDevice("TestDevice");
-        SetDisposed(device, true);
-
-        var ex = await Assert.ThrowsAsync<DeviceNotConnectedException>(
-            () => device.CallExecuteTextCommandAsync(() => { }));
-        Assert.Contains("disposing or disconnecting", ex.Message);
-    }
-
     [Fact]
     public async Task ExecuteTextCommandAsync_ReleasesLockAfterValidationFailure()
     {
@@ -101,20 +58,6 @@ public class DaqifiDeviceTextCommandLockTests
         return (AsyncLocal<bool>)typeof(DaqifiDevice)
             .GetField("_isInsideTextExchange", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(device)!;
-    }
-
-    private static void SetIsDisconnecting(DaqifiDevice device, bool value)
-    {
-        typeof(DaqifiDevice)
-            .GetField("_isDisconnecting", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(device, value);
-    }
-
-    private static void SetDisposed(DaqifiDevice device, bool value)
-    {
-        typeof(DaqifiDevice)
-            .GetField("_disposed", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(device, value);
     }
 
     /// <summary>
