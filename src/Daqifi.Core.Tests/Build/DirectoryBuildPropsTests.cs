@@ -1,5 +1,5 @@
-using System.Reflection;
 using System.Xml.Linq;
+using Daqifi.Core.Tests.TestSupport;
 
 namespace Daqifi.Core.Tests.Build;
 
@@ -21,16 +21,9 @@ namespace Daqifi.Core.Tests.Build;
 /// </remarks>
 public class DirectoryBuildPropsTests
 {
-    private static string RepositoryRoot =>
-        Path.GetFullPath(
-            typeof(DirectoryBuildPropsTests).Assembly
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Single(a => a.Key == "RepositoryRoot")
-                .Value!);
+    private static string DirectoryBuildPropsPath => Path.Combine(RepositoryRoot.FullPath, "Directory.Build.props");
 
-    private static string DirectoryBuildPropsPath => Path.Combine(RepositoryRoot, "Directory.Build.props");
-
-    private static string DirectoryBuildTargetsPath => Path.Combine(RepositoryRoot, "Directory.Build.targets");
+    private static string DirectoryBuildTargetsPath => Path.Combine(RepositoryRoot.FullPath, "Directory.Build.targets");
 
     /// <summary>
     /// Property names declared in one of the repo-root build files, read from the file itself so
@@ -59,7 +52,7 @@ public class DirectoryBuildPropsTests
     }
 
     private static IReadOnlyList<string> ProjectFiles() =>
-        Directory.GetFiles(Path.Combine(RepositoryRoot, "src"), "*.csproj", SearchOption.AllDirectories)
+        Directory.GetFiles(Path.Combine(RepositoryRoot.FullPath, "src"), "*.csproj", SearchOption.AllDirectories)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
 
@@ -122,7 +115,7 @@ public class DirectoryBuildPropsTests
         // Daqifi.Mcp had none at all.
         foreach (var project in new[] { "Daqifi.Core", "Daqifi.Mcp" })
         {
-            var path = Path.Combine(RepositoryRoot, "src", project, $"{project}.csproj");
+            var path = Path.Combine(RepositoryRoot.FullPath, "src", project, $"{project}.csproj");
             var tags = XDocument.Load(path)
                 .Descendants("PackageTags")
                 .Select(e => e.Value)
@@ -170,7 +163,7 @@ public class DirectoryBuildPropsTests
 
             foreach (var name in declared.Where(centralized.Contains))
             {
-                offenders.Add($"{Path.GetRelativePath(RepositoryRoot, project)} declares <{name}>");
+                offenders.Add($"{Path.GetRelativePath(RepositoryRoot.FullPath, project)} declares <{name}>");
             }
         }
 
@@ -257,7 +250,7 @@ public class DirectoryBuildPropsTests
 
         foreach (var file in BuildFilesThatCanDeclareThem())
         {
-            var relativePath = Path.GetRelativePath(RepositoryRoot, file);
+            var relativePath = Path.GetRelativePath(RepositoryRoot.FullPath, file);
 
             foreach (var value in reader(XDocument.Load(file)))
             {
