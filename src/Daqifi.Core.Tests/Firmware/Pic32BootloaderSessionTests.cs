@@ -118,7 +118,7 @@ public class Pic32BootloaderSessionTests
     }
 
     [Fact]
-    public async Task WaitForBootloaderDevice_WithALocationKeyTarget_StillRefusesNothingWhenSeveralArePresent()
+    public async Task WaitForBootloaderDevice_WithALocationKeyTarget_StillMatchesItAmongSeveralCandidates()
     {
         using var poll = PollBudget();
 
