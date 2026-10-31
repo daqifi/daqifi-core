@@ -108,6 +108,40 @@ public class Pic32BootloaderSessionTests
     }
 
     [Fact]
+    public async Task WaitForBootloaderDevice_WithNoTargetAndExactlyOneBootloader_TakesItOnTheFirstSweep()
+    {
+        using var poll = PollBudget();
+
+        // The ordinary update: one board on the bench, no target supplied. One candidate is not
+        // ambiguous, so it is accepted straight away rather than polled again for a second opinion.
+        var (session, _) = CreateSession(
+            new FakeHidTransport(),
+            new FakeBootloaderProtocol([[0xA1]]),
+            new FakeHidDeviceEnumerator([], [Bootloader("path-1")]));
+
+        var found = await session.WaitForBootloaderDeviceAsync(null, null, poll.Token);
+
+        Assert.Equal("path-1", found.DevicePath);
+        Assert.Contains("after 1 poll attempt(s)", session.DescribeBootloaderSearch(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WaitForBootloaderDevice_WithATargetPathThatMatchesNothing_NeverFallsBackToAnotherBootloader()
+    {
+        // Two bootloaders are enumerated and neither is the requested one. Returning either would
+        // erase a board the caller did not name, so the only correct answer is to keep waiting.
+        var (session, _) = CreateSession(
+            new FakeHidTransport(),
+            new FakeBootloaderProtocol([[0xA1]]),
+            new FakeHidDeviceEnumerator([], [Bootloader("path-1"), Bootloader("path-2")]));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => session.WaitForBootloaderDeviceAsync("path-9", null, cts.Token));
+    }
+
+    [Fact]
     public async Task WaitForBootloaderDevice_KeepsPollingUntilTheBootloaderEnumerates()
     {
         using var poll = PollBudget();
