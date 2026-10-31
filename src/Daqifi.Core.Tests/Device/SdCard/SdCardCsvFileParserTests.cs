@@ -596,11 +596,14 @@ public sealed class SdCardCsvFileParserTests
     [Fact]
     public async Task ParseAsync_WithCalibrationConfig_ScalesRawAdcValues()
     {
-        // Arrange — raw ADC values (e.g., 22 counts on a 16-bit ADC)
-        // with calibration config that should scale them to voltage
+        // Arrange — raw ADC counts on a 16-bit ADC, with a calibration config that scales them
+        // to voltage. Every channel gets a different slope, intercept, range, and internal
+        // scale, so each expected value below is reachable only from that channel's own slot:
+        // the uniform lists this test used to carry could not tell a per-channel lookup from
+        // one pinned to slot 0 (#849).
         await using var stream = SdCardTestCsvFileBuilder.BuildCsvFileSharedTimestamp(
             "Nyquist 1", "7E2815916200E898", 50_000_000u,
-            (1000u, new[] { 0.0, 22.0, 16.0 })
+            (1000u, new[] { 4095.0, 22.0, 16.0 })
         );
 
         var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
@@ -610,10 +613,10 @@ public sealed class SdCardCsvFileParserTests
             DeviceSerialNumber: "7E2815916200E898",
             DevicePartNumber: "Nyquist 1",
             FirmwareRevision: "3.4.4",
-            CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0), (1.0, 0.0) },
+            CalibrationValues: new[] { (1.0, 0.0), (1.02, -0.05), (0.98, 0.01) },
             Resolution: 65535,
-            PortRange: new[] { 10.0, 10.0, 10.0 },
-            InternalScaleM: new[] { 1.0, 1.0, 1.0 });
+            PortRange: new[] { 10.0, 5.0, 2.0 },
+            InternalScaleM: new[] { 1.0, 2.0, 4.0 });
 
         var parser = new global::Daqifi.Core.Device.SdCard.SdCardCsvFileParser();
         var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
@@ -625,12 +628,13 @@ public sealed class SdCardCsvFileParserTests
         var session = await parser.ParseAsync(stream, "test.csv", options);
         var samples = await ToListAsync(session.Samples);
 
-        // Assert — raw value 22 should be scaled: (22 / 65535) * 10.0 * 1.0 + 0.0 = ~0.00336
+        // Assert — raw / resolution * portRange * calM * internalScaleM + calB, per channel.
+        // The header names ch0, ch1, ch2 in order, so name and position agree here.
         Assert.Single(samples);
         Assert.Equal(3, samples[0].AnalogValues.Count);
-        Assert.Equal(0.0, samples[0].AnalogValues[0], precision: 5);
-        Assert.Equal(22.0 / 65535.0 * 10.0, samples[0].AnalogValues[1], precision: 5);
-        Assert.Equal(16.0 / 65535.0 * 10.0, samples[0].AnalogValues[2], precision: 5);
+        Assert.Equal(4095.0 / 65535.0 * 10.0 * 1.0 * 1.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(22.0 / 65535.0 * 5.0 * 1.02 * 2.0 - 0.05, samples[0].AnalogValues[1], precision: 5);
+        Assert.Equal(16.0 / 65535.0 * 2.0 * 0.98 * 4.0 + 0.01, samples[0].AnalogValues[2], precision: 5);
     }
 
     [Fact]

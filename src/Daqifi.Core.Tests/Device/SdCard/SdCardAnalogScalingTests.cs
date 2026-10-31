@@ -114,6 +114,59 @@ public class SdCardAnalogScalingTests
     }
 
     // ------------------------------------------------------------------
+    // Channel numbers stated by the log, IReadOnlyList<double> overload
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void ScaleRawAnalogValues_Double_WithChannelIndices_ReadsTheNamedChannelsCoefficients()
+    {
+        // Arrange — a log that records only channels 2 and 0, in that order, which is what a
+        // CSV header of "ain2_ts,ain2_val,ain0_ts,ain0_val" states (#849). The two values sit
+        // at positions 0 and 1, so a lookup by position would read channels 0 and 1 instead.
+        var config = PerChannelConfig();
+        double[] raw = [150.0, 400.0];
+
+        // Act
+        var result = SdCardAnalogScaling.ScaleRawAnalogValues(raw, config, [2, 0]);
+
+        // Assert — channel 2's range, slope, scale, and offset for the first value...
+        Assert.Equal(150.0 / 1000.0 * 40.0 * 4.0 * 0.5 + 0.125, result[0], 10);
+        // ...and channel 0's for the second.
+        Assert.Equal(400.0 / 1000.0 * 10.0 * 2.0 * 1.0 + 0.5, result[1], 10);
+    }
+
+    [Fact]
+    public void ScaleRawAnalogValues_Double_WithFewerChannelIndicesThanValues_TheRestFallBackToPosition()
+    {
+        // Arrange — one value is named, one is not. The named one must still be read by name;
+        // position is all the other one has.
+        var config = PerChannelConfig();
+        double[] raw = [150.0, 400.0];
+
+        // Act
+        var result = SdCardAnalogScaling.ScaleRawAnalogValues(raw, config, [2]);
+
+        // Assert
+        Assert.Equal(150.0 / 1000.0 * 40.0 * 4.0 * 0.5 + 0.125, result[0], 10);
+        Assert.Equal(400.0 / 1000.0 * 20.0 * 3.0 * 2.0 - 0.25, result[1], 10);
+    }
+
+    [Fact]
+    public void ScaleRawAnalogValues_Double_WithAChannelIndexPastEveryList_UsesTheDefaultsNotAnotherChannel()
+    {
+        // Arrange — the log names channel 9; this configuration describes three channels. The
+        // fallback must be unity gain, no offset, a one-volt range, and a unity internal
+        // scale, never the coefficients of some other channel.
+        var config = PerChannelConfig();
+
+        // Act
+        var result = SdCardAnalogScaling.ScaleRawAnalogValues([150.0], config, [9]);
+
+        // Assert
+        Assert.Equal(150.0 / 1000.0, result[0], 10);
+    }
+
+    // ------------------------------------------------------------------
     // Short per-channel lists, IReadOnlyList<double> overload
     // ------------------------------------------------------------------
 
