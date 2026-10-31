@@ -33,6 +33,28 @@ internal static class SdCardTestJsonFileBuilder
     }
 
     /// <summary>
+    /// Builds a JSON log file from literal text lines, for shapes the typed builders above do
+    /// not cover: the real firmware's multi-line objects, a metadata header, or deliberately
+    /// malformed input.
+    /// </summary>
+    /// <param name="lines">The lines to write, in order, each followed by a line terminator.</param>
+    /// <returns>A <see cref="MemoryStream"/> positioned at the beginning containing the text.</returns>
+    public static MemoryStream BuildRawJsonFile(params string[] lines)
+    {
+        var ms = new MemoryStream();
+        var writer = new StreamWriter(ms, new UTF8Encoding(false), leaveOpen: true);
+
+        foreach (var line in lines)
+        {
+            writer.WriteLine(line);
+        }
+
+        writer.Flush();
+        ms.Position = 0;
+        return ms;
+    }
+
+    /// <summary>
     /// Builds a JSON log file with integer analog values instead of floats.
     /// </summary>
     public static MemoryStream BuildJsonFileWithIntegers(params (uint ts, int[] analog, string digital)[] lines)

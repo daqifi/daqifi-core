@@ -143,6 +143,68 @@ public sealed class SdCardJsonFileParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_LegacyLineWithoutDigitalField_ReportsZeroForThatSample()
+    {
+        // The legacy one-object-per-line shape is self-contained: a line that states no
+        // "digital" field states a digital state of zero, and must not inherit the previous
+        // line's. Pinned so the firmware "di" shape cannot quietly change this.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"ts\":100,\"analog\":[1.0],\"digital\":\"01-02\"}",
+            "{\"ts\":200,\"analog\":[2.0]}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(0x0201u, samples[0].DigitalData);
+        Assert.Equal(0u, samples[1].DigitalData);
+    }
+
+    [Fact]
+    public async Task ParseAsync_LegacyNonNumericAnalogValue_SkipsThatSample()
+    {
+        // A string inside the legacy "analog" array makes the whole sample unusable, so it is
+        // dropped rather than reported with a guessed value.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"ts\":100,\"analog\":[1.0],\"digital\":\"\"}",
+            "{\"ts\":200,\"analog\":[\"oops\"],\"digital\":\"\"}",
+            "{\"ts\":300,\"analog\":[3.0],\"digital\":\"\"}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(1.0, samples[0].AnalogValues[0]);
+        Assert.Equal(3.0, samples[1].AnalogValues[0]);
+    }
+
+    [Fact]
+    public async Task ParseAsync_ObjectWithoutAnalogValues_IsNotASample()
+    {
+        // A timestamp on its own carries no reading, so it produces no sample.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"ts\":100,\"analog\":[1.0],\"digital\":\"\"}",
+            "{\"ts\":200,\"digital\":\"\"}",
+            "{\"ts\":300,\"analog\":[3.0],\"digital\":\"\"}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions { FallbackTimestampFrequency = 100 };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(1.0, samples[0].AnalogValues[0]);
+        Assert.Equal(3.0, samples[1].AnalogValues[0]);
+    }
+
+    [Fact]
     public async Task ParseAsync_EmptyFile_ReturnsEmptySamples()
     {
         // Arrange
