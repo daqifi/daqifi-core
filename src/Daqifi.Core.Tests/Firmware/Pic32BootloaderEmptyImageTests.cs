@@ -77,10 +77,10 @@ public class Pic32BootloaderEmptyImageTests
 
         // Queued so that the old code could run to completion: version, erase ack, program ack,
         // version again for the verify pass. The fix makes all of them unused.
-        hidTransport.EnqueueRead([0x01, 0x10]);
-        hidTransport.EnqueueRead([0x01, 0x02]);
-        hidTransport.EnqueueRead([0x01, 0x03]);
-        hidTransport.EnqueueRead([0x01, 0x10]);
+        hidTransport.EnqueueRead(FrameReply([ReadVersionOpcode, 3, 1]));
+        hidTransport.EnqueueRead(FrameReply([EraseFlashOpcode]));
+        hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode]));
+        hidTransport.EnqueueRead(FrameReply([ReadVersionOpcode, 3, 1]));
 
         var service = CreateService(hidTransport);
         var device = new FakeStreamingDevice("COM3");
@@ -125,11 +125,11 @@ public class Pic32BootloaderEmptyImageTests
     public async Task UpdateFirmwareAsync_WithOneDataRecord_StillErasesThenProgramsIt()
     {
         var hidTransport = new FakeHidTransport();
-        hidTransport.EnqueueRead([0x01, 0x10]); // version
-        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the address record
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the data record
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the end-of-file record
+        hidTransport.EnqueueRead(FrameReply([ReadVersionOpcode, 3, 1])); // version
+        hidTransport.EnqueueRead(FrameReply([EraseFlashOpcode])); // erase ack
+        hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode])); // program ack, the address record
+        hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode])); // program ack, the data record
+        hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode])); // program ack, the end-of-file record
         hidTransport.EnqueueRead(CrcReply(Enumerable.Range(0, 16).Select(value => (byte)value).ToArray()));
 
         var service = CreateService(hidTransport);
@@ -171,11 +171,11 @@ public class Pic32BootloaderEmptyImageTests
         // The smallest image that programs anything at all. One data byte has to be enough,
         // because the guard asks whether there is a byte to program, not how many.
         var hidTransport = new FakeHidTransport();
-        hidTransport.EnqueueRead([0x01, 0x10]); // version
-        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the address record
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the data record
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the end-of-file record
+        hidTransport.EnqueueRead(FrameReply([ReadVersionOpcode, 3, 1])); // version
+        hidTransport.EnqueueRead(FrameReply([EraseFlashOpcode])); // erase ack
+        hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode])); // program ack, the address record
+        hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode])); // program ack, the data record
+        hidTransport.EnqueueRead(FrameReply([ProgramFlashOpcode])); // program ack, the end-of-file record
         hidTransport.EnqueueRead(CrcReply([0x7F]));
 
         var service = CreateService(hidTransport);
@@ -250,6 +250,11 @@ public class Pic32BootloaderEmptyImageTests
     {
         var flashCrc = new Crc16(data).Crc;
         byte[] content = [ReadCrcOpcode, (byte)flashCrc, (byte)(flashCrc >> 8)];
+        return FrameReply(content);
+    }
+
+    private static byte[] FrameReply(byte[] content)
+    {
         var frameCrc = new Crc16(content).Crc;
         byte[] body = [.. content, (byte)frameCrc, (byte)(frameCrc >> 8)];
         var frame = new List<byte> { 0x01 };
