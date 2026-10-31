@@ -502,6 +502,40 @@ public class SdCardOperationsCollaboratorTests
         Assert.Equal(1, host.StartStreamingCallCount);
     }
 
+    [Fact]
+    public async Task GetSdCardFilesAsync_NoDirectoryOnTheCard_ReturnsNoFilesInOneExchange()
+    {
+        // #730: a new card has no log directory, and that is an empty card. The
+        // listing returns no files instead of raising. One exchange, because the
+        // answer is final -- there is nothing transient to retry.
+        var host = new FakeHost();
+        host.EnqueueResponse("[Error:5]Failed to open directory [DAQiFi]", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        var files = await ops.GetSdCardFilesAsync();
+
+        Assert.NotNull(files);
+        Assert.Empty(files);
+        Assert.Empty(ops.SdCardFiles);
+        Assert.Equal(1, host.ExchangeCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_NoCardAtAll_StillThrowsEvenWithANotFoundLine()
+    {
+        // A missing card outranks a missing directory, and the order is the same one
+        // the error classifier already applies. An absent card is a fault and must not
+        // read as an empty card (#730).
+        var host = new FakeHost();
+        host.EnqueueResponse(
+            "Error !! No SD Card Detected",
+            "[Error:5]Failed to open directory [DAQiFi]",
+            NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(() => ops.GetSdCardFilesAsync());
+    }
+
     #endregion
 
     #region GetSdCardStorageAsync
@@ -936,6 +970,30 @@ public class SdCardOperationsCollaboratorTests
 
         Assert.False(host.IsStreaming);
         Assert.Equal(0, host.StartStreamingCallCount);
+    }
+
+    [Fact]
+    public async Task DeleteSdCardFileAsync_RelistFindsNoDirectory_StillThrowsDirectoryNotFound()
+    {
+        // #730 changes the READ path only. The delete keeps the exception, because the
+        // two calls ask the device different questions. A listing asks "what is on the
+        // card?", and "no directory" answers it: nothing. A delete asks "is the file I
+        // named gone?", and it answers that from the relist in the same exchange. A
+        // directory that disappeared between the DELETE and the LIST leaves that
+        // question open, so the delete reports it instead of writing an empty list it
+        // never confirmed into the cache.
+        var host = new FakeHost();
+        host.EnqueueResponse("Daqifi/keep.bin 10", NoErrorTerminator);
+        host.EnqueueResponse("[Error:5]Failed to open directory [DAQiFi]", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+        await ops.GetSdCardFilesAsync();
+
+        var ex = await Assert.ThrowsAsync<SdCardDirectoryNotFoundException>(
+            () => ops.DeleteSdCardFileAsync("gone.bin"));
+
+        Assert.Equal("DAQiFi", ex.DirectoryPath);
+        // The cache still holds what the last trusted listing saw.
+        Assert.Equal("keep.bin", Assert.Single(ops.SdCardFiles).FileName);
     }
 
     [Fact]
