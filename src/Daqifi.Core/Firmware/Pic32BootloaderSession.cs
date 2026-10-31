@@ -48,10 +48,25 @@ internal sealed class Pic32BootloaderSession
     /// Parses and validates the HEX image before any device I/O, returning the programmable
     /// records, the CRC regions used by the post-programming verify pass and the total byte count.
     /// </summary>
+    /// <remarks>
+    /// Everything this method decides, it decides before the flow can erase the device. That is
+    /// the point of it. A PROGRAM_FLASH frame has to fit one HID OUT report, and DLE escaping can
+    /// take a legal 32-byte HEX record past that length; the transport then refuses the write
+    /// during programming, with the application flash already erased (#840). So the records are
+    /// re-packed to fit here, and an image that still cannot fit is refused here, while the device
+    /// is whole.
+    /// </remarks>
     internal (IReadOnlyList<byte[]> HexRecords, IReadOnlyList<FlashCrcRegion> CrcRegions, long TotalBytes)
         PrepareHexImage(string[] hexLines)
     {
-        var hexRecords = _bootloaderProtocol.ParseHexFile(hexLines);
+        var parsedRecords = _bootloaderProtocol.ParseHexFile(hexLines);
+
+        // Split any record whose escaped frame could outgrow one HID report, then confirm that
+        // nothing is left over. Same bytes, same addresses — only the records they arrive in
+        // change. Both steps run before any device I/O.
+        var hexRecords = Pic32BootloaderFrameBudget.FitRecordsToOneReport(parsedRecords);
+        Pic32BootloaderFrameBudget.EnsureEveryRecordFitsOneReport(hexRecords);
+
         var totalBytes = hexRecords.Sum(record => (long)record.Length);
         if (totalBytes <= 0)
         {
