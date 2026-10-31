@@ -233,6 +233,18 @@ public class SerialStreamTransport : IStreamTransport, ITransportHealthSink
     public bool IsConnected => _serialPort?.IsOpen == true;
 
     /// <summary>
+    /// The port this transport was constructed for, for example <c>COM7</c> or
+    /// <c>/dev/cu.usbmodem1101</c>.
+    /// </summary>
+    /// <remarks>
+    /// The name an external program needs, on its own. <see cref="ConnectionInfo"/> carries the
+    /// same port inside a sentence for a log line, so it cannot be passed to a tool. The port is
+    /// fixed at construction and does not change, so this answers the same whether the transport
+    /// is open or closed.
+    /// </remarks>
+    internal string PortName => _portName;
+
+    /// <summary>
     /// Gets information about the transport connection.
     /// </summary>
     public string ConnectionInfo
