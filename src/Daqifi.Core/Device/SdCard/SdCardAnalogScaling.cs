@@ -21,10 +21,20 @@ internal static class SdCardAnalogScaling
     /// scale. When <c>null</c> or <see cref="SdCardDeviceConfiguration.Resolution"/> is zero,
     /// <paramref name="rawValues"/> is returned unchanged.
     /// </param>
+    /// <param name="channelIndices">
+    /// The channel number each value belongs to, in the same order as
+    /// <paramref name="rawValues"/>. A log that states which channels it holds — the CSV
+    /// column header names them — passes them here, so that a value is scaled with its own
+    /// channel's coefficients rather than with those of the channel at its position
+    /// (closes #849). When <c>null</c>, or shorter than <paramref name="rawValues"/>, the
+    /// remaining values fall back to their position, which is all a log that names no channels
+    /// can offer.
+    /// </param>
     /// <returns>The scaled values, in volts, or <paramref name="rawValues"/> as-is if no config is available.</returns>
     internal static IReadOnlyList<double> ScaleRawAnalogValues(
         IReadOnlyList<double> rawValues,
-        SdCardDeviceConfiguration? config)
+        SdCardDeviceConfiguration? config,
+        IReadOnlyList<int>? channelIndices = null)
     {
         if (config == null || config.Resolution == 0)
         {
@@ -33,9 +43,12 @@ internal static class SdCardAnalogScaling
         }
 
         var result = new double[rawValues.Count];
-        for (var ch = 0; ch < rawValues.Count; ch++)
+        for (var i = 0; i < rawValues.Count; i++)
         {
-            result[ch] = ScaleChannel(rawValues[ch], ch, config);
+            var channel = channelIndices != null && i < channelIndices.Count
+                ? channelIndices[i]
+                : i;
+            result[i] = ScaleChannel(rawValues[i], channel, config);
         }
 
         return result;
@@ -75,16 +88,23 @@ internal static class SdCardAnalogScaling
         return result;
     }
 
+    /// <summary>
+    /// Scales one raw count with channel <paramref name="channel"/>'s coefficients. A channel
+    /// the configuration does not describe gets unity gain, no offset, a one-volt range, and a
+    /// unity internal scale. That fallback never borrows another channel's coefficients, so it
+    /// cannot report one channel's reading as another's.
+    /// </summary>
     private static double ScaleChannel(double rawValue, int channel, SdCardDeviceConfiguration config)
     {
         var cal = config.CalibrationValues; // May be null — defaults applied per-channel below
         var portRange = config.PortRange;
         var intScale = config.InternalScaleM;
 
-        var calM = cal != null && channel < cal.Count ? cal[channel].Slope : 1.0;
-        var calB = cal != null && channel < cal.Count ? cal[channel].Intercept : 0.0;
-        var range = portRange != null && channel < portRange.Count ? portRange[channel] : 1.0;
-        var scaleM = intScale != null && channel < intScale.Count ? intScale[channel] : 1.0;
+        var hasCal = cal != null && channel >= 0 && channel < cal.Count;
+        var calM = hasCal ? cal![channel].Slope : 1.0;
+        var calB = hasCal ? cal![channel].Intercept : 0.0;
+        var range = portRange != null && channel >= 0 && channel < portRange.Count ? portRange[channel] : 1.0;
+        var scaleM = intScale != null && channel >= 0 && channel < intScale.Count ? intScale[channel] : 1.0;
 
         return AnalogScaling.Scale(rawValue, config.Resolution, range, calM, scaleM, calB);
     }
