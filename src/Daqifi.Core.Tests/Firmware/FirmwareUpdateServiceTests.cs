@@ -6,6 +6,7 @@ using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -5040,7 +5041,7 @@ public class FirmwareUpdateServiceTests
         return path;
     }
 
-    private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider
+    private sealed class FakeLanChipInfoStreamingDevice : IStreamingDevice, ILanChipInfoProvider, ISerialPortNamed
     {
         private readonly LanChipInfo? _chipInfo;
         private ConnectionStatus _status = ConnectionStatus.Connected;
@@ -5052,9 +5053,13 @@ public class FirmwareUpdateServiceTests
             LanChipInfo? chipInfo,
             int transientFailuresBeforeSuccess = 0,
             bool isConnected = true,
-            int lanNotInitializedFailuresBeforeSuccess = 0)
+            int lanNotInitializedFailuresBeforeSuccess = 0,
+            string? serialPortName = null)
         {
             Name = name;
+            // Defaults to the name, as these tests name the double after the port it sits on.
+            // The port-resolution tests in WifiModuleUpdaterTests set the two apart (issue #842).
+            SerialPortName = serialPortName ?? name;
             _chipInfo = chipInfo;
             _remainingTransientFailures = transientFailuresBeforeSuccess;
             _remainingLanNotInitializedFailures = lanNotInitializedFailuresBeforeSuccess;
@@ -5073,6 +5078,10 @@ public class FirmwareUpdateServiceTests
         public int GetLanChipInfoCallCount { get; private set; }
 
         public string Name { get; }
+
+        /// <inheritdoc />
+        public string? SerialPortName { get; set; }
+
         public IPAddress? IpAddress => null;
         public bool IsConnected { get; private set; }
         public ConnectionStatus Status => _status;

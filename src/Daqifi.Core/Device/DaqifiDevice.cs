@@ -46,7 +46,7 @@ namespace Daqifi.Core.Device;
 /// remaining known-cost rather than reworking it.
 /// </para>
 /// </remarks>
-public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost
+public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchangeHost, IOperationSerializationHost, IReconnectHost, ISerialPortNamed
 {
     /// <summary>
     /// Gets the name of the device.
@@ -2092,6 +2092,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
     /// <inheritdoc />
     IStreamTransport? ITextExchangeHost.Transport => _transport;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Only a serial transport has a port, so a device on TCP or on a bare
+    /// <see cref="System.IO.Stream"/> answers <c>null</c>.
+    /// </remarks>
+    string? ISerialPortNamed.SerialPortName => (_transport as SerialStreamTransport)?.PortName;
 
     /// <inheritdoc />
     IMessageConsumer<DaqifiOutMessage>? ITextExchangeHost.MessageConsumer => _messageConsumer;

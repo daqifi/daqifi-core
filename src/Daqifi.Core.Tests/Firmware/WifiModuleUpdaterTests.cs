@@ -107,11 +107,15 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(options, runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        await RunUpdateAsync(
+            updater,
+            new FakeStreamingDevice("DAQiFi Device", serialPortName: "COM7"),
+            CreateFirmwareDirectory());
 
         Assert.NotNull(runner.LastRequest);
         Assert.Contains("/p COM42", runner.LastRequest!.Arguments, StringComparison.Ordinal);
         Assert.DoesNotContain("COM7", runner.LastRequest.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("DAQiFi Device", runner.LastRequest.Arguments, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -120,21 +124,79 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        // The label and the port are set apart on purpose. A double whose name equals its port
+        // cannot tell the two sources apart, so it passes whichever one the code reads — which is
+        // how issue #842 stayed hidden behind a test named for the port.
+        await RunUpdateAsync(
+            updater,
+            new FakeStreamingDevice("Nq1 on the bench", serialPortName: "COM7"),
+            CreateFirmwareDirectory());
 
         Assert.NotNull(runner.LastRequest);
         Assert.Contains("/p COM7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("Nq1 on the bench", runner.LastRequest.Arguments, StringComparison.Ordinal);
     }
 
+    // Issue #842. The device name is a display label: the factory fills it from
+    // DeviceConnectionOptions.DeviceName, whose default is "DAQiFi Device". Reading the port off
+    // it launched the flash tool with /p "DAQiFi Device", which the tool cannot open. This is the
+    // exact device every caller who never set a name has, so it is the case that has to hold.
     [Fact]
-    public async Task RunUpdate_WhenNoPortCanBeResolved_FailsRatherThanFlashingAnEmptyPort()
+    public async Task RunUpdate_WhenTheDeviceCarriesTheDefaultLabel_StillFlashesThroughItsRealPort()
     {
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
 
-        // No override, and a device that cannot name its own port.
+        var device = new FakeStreamingDevice(
+            new DeviceConnectionOptions().DeviceName,
+            serialPortName: "COM7");
+
+        // Guards the premise: the default really is a label, not a port.
+        Assert.Equal("DAQiFi Device", device.Name);
+
+        await RunUpdateAsync(updater, device, CreateFirmwareDirectory());
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Contains("/p COM7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("DAQiFi Device", runner.LastRequest.Arguments, StringComparison.Ordinal);
+    }
+
+    // The other half of #842: when no port is known, say so. Handing the tool the label instead
+    // bought a failure that named the wrong problem, so this must fail loudly and before the
+    // tool runs.
+    [Fact]
+    public async Task RunUpdate_WhenNoPortCanBeResolved_FailsLoudlyAndNeverRunsTheTool()
+    {
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        // A named device on no serial transport — a TCP connection, for instance.
+        var device = new FakeStreamingDevice("DAQiFi Device") { SerialPortName = null };
+
         var error = await Assert.ThrowsAsync<FirmwareUpdateException>(
-            () => RunUpdateAsync(updater, new FakeStreamingDevice(string.Empty), CreateFirmwareDirectory()));
+            () => RunUpdateAsync(updater, device, CreateFirmwareDirectory()));
+
+        var inner = Assert.IsType<InvalidOperationException>(error.InnerException);
+
+        // The message has to say what is missing and what the caller can do about it, and must
+        // not offer the device name as a port.
+        Assert.Contains("serial port", inner.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(nameof(FirmwareUpdateServiceOptions.WifiPortOverride), inner.Message, StringComparison.Ordinal);
+        Assert.Equal(0, runner.RunCount);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenTheDeviceReportsABlankPort_FailsTheSameWay()
+    {
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        // Whitespace is not a port either, and it is what an unquoted /p argument would swallow
+        // silently.
+        var device = new FakeStreamingDevice("DAQiFi Device") { SerialPortName = "   " };
+
+        var error = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => RunUpdateAsync(updater, device, CreateFirmwareDirectory()));
 
         Assert.IsType<InvalidOperationException>(error.InnerException);
         Assert.Equal(0, runner.RunCount);
