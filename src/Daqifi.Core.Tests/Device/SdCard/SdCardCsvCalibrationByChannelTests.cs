@@ -247,6 +247,32 @@ public sealed class SdCardCsvCalibrationByChannelTests
     }
 
     [Fact]
+    public async Task ParseAsync_HeaderWithSpacesAfterEachComma_StillReadsEveryChannelNumber()
+    {
+        // Arrange — a hand-edited header. The spaces must not hide a channel number, and must
+        // not turn the dio pair into an unmatched analog column either. The data rows keep the
+        // firmware's own spacing: a space in a data row is a separate question, which the
+        // parser's skip-the-bad-row contract already answers.
+        var content =
+            $"# Timestamp Tick Rate: {TickRate} Hz\n" +
+            "ain3_ts, ain3_val, ain1_ts, ain1_val, dio_ts, dio_val\n" +
+            "1000,100,1000,200,1000,7\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+        var options = new SdCardParseOptions { ConfigurationOverride = EightChannelConfig() };
+
+        // Act
+        var session = await new SdCardCsvFileParser().ParseAsync(stream, "log.csv", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert
+        var sample = Assert.Single(samples);
+        Assert.Equal(2, sample.AnalogValues.Count);
+        Assert.Equal(VoltsFor(3, 100.0), sample.AnalogValues[0], 10);
+        Assert.Equal(VoltsFor(1, 200.0), sample.AnalogValues[1], 10);
+        Assert.Equal(7u, sample.DigitalData);
+    }
+
+    [Fact]
     public async Task ParseAsync_FileWithNoColumnHeader_StillScalesByPosition()
     {
         // Arrange — data rows only. Nothing names a channel, so position is all there is; this

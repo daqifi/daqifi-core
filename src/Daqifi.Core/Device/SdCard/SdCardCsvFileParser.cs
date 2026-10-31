@@ -283,7 +283,9 @@ public sealed class SdCardCsvFileParser
 
                     for (var p = 0; p < totalPairs; p++)
                     {
-                        var nameCol = cols[p * 2]; // e.g., "ain0_ts" or "dio_ts"
+                        // Trimmed once, so that a hand-edited file with a space after each
+                        // comma classifies its columns exactly as the firmware's own does.
+                        var nameCol = cols[p * 2].Trim(); // e.g., "ain0_ts" or "dio_ts"
                         if (nameCol.StartsWith("dio", StringComparison.OrdinalIgnoreCase))
                         {
                             hasDigitalPair = true;
@@ -294,7 +296,7 @@ public sealed class SdCardCsvFileParser
                         if (!TryParseAnalogChannelIndex(nameCol, out var channelIndex))
                         {
                             throw new InvalidDataException(
-                                $"SD card CSV column header '{nameCol.Trim()}' names no analog channel. " +
+                                $"SD card CSV column header '{nameCol}' names no analog channel. " +
                                 "Expected 'ain<N>_ts', 'ch<N>_ts', or a 'dio' pair. Calibration is " +
                                 "applied per channel number, so this column cannot be scaled.");
                         }
