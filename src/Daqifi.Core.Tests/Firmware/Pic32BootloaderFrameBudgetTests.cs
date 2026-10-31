@@ -236,19 +236,20 @@ public class Pic32BootloaderFrameBudgetTests
         var session = CreateSession(transport, new Pic32BootloaderProtocol());
 
         var (hexRecords, _, totalBytes) = session.PrepareHexImage([
+            ":020000041D00DD",
             ":200000001010101010101010101010101010101010101010101010101010101010101010E0",
             ":00000001FF"
         ]);
 
-        // Two 16-byte program records out of the one 32-byte record, then the end-of-file record.
-        Assert.Equal(3, hexRecords.Count);
-        Assert.Equal(47, totalBytes);
+        // Address record, two 16-byte data records, then the end-of-file record.
+        Assert.Equal(4, hexRecords.Count);
+        Assert.Equal(54, totalBytes);
 
         var frameLengths = hexRecords
             .Select(record => Pic32BootloaderMessageProducer.CreateProgramFlashMessage(record).Length)
             .ToArray();
 
-        Assert.Equal([43, 44, 11], frameLengths);
+        Assert.Equal([13, 43, 44, 11], frameLengths);
         Assert.All(frameLengths, length => Assert.True(length <= OneReport, $"A frame was {length} bytes."));
 
         // Nothing was asked of the device to work any of that out.
@@ -304,16 +305,19 @@ public class Pic32BootloaderFrameBudgetTests
     public async Task UpdateFirmwareAsync_WithA32ByteRecord_WritesTheEraseThenOneReportPerRecord()
     {
         var hidTransport = new FakeHidTransport();
-        hidTransport.EnqueueRead([0x01, 0x10]); // version
-        hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, first 16 bytes
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, second 16 bytes
-        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, end-of-file record
-        hidTransport.EnqueueRead([0x01, 0x10]); // version, read again to verify
+        hidTransport.EnqueueRead(FrameReply([0x01, 3, 1])); // version
+        hidTransport.EnqueueRead(FrameReply([0x02])); // erase ack
+        hidTransport.EnqueueRead(FrameReply([0x03])); // program ack, address record
+        hidTransport.EnqueueRead(FrameReply([0x03])); // program ack, first 16 bytes
+        hidTransport.EnqueueRead(FrameReply([0x03])); // program ack, second 16 bytes
+        hidTransport.EnqueueRead(FrameReply([0x03])); // program ack, end-of-file record
+        var crc = new Crc16(Repeat(DLE, 32)).Crc;
+        hidTransport.EnqueueRead(FrameReply([0x04, (byte)crc, (byte)(crc >> 8)]));
 
         var service = CreateService(hidTransport, new Pic32BootloaderProtocol());
 
         var hexPath = WriteTempHexFile(
+            ":020000041D00DD",
             ":200000001010101010101010101010101010101010101010101010101010101010101010E0",
             ":00000001FF");
         try
@@ -328,16 +332,14 @@ public class Pic32BootloaderFrameBudgetTests
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
 
         // The opcode of every frame, in the order the device saw it. One program frame per record,
-        // and three records because the 32-byte one was split in two before the erase went out.
+        // and four records because the address record precedes the two split data records and EOF.
         Assert.Equal<byte[]>(
-            [0x01, 0x02, 0x03, 0x03, 0x03, 0x01, 0x05],
+            [0x01, 0x02, 0x03, 0x03, 0x03, 0x03, 0x04, 0x05],
             hidTransport.Writes.Select(OpcodeOf).ToArray());
 
-        // One HID report each, in the same order: version 7, erase 5, the two split records 43
-        // and 44, the end-of-file record 11, version again 7, jump 5. This is what failed before
-        // #840: the unsplit 32-byte record framed to 74 bytes and the transport refused that
-        // write, after the erase had already run.
-        Assert.Equal([7, 5, 43, 44, 11, 7, 5], hidTransport.Writes.Select(w => w.Length).ToArray());
+        // Every command fits one report, including the address record and real CRC check.
+        // The unsplit data frame was 74 bytes and failed only after the erase.
+        Assert.Equal([7, 5, 13, 43, 44, 11, 14, 5], hidTransport.Writes.Select(w => w.Length).ToArray());
         Assert.All(
             hidTransport.Writes,
             write => Assert.True(write.Length <= OneReport, $"A frame of {write.Length} bytes reached the transport."));
@@ -398,6 +400,21 @@ public class Pic32BootloaderFrameBudgetTests
 
     /// <summary>Strips the framing and the escapes and returns the opcode the frame carries.</summary>
     private static byte OpcodeOf(byte[] frame) => frame[1] == DLE ? frame[2] : frame[1];
+
+    private static byte[] FrameReply(byte[] content)
+    {
+        var crc = new Crc16(content).Crc;
+        byte[] body = [.. content, (byte)crc, (byte)(crc >> 8)];
+        var frame = new List<byte> { SOH };
+        foreach (var value in body)
+        {
+            if (value is SOH or EOT or DLE) frame.Add(DLE);
+            frame.Add(value);
+        }
+
+        frame.Add(EOT);
+        return frame.ToArray();
+    }
 
     private static Pic32BootloaderSession CreateSession(FakeHidTransport transport, IBootloaderProtocol protocol)
     {
