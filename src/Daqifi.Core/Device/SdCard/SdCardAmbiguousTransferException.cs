@@ -5,9 +5,9 @@ namespace Daqifi.Core.Device.SdCard;
 
 /// <summary>
 /// Thrown when an SD card file download reaches the <c>__END_OF_FILE__</c> marker, more file
-/// content follows it, and no directory listing size is available to say how long the file is.
+/// content follows it, and the directory listing size is missing or out of date.
 /// The marker is ASCII text, so a log file can hold it; when that happens the marker no longer
-/// marks the end of anything, and without a listed size there is nothing left to locate the end
+/// marks the end of anything, and without a current listed size there is nothing left to locate the end
 /// of the file with.
 /// </summary>
 /// <remarks>
@@ -18,7 +18,7 @@ namespace Daqifi.Core.Device.SdCard;
 /// file and leaves the rest of it on the wire for the next command to read (#852).
 /// <para>
 /// The cure is the listed size. With it the receiver copies exactly that many bytes and reads
-/// the marker text inside them as the file content it is, so fetching a directory listing before
+/// the marker text inside them as the file content it is, so fetching a fresh directory listing before
 /// the download — which <see cref="SdCardOperations"/> does — makes this file downloadable.
 /// </para>
 /// <para>
@@ -62,10 +62,10 @@ public class SdCardAmbiguousTransferException : SdCardOperationException
         return string.Format(
             CultureInfo.InvariantCulture,
             "SD card file '{0}' contains the text __END_OF_FILE__, which is also the marker the " +
-            "device sends to end a transfer, and more file content follows it. Without the size " +
+            "device sends to end a transfer, and more file content follows it. Without a current size " +
             "from a directory listing the end of the file cannot be found, so the {1} bytes " +
             "before the marker are not the whole file; discard them and download the file again " +
-            "with a directory listing available.",
+            "with a fresh directory listing available.",
             fileName,
             bytesReceived);
     }

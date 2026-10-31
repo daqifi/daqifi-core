@@ -21,6 +21,19 @@ public class SdCardFileReceiverTests
     /// </summary>
     private static readonly int TrailingWindow = Math.Max(EofMarker.Length, TransferErrorMarker.Length);
 
+    [Theory]
+    [InlineData(4096)]
+    [InlineData(5)]
+    public async Task ReceiveAsync_StaleListedSizeAndMarkerInContent_RefusesATruncatedSuccess(int chunkSize)
+    {
+        var content = Encoding.ASCII.GetBytes("abc__END_OF_FILE__more file data");
+        using var source = new ChunkedMemoryStream(Combine(content, EofMarker), chunkSize);
+        using var destination = new MemoryStream();
+        var receiver = new SdCardFileReceiver(source, bufferSize: chunkSize);
+        await Assert.ThrowsAsync<SdCardAmbiguousTransferException>(() => receiver.ReceiveAsync(
+            destination, "growing.csv", listedFileSizeBytes: 1));
+    }
+
     [Fact]
     public async Task ReceiveAsync_CompleteFileWithEofMarker_WritesCorrectBytes()
     {

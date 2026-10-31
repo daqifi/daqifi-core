@@ -457,20 +457,19 @@ public sealed class SdCardFileReceiver
                             throw new SdCardEmptyTransferException(fileName, null);
                         }
 
-                        // No listed size, so this marker is the only end-of-file signal there is —
-                        // and it is also text a log file can contain. Nothing in the transfer tells
-                        // the two apart, so look at what follows: file content means the marker was
-                        // content and the end of the file cannot be located, and silence means the
-                        // marker ended the file (#852).
-                        await ConfirmMarkerEndedTheFileAsync(
-                            buffer,
-                            markerPosition + EndOfFileMarker.Length - trailingCount,
-                            bytesRead,
-                            fileName,
-                            totalBytesReceived,
-                            cancellationToken,
-                            token).ConfigureAwait(false);
                     }
+
+                    // Even a listed size can be stale if another session appended to the file.
+                    // A marker at or past that size is not a terminator when content follows it.
+                    // Confirm both sized and unsized transfers before reporting a complete file.
+                    await ConfirmMarkerEndedTheFileAsync(
+                        buffer,
+                        markerPosition + EndOfFileMarker.Length - trailingCount,
+                        bytesRead,
+                        fileName,
+                        totalBytesReceived,
+                        cancellationToken,
+                        token).ConfigureAwait(false);
 
                     // With a listed size the floor above has already settled both of the checks
                     // this used to make here: the marker was only accepted at or past the listed
