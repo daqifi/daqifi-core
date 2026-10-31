@@ -48,15 +48,23 @@ internal sealed class Pic32BootloaderSession
     /// Parses and validates the HEX image before any device I/O, returning the programmable
     /// records, the CRC regions used by the post-programming verify pass and the total byte count.
     /// </summary>
+    /// <remarks>
+    /// Everything this method decides, it decides before the flow can erase the device. That is
+    /// the point of it: the flow erases the application flash first and programs second, so an
+    /// image refused any later than here costs the board its firmware.
+    /// </remarks>
     internal (IReadOnlyList<byte[]> HexRecords, IReadOnlyList<FlashCrcRegion> CrcRegions, long TotalBytes)
         PrepareHexImage(string[] hexLines)
     {
         var hexRecords = _bootloaderProtocol.ParseHexFile(hexLines);
+
+        // Count the bytes the device will program, not the bytes the records are made of. An
+        // end-of-file record is 5 bytes long and programs nothing, so a file holding only
+        // non-data records has a byte total above zero and nothing to write (#838).
+        Pic32BootloaderImageContent.EnsureImageHasDataToProgram(hexRecords);
+
+        // Record bytes, which is what the Programming progress band counts out.
         var totalBytes = hexRecords.Sum(record => (long)record.Length);
-        if (totalBytes <= 0)
-        {
-            throw new InvalidDataException("Firmware HEX file did not contain any writable records.");
-        }
 
         // Computed up front (alongside parsing) so the post-programming Verifying
         // state can checksum exactly the bytes we programmed via the bootloader
