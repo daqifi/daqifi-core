@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Daqifi.Core.Firmware.Internal;
 
 /// <summary>
@@ -12,41 +10,11 @@ internal sealed class SystemProcessHandleFactory : IProcessHandleFactory
     /// <inheritdoc />
     public IProcessHandle Start(ExternalProcessRequest request)
     {
-        var startInfo = new ProcessStartInfo
+        if (OperatingSystem.IsWindows())
         {
-            FileName = request.FileName,
-            Arguments = request.Arguments ?? string.Empty,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = request.StandardInputResponseFactory != null,
-            CreateNoWindow = true
-        };
-
-        if (!string.IsNullOrWhiteSpace(request.WorkingDirectory))
-        {
-            startInfo.WorkingDirectory = request.WorkingDirectory;
+            return WindowsJobProcessHandle.Start(request);
         }
 
-        var process = new Process
-        {
-            StartInfo = startInfo,
-            EnableRaisingEvents = true
-        };
-
-        try
-        {
-            if (!process.Start())
-            {
-                throw new InvalidOperationException($"Unable to start process '{request.FileName}'.");
-            }
-        }
-        catch
-        {
-            process.Dispose();
-            throw;
-        }
-
-        return new SystemProcessHandle(process);
+        return UnixProcessGroupHandle.Start(request);
     }
 }

@@ -98,6 +98,10 @@ public sealed class ProcessExternalProcessRunner : IExternalProcessRunner
         try
         {
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
+            // A launcher can exit while its worker is still flashing and owns the pipes.
+            // Give that work the requested run budget; the short drain budget is only for
+            // cleanup after a timeout, not a second, much shorter process timeout.
+            await Task.WhenAll(outputTask, errorTask).WaitAsync(linkedCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {

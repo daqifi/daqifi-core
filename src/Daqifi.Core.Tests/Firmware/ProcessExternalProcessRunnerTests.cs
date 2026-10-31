@@ -93,7 +93,7 @@ public class ProcessExternalProcessRunnerTests
         var runner = NewRunner(handle);
 
         var sawOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var request = NewRequest(TimeSpan.FromSeconds(30));
+        var request = NewRequest(ShortProcessTimeout);
         request.OnStandardOutputLine = _ => sawOutput.TrySetResult();
         handle.Out.WriteLine("flashing");
 
@@ -108,6 +108,24 @@ public class ProcessExternalProcessRunnerTests
         Assert.True(
             handle.KillAttempts > 0,
             "the surviving worker must be killed even though the launcher has already exited");
+    }
+
+    [Fact]
+    public async Task RunAsync_WorkerFinishesInsideTheRequestTimeout_DoesNotUseTheCleanupDeadline()
+    {
+        using var handle = new FakeProcessHandle();
+        var runner = NewRunner(handle);
+        handle.Out.WriteLine("flashing");
+        handle.ExitLeavingThePipesOpen(0);
+        var run = runner.RunAsync(NewRequest(TimeSpan.FromSeconds(5)));
+        await Task.Delay(ShortDrainTimeout + ShortDrainTimeout);
+        handle.Out.WriteLine("verify passed");
+        handle.Out.CloseStream();
+        handle.Error.CloseStream();
+        var result = await WithinBoundAsync(run, "a worker still inside the requested time budget");
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, handle.KillAttempts);
+        Assert.Contains("verify passed", result.StandardOutputLines);
     }
 
     [Fact]
@@ -149,7 +167,7 @@ public class ProcessExternalProcessRunnerTests
             "No process is associated with this object.");
 
         var sawOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var request = NewRequest(TimeSpan.FromSeconds(30));
+        var request = NewRequest(ShortProcessTimeout);
         request.OnStandardOutputLine = _ => sawOutput.TrySetResult();
         handle.Out.WriteLine("flashing");
 
@@ -218,6 +236,61 @@ public class ProcessExternalProcessRunnerTests
         Assert.True(
             elapsed.Elapsed < HardBound,
             $"the run must be bounded; it took {elapsed.Elapsed.TotalSeconds:F1} s");
+    }
+
+    [Fact]
+    public async Task RunAsync_OnWindows_KillsAWorkerAfterItsLauncherHasExited()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var script = Path.Combine(Path.GetTempPath(), $"daqifi-worker-{Guid.NewGuid():N}.ps1");
+        File.WriteAllText(script,
+            "$child = Start-Process -FilePath cmd.exe -ArgumentList '/d /c ping -n 30 127.0.0.1' -NoNewWindow -PassThru\n" +
+            "[Console]::WriteLine($child.Id)\n");
+        int? workerId = null;
+        try
+        {
+            var result = await new ProcessExternalProcessRunner().RunAsync(new ExternalProcessRequest
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{script}\"",
+                Timeout = TimeSpan.FromSeconds(5)
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+            var idLine = Assert.Single(result.StandardOutputLines, line => int.TryParse(line, out _));
+            workerId = int.Parse(idLine, System.Globalization.CultureInfo.InvariantCulture);
+            Assert.True(result.TimedOut);
+            try
+            {
+                using var worker = Process.GetProcessById(workerId.Value);
+                await worker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            catch (ArgumentException)
+            {
+                // The terminated worker has already been removed from the process table.
+            }
+        }
+        finally
+        {
+            if (workerId is { } id)
+            {
+                try
+                {
+                    using var worker = Process.GetProcessById(id);
+                    if (!worker.HasExited)
+                    {
+                        worker.Kill(entireProcessTree: true);
+                    }
+                }
+                catch (ArgumentException)
+                {
+                }
+            }
+
+            File.Delete(script);
+        }
     }
 
     private static ProcessExternalProcessRunner NewRunner(IProcessHandle handle) =>
