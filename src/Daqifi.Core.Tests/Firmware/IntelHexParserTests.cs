@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using Daqifi.Core.Firmware;
 
@@ -197,7 +198,9 @@ public class IntelHexParserTests
 
         var result = parser.ParseHexRecords(lines);
 
-        Assert.Equal(3, result.Count);
+        // A count alone would also pass if the data record were dropped and some other
+        // record kept in its place, so name the record types that survive.
+        Assert.Equal<byte[]>([0x04, 0x00, 0x01], RecordTypes(result));
     }
 
     [Fact]
@@ -213,7 +216,9 @@ public class IntelHexParserTests
 
         var result = parser.ParseHexRecords(lines);
 
-        Assert.Equal(2, result.Count);
+        // The end of the protected range is inclusive, so the data record at exactly that
+        // address goes. The extended-address record and the EOF record stay.
+        Assert.Equal<byte[]>([0x04, 0x01], RecordTypes(result));
     }
 
     [Fact]
@@ -229,7 +234,7 @@ public class IntelHexParserTests
 
         var result = parser.ParseHexRecords(lines);
 
-        Assert.Equal(3, result.Count);
+        Assert.Equal<byte[]>([0x04, 0x00, 0x01], RecordTypes(result));
     }
 
     [Fact]
@@ -247,9 +252,13 @@ public class IntelHexParserTests
 
         var result = parser.ParseHexRecords(lines);
 
-        // First ext addr + second ext addr + second data + EOF = 4
-        Assert.Equal(4, result.Count);
+        // The type order says which data record went: the surviving one follows the second
+        // extended-address record, so the dropped one is the first.
+        Assert.Equal<byte[]>([0x04, 0x04, 0x00, 0x01], RecordTypes(result));
     }
+
+    private static byte[] RecordTypes(IEnumerable<byte[]> records) =>
+        records.Select(r => r[3]).ToArray();
 
     #endregion
 
@@ -372,6 +381,111 @@ public class IntelHexParserTests
 
         var dataAddresses = result.Where(r => r.RecordType == 0x00).Select(r => r.Address).ToArray();
         Assert.Equal([0x00010100u, 0x00010400u], dataAddresses);
+    }
+
+    /// <summary>
+    /// The protected range is an address interval, so the test that keeps a record out of it has
+    /// to be an interval-overlap test. A record carries <c>dataLength</c> bytes from its own
+    /// address, and every one of those bytes is programmed. Before issue #839 only the record's
+    /// start address was compared against the range, so a record that began below the range and
+    /// ran into it was kept in full and its trailing bytes were programmed into protected flash.
+    /// </summary>
+    /// <remarks>
+    /// Every row uses a custom protected range whose bounds sit inside a single 64 KB page. The
+    /// default range starts at <c>0x1D1E0000</c>, which is itself a page boundary, so no record
+    /// can straddle it without also running past the end of its page - two separate things that
+    /// would then be impossible to tell apart. The last two rows cover that page-crossing case on
+    /// its own. Both ends of the range are inclusive, which is the convention the shipped default
+    /// constants already use.
+    /// </remarks>
+    [Theory]
+    // Rows that do not touch the range.
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x0100u, 16, true, "wholly below the range")]
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x01F0u, 16, true, "last byte is the byte just below the range start")]
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x0301u, 16, true, "starts on the byte just above the inclusive range end")]
+    // Rows the start-address test already caught.
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x0200u, 16, false, "starts on the range start")]
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x0280u, 16, false, "wholly inside the range")]
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x02F8u, 16, false, "starts inside the range and runs past its end")]
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x0300u, 16, false, "starts on the inclusive range end")]
+    // Rows the start-address test let through. These are the bug in issue #839.
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x01F8u, 16, false, "starts below the range and runs into it")]
+    [InlineData(0x00010204u, 0x00010208u, 0x0001u, 0x0200u, 16, false, "starts below the range and spans all of it")]
+    // A 16-bit record offset plus the data length can run past the end of the 64 KB page. Such a
+    // record is malformed and tools do not agree on it: some carry the data on linearly into the
+    // next page, some wrap it to the bottom of the same page. Both readings are tested, so
+    // neither can put bytes in the protected range unseen.
+    [InlineData(0x00020000u, 0x0002000Fu, 0x0001u, 0xFFF8u, 16, false, "runs past the end of its page, read as carrying on into the next page")]
+    [InlineData(0x00010000u, 0x0001000Fu, 0x0001u, 0xFFF8u, 16, false, "runs past the end of its page, read as wrapping to the bottom of the page")]
+    // A zero-length data record programs no byte at all, so it has no span. It is judged on its
+    // start address, which is the decision this parser has always made for it.
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x0280u, 0, false, "zero data bytes, start address inside the range")]
+    [InlineData(0x00010200u, 0x00010300u, 0x0001u, 0x01F8u, 0, true, "zero data bytes, start address below the range")]
+    public void ParseRecords_ProtectedRangeTestsTheWholeRecordSpan(
+        uint beginProtected,
+        uint endProtected,
+        uint baseAddress,
+        uint offset,
+        int dataLength,
+        bool expectKept,
+        string because)
+    {
+        var parser = new IntelHexParser(beginProtected, endProtected);
+        var lines = new[]
+        {
+            ExtendedAddressRecordLine((ushort)baseAddress),
+            DataRecordLine((ushort)offset, dataLength),
+            ":00000001FF"
+        };
+
+        var kept = parser.ParseRecords(lines).Any(r => r.RecordType == 0x00);
+
+        var start = (baseAddress << 16) | offset;
+        Assert.True(
+            kept == expectKept,
+            $"A record of {dataLength} byte(s) at 0x{start:X8} ({because}), against the protected "
+            + $"range 0x{beginProtected:X8}-0x{endProtected:X8}, should be "
+            + $"{(expectKept ? "kept" : "dropped")} but was {(kept ? "kept" : "dropped")}.");
+    }
+
+    /// <summary>
+    /// Builds a type-00 data record line with the given 16-bit offset and data length, with a
+    /// correct byte count and checksum. Built here rather than written out by hand because the
+    /// span cases need many lengths and offsets, and a hand-computed checksum is easy to get
+    /// wrong - a wrong one would throw instead of testing the protected-range decision.
+    /// </summary>
+    private static string DataRecordLine(ushort offset, int dataLength)
+    {
+        var bytes = new List<byte> { (byte)dataLength, (byte)(offset >> 8), (byte)(offset & 0xFF), 0x00 };
+        for (var i = 0; i < dataLength; i++)
+        {
+            bytes.Add((byte)(i & 0xFF));
+        }
+
+        return BuildLine(bytes);
+    }
+
+    /// <summary>
+    /// Builds a type-04 extended-linear-address record line carrying the given upper 16 bits.
+    /// </summary>
+    private static string ExtendedAddressRecordLine(ushort baseAddress)
+    {
+        var bytes = new List<byte> { 0x02, 0x00, 0x00, 0x04, (byte)(baseAddress >> 8), (byte)(baseAddress & 0xFF) };
+        return BuildLine(bytes);
+    }
+
+    private static string BuildLine(List<byte> bytes)
+    {
+        byte sum = 0;
+        foreach (var b in bytes)
+        {
+            sum += b;
+        }
+
+        // Intel HEX checksum: the two's complement of the sum of every byte before it.
+        bytes.Add((byte)(-sum & 0xFF));
+
+        return ":" + string.Concat(bytes.Select(b => b.ToString("X2", CultureInfo.InvariantCulture)));
     }
 
     [Fact]
