@@ -97,7 +97,7 @@ internal sealed class Pic32FirmwareUpdater
                 await _context.ExecuteWithStateTimeoutAsync(
                     FirmwareUpdateState.Connecting,
                     "connect HID transport",
-                    ct => _session.ConnectWithRetryAsync(hidDevice, targetDevicePath, targetLocationKey, ct),
+                    ct => _session.ConnectWithRetryAsync(hidDevice, ct),
                     cancellationToken).ConfigureAwait(false);
 
                 version = await _context.ExecuteWithStateTimeoutAsync(
@@ -301,7 +301,7 @@ internal sealed class Pic32FirmwareUpdater
             await _context.ExecuteWithStateTimeoutAsync(
                 phase.State,
                 phase.Operation,
-                innerCt => _session.ConnectWithRetryAsync(hidDevice, targetDevicePath, null, innerCt),
+                innerCt => _session.ConnectWithRetryAsync(hidDevice, innerCt),
                 cancellationToken).ConfigureAwait(false);
 
             return await finalStep(phase, cancellationToken).ConfigureAwait(false);
@@ -534,7 +534,7 @@ internal sealed class Pic32FirmwareUpdater
             await _context.ExecuteWithStateTimeoutAsync(
                 FirmwareUpdateState.Connecting,
                 "reconnect HID transport after soft reset",
-                ct => _session.ConnectWithRetryAsync(recoveredDevice, targetDevicePath, targetLocationKey, ct),
+                ct => _session.ConnectWithRetryAsync(recoveredDevice, ct),
                 cancellationToken).ConfigureAwait(false);
 
             var version = await _context.ExecuteWithStateTimeoutAsync(
