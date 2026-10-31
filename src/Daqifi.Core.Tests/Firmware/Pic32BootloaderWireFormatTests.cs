@@ -63,7 +63,7 @@ public class Pic32BootloaderWireFormatTests
     {
         var sent = Pic32BootloaderMessageProducer.CreateEraseFlashMessage();
 
-        var acknowledgment = new[] { sent[0], OpcodeOf(sent) };
+        var acknowledgment = FrameResponse(OpcodeOf(sent));
 
         Assert.True(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(acknowledgment));
     }
@@ -73,7 +73,7 @@ public class Pic32BootloaderWireFormatTests
     {
         var sent = Pic32BootloaderMessageProducer.CreateProgramFlashMessage([0x08, 0x00, 0x20, 0x00, 0xAA]);
 
-        var acknowledgment = new[] { sent[0], OpcodeOf(sent) };
+        var acknowledgment = FrameResponse(OpcodeOf(sent));
 
         Assert.True(Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(acknowledgment));
     }
@@ -83,12 +83,7 @@ public class Pic32BootloaderWireFormatTests
     {
         var sent = Pic32BootloaderMessageProducer.CreateRequestVersionMessage();
 
-        // The version response is the one frame the consumer unescapes inline: SOH, DLE, opcode,
-        // major, minor.
-        var response = new[]
-        {
-            sent[0], Pic32BootloaderWireFormat.DataLinkEscape, OpcodeOf(sent), (byte)2, (byte)5
-        };
+        var response = FrameResponse(OpcodeOf(sent), 2, 5);
 
         Assert.Equal("2.5", Pic32BootloaderMessageConsumer.DecodeVersionResponse(response));
     }
@@ -99,13 +94,28 @@ public class Pic32BootloaderWireFormatTests
         var sent = Pic32BootloaderMessageProducer.CreateReadCrcMessage(0x9D000000, 0x200000);
         const ushort flashCrc = 0xABCD;
 
-        // The firmware echoes the opcode, then the flash CRC, then a framing CRC over those three
-        // bytes; the whole body is then SOH/EOT-framed with escaping.
-        byte[] content = [OpcodeOf(sent), (byte)(flashCrc & 0xFF), (byte)(flashCrc >> 8)];
-        var frameCrc = new Crc16(content).Crc;
-        var response = Frame([.. content, (byte)(frameCrc & 0xFF), (byte)(frameCrc >> 8)]);
+        var response = FrameResponse(OpcodeOf(sent), (byte)(flashCrc & 0xFF), (byte)(flashCrc >> 8));
 
         Assert.Equal(flashCrc, Pic32BootloaderMessageConsumer.DecodeReadCrcResponse(response));
+    }
+
+    /// <summary>
+    /// Every reply, in either direction, is framed the same way and carries a CRC-16 over its
+    /// content. The producer stamps that CRC on what it sends; this shows the consumer requires
+    /// the same CRC on what comes back, computed by the same routine over the same bytes.
+    /// </summary>
+    [Fact]
+    public void ResponseCrc_IsTheSameCrcTheProducerStampsOnWhatItSends()
+    {
+        var sent = Pic32BootloaderMessageProducer.CreateEraseFlashMessage();
+
+        // An outbound ERASE_FLASH message is the opcode followed by a CRC-16 over it, and an
+        // ERASE_FLASH acknowledgment is the same opcode, so the acknowledgment's CRC is the same
+        // two bytes. Reframing the sent payload therefore produces a response the consumer
+        // accepts — without this test computing a CRC of its own.
+        var acknowledgment = Frame(PayloadOf(sent));
+
+        Assert.True(Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(acknowledgment));
     }
 
     #endregion
@@ -134,7 +144,24 @@ public class Pic32BootloaderWireFormatTests
     /// The command opcode inside a message the producer built: the first payload byte, once the
     /// leading SOH is dropped and DLE escaping is undone.
     /// </summary>
-    private static byte OpcodeOf(byte[] producedMessage)
+    private static byte OpcodeOf(byte[] producedMessage) => PayloadOf(producedMessage)[0];
+
+    /// <summary>
+    /// Frames a response the way the firmware does: the content, then a CRC-16 over it, then
+    /// SOH/EOT framing with DLE escaping.
+    /// </summary>
+    private static byte[] FrameResponse(params byte[] content)
+    {
+        var crc = new Crc16(content).Crc;
+        return Frame([.. content, (byte)(crc & 0xFF), (byte)(crc >> 8)]);
+    }
+
+    /// <summary>
+    /// The payload of a framed message — everything between the SOH and the EOT, with DLE
+    /// escaping undone. For a message the producer built that is the command bytes and the
+    /// CRC-16 over them.
+    /// </summary>
+    private static byte[] PayloadOf(byte[] producedMessage)
     {
         var payload = new List<byte>();
         var escaped = false;
@@ -163,7 +190,7 @@ public class Pic32BootloaderWireFormatTests
         }
 
         Assert.NotEmpty(payload);
-        return payload[0];
+        return payload.ToArray();
     }
 
     /// <summary>SOH/EOT-frames a response body with DLE escaping, the way the firmware does.</summary>
