@@ -95,19 +95,23 @@ public class Pic32BootloaderEmptyImageTests
             File.Delete(hexPath);
         }
 
-        // The ordered evidence. Before the fix this list read 0x01 version, 0x02 erase, 0x03
-        // program, 0x01 version, 0x05 jump for every shape above except the two that parsed to no
-        // records at all. The erase at position two is the damage: it clears the application
+        // The ordered evidence, and the assertion that fails against the unchanged code. Before
+        // the fix this list read 0x01 version, 0x02 erase, 0x03 program, 0x01 version, 0x05 jump
+        // for every shape above except the two that parsed to no records at all — and the flow
+        // then reported the update as a success. The 0x02 is the damage: it clears the application
         // flash, and the image had nothing to put back.
-        Assert.Empty(hidTransport.Writes.Select(OpcodeOf));
-        Assert.DoesNotContain(EraseFlashOpcode, hidTransport.Writes.Select(OpcodeOf));
+        var opcodes = hidTransport.Writes.Select(OpcodeOf).ToArray();
+        Assert.True(
+            opcodes.Length == 0,
+            $"The device saw {opcodes.Length} command(s) for a file that is {shape}: " +
+            $"[{string.Join(", ", opcodes.Select(opcode => $"0x{opcode:X2}"))}]. " +
+            $"{(opcodes.Contains(EraseFlashOpcode) ? "One of them is the erase." : string.Empty)}");
 
         // The refusal happens before the flow opens the bootloader at all, so the device never
-        // even left the application. The shape is named so a failure says which file did it.
+        // even left the application.
         Assert.Equal(0, hidTransport.ConnectAttempts);
         Assert.Empty(device.SentCommands);
         Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
-        Assert.False(string.IsNullOrEmpty(shape));
     }
 
     // ---------------------------------------------------------------------------------------
