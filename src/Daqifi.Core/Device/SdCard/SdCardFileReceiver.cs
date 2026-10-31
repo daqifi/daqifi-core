@@ -16,6 +16,11 @@ namespace Daqifi.Core.Device.SdCard;
 /// A third ending has no marker at all: firmware v3.7.3 still abandons a stalled peer after
 /// partial data without sending a terminator, by design, so the inactivity window below remains
 /// the only thing that ends such a transfer.
+/// <para>
+/// Both markers are ASCII text, so a log file can hold the same bytes. The listed file size is
+/// what settles that: when the caller passes one, the receiver reads at least that many bytes of
+/// content and the marker text inside them is file content like any other (#852).
+/// </para>
 /// </remarks>
 public sealed class SdCardFileReceiver
 {
@@ -59,6 +64,29 @@ public sealed class SdCardFileReceiver
     /// </para>
     /// </remarks>
     internal static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// How long the receiver waits for more content after an <c>__END_OF_FILE__</c> marker when
+    /// no listed size says where the file ends. Nothing arriving inside the window means the
+    /// marker ended the file; file content arriving means the marker was part of the content and
+    /// the end of the file cannot be located (<see cref="SdCardAmbiguousTransferException"/>).
+    /// </summary>
+    /// <remarks>
+    /// It is short because the bytes it waits for are bytes the device has already written: a
+    /// marker inside the content is followed by the next chunk of a file the device is streaming
+    /// at full rate, not by a chunk it has yet to decide to send. The inactivity window above is
+    /// the budget for a device that went quiet mid-file, which is a different question and two
+    /// orders of magnitude longer; paying it after every marker would add twenty seconds to every
+    /// download of a file with no listed size.
+    /// </remarks>
+    internal static readonly TimeSpan EndOfFileConfirmationWindow = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// How many reads the confirmation above may take. More than one is needed only because the
+    /// device may follow the marker with a line ending, which can arrive in a read of its own;
+    /// the cap keeps a transport that emits nothing but line endings from holding the call.
+    /// </summary>
+    private const int MaxEndOfFileConfirmationReads = 4;
 
     private readonly Stream _sourceStream;
     private readonly int _bufferSize;
@@ -173,15 +201,17 @@ public sealed class SdCardFileReceiver
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="listedFileSizeBytes">
-    /// The size the device's directory listing reported for this file, when known. It is what the
-    /// completed transfer is judged against, because the EOF marker is the firmware's only
-    /// completion signal and says nothing about whether the whole file arrived: a transfer shorter
-    /// than this raises <see cref="SdCardTruncatedTransferException"/>, and one with no content
-    /// bytes at all raises <see cref="SdCardEmptyTransferException"/>. It is also the only thing
-    /// that separates a wedged SD subsystem from a genuinely 0-byte file, so pass <c>0</c> for a
-    /// listed empty file to have it return 0 bytes as a legitimate empty download. When
-    /// <c>null</c> (no listing available) there is nothing to judge the size against, so a short
-    /// transfer cannot be detected and only the conservative marker-only behavior applies.
+    /// The size the device's directory listing reported for this file, when known. It is the
+    /// authority on how long the file is, because the EOF marker is the firmware's only completion
+    /// signal and says nothing about whether the whole file arrived: the receiver copies at least
+    /// this many bytes and reads the marker text inside them as the file content it is, a transfer
+    /// that ends short of it raises <see cref="SdCardTruncatedTransferException"/>, and one with no
+    /// content bytes at all raises <see cref="SdCardEmptyTransferException"/>. It is also the only
+    /// thing that separates a wedged SD subsystem from a genuinely 0-byte file, so pass <c>0</c>
+    /// for a listed empty file to have it return 0 bytes as a legitimate empty download. When
+    /// <c>null</c> (no listing available) there is nothing to judge the length against: a short
+    /// transfer cannot be detected, and a file whose own content holds the marker text raises
+    /// <see cref="SdCardAmbiguousTransferException"/> instead of returning a truncated file.
     /// </param>
     /// <returns>The total number of file bytes written (excluding the EOF marker).</returns>
     /// <exception cref="SdCardTransferStalledException">
@@ -207,6 +237,13 @@ public sealed class SdCardFileReceiver
     /// short reply — an error line, or a partial file — rather than the file itself. Whatever
     /// arrived has already been written to <paramref name="destinationStream"/> and must be
     /// discarded.
+    /// </exception>
+    /// <exception cref="SdCardAmbiguousTransferException">
+    /// Thrown when the file's own content holds the <c>__END_OF_FILE__</c> text, more content
+    /// follows it, and <paramref name="listedFileSizeBytes"/> is <c>null</c>. The end of the file
+    /// cannot be located, so what was written to <paramref name="destinationStream"/> is genuine
+    /// but partial content and must be discarded; downloading the file with a listed size
+    /// available works.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="listedFileSizeBytes"/> is negative.
@@ -251,6 +288,13 @@ public sealed class SdCardFileReceiver
         var trailingBytes = new byte[MaxMarkerLength];
         var trailingCount = 0;
 
+        // Where the first EOF marker that arrived BELOW the listed size was, measured in content
+        // bytes. Such a marker is file content as far as this transfer is concerned (the listed
+        // size says the file is longer), so the transfer carries on past it — but if the device
+        // then sends nothing more, that marker was the end of a short reply after all, and this
+        // is the byte count to report it with (#539).
+        long? shortReplyContentLength = null;
+
         try
         {
             while (true)
@@ -273,6 +317,8 @@ public sealed class SdCardFileReceiver
                 }
                 catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
+                    ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
+
                     throw new SdCardTransferStalledException(
                         fileName,
                         totalBytesReceived,
@@ -286,6 +332,8 @@ public sealed class SdCardFileReceiver
                     // deadline had anything to say — the device stopped feeding the transfer. This
                     // is the only stall signal a socket gives (see DefaultIdleTimeout); on serial
                     // the zero-length-read path below gets there first and this never fires.
+                    ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
+
                     throw new SdCardTransferStalledException(
                         fileName,
                         totalBytesReceived,
@@ -316,12 +364,33 @@ public sealed class SdCardFileReceiver
                         ? SdCardTransferStallReason.TransportClosed
                         : SdCardTransferStallReason.NoDataReceived;
 
+                    ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
+
                     throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason);
                 }
 
+                // The listed size is a floor for the EOF marker: the marker is ASCII text, so a log
+                // file can contain it, and below the floor it is the file's own content rather than
+                // a terminator (#852). Everything before the trailing window has been written, so
+                // the window starts at totalBytesReceived and a marker's content offset is
+                // totalBytesReceived + its position in the combined view.
+                var eofFloor = 0;
+                if (listedFileSizeBytes is { } listedSize)
+                {
+                    var bytesStillOwed = listedSize - totalBytesReceived;
+                    eofFloor = bytesStillOwed <= 0
+                        ? 0
+                        : (int)Math.Min(bytesStillOwed, trailingCount + bytesRead);
+                }
+
                 // Check if a terminal marker is contained in or spans the new data
-                var (foundMarker, markerPosition, isTransferError) = FindTerminalMarker(
-                    trailingBytes, trailingCount, buffer, bytesRead);
+                var (foundMarker, markerPosition, isTransferError, subFloorEofPosition) =
+                    FindTerminalMarker(trailingBytes, trailingCount, buffer, bytesRead, eofFloor);
+
+                if (subFloorEofPosition >= 0 && shortReplyContentLength is null)
+                {
+                    shortReplyContentLength = totalBytesReceived + subFloorEofPosition;
+                }
 
                 if (foundMarker)
                 {
@@ -373,38 +442,44 @@ public sealed class SdCardFileReceiver
                         throw new SdCardTransferErrorException(fileName, totalBytesReceived);
                     }
 
-                    if (totalBytesReceived == 0 && listedFileSizeBytes != 0)
+                    if (listedFileSizeBytes is null)
                     {
-                        // An immediate EOF marker with no preceding file bytes is ambiguous on the
-                        // wire: a transient/wedged SD subsystem opens the file and sends nothing
-                        // (#264), and so does a genuinely 0-byte file left behind by an interrupted
-                        // logging session. The listing's reported size is the only discriminator,
-                        // so honor it — a listed 0-byte file falls through and returns 0 bytes as a
-                        // legitimate empty download. With no listed size we keep the conservative
-                        // #264 behavior so a wedged subsystem is still caught (#398 gap 2).
-                        throw new SdCardEmptyTransferException(fileName, listedFileSizeBytes);
-                    }
+                        if (totalBytesReceived == 0)
+                        {
+                            // An immediate EOF marker with no preceding file bytes is ambiguous on
+                            // the wire: a transient/wedged SD subsystem opens the file and sends
+                            // nothing (#264), and so does a genuinely 0-byte file left behind by an
+                            // interrupted logging session. With no listed size to tell them apart
+                            // we keep the conservative #264 behavior so a wedged subsystem is still
+                            // caught (#398 gap 2). There is also nothing to confirm below: with no
+                            // content before the marker there is no content to truncate, and the
+                            // caller's answer is the same retry either way.
+                            throw new SdCardEmptyTransferException(fileName, null);
+                        }
 
-                    if (listedFileSizeBytes is > 0 && totalBytesReceived < listedFileSizeBytes)
-                    {
-                        // The marker arrived, but with less content than the listing says the file
-                        // holds. The marker is the firmware's ONLY completion signal, so without
-                        // this check a short reply is indistinguishable from a finished download:
-                        // a device that answers SD:GET with `**ERROR: -200, "Execution error"` and
-                        // then the marker hands the caller a 34-byte "log file" and no error at
-                        // all — its error queue reads clean afterwards too (#539). The listed size
-                        // is the only evidence available, and it is already in hand for the
-                        // marker-only case above, so let it settle the short case as well.
-                        //
-                        // Deliberately one-sided: a transfer LONGER than the listed size is left
-                        // alone, because a listing goes stale the moment an active logging session
-                        // appends to the file, and those extra bytes are real content.
-                        throw new SdCardTruncatedTransferException(
+                        // No listed size, so this marker is the only end-of-file signal there is —
+                        // and it is also text a log file can contain. Nothing in the transfer tells
+                        // the two apart, so look at what follows: file content means the marker was
+                        // content and the end of the file cannot be located, and silence means the
+                        // marker ended the file (#852).
+                        await ConfirmMarkerEndedTheFileAsync(
+                            buffer,
+                            markerPosition + EndOfFileMarker.Length - trailingCount,
+                            bytesRead,
                             fileName,
-                            listedFileSizeBytes.Value,
-                            totalBytesReceived);
+                            totalBytesReceived,
+                            cancellationToken,
+                            token).ConfigureAwait(false);
                     }
 
+                    // With a listed size the floor above has already settled both of the checks
+                    // this used to make here: the marker was only accepted at or past the listed
+                    // size, so the transfer cannot be short (#539) or marker-only (#264) — a
+                    // marker below the floor was taken as content and recorded in
+                    // shortReplyContentLength, and the stall paths report it if the device then
+                    // sends nothing more. A transfer LONGER than the listed size still succeeds:
+                    // a listing goes stale the moment an active logging session appends to the
+                    // file, and those extra bytes are real content.
                     progress?.Report(new SdCardTransferProgress(totalBytesReceived, fileName));
                     return totalBytesReceived;
                 }
@@ -468,6 +543,8 @@ public sealed class SdCardFileReceiver
         }
         catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
+            ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
+
             throw new SdCardTransferStalledException(
                 fileName,
                 totalBytesReceived,
@@ -475,6 +552,143 @@ public sealed class SdCardFileReceiver
                 effectiveTimeout,
                 ex);
         }
+    }
+
+    /// <summary>
+    /// Reports a transfer that ended at an EOF marker which arrived below the listed size. The
+    /// marker was treated as file content while the transfer continued, because the listing says
+    /// the file is longer; the device sending nothing after it means the reply really did end
+    /// there, and the byte count to report is the content that preceded that marker, not the
+    /// marker and whatever followed it.
+    /// </summary>
+    /// <param name="fileName">The file being downloaded.</param>
+    /// <param name="shortReplyContentLength">
+    /// Content bytes before the first sub-floor marker, or <c>null</c> when there was none — in
+    /// which case this returns and the caller reports the stall itself.
+    /// </param>
+    /// <param name="listedFileSizeBytes">
+    /// The listed size. Never <c>null</c> when <paramref name="shortReplyContentLength"/> has a
+    /// value, because only a listed size creates a floor for a marker to fall below.
+    /// </param>
+    /// <exception cref="SdCardEmptyTransferException">
+    /// Thrown when the reply held no content at all before the marker (#264).
+    /// </exception>
+    /// <exception cref="SdCardTruncatedTransferException">
+    /// Thrown when it held some content but less than the listing reports (#539).
+    /// </exception>
+    private static void ThrowIfShortReplyEnded(
+        string fileName, long? shortReplyContentLength, long? listedFileSizeBytes)
+    {
+        if (shortReplyContentLength is not { } contentLength || listedFileSizeBytes is not { } listedSize)
+        {
+            return;
+        }
+
+        if (contentLength == 0)
+        {
+            throw new SdCardEmptyTransferException(fileName, listedSize);
+        }
+
+        throw new SdCardTruncatedTransferException(fileName, listedSize, contentLength);
+    }
+
+    /// <summary>
+    /// Decides whether an <c>__END_OF_FILE__</c> marker ended the file, for a transfer with no
+    /// listed size to measure against. Returns when nothing but line endings follows the marker;
+    /// throws when file content does.
+    /// </summary>
+    /// <param name="buffer">
+    /// The read buffer the marker was found in. Everything the marker did not cover has already
+    /// been accounted for, so this method reuses it for its own reads.
+    /// </param>
+    /// <param name="leftoverStart">Index in <paramref name="buffer"/> just past the marker.</param>
+    /// <param name="leftoverEnd">Index in <paramref name="buffer"/> just past the last byte read.</param>
+    /// <param name="fileName">The file being downloaded.</param>
+    /// <param name="contentLength">File bytes received before the marker.</param>
+    /// <param name="cancellationToken">The caller's own token; only it can fail this method.</param>
+    /// <param name="token">The token the transfer reads with (caller plus overall deadline).</param>
+    /// <exception cref="SdCardAmbiguousTransferException">
+    /// Thrown when file content follows the marker.
+    /// </exception>
+    private async Task ConfirmMarkerEndedTheFileAsync(
+        byte[] buffer,
+        int leftoverStart,
+        int leftoverEnd,
+        string fileName,
+        long contentLength,
+        CancellationToken cancellationToken,
+        CancellationToken token)
+    {
+        // The cheapest answer first: bytes already read that the marker did not cover.
+        if (HoldsFileContent(buffer, leftoverStart, leftoverEnd))
+        {
+            throw new SdCardAmbiguousTransferException(fileName, contentLength);
+        }
+
+        var window = _idleTimeout is { } idle && idle < EndOfFileConfirmationWindow
+            ? idle
+            : EndOfFileConfirmationWindow;
+
+        for (var read = 0; read < MaxEndOfFileConfirmationReads; read++)
+        {
+            int bytesRead;
+
+            using var confirmCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            confirmCts.CancelAfter(window);
+
+            try
+            {
+                bytesRead = await _sourceStream.ReadAsync(buffer, 0, buffer.Length, confirmCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The window closed on a quiet transport, or the overall deadline ran out while it
+                // was quiet. Either way nothing followed the marker, and the file is complete.
+                return;
+            }
+            catch (IOException)
+            {
+                // The transport failed after the file had already arrived. The content stands.
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (bytesRead == 0)
+            {
+                // End of stream, or a serial per-read timeout: the device has nothing more to say.
+                return;
+            }
+
+            if (HoldsFileContent(buffer, 0, bytesRead))
+            {
+                throw new SdCardAmbiguousTransferException(fileName, contentLength);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Says whether a region holds anything that could be file content. A carriage return or line
+    /// feed after the marker is the device ending its reply line, which the Python port accepts the
+    /// same way; anything else is content, and content after the marker means the marker was
+    /// content too.
+    /// </summary>
+    private static bool HoldsFileContent(byte[] buffer, int start, int end)
+    {
+        for (var i = Math.Max(0, start); i < end; i++)
+        {
+            if (buffer[i] != (byte)'\r' && buffer[i] != (byte)'\n')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -490,35 +704,88 @@ public sealed class SdCardFileReceiver
     internal static (bool Found, int Position, bool IsTransferError) FindTerminalMarker(
         byte[] trailing, int trailingCount, byte[] newData, int newDataLength)
     {
+        var (found, position, isTransferError, _) = FindTerminalMarker(
+            trailing, trailingCount, newData, newDataLength, eofFloor: 0);
+
+        return (found, position, isTransferError);
+    }
+
+    /// <summary>
+    /// Searches for a terminal marker, with <paramref name="eofFloor"/> saying how far into the
+    /// combined view the file's own content is known to reach. An <c>__END_OF_FILE__</c> marker
+    /// below that point is file content, not a terminator, and is reported separately instead of
+    /// ending the transfer (#852).
+    /// </summary>
+    /// <returns>
+    /// The tuple the four-argument overload returns, plus the position of the first EOF marker
+    /// found below <paramref name="eofFloor"/>, or <c>-1</c> when there was none.
+    /// </returns>
+    /// <remarks>
+    /// The floor applies to the EOF marker only. <c>__TRANSFER_ERROR__</c> says the device gave up
+    /// reading the card part-way through the file, so by definition it arrives before the listed
+    /// size is reached; holding it to the same floor would turn every mid-file card read error back
+    /// into the transport stall it looked like before firmware v3.7.3 (#720).
+    /// </remarks>
+    internal static (bool Found, int Position, bool IsTransferError, int SubFloorEofPosition)
+        FindTerminalMarker(
+            byte[] trailing, int trailingCount, byte[] newData, int newDataLength, int eofFloor)
+    {
         var (foundEof, eofPosition) = FindMarker(
             EndOfFileMarker, trailing, trailingCount, newData, newDataLength);
+
+        var subFloorEofPosition = -1;
+        if (foundEof && eofPosition < eofFloor)
+        {
+            // File content that happens to read as the marker. Another marker can still follow it
+            // inside this same chunk, so keep looking from the floor on.
+            subFloorEofPosition = eofPosition;
+            (foundEof, eofPosition) = FindMarker(
+                EndOfFileMarker, trailing, trailingCount, newData, newDataLength, eofFloor);
+        }
+
         var (foundError, errorPosition) = FindMarker(
             TransferErrorMarker, trailing, trailingCount, newData, newDataLength);
 
         if (foundEof && foundError)
         {
             return errorPosition < eofPosition
-                ? (true, errorPosition, true)
-                : (true, eofPosition, false);
+                ? (true, errorPosition, true, subFloorEofPosition)
+                : (true, eofPosition, false, subFloorEofPosition);
         }
 
         if (foundEof)
         {
-            return (true, eofPosition, false);
+            return (true, eofPosition, false, subFloorEofPosition);
         }
 
-        return foundError ? (true, errorPosition, true) : (false, -1, false);
+        return foundError
+            ? (true, errorPosition, true, subFloorEofPosition)
+            : (false, -1, false, subFloorEofPosition);
     }
 
     /// <summary>
     /// Searches for one specific marker in the combined view of trailing bytes and new data.
     /// </summary>
+    /// <param name="marker">The marker to look for.</param>
+    /// <param name="trailing">The bytes held back from the previous read.</param>
+    /// <param name="trailingCount">How many of <paramref name="trailing"/> are in use.</param>
+    /// <param name="newData">The read buffer.</param>
+    /// <param name="newDataLength">How many bytes of <paramref name="newData"/> were read.</param>
+    /// <param name="minPosition">
+    /// The earliest position in the combined view a match may start at. Used to look past a match
+    /// that the listed size has already shown to be file content.
+    /// </param>
     /// <returns>
     /// A tuple of (found, position) where position is the start index of the marker
     /// in the virtual combined buffer [trailing..new].
     /// </returns>
     private static (bool Found, int Position) FindMarker(
-        byte[] marker, byte[] trailing, int trailingCount, byte[] newData, int newDataLength)
+        byte[] marker,
+        byte[] trailing,
+        int trailingCount,
+        byte[] newData,
+        int newDataLength,
+        int minPosition = 0)
     {
         if (trailingCount + newDataLength < marker.Length)
         {
@@ -530,7 +797,7 @@ public sealed class SdCardFileReceiver
         // to (trailingCount + newDataLength - markerLength).
         // But we only need to scan positions that include new data to avoid re-scanning.
         var markerLen = marker.Length;
-        var searchStart = Math.Max(0, trailingCount - markerLen + 1);
+        var searchStart = Math.Max(minPosition, Math.Max(0, trailingCount - markerLen + 1));
         var searchEnd = trailingCount + newDataLength - markerLen;
 
         for (var pos = searchStart; pos <= searchEnd; pos++)

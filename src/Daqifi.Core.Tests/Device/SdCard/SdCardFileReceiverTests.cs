@@ -962,6 +962,290 @@ public class SdCardFileReceiverTests
 
     #endregion
 
+    #region End-of-file marker inside the file's own content (#852)
+
+    /// <summary>
+    /// What the receiver is expected to do with one shape of SD reply.
+    /// </summary>
+    private enum MarkerOutcome
+    {
+        /// <summary>The whole file arrives and the call returns its byte count.</summary>
+        Complete,
+
+        /// <summary>The end of the file cannot be located, and the call says so.</summary>
+        Ambiguous,
+
+        /// <summary>The reply ended without a terminator, and the call says so.</summary>
+        Stalled,
+    }
+
+    /// <summary>
+    /// One row per shape the end-of-file marker can take in an SD reply, including the shapes
+    /// where the marker text is part of the file's own content.
+    /// </summary>
+    public static TheoryData<string> EndOfFileMarkerShapes() => new()
+    {
+        "plain file, listed size",
+        "marker text inside the content, listed size",
+        "marker text inside the content, no listed size",
+        "marker text split across a read boundary, listed size",
+        "partial marker text at the end of the stream",
+        "content ends exactly on a read boundary, listed size",
+        "partial marker text immediately before the real marker, no listed size",
+    };
+
+    [Theory]
+    [MemberData(nameof(EndOfFileMarkerShapes))]
+    public async Task ReceiveAsync_EndOfFileMarkerShapes_ReturnsTheWholeFileOrSaysWhyNot(string shape)
+    {
+        // The marker is ASCII text, so a log file can contain it. The listed size is then the only
+        // authority on where the file ends: with a size the receiver copies that many bytes and
+        // treats the text as content; without one it cannot tell content from terminator, and
+        // says so rather than returning a short file (#852).
+        var (sourceData, expectedContent, chunkSize, listedSize, outcome) = MarkerShape(shape);
+
+        using var sourceStream = new ChunkedMemoryStream(sourceData, chunkSize);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, bufferSize: chunkSize);
+
+        if (outcome == MarkerOutcome.Complete)
+        {
+            var bytesReceived = await receiver.ReceiveAsync(
+                destinationStream,
+                "log.csv",
+                timeout: TimeSpan.FromSeconds(10),
+                listedFileSizeBytes: listedSize);
+
+            Assert.Equal(expectedContent.Length, bytesReceived);
+            Assert.Equal(expectedContent, destinationStream.ToArray());
+            return;
+        }
+
+        var ex = await Assert.ThrowsAnyAsync<SdCardOperationException>(
+            () => receiver.ReceiveAsync(
+                destinationStream,
+                "log.csv",
+                timeout: TimeSpan.FromSeconds(10),
+                listedFileSizeBytes: listedSize));
+
+        if (outcome == MarkerOutcome.Ambiguous)
+        {
+            var ambiguous = Assert.IsType<SdCardAmbiguousTransferException>(ex);
+            Assert.Equal("log.csv", ambiguous.FileName);
+            Assert.Equal(expectedContent.Length, ambiguous.BytesReceived);
+        }
+        else
+        {
+            Assert.IsType<SdCardTransferStalledException>(ex);
+        }
+    }
+
+    /// <summary>
+    /// Builds one row of <see cref="EndOfFileMarkerShapes"/>: the bytes the device sends, the file
+    /// content the caller must end up with (or, for an ambiguous reply, the content that precedes
+    /// the first marker), the read size, the listed size, and the expected outcome.
+    /// </summary>
+    private static (byte[] SourceData, byte[] ExpectedContent, int ChunkSize, long? ListedSize, MarkerOutcome Outcome)
+        MarkerShape(string shape)
+    {
+        // A line of log text that holds the marker, exactly as a note typed into a log would.
+        var head = Encoding.ASCII.GetBytes("note before ");
+        var tail = Encoding.ASCII.GetBytes(" was written here\r\n1,0.5\r\n");
+        var contentWithMarker = Combine(head, EofMarker, tail);
+        var plainContent = Encoding.ASCII.GetBytes("timestamp,ch0\r\n1,0.50\r\n2,0.75\r\n3,1.00\r\n");
+        var partialMarker = Encoding.ASCII.GetBytes("__END_OF_FIL");
+
+        return shape switch
+        {
+            "plain file, listed size" => (
+                Combine(plainContent, EofMarker),
+                plainContent,
+                16,
+                plainContent.Length,
+                MarkerOutcome.Complete),
+
+            // The losing case the ticket reports: with a listed size this threw on every attempt,
+            // so the file could not be downloaded at all.
+            "marker text inside the content, listed size" => (
+                Combine(contentWithMarker, EofMarker),
+                contentWithMarker,
+                4096,
+                contentWithMarker.Length,
+                MarkerOutcome.Complete),
+
+            // The other losing case: with no listed size this returned the 12 bytes before the
+            // marker as a finished download and left the rest of the file on the wire.
+            "marker text inside the content, no listed size" => (
+                Combine(contentWithMarker, EofMarker),
+                head,
+                4096,
+                null,
+                MarkerOutcome.Ambiguous),
+
+            // Six bytes of the marker land in the first read and the other nine in the second, so
+            // a scan that only looks inside one read would miss it or cut it in half.
+            "marker text split across a read boundary, listed size" => (
+                Combine(contentWithMarker, EofMarker),
+                contentWithMarker,
+                head.Length + 6,
+                contentWithMarker.Length,
+                MarkerOutcome.Complete),
+
+            // Twelve of the marker's fifteen bytes, and then silence. A partial marker is not a
+            // marker, so the reply ended without a terminator.
+            "partial marker text at the end of the stream" => (
+                Combine(plainContent, partialMarker),
+                plainContent,
+                16,
+                null,
+                MarkerOutcome.Stalled),
+
+            "content ends exactly on a read boundary, listed size" => (
+                Combine(plainContent, EofMarker),
+                plainContent,
+                plainContent.Length,
+                plainContent.Length,
+                MarkerOutcome.Complete),
+
+            // The content ends with twelve bytes of the marker and the real marker follows it, so
+            // the two run together on the wire. The first complete marker starts at the real one.
+            "partial marker text immediately before the real marker, no listed size" => (
+                Combine(plainContent, partialMarker, EofMarker),
+                Combine(plainContent, partialMarker),
+                16,
+                null,
+                MarkerOutcome.Complete),
+
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "Unknown shape."),
+        };
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerInContentWithListedSize_WritesTheMarkerTextAsFileContent()
+    {
+        // The byte-exact form of the ticket: 57 bytes of content that hold the marker text, and a
+        // listing that says 57. Before the fix the call threw SdCardTruncatedTransferException
+        // after 12 bytes and the file was unreachable; now all 57 bytes arrive, marker text and
+        // all.
+        var content = Encoding.ASCII.GetBytes("note before __END_OF_FILE__ was written here\r\n1,0.5\r\n");
+        using var sourceStream = new MemoryStream(Combine(content, EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "log.csv", listedFileSizeBytes: content.Length);
+
+        Assert.Equal(content.Length, bytesReceived);
+        Assert.Equal(content, destinationStream.ToArray());
+        Assert.Contains(
+            "__END_OF_FILE__",
+            Encoding.ASCII.GetString(destinationStream.ToArray()),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerInContentNoListedSize_ContentFollowsInTheNextRead_ThrowsAmbiguous()
+    {
+        // The read ends on the marker's last byte, so nothing in that read shows the file goes on.
+        // The receiver has to look at what comes next before it accepts the marker.
+        var head = Encoding.ASCII.GetBytes("note before ");
+        var tail = Encoding.ASCII.GetBytes(" was written here\r\n");
+        using var sourceStream = new ChunkedMemoryStream(
+            Combine(head, EofMarker, tail, EofMarker), chunkSize: head.Length + EofMarker.Length);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream, bufferSize: head.Length + EofMarker.Length);
+
+        var ex = await Assert.ThrowsAsync<SdCardAmbiguousTransferException>(
+            () => receiver.ReceiveAsync(
+                destinationStream, "log.csv", timeout: TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(head.Length, ex.BytesReceived);
+        Assert.Contains("log.csv", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("__END_OF_FILE__", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_AmbiguousTransfer_IsAnSdCardOperationException()
+    {
+        // Callers catch SdCardOperationException around a download, so the new failure has to sit
+        // inside that family like every other SD card failure.
+        var head = Encoding.ASCII.GetBytes("note before ");
+        using var sourceStream = new MemoryStream(
+            Combine(head, EofMarker, Encoding.ASCII.GetBytes("more"), EofMarker));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var ex = await Assert.ThrowsAsync<SdCardAmbiguousTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "log.csv"));
+
+        Assert.IsAssignableFrom<SdCardOperationException>(ex);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerFollowedByLineEnding_NoListedSize_StillCompletes()
+    {
+        // The device can put a line ending after the marker. That is not file content, so the
+        // download is complete and must not be reported as ambiguous.
+        var content = Encoding.ASCII.GetBytes("timestamp,ch0\r\n1,0.50\r\n");
+        using var sourceStream = new MemoryStream(
+            Combine(content, EofMarker, Encoding.ASCII.GetBytes("\r\n")));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(destinationStream, "log.csv");
+
+        Assert.Equal(content.Length, bytesReceived);
+        Assert.Equal(content, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_MarkerFollowedByLineEndingInTheNextRead_NoListedSize_StillCompletes()
+    {
+        // Same line ending, but it arrives in a read of its own, so it is only visible to the
+        // check that looks at what follows the marker.
+        var content = Encoding.ASCII.GetBytes("timestamp,ch0\r\n1,0.50\r\n");
+        using var sourceStream = new ChunkedMemoryStream(
+            Combine(content, EofMarker, Encoding.ASCII.GetBytes("\r\n")),
+            chunkSize: content.Length + EofMarker.Length);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream, bufferSize: content.Length + EofMarker.Length);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "log.csv", timeout: TimeSpan.FromSeconds(10));
+
+        Assert.Equal(content.Length, bytesReceived);
+        Assert.Equal(content, destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ShortReplyOnASocket_StillReportsTheTruncatedTransfer()
+    {
+        // A short reply ends in silence, and on a socket silence only shows up as the inactivity
+        // window closing. The receiver must still name the short transfer (#539) there, not the
+        // transport.
+        var errorLine = Encoding.ASCII.GetBytes("**ERROR: -200, \"Execution error\"\r\n");
+        using var sourceStream = new ThrottledStream(
+            Combine(errorLine, EofMarker), chunkSize: 64, gap: TimeSpan.FromMilliseconds(1));
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream,
+            zeroLengthReadMeansClosed: true,
+            idleTimeout: TimeSpan.FromMilliseconds(300));
+
+        var ex = await Assert.ThrowsAsync<SdCardTruncatedTransferException>(
+            () => receiver.ReceiveAsync(
+                destinationStream,
+                "log.csv",
+                timeout: TimeSpan.FromSeconds(10),
+                listedFileSizeBytes: 6159));
+
+        Assert.Equal(6159, ex.ListedSizeInBytes);
+        Assert.Equal(errorLine.Length, ex.BytesReceived);
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private static byte[] Combine(params byte[][] arrays)

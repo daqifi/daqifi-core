@@ -3,6 +3,10 @@ Daqifi.Core.Device.Discovery.MDnsDeviceFinder
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder() -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder(string! serviceType) -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.ServiceType.get -> string!
+Daqifi.Core.Device.SdCard.SdCardAmbiguousTransferException
+Daqifi.Core.Device.SdCard.SdCardAmbiguousTransferException.BytesReceived.get -> long
+Daqifi.Core.Device.SdCard.SdCardAmbiguousTransferException.FileName.get -> string!
+Daqifi.Core.Device.SdCard.SdCardAmbiguousTransferException.SdCardAmbiguousTransferException(string! fileName, long bytesReceived) -> void
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException.BytesReceived.get -> long
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException.FileName.get -> string!
