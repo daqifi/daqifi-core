@@ -88,6 +88,29 @@ public sealed class SdCardParseOptions
     public SdCardDeviceConfiguration? ConfigurationOverride { get; set; }
 
     /// <summary>
+    /// Gets or sets what a whole-number analog value in a CSV or JSON log means: a raw ADC code
+    /// or a millivolt reading. Leave it unset only when the recording used raw mode.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Firmware writes volts with a decimal point, so the parser reads that unit from the file
+    /// and reports those values unchanged. It writes raw ADC codes and millivolts as whole
+    /// numbers, and nothing in the file separates the two
+    /// (daqifi/daqifi-nyquist-firmware#1179), so this option supplies the answer. A recording
+    /// made in raw mode (<c>CONF:ADC:USECal 2</c>) is
+    /// <see cref="SdCardIntegerValueUnits.RawAdcCodes"/>; one made at
+    /// <c>CONF:VOLTage:PRECision 0</c> is <see cref="SdCardIntegerValueUnits.Millivolts"/>.
+    /// </para>
+    /// <para>
+    /// Unset means <see cref="SdCardIntegerValueUnits.RawAdcCodes"/>, which is what every
+    /// release before this one assumed for every value. A millivolt log read that way comes out
+    /// wrong, so check <see cref="SdCardLogEntry.SourceAnalogValueUnit"/> on the samples to see
+    /// which unit the parser actually applied.
+    /// </para>
+    /// </remarks>
+    public SdCardIntegerValueUnits? IntegerValueUnits { get; set; }
+
+    /// <summary>
     /// Throws if <paramref name="options"/> asks for something no parser can honour. Called by
     /// every public parse entry point, before it touches the file.
     /// </summary>
