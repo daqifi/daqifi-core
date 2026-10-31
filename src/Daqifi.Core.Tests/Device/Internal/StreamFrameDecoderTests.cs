@@ -738,7 +738,265 @@ public class StreamFrameDecoderTests
 
     #endregion
 
+    #region First session of a device instance (#773)
+
+    /// <summary>
+    /// Firmware that still latches the last frame of a stopped session and emits it into the
+    /// next one. The firmware fix (daqifi-nyquist-firmware #535) shipped in v3.6.0, and v3.5.0
+    /// is the oldest firmware this library supports, so this is a supported device.
+    /// </summary>
+    private const string LatchingFirmware = "3.5.0";
+
+    /// <summary>
+    /// How far the device clock ran on between the previous session and this one, in ticks —
+    /// 66.841 s at 1000 ticks per second, the gap the desktop app measured on the bench when it
+    /// caught this frame (daqifi-desktop #584).
+    /// </summary>
+    private const uint StopToStartGapTicks = 66_841;
+
+    /// <summary>
+    /// The frame the device latched before the first session of this instance began must not
+    /// anchor the session clock. This is the whole harm in issue #773: the stale frame arrives
+    /// first, so every sample after it is stamped a stop-to-start gap into the future.
+    /// </summary>
+    [Fact]
+    public void FirstSession_ALatchedFrame_DoesNotAnchorTheSessionClock()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = LatchingFirmware;
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var samples = Collect(ai0);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1); // 1000-tick sample period
+
+        var sessionStart = DateTime.Now;
+        decoder.ProcessFrame(AnalogFrame(10_000, 99f)); // latched before this session began
+        decoder.ProcessFrame(AnalogFrame(10_000u + StopToStartGapTicks, 1f));
+        decoder.ProcessFrame(AnalogFrame(11_000u + StopToStartGapTicks, 2f));
+
+        // Every sample is stamped at about the time it arrived. Anchored on the latched frame
+        // instead, the session's own first sample reads 66.841 s into the future.
+        Assert.All(samples, sample => Assert.InRange(sample.Timestamp, sessionStart, sessionStart.AddSeconds(5)));
+
+        // One sample period between consecutive samples, not a stop-to-start gap.
+        Assert.Equal(1.0, (samples[^1].Timestamp - samples[0].Timestamp).TotalSeconds, 3);
+
+        // The session's own first frame is the anchor, and the latched frame never becomes a sample.
+        Assert.Equal(
+            new[] { 10_000u + StopToStartGapTicks, 11_000u + StopToStartGapTicks },
+            samples.ConvertAll(sample => sample.DeviceTimestamp!.Value));
+    }
+
+    /// <summary>
+    /// The latched frame is dropped for every consumer, raw-frame consumers included, and the
+    /// drop is reported — the same treatment the second session of an instance already gives it.
+    /// </summary>
+    [Fact]
+    public void FirstSession_ALatchedFrame_IsReportedAndWithheldFromRawConsumers()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = LatchingFirmware;
+        host.AddAnalog(0, enabled: true);
+        StreamFrameDiscardedEventArgs? reported = null;
+        host.OnDiscard = e => reported = e;
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        decoder.ProcessFrame(AnalogFrame(10_000, 99f));
+        decoder.ProcessFrame(AnalogFrame(10_000u + StopToStartGapTicks, 1f));
+        decoder.ProcessFrame(AnalogFrame(11_000u + StopToStartGapTicks, 2f));
+
+        Assert.Equal(new[] { "discard", "raw", "raw" }, host.Calls);
+        Assert.Equal(1, decoder.DiscardedStreamFrameCount);
+        Assert.Equal(StreamFrameDiscardReason.StaleLeftoverFrame, reported!.Reason);
+        Assert.Equal(10_000u, reported.DeviceTimestamp);
+    }
+
+    /// <summary>
+    /// A first session with nothing latched keeps the behavior it always had: its own first
+    /// frame anchors the clock, every frame is delivered, and nothing is discarded.
+    /// </summary>
+    [Fact]
+    public void FirstSession_WithNothingLatched_AnchorsOnItsOwnFirstFrame()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = LatchingFirmware;
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var samples = Collect(ai0);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        var sessionStart = DateTime.Now;
+        decoder.ProcessFrame(AnalogFrame(1000, 1f));
+        decoder.ProcessFrame(AnalogFrame(2000, 2f));
+        decoder.ProcessFrame(AnalogFrame(3000, 3f));
+
+        Assert.Equal(
+            new[] { 1000u, 2000u, 3000u },
+            samples.ConvertAll(sample => sample.DeviceTimestamp!.Value));
+        Assert.Equal(new[] { "raw", "raw", "raw" }, host.Calls);
+        Assert.Equal(0, decoder.DiscardedStreamFrameCount);
+        Assert.InRange(samples[0].Timestamp, sessionStart, sessionStart.AddSeconds(5));
+        Assert.Equal(2.0, (samples[2].Timestamp - samples[0].Timestamp).TotalSeconds, 3);
+    }
+
+    /// <summary>
+    /// The second session of an instance is the path that already worked, and it has to keep
+    /// working: the counter value this instance carries over from the first session is what
+    /// recognizes the latched frame there.
+    /// </summary>
+    [Fact]
+    public void SecondSession_ALatchedFrame_StillDoesNotAnchorTheSessionClock()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = LatchingFirmware;
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+        decoder.ProcessFrame(AnalogFrame(1000, 1f));
+        decoder.ProcessFrame(AnalogFrame(2000, 2f));
+
+        // The stream stops, and the device emits one more frame after the stop command lands.
+        host.IsStreaming = false;
+        decoder.ProcessFrame(AnalogFrame(3000, 3f));
+
+        // The second session starts a stop-to-start gap later. The device emits the frame it
+        // latched at the stop, one sample period past the last frame of the previous session.
+        host.IsStreaming = true;
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+        var samples = Collect(ai0);
+        host.Calls.Clear();
+
+        var sessionStart = DateTime.Now;
+        decoder.ProcessFrame(AnalogFrame(4000, 99f));
+        decoder.ProcessFrame(AnalogFrame(4000u + StopToStartGapTicks, 1f));
+        decoder.ProcessFrame(AnalogFrame(5000u + StopToStartGapTicks, 2f));
+
+        Assert.Equal(
+            new[] { 4000u + StopToStartGapTicks, 5000u + StopToStartGapTicks },
+            samples.ConvertAll(sample => sample.DeviceTimestamp!.Value));
+        Assert.Equal(new[] { "discard", "raw", "raw" }, host.Calls);
+        Assert.All(samples, sample => Assert.InRange(sample.Timestamp, sessionStart, sessionStart.AddSeconds(5)));
+        Assert.Equal(1.0, (samples[1].Timestamp - samples[0].Timestamp).TotalSeconds, 3);
+    }
+
+    /// <summary>
+    /// A reconnect builds a new device instance, and with it a new decoder that has seen no
+    /// frames — but the device still holds the frame it latched before the connection dropped.
+    /// </summary>
+    [Fact]
+    public void NewInstanceAfterAReconnect_IsGuardedLikeAnyOtherFirstSession()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = LatchingFirmware;
+        var ai0 = host.AddAnalog(0, enabled: true);
+
+        var beforeTheDrop = new StreamFrameDecoder(host);
+        beforeTheDrop.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+        beforeTheDrop.ProcessFrame(AnalogFrame(500_000, 1f));
+        beforeTheDrop.ProcessFrame(AnalogFrame(501_000, 2f));
+
+        // The connection drops and the app reconnects. The counter reference the first instance
+        // built is gone with it; the device's latched frame is not.
+        var reconnected = new StreamFrameDecoder(host);
+        var samples = Collect(ai0);
+        reconnected.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        var sessionStart = DateTime.Now;
+        reconnected.ProcessFrame(AnalogFrame(502_000, 99f));
+        reconnected.ProcessFrame(AnalogFrame(502_000u + StopToStartGapTicks, 1f));
+        reconnected.ProcessFrame(AnalogFrame(503_000u + StopToStartGapTicks, 2f));
+
+        Assert.Equal(
+            new[] { 502_000u + StopToStartGapTicks, 503_000u + StopToStartGapTicks },
+            samples.ConvertAll(sample => sample.DeviceTimestamp!.Value));
+        Assert.All(samples, sample => Assert.InRange(sample.Timestamp, sessionStart, sessionStart.AddSeconds(5)));
+        Assert.Equal(1, reconnected.DiscardedStreamFrameCount);
+    }
+
+    /// <summary>
+    /// Firmware from v3.6.0 on does not latch a frame, so its first session is not held back:
+    /// the first frame is delivered as it arrives, and the guard costs it nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("3.6.0")]
+    [InlineData("3.8.0")]
+    [InlineData("v4.0.0")]
+    public void FirstSession_OnFirmwareWithoutTheLatch_DeliversItsFirstFrameImmediately(string firmware)
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = firmware;
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 7f));
+
+        Assert.Equal(new[] { "raw" }, host.Calls);
+        Assert.Equal(7.0, ai0.ActiveSample!.Value);
+    }
+
+    /// <summary>
+    /// Every firmware below v3.6.0 latches, so every one of them is guarded.
+    /// </summary>
+    [Theory]
+    [InlineData("3.5.0")]
+    [InlineData("3.5.1")]
+    [InlineData("v3.5.2b1")]
+    public void FirstSession_OnFirmwareWithTheLatch_HoldsItsFirstFrame(string firmware)
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = firmware;
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        decoder.ProcessFrame(AnalogFrame(1000, 7f));
+
+        Assert.Empty(host.Calls);
+        Assert.Null(ai0.ActiveSample);
+    }
+
+    /// <summary>
+    /// A device whose counter jumps on every frame must lose a bounded prefix of one session,
+    /// never the stream: after the cap the gate gives up and the frames flow.
+    /// </summary>
+    [Fact]
+    public void FirstSession_DiscardsAreBounded()
+    {
+        var host = new FakeHost { IsStreaming = true };
+        host.Metadata.FirmwareVersion = LatchingFirmware;
+        var ai0 = host.AddAnalog(0, enabled: true);
+        var samples = Collect(ai0);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        // Seven frames, each a full gap past the last: the first six are held and dropped one by
+        // one, and the seventh releases the sixth because the cap has been reached.
+        for (uint ts = 100_000; ts <= 700_000; ts += 100_000)
+        {
+            decoder.ProcessFrame(AnalogFrame(ts, 1f));
+        }
+
+        Assert.Equal(StreamFrameGate.MaxDiscardedFrames, decoder.DiscardedStreamFrameCount);
+        Assert.Equal(new[] { 600_000u, 700_000u }, samples.ConvertAll(sample => sample.DeviceTimestamp!.Value));
+    }
+
+    #endregion
+
     #region Helpers
+
+    /// <summary>
+    /// Records every sample the channel receives, in order, so a test can read the session clock
+    /// off them. <see cref="IChannel.ActiveSample"/> only keeps the last one.
+    /// </summary>
+    private static List<IDataSample> Collect(IChannel channel)
+    {
+        var samples = new List<IDataSample>();
+        channel.SampleReceived += (_, e) => samples.Add(e.Sample);
+        return samples;
+    }
 
     private static ThrowSwitch AttachThrowingSubscriber(IChannel channel)
     {
@@ -826,6 +1084,14 @@ public class StreamFrameDecoderTests
 
         public bool IsStreaming { get; set; }
 
+        /// <summary>
+        /// The device's reported metadata. The firmware version defaults to one that does not
+        /// latch a frame across sessions (the firmware fix shipped in v3.6.0), because that is
+        /// what every test that is not about the latch wants: no first-frame hold, so a session's
+        /// first frame is delivered as it arrives. A test about the latch sets it lower.
+        /// </summary>
+        public DeviceMetadata Metadata { get; } = new() { FirmwareVersion = "3.8.0" };
+
         public AnalogChannel AddAnalog(int number, bool enabled)
         {
             var channel = new AnalogChannel(number) { IsEnabled = enabled };
@@ -891,7 +1157,6 @@ public class StreamFrameDecoderTests
         // Not part of the decode path.
         public bool IsConnected => throw new NotSupportedException();
         public int StreamingFrequency => throw new NotSupportedException();
-        public DeviceMetadata Metadata => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
         public void StartStreaming() => throw new NotSupportedException();
         public void Disconnect() => throw new NotSupportedException();

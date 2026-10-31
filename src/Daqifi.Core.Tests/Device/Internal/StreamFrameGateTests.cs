@@ -173,5 +173,154 @@ public class StreamFrameGateTests
         Assert.False(gate.IsLeftoverFromPreviousSession(Frame(60_000)));
     }
 
+    // The guard for a session with no counter reference of its own — the first session of a
+    // device instance. It holds the first frame and judges it against the next one, because on
+    // its own there is nothing to judge it against.
+    #region The first session of a device instance (#773)
+
+    [Fact]
+    public void BeginSession_ArmsTheHoldInsteadOfTheReferencePath()
+    {
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+
+        Assert.True(gate.IsAwaitingFirstFramePair);
+        Assert.False(gate.IsValidating); // the two paths are mutually exclusive
+    }
+
+    [Fact]
+    public void BeginSession_LeavesTheHoldDisarmedUnlessTheCallerAsksForIt()
+    {
+        // The hold costs a sample period of latency, so the caller turns it on only for the
+        // firmware that latches a frame across sessions.
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1);
+
+        Assert.False(gate.IsAwaitingFirstFramePair);
+    }
+
+    [Fact]
+    public void BeginSession_LeavesTheHoldDisarmedOnceTheInstanceHasAReference()
+    {
+        // From the second session on, the reference path recognizes the latched frame on
+        // arrival and nothing has to be held.
+        var gate = new StreamFrameGate();
+        gate.TrackFrame(1000);
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+
+        Assert.False(gate.IsAwaitingFirstFramePair);
+        Assert.True(gate.IsValidating);
+    }
+
+    [Fact]
+    public void TheFirstFrameIsHeld()
+    {
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+
+        Assert.Equal(StreamFrameAdmission.Hold, gate.AdmitFirstFrameOfSession(Frame(1000), out var held));
+        Assert.Null(held);
+        Assert.True(gate.IsAwaitingFirstFramePair);
+    }
+
+    [Fact]
+    public void AFrameWhoseSuccessorIsASamplePeriodOn_IsReleasedBeforeIt()
+    {
+        // 1 Hz -> 1000-tick sample period -> 2500-tick window. Two frames one period apart
+        // belong to the same session, and the held one is the session's anchor.
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+        gate.AdmitFirstFrameOfSession(Frame(1000), out _);
+
+        var admission = gate.AdmitFirstFrameOfSession(Frame(2000), out var held);
+
+        Assert.Equal(StreamFrameAdmission.ReleaseHeldFrameThenThisOne, admission);
+        Assert.Equal(1000u, held!.MsgTimeStamp);
+        Assert.Equal(0, gate.DiscardedFrameCount);
+        Assert.False(gate.IsAwaitingFirstFramePair); // the gate steps aside for the session
+    }
+
+    [Fact]
+    public void AFrameWhoseSuccessorIsAWholeGapOn_IsDiscarded_AndTheSuccessorIsHeldInstead()
+    {
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+        gate.AdmitFirstFrameOfSession(Frame(10_000), out _);
+
+        // 66.841 s on: the latched frame and the session's own first frame.
+        var admission = gate.AdmitFirstFrameOfSession(Frame(76_841), out var held);
+
+        Assert.Equal(StreamFrameAdmission.DiscardHeldFrame, admission);
+        Assert.Equal(10_000u, held!.MsgTimeStamp);
+        Assert.Equal(1, gate.DiscardedFrameCount);
+        Assert.True(gate.IsAwaitingFirstFramePair); // still holding, now the frame at 76_841
+
+        // The pair that follows is coherent, so the session's own frame is released first.
+        Assert.Equal(
+            StreamFrameAdmission.ReleaseHeldFrameThenThisOne,
+            gate.AdmitFirstFrameOfSession(Frame(77_841), out var anchor));
+        Assert.Equal(76_841u, anchor!.MsgTimeStamp);
+    }
+
+    [Fact]
+    public void CounterWrap_AFramePairStraddlingTheWrapIsStillCoherent()
+    {
+        // Modular subtraction keeps the pair one sample period apart across the counter's
+        // wrap; measured naively the successor would look like a huge jump back and the
+        // session's own first frame would be thrown away.
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+        gate.AdmitFirstFrameOfSession(Frame(uint.MaxValue - 400), out _);
+
+        var admission = gate.AdmitFirstFrameOfSession(Frame(599), out var held);
+
+        Assert.Equal(StreamFrameAdmission.ReleaseHeldFrameThenThisOne, admission);
+        Assert.Equal(uint.MaxValue - 400, held!.MsgTimeStamp);
+        Assert.Equal(0, gate.DiscardedFrameCount);
+    }
+
+    [Fact]
+    public void FirstFramePair_DiscardsAreCapped()
+    {
+        // A device whose counter jumps on every frame would otherwise hold back the whole
+        // session, one frame at a time.
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+        gate.AdmitFirstFrameOfSession(Frame(100_000), out _);
+
+        for (uint ts = 200_000; ts <= 600_000; ts += 100_000)
+        {
+            Assert.Equal(
+                StreamFrameAdmission.DiscardHeldFrame,
+                gate.AdmitFirstFrameOfSession(Frame(ts), out _));
+        }
+
+        Assert.Equal(StreamFrameGate.MaxDiscardedFrames, gate.DiscardedFrameCount);
+        Assert.Equal(
+            StreamFrameAdmission.ReleaseHeldFrameThenThisOne,
+            gate.AdmitFirstFrameOfSession(Frame(700_000), out var held));
+        Assert.Equal(600_000u, held!.MsgTimeStamp);
+    }
+
+    [Fact]
+    public void BeginSession_DropsAFrameThePreviousSessionHeld()
+    {
+        // The stream stopped while a frame was held. That frame belongs to the session that
+        // ended, so the next session must not release it into its own data.
+        var gate = new StreamFrameGate();
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+        gate.AdmitFirstFrameOfSession(Frame(1000), out _);
+
+        // The held frame was seen, so the next session has a counter reference and uses the
+        // reference path — which recognizes a latched frame one sample period past it.
+        gate.BeginSession(TicksPerSecond, streamingFrequencyHz: 1, validateFirstFramesWithoutReference: true);
+
+        Assert.False(gate.IsAwaitingFirstFramePair);
+        Assert.True(gate.IsValidating);
+        Assert.True(gate.IsLeftoverFromPreviousSession(Frame(2000)));
+    }
+
+    #endregion
+
     private static DaqifiOutMessage Frame(uint timestamp) => new() { MsgTimeStamp = timestamp };
 }

@@ -21,13 +21,14 @@ namespace Daqifi.Core.Device.Internal;
 /// correct across the counter's wrap (about 86 s at the 50 MHz default tick rate).
 /// </para>
 /// <para>
-/// <b>Known limitation.</b> This needs a counter value from before the session, which means the
-/// very first session after a connect is unprotected: the device's latched frame survives a
-/// disconnect, but a freshly connected instance has nothing to recognize it against. Every
-/// session from the second onward — which is the stop/start case #533 describes — is covered.
-/// The alternative, holding the first frame of the first session until a second frame can vouch
-/// for it, was considered and rejected: it delays every consumer's first sample to defend
-/// against a frame that has never been observed on current firmware.
+/// The first session of a device instance has no such counter value: the device's latched frame
+/// survives a disconnect, but a freshly connected instance has seen nothing to recognize it
+/// against. That session is guarded the other way round, by
+/// <see cref="AdmitFirstFrameOfSession"/> — the first frame is held until the next one arrives,
+/// and the gap between the two says which of them started the session. A held frame whose
+/// successor is a whole stop-to-start gap away is the leftover; one whose successor is a sample
+/// period away is genuine. The cost is one sample period of latency on the first sample of the
+/// first session, so the caller arms it only for the firmware that needs it (issue #773).
 /// </para>
 /// <para>
 /// This type is not thread-safe by itself. It is driven from the message-consumer thread that
@@ -79,10 +80,32 @@ internal sealed class StreamFrameGate
     private double _leftoverWindowTicks;
 
     /// <summary>
+    /// The first frame of a session begun without a counter reference, withheld until its
+    /// successor can vouch for it. Null whenever nothing is held.
+    /// </summary>
+    private DaqifiOutMessage? _heldFirstFrame;
+
+    /// <summary>
+    /// Backing field for <see cref="IsAwaitingFirstFramePair"/>.
+    /// </summary>
+    private bool _awaitingFirstFramePair;
+
+    /// <summary>
     /// Gets a value indicating whether the gate still has something to decide. False for the
     /// overwhelming majority of frames, which lets the caller skip evaluation entirely.
     /// </summary>
+    /// <remarks>
+    /// This is the reference-based path only, and it is mutually exclusive with
+    /// <see cref="IsAwaitingFirstFramePair"/>: a session has a counter reference or it has not.
+    /// </remarks>
     public bool IsValidating => _checkForLeftoverFrames;
+
+    /// <summary>
+    /// Gets a value indicating whether frames must go to
+    /// <see cref="AdmitFirstFrameOfSession"/> rather than be evaluated one at a time, because
+    /// this session began with no counter reference to judge its first frame against.
+    /// </summary>
+    public bool IsAwaitingFirstFramePair => _awaitingFirstFramePair;
 
     /// <summary>
     /// Gets the number of frames discarded since the current session began.
@@ -100,7 +123,17 @@ internal sealed class StreamFrameGate
     /// The rate the session is starting at; zero or negative falls back to
     /// <see cref="FallbackStreamingFrequencyHz"/>.
     /// </param>
-    public void BeginSession(uint timestampFrequency, int streamingFrequencyHz)
+    /// <param name="validateFirstFramesWithoutReference">
+    /// Whether to guard a session that has no counter reference by holding its first frame (see
+    /// <see cref="AdmitFirstFrameOfSession"/>). Off by default because it delays the first
+    /// sample by one sample period; the caller turns it on for the firmware that latches frames
+    /// across sessions. Has no effect once the instance has a counter reference, which every
+    /// session after the first does.
+    /// </param>
+    public void BeginSession(
+        uint timestampFrequency,
+        int streamingFrequencyHz,
+        bool validateFirstFramesWithoutReference = false)
     {
         var ticksPerSecond = timestampFrequency != 0
             ? timestampFrequency
@@ -111,6 +144,10 @@ internal sealed class StreamFrameGate
         _discardedFrameCount = 0;
         _sessionStartReference = _lastSeenDeviceTimestamp;
         _checkForLeftoverFrames = _hasDeviceTimestampReference;
+
+        // A frame still held when a session ends belongs to that session and is dropped with it.
+        _heldFirstFrame = null;
+        _awaitingFirstFramePair = validateFirstFramesWithoutReference && !_hasDeviceTimestampReference;
     }
 
     /// <summary>
@@ -154,6 +191,64 @@ internal sealed class StreamFrameGate
         _checkForLeftoverFrames = false;
         TrackFrame(deviceTimestamp);
         return false;
+    }
+
+    /// <summary>
+    /// Decides what to do with a frame that arrived while <see cref="IsAwaitingFirstFramePair"/>
+    /// is true — a session with no counter reference of its own.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The frame cannot be judged on arrival, so it is held and judged against the next frame.
+    /// The reference-based path asks whether a frame sits within
+    /// <see cref="LeftoverWindowSamplePeriods"/> of the counter value the session inherited; this
+    /// one asks the same question from the other side, of the held frame and its successor. Two
+    /// frames a sample period apart are both from this session. A held frame whose successor is a
+    /// whole stop-to-start gap away was latched before the session began.
+    /// </para>
+    /// <para>
+    /// Discards share <see cref="DiscardedFrameCount"/> with the reference-based path and the
+    /// same <see cref="MaxDiscardedFrames"/> cap. The two never run in one session — a session
+    /// either inherits a counter value or it does not — so the counter means the same thing
+    /// either way: frames this session threw away.
+    /// </para>
+    /// </remarks>
+    /// <param name="message">The frame that just arrived.</param>
+    /// <param name="heldFrame">
+    /// The frame that was held, for the two outcomes that have something to say about it: the
+    /// frame to report dropped for <see cref="StreamFrameAdmission.DiscardHeldFrame"/>, and the
+    /// frame to deliver first for
+    /// <see cref="StreamFrameAdmission.ReleaseHeldFrameThenThisOne"/>. Null for
+    /// <see cref="StreamFrameAdmission.Hold"/>.
+    /// </param>
+    /// <returns>What the caller must do with the frames.</returns>
+    public StreamFrameAdmission AdmitFirstFrameOfSession(
+        DaqifiOutMessage message,
+        out DaqifiOutMessage? heldFrame)
+    {
+        var held = _heldFirstFrame;
+        if (held is null)
+        {
+            _heldFirstFrame = message;
+            TrackFrame(message.MsgTimeStamp);
+            heldFrame = null;
+            return StreamFrameAdmission.Hold;
+        }
+
+        heldFrame = held;
+        TrackFrame(message.MsgTimeStamp);
+
+        if (_discardedFrameCount < MaxDiscardedFrames
+            && TicksSince(held.MsgTimeStamp, message.MsgTimeStamp) >= _leftoverWindowTicks)
+        {
+            _discardedFrameCount++;
+            _heldFirstFrame = message;
+            return StreamFrameAdmission.DiscardHeldFrame;
+        }
+
+        _heldFirstFrame = null;
+        _awaitingFirstFramePair = false;
+        return StreamFrameAdmission.ReleaseHeldFrameThenThisOne;
     }
 
     /// <summary>
