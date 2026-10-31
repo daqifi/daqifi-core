@@ -400,41 +400,56 @@ public class Pic32BootloaderSessionTests
 
         var (session, _) = CreateSession(transport, new FakeBootloaderProtocol([[0xA1]]));
 
-        await session.ConnectWithRetryAsync(Bootloader("path-1"), null, null, CancellationToken.None);
+        await session.ConnectWithRetryAsync(Bootloader("path-1"), CancellationToken.None);
 
         Assert.Equal(1, transport.DisconnectCalls);
         Assert.True(transport.IsConnected);
     }
 
     [Fact]
-    public async Task Connect_WithoutATarget_ConnectsByVidPidAndSerialNumber()
+    public async Task Connect_WithoutATarget_StillOpensTheSelectedPathAndNeverAVidPidFirstMatch()
     {
+        // #837. The connect addresses the selected board by path even when the caller named no
+        // target. ConnectAsync reads HID enumeration again and opens its own first match, and a
+        // bootloader carries no serial number to narrow that search, so a VID/PID connect can
+        // open a board the search never selected. See the race test below.
         var transport = new FakeHidTransport();
         var (session, _) = CreateSession(transport, new FakeBootloaderProtocol([[0xA1]]));
 
         await session.ConnectWithRetryAsync(
-            Bootloader("path-1", "SN-7"), null, null, CancellationToken.None);
+            Bootloader("path-1", "SN-7"), CancellationToken.None);
 
-        Assert.Equal(0, transport.ConnectByPathAttempts);
-        Assert.Equal(0x04D8, transport.VendorId);
-        Assert.Equal(0x003C, transport.ProductId);
-        Assert.Equal("SN-7", transport.SerialNumber);
+        Assert.Equal(1, transport.ConnectByPathAttempts);
+        Assert.Equal("path-1", transport.LastConnectByPath);
+        Assert.Equal(0, transport.ConnectAttempts);
     }
 
     [Fact]
-    public async Task Connect_WhenOnlyALocationKeyWasRequested_StillConnectsToTheMatchedPath()
+    public async Task Connect_WhenASecondBootloaderAppearsAfterTheSearch_StillOpensTheBoardThatWasSelected()
     {
-        // Location targeting exists because several identical bootloaders can be enumerated with
-        // no serial to tell them apart — so the connect has to address the one that matched, and
-        // VID/PID first-match would defeat the whole point.
+        // #837. The dangerous window is between the search and the connect. The first sweep sees
+        // only path-b, so the untargeted search selects path-b. A second board then enters
+        // bootloader mode, and by connect time enumeration reports path-a and path-b. A VID/PID
+        // connect re-reads that list and opens its first match — path-a — and the erase that
+        // follows destroys a board nobody named. The connect must open path-b or fail.
         var transport = new FakeHidTransport();
-        var (session, _) = CreateSession(transport, new FakeBootloaderProtocol([[0xA1]]));
+        var (session, _) = CreateSession(
+            transport,
+            new FakeBootloaderProtocol([[0xA1]]),
+            // First sweep: one board. Every later read: two, path-a listed first.
+            new FakeHidDeviceEnumerator(
+                [[Bootloader("path-b")]],
+                [Bootloader("path-a"), Bootloader("path-b")]));
 
-        await session.ConnectWithRetryAsync(
-            Bootloader("path-2"), null, "USB(2)", CancellationToken.None);
+        using var poll = PollBudget();
+        var selected = await session.WaitForBootloaderDeviceAsync(null, null, poll.Token);
+        Assert.Equal("path-b", selected.DevicePath);
 
-        Assert.Equal(1, transport.ConnectByPathAttempts);
-        Assert.Equal("path-2", transport.LastConnectByPath);
+        await session.ConnectWithRetryAsync(selected, CancellationToken.None);
+
+        Assert.Equal("path-b", transport.LastConnectByPath);
+        Assert.Equal("path-b", transport.DevicePath);
+        Assert.Equal(0, transport.ConnectAttempts);
     }
 
     public static TheoryData<Exception> TransientConnectFailures => new()
@@ -455,9 +470,9 @@ public class Pic32BootloaderSessionTests
         options.HidConnectRetryCount = 3;
         var (session, _) = CreateSession(transport, new FakeBootloaderProtocol([[0xA1]]), options: options);
 
-        await session.ConnectWithRetryAsync(Bootloader("path-1"), null, null, CancellationToken.None);
+        await session.ConnectWithRetryAsync(Bootloader("path-1"), CancellationToken.None);
 
-        Assert.Equal(2, transport.ConnectAttempts);
+        Assert.Equal(2, transport.ConnectByPathAttempts);
         Assert.True(transport.IsConnected);
     }
 
@@ -479,7 +494,7 @@ public class Pic32BootloaderSessionTests
         var (session, _) = CreateSession(transport, new FakeBootloaderProtocol([[0xA1]]), options: options);
 
         await Assert.ThrowsAsync<NotSupportedException>(
-            () => session.ConnectWithRetryAsync(Bootloader("path-1"), "path-1", null, CancellationToken.None));
+            () => session.ConnectWithRetryAsync(Bootloader("path-1"), CancellationToken.None));
 
         Assert.Equal(1, transport.ConnectByPathAttempts);
     }
@@ -497,10 +512,10 @@ public class Pic32BootloaderSessionTests
         var (session, _) = CreateSession(transport, new FakeBootloaderProtocol([[0xA1]]), options: options);
 
         var error = await Assert.ThrowsAsync<IOException>(
-            () => session.ConnectWithRetryAsync(Bootloader("path-1"), null, null, CancellationToken.None));
+            () => session.ConnectWithRetryAsync(Bootloader("path-1"), CancellationToken.None));
 
         Assert.Equal("attempt 3", error.Message);
-        Assert.Equal(3, transport.ConnectAttempts);
+        Assert.Equal(3, transport.ConnectByPathAttempts);
 
         // The soft-reset recovery reads exactly this to decide whether there is a handle worth
         // resetting, so an exhausted connect must not leave the session looking connected.

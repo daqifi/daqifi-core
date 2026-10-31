@@ -227,10 +227,22 @@ internal sealed class Pic32BootloaderSession
         return resolved;
     }
 
+    /// <summary>
+    /// Opens the HID handle on <paramref name="bootloaderDevice"/>, the board
+    /// <see cref="WaitForBootloaderDeviceAsync"/> selected, with the configured transient retry.
+    /// </summary>
+    /// <remarks>
+    /// #837. The connect always addresses the selected board by its device path. It never asks the
+    /// transport for a VID/PID first-match, not even when the caller named no target.
+    /// <see cref="IHidTransport.ConnectAsync(int,int,string?,CancellationToken)"/> reads HID
+    /// enumeration again and opens its own first match, and a bootloader advertises no serial
+    /// number to narrow that search. A second board entering bootloader mode between the search
+    /// and this connect would therefore hand back a different board, and the erase that follows
+    /// would destroy it. Addressing the selected path cannot pick the wrong board: if that exact
+    /// board is gone, the open fails and the run stops, which is the safe outcome.
+    /// </remarks>
     internal async Task ConnectWithRetryAsync(
         HidDeviceInfo bootloaderDevice,
-        string? targetDevicePath,
-        string? targetLocationKey,
         CancellationToken cancellationToken)
     {
         await _context.ExecuteWithRetryAsync(
@@ -244,24 +256,9 @@ internal sealed class Pic32BootloaderSession
                     await _hidTransport.DisconnectAsync().ConfigureAwait(false);
                 }
 
-                // When a specific device was requested (by path or by location, several identical
-                // bootloaders present), connect to that exact device by path — bootloaderDevice was
-                // already matched on the requested criterion in WaitForBootloaderDeviceAsync.
-                // Otherwise fall back to VID/PID(+serial) first-match for the single-device case.
-                if (targetDevicePath != null || targetLocationKey != null)
-                {
-                    await _hidTransport
-                        .ConnectByPathAsync(bootloaderDevice.DevicePath, ct)
-                        .ConfigureAwait(false);
-                }
-                else
-                {
-                    await _hidTransport.ConnectAsync(
-                        Options.BootloaderVendorId,
-                        Options.BootloaderProductId,
-                        bootloaderDevice.SerialNumber,
-                        ct).ConfigureAwait(false);
-                }
+                await _hidTransport
+                    .ConnectByPathAsync(bootloaderDevice.DevicePath, ct)
+                    .ConfigureAwait(false);
             },
             ex => ex is IOException or TimeoutException or InvalidOperationException,
             cancellationToken).ConfigureAwait(false);

@@ -89,9 +89,11 @@ public class Pic32FirmwareUpdaterTests
         Assert.Equal(["path-1", "path-2"], error.CandidateDevicePaths);
         Assert.Equal(FirmwareUpdateState.WaitingForBootloader, error.FailedState);
 
-        // No HID handle was opened and no bootloader command was written, so neither board was
-        // touched. The device itself was still rebooted into the bootloader, which is harmless.
+        // No HID handle was opened, by either addressing mode, and no bootloader command was
+        // written, so neither board was touched. The device itself was still rebooted into the
+        // bootloader, which is harmless.
         Assert.Equal(0, harness.Transport.ConnectAttempts);
+        Assert.Equal(0, harness.Transport.ConnectByPathAttempts);
         Assert.Empty(harness.Transport.Writes);
         Assert.Equal(FirmwareUpdateState.Failed, harness.Context.CurrentState);
         Assert.DoesNotContain(FirmwareUpdateState.CleaningUp, harness.StateTransitions);
