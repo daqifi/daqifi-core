@@ -204,6 +204,11 @@ await firmwareUpdateService.UpdateFirmwareAsync(
 `LocationKey` is resolved via `IUsbLocationProvider` and is Windows-only in v1 (Linux/macOS
 resolve to `null`, same as `IUsbPortDescriptorProvider`'s cross-platform fallback pattern).
 
+Naming a board is required whenever more than one is in bootloader mode. An update that names
+neither a device path nor a location key stops with `AmbiguousBootloaderTargetException` — which
+lists the candidate device paths — rather than erase whichever board enumerated first
+([#837](https://github.com/daqifi/daqifi-core/issues/837)). A single bootloader needs no target.
+
 > **Verification status:** the serial ⇄ HID-bootloader stability claim above is this feature's
 > core design assumption ([#285](https://github.com/daqifi/daqifi-core/issues/285)), but it has
 > **not yet been empirically confirmed on Windows hardware** in this repo — the environment this
