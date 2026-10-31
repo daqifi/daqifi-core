@@ -301,13 +301,29 @@ public sealed class SdCardCsvCalibrationByChannelTests
     /// Writes a one-row CSV log with the given column header. A header ending in a
     /// <c>dio</c> pair also gets <paramref name="digitalValue"/> as its last column.
     /// </summary>
+    /// <remarks>
+    /// A whole raw count is written as a whole number: <c>100</c>, not <c>100.000000</c>. The
+    /// firmware writes a raw ADC count with no decimal point, and the parser reads a value's
+    /// unit from that form — a decimal point means the device already converted the reading to
+    /// volts, so the file needs no calibration at all. A fixture that padded every count with
+    /// six decimal places would therefore describe a file of volts, and every case here that
+    /// exists to pin which channel's calibration a column is scaled with would stop scaling
+    /// anything.
+    /// </remarks>
     private static MemoryStream BuildCsv(string header, double[] raws, uint digitalValue = 0u)
     {
         var columns = new List<string>();
         foreach (var raw in raws)
         {
+            var value = raw.ToString("0.#########", CultureInfo.InvariantCulture);
+
+            // A raw count with a decimal point is a file of volts, not of counts, and the cases
+            // here would silently stop testing the scaling they exist to pin. Fail the fixture
+            // instead of writing a file that no longer says what the test means.
+            Assert.DoesNotContain(".", value, StringComparison.Ordinal);
+
             columns.Add("1000");
-            columns.Add(raw.ToString("F6", CultureInfo.InvariantCulture));
+            columns.Add(value);
         }
 
         if (header.Contains("dio", StringComparison.OrdinalIgnoreCase))
