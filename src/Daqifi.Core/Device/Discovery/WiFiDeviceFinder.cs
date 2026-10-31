@@ -508,10 +508,25 @@ public class WiFiDeviceFinder : DeviceFinderBase
 
     /// <summary>
     /// Returns true if a NIC matching the given metadata should be included in discovery.
-    /// Centralizes the filter — Up + IPv4-capable + Ethernet/Wireless80211 + non-virtual —
+    /// Centralizes the filter — Up + IPv4-capable + not loopback or tunnel + non-virtual —
     /// so a mixed-NIC list can be exercised in unit tests without instantiating real
     /// <see cref="NetworkInterface"/> objects. Internal for testing.
     /// </summary>
+    /// <remarks>
+    /// The filter asks what an adapter can do, not what the platform calls it. It used to require
+    /// <see cref="NetworkInterfaceType.Ethernet"/> or <see cref="NetworkInterfaceType.Wireless80211"/>
+    /// as a proxy for "a real physical NIC". That proxy does not hold on Linux-derived platforms,
+    /// where the type is inferred from the hardware type: .NET for Android reports the phone's own
+    /// WiFi adapter <c>wlan0</c> as <see cref="NetworkInterfaceType.Unknown"/>, so every interface on
+    /// the phone was dropped and WiFi discovery found nothing (issue #846).
+    /// <para>
+    /// Loopback and tunnel adapters are named by type because no IPv4 broadcast belongs on them.
+    /// <see cref="IsVirtualOrTunnelInterface"/> still carries the exclusion that issue #179 needed:
+    /// it matches the Windows virtual adapters (WSL2 mirrored vEthernet, Hyper-V, VirtualBox, VMware,
+    /// TAP) by name and description, and those adapters report themselves as
+    /// <see cref="NetworkInterfaceType.Ethernet"/>, so the type filter never caught them.
+    /// </para>
+    /// </remarks>
     internal static bool ShouldIncludeInterface(
         string? name,
         string? description,
@@ -529,8 +544,8 @@ public class WiFiDeviceFinder : DeviceFinderBase
             return false;
         }
 
-        if (interfaceType != NetworkInterfaceType.Ethernet &&
-            interfaceType != NetworkInterfaceType.Wireless80211)
+        // Loopback carries no broadcast to a device, and a tunnel's far end is not a local segment.
+        if (interfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
         {
             return false;
         }

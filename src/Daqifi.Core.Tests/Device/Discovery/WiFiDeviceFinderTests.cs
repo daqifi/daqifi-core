@@ -185,6 +185,84 @@ public class WiFiDeviceFinderTests
         }
     }
 
+    // The exclusions above must not rest on the interface type alone. Each row here is
+    // excluded for a reason the type does not carry — not Up, loopback, no IPv4, a virtual
+    // adapter name — and stays excluded even when the platform reports the type as Unknown.
+    [Theory]
+    // Down, and otherwise a perfectly good WiFi adapter.
+    [InlineData("Wi-Fi", "Intel(R) Wi-Fi 6 AX201", OperationalStatus.Down, NetworkInterfaceType.Wireless80211, true)]
+    [InlineData("wlan0", "wlan0", OperationalStatus.Down, NetworkInterfaceType.Unknown, true)]
+    [InlineData("eth0", "eth0", OperationalStatus.Dormant, NetworkInterfaceType.Unknown, true)]
+    // Loopback: Up, IPv4-capable, and never a broadcast target.
+    [InlineData("Loopback Pseudo-Interface 1", "Software Loopback Interface 1", OperationalStatus.Up, NetworkInterfaceType.Loopback, true)]
+    [InlineData("lo", "lo", OperationalStatus.Up, NetworkInterfaceType.Loopback, true)]
+    // Tunnel adapters.
+    [InlineData("Teredo Tunneling Pseudo-Interface", "Teredo Tunneling Pseudo-Interface", OperationalStatus.Up, NetworkInterfaceType.Tunnel, true)]
+    // No IPv4 support.
+    [InlineData("Ethernet 3", "Some IPv6-only adapter", OperationalStatus.Up, NetworkInterfaceType.Ethernet, false)]
+    [InlineData("dummy0", "dummy0", OperationalStatus.Up, NetworkInterfaceType.Unknown, false)]
+    // Virtual adapters, caught by name or description whatever the type says.
+    [InlineData("vEthernet (WSL)", "Hyper-V Virtual Ethernet Adapter", OperationalStatus.Up, NetworkInterfaceType.Ethernet, true)]
+    [InlineData("vEthernet (WSL)", "Hyper-V Virtual Ethernet Adapter", OperationalStatus.Up, NetworkInterfaceType.Unknown, true)]
+    [InlineData("VirtualBox Host-Only Network", "VirtualBox Host-Only Ethernet Adapter", OperationalStatus.Up, NetworkInterfaceType.Unknown, true)]
+    [InlineData("VMware Network Adapter VMnet1", "VMware Virtual Ethernet Adapter for VMnet1", OperationalStatus.Up, NetworkInterfaceType.Unknown, true)]
+    [InlineData("OpenVPN TAP-Windows6", "TAP-Windows Adapter V9", OperationalStatus.Up, NetworkInterfaceType.Unknown, true)]
+    public void ShouldIncludeInterface_IneligibleNic_IsExcludedRegardlessOfType(
+        string name,
+        string description,
+        OperationalStatus status,
+        NetworkInterfaceType type,
+        bool supportsIPv4)
+    {
+        Assert.False(WiFiDeviceFinder.ShouldIncludeInterface(name, description, status, type, supportsIPv4));
+    }
+
+    // Android interface filter — issue #846.
+    // .NET for Android reports the phone's real WiFi adapter as NetworkInterfaceType.Unknown,
+    // because the type is inferred from the hardware type and wlan0 is ARPHRD_ETHER. The type
+    // was the only thing that excluded it, so no interface on the phone passed the filter,
+    // GetAllNetworkInterfaces returned an empty list, and WiFi discovery found nothing.
+    [Theory]
+    [InlineData("wlan0", "wlan0")]
+    [InlineData("eth0", "eth0")]
+    [InlineData("rmnet0", "rmnet0")]
+    public void ShouldIncludeInterface_UpIPv4CapableUnknownType_IsIncluded(string name, string description)
+    {
+        Assert.True(WiFiDeviceFinder.ShouldIncludeInterface(
+            name,
+            description,
+            OperationalStatus.Up,
+            NetworkInterfaceType.Unknown,
+            supportsIPv4: true));
+    }
+
+    // The interface list a Galaxy A16 5G on Android 15 (API 35) reported under net10.0-android,
+    // measured on issue #846. Only wlan0 carries a usable unicast IPv4 address, so only wlan0
+    // is a broadcast target: dummy0 supports no IPv4 and lo is loopback.
+    [Fact]
+    public void ShouldIncludeInterface_AndroidNicList_KeepsOnlyWlan0()
+    {
+        var nics = new (string Name, string Description, OperationalStatus Status, NetworkInterfaceType Type, bool IPv4, bool Expected)[]
+        {
+            ("wlan0", "wlan0", OperationalStatus.Up, NetworkInterfaceType.Unknown, true, true),
+            ("dummy0", "dummy0", OperationalStatus.Up, NetworkInterfaceType.Unknown, false, false),
+            ("lo", "lo", OperationalStatus.Up, NetworkInterfaceType.Loopback, true, false),
+        };
+
+        var included = nics
+            .Where(n => WiFiDeviceFinder.ShouldIncludeInterface(n.Name, n.Description, n.Status, n.Type, n.IPv4))
+            .Select(n => n.Name)
+            .ToList();
+
+        Assert.Equal(new[] { "wlan0" }, included);
+
+        foreach (var nic in nics)
+        {
+            var actual = WiFiDeviceFinder.ShouldIncludeInterface(nic.Name, nic.Description, nic.Status, nic.Type, nic.IPv4);
+            Assert.True(actual == nic.Expected, $"NIC '{nic.Name}' expected {nic.Expected} but got {actual}");
+        }
+    }
+
     // ---------------------------------------------------------------------
     // TCP data-port resolution (daqifi-core#244)
     // ---------------------------------------------------------------------
