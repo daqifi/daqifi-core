@@ -29,6 +29,14 @@ public class FirmwareVersionTests
     [InlineData("1.0.0alpha", 1, 0, 0, "alpha", 0)]
     [InlineData("2.1.0beta3", 2, 1, 0, "beta", 3)]
     [InlineData("v1.0.0pre", 1, 0, 0, "pre", 0)]
+    // PreLabel keeps the raw spelling and the raw case of the suffix. Equality normalizes
+    // label aliases (see Equals_AliasLabels_*), but the parsed label itself is never rewritten:
+    // "b" stays "b", "beta" stays "beta", and "B" stays "B".
+    [InlineData("3.2.0b1", 3, 2, 0, "b", 1)]
+    [InlineData("3.2.0beta1", 3, 2, 0, "beta", 1)]
+    [InlineData("3.2.0B1", 3, 2, 0, "B", 1)]
+    [InlineData("1.0.0dev2", 1, 0, 0, "dev", 2)]
+    [InlineData("v2.0.0RC1", 2, 0, 0, "RC", 1)]
     public void TryParse_ValidPreRelease_ParsesCorrectly(
         string input, int major, int minor, int patch, string? label, int preNum)
     {
@@ -159,10 +167,229 @@ public class FirmwareVersionTests
     [InlineData("3.2.0b2", "3.2.0b2")]
     [InlineData("v1.0.0rc1", "1.0.0rc1")]
     [InlineData("2.0.0alpha", "2.0.0alpha")]
+    // ToString round-trips the raw label verbatim. Two versions that are now equal
+    // ("3.2.0b2" and "3.2.0beta2") still print differently, because the string is what the
+    // device reported and a user has to be able to recognize it.
+    [InlineData("3.2.0beta2", "3.2.0beta2")]
+    [InlineData("1.0.0B2", "1.0.0B2")]
+    [InlineData("v2.0.0RC1", "2.0.0RC1")]
     public void ToString_FormatsCorrectly(string input, string expected)
     {
         FirmwareVersion.TryParse(input, out var v);
         Assert.Equal(expected, v.ToString());
+    }
+
+    /// <summary>
+    /// Pins the ordering that <see cref="FirmwareVersion.CompareTo"/> produces across every
+    /// spelling of a pre-release label. Normalizing equality must not move any of these.
+    /// </summary>
+    [Theory]
+    // release beats every pre-release, whichever way the label is spelled
+    [InlineData("3.2.0", "3.2.0rc1", 1)]
+    [InlineData("3.2.0", "3.2.0releasecandidate1", 1)]
+    [InlineData("3.2.0", "3.2.0b1", 1)]
+    [InlineData("3.2.0", "3.2.0beta1", 1)]
+    [InlineData("3.2.0", "3.2.0dev1", 1)]
+    // rc beats beta beats alpha, across spellings and across cases
+    [InlineData("3.2.0rc1", "3.2.0beta1", 1)]
+    [InlineData("3.2.0RC1", "3.2.0b1", 1)]
+    [InlineData("3.2.0releasecandidate1", "3.2.0beta1", 1)]
+    [InlineData("3.2.0beta1", "3.2.0alpha1", 1)]
+    [InlineData("3.2.0b1", "3.2.0a1", 1)]
+    [InlineData("3.2.0B1", "3.2.0ALPHA1", 1)]
+    [InlineData("3.2.0beta1", "3.2.0dev1", 1)]
+    [InlineData("3.2.0beta1", "3.2.0preview1", 1)]
+    // the pre-release number breaks a tie between two spellings of the same rank
+    [InlineData("3.2.0beta2", "3.2.0b1", 1)]
+    [InlineData("3.2.0b2", "3.2.0beta1", 1)]
+    [InlineData("3.2.0b1", "3.2.0beta2", -1)]
+    // major, minor and patch still outrank the label
+    [InlineData("4.0.0alpha1", "3.9.9", 1)]
+    [InlineData("3.3.0a1", "3.2.0", 1)]
+    [InlineData("3.2.1a1", "3.2.0", 1)]
+    public void CompareTo_AcrossLabelSpellings_OrdersByRank(string left, string right, int expectedSign)
+    {
+        Assert.True(FirmwareVersion.TryParse(left, out var l));
+        Assert.True(FirmwareVersion.TryParse(right, out var r));
+
+        Assert.Equal(expectedSign, Math.Sign(l.CompareTo(r)));
+        Assert.Equal(-expectedSign, Math.Sign(r.CompareTo(l)));
+    }
+
+    /// <summary>
+    /// Every pair here is one version written two ways. <see cref="FirmwareVersion.CompareTo"/>
+    /// has always ranked them the same, so equality and the hash code have to agree (issue #843).
+    /// </summary>
+    public static TheoryData<string, string> AliasPairs() => new()
+    {
+        { "3.2.0b1", "3.2.0beta1" },
+        { "3.2.0a1", "3.2.0alpha1" },
+        { "1.0.0rc1", "1.0.0releasecandidate1" },
+        { "1.0.0pre", "1.0.0preview" },
+        { "1.0.0pre", "1.0.0dev" },
+        { "1.0.0alpha", "1.0.0dev" },
+        { "2.1.0b3", "2.1.0beta3" },
+        // the label rank is case-insensitive, so the case of the spelling does not matter either
+        { "3.2.0B1", "3.2.0beta1" },
+        { "1.0.0RC2", "1.0.0rc2" },
+        { "3.2.0BETA1", "3.2.0b1" },
+    };
+
+    [Theory]
+    [MemberData(nameof(AliasPairs))]
+    public void Equals_AliasLabels_AreEqual(string left, string right)
+    {
+        Assert.True(FirmwareVersion.TryParse(left, out var l));
+        Assert.True(FirmwareVersion.TryParse(right, out var r));
+
+        Assert.Equal(0, l.CompareTo(r));
+        Assert.True(l.Equals(r));
+        Assert.True(r.Equals(l));
+        Assert.True(l == r);
+        Assert.False(l != r);
+        Assert.Equal(l, r);
+    }
+
+    [Theory]
+    [MemberData(nameof(AliasPairs))]
+    public void GetHashCode_AliasLabels_AreEqual(string left, string right)
+    {
+        Assert.True(FirmwareVersion.TryParse(left, out var l));
+        Assert.True(FirmwareVersion.TryParse(right, out var r));
+
+        Assert.Equal(l.GetHashCode(), r.GetHashCode());
+    }
+
+    [Theory]
+    // a different label rank, a different pre-release number, a pre-release against its
+    // release, and a different patch all stay unequal
+    [InlineData("3.2.0b1", "3.2.0rc1")]
+    [InlineData("3.2.0beta1", "3.2.0alpha1")]
+    [InlineData("3.2.0b1", "3.2.0b2")]
+    [InlineData("3.2.0b1", "3.2.0beta2")]
+    [InlineData("3.2.0", "3.2.0b1")]
+    [InlineData("3.2.0", "3.2.1")]
+    [InlineData("3.2.0", "4.2.0")]
+    [InlineData("3.2.0", "3.3.0")]
+    public void Equals_DifferentVersions_AreNotEqual(string left, string right)
+    {
+        Assert.True(FirmwareVersion.TryParse(left, out var l));
+        Assert.True(FirmwareVersion.TryParse(right, out var r));
+
+        Assert.NotEqual(0, l.CompareTo(r));
+        Assert.False(l.Equals(r));
+        Assert.False(l == r);
+        Assert.True(l != r);
+    }
+
+    [Fact]
+    public void Distinct_AliasLabels_CollapseToOneVersion()
+    {
+        FirmwareVersion.TryParse("3.2.0b1", out var b1);
+        FirmwareVersion.TryParse("3.2.0beta1", out var beta1);
+        FirmwareVersion.TryParse("3.2.0B1", out var upperB1);
+
+        var distinct = new[] { b1, beta1, upperB1 }.Distinct().ToList();
+
+        Assert.Single(distinct);
+    }
+
+    [Fact]
+    public void HashSet_AliasLabels_HoldOneVersion()
+    {
+        FirmwareVersion.TryParse("1.0.0rc2", out var rc2);
+        FirmwareVersion.TryParse("1.0.0releasecandidate2", out var releaseCandidate2);
+
+        var set = new HashSet<FirmwareVersion> { rc2 };
+
+        Assert.Contains(releaseCandidate2, set);
+        Assert.False(set.Add(releaseCandidate2));
+        Assert.Single(set);
+    }
+
+    [Fact]
+    public void DictionaryKey_AliasLabels_ResolveToOneEntry()
+    {
+        FirmwareVersion.TryParse("2.1.0beta3", out var beta3);
+        FirmwareVersion.TryParse("2.1.0b3", out var b3);
+
+        var map = new Dictionary<FirmwareVersion, string> { [beta3] = "release notes" };
+
+        Assert.True(map.TryGetValue(b3, out var notes));
+        Assert.Equal("release notes", notes);
+    }
+
+    /// <summary>
+    /// The general contract: across a matrix of every spelling in play, a zero
+    /// <see cref="FirmwareVersion.CompareTo"/> result and <c>Equals</c> always agree.
+    /// </summary>
+    [Fact]
+    public void Equals_AgreesWithCompareTo_AcrossEveryPair()
+    {
+        string[] inputs =
+        [
+            "3.2.0", "3.2.1", "3.3.0", "4.2.0",
+            "3.2.0a1", "3.2.0alpha1", "3.2.0b1", "3.2.0beta1", "3.2.0B1", "3.2.0b2",
+            "3.2.0rc1", "3.2.0releasecandidate1", "3.2.0RC1",
+            "3.2.0pre", "3.2.0preview", "3.2.0dev",
+        ];
+
+        var versions = inputs.Select(s =>
+        {
+            Assert.True(FirmwareVersion.TryParse(s, out var v));
+            return v;
+        }).ToList();
+
+        foreach (var left in versions)
+        {
+            foreach (var right in versions)
+            {
+                var ranksEqual = left.CompareTo(right) == 0;
+
+                Assert.Equal(ranksEqual, left.Equals(right));
+                if (ranksEqual)
+                {
+                    Assert.Equal(left.GetHashCode(), right.GetHashCode());
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// An unknown label carries no rank of its own, so <c>CompareTo</c> puts every unknown
+    /// label at the lowest rank. Equality follows it, which is the point of the fix: two
+    /// unrecognized labels with the same number are one version.
+    /// </summary>
+    [Fact]
+    public void Equals_UnknownLabels_FollowCompareTo()
+    {
+        FirmwareVersion.TryParse("1.0.0foo1", out var foo1);
+        FirmwareVersion.TryParse("1.0.0bar1", out var bar1);
+
+        Assert.Equal(0, foo1.CompareTo(bar1));
+        Assert.Equal(foo1, bar1);
+        Assert.Equal(foo1.GetHashCode(), bar1.GetHashCode());
+
+        // an unknown label still sorts below a known pre-release label and below the release
+        FirmwareVersion.TryParse("1.0.0b1", out var b1);
+        Assert.True(b1 > foo1);
+    }
+
+    /// <summary>
+    /// An empty label is not a pre-release, exactly as a missing label is not. The two were
+    /// unequal before the fix because the raw strings differed.
+    /// </summary>
+    [Fact]
+    public void Equals_EmptyLabel_MatchesMissingLabel()
+    {
+        var missing = new FirmwareVersion(3, 2, 0, null, 0);
+        var empty = new FirmwareVersion(3, 2, 0, string.Empty, 0);
+
+        Assert.False(missing.IsPreRelease);
+        Assert.False(empty.IsPreRelease);
+        Assert.Equal(0, missing.CompareTo(empty));
+        Assert.Equal(missing, empty);
+        Assert.Equal(missing.GetHashCode(), empty.GetHashCode());
     }
 
     [Fact]
