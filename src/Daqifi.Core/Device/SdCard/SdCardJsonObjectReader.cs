@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 
 namespace Daqifi.Core.Device.SdCard;
@@ -69,9 +70,21 @@ internal static class SdCardJsonObjectReader
         var bracketDepth = 0;
         var inString = false;
         var escaped = false;
+        var recoveryStart = -1;
+        var recoveryParentDepth = 0;
 
         await foreach (var line in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
+            // An unclosed array can make the next log object look like an array element.
+            // Remember that candidate until its closing brace, then check its known log fields.
+            // Real ai/di elements contain ch/val or ts/mask/val, not another log object.
+            if (depth > 0 && bracketDepth > 0 && !inString
+                && recoveryStart < 0 && StartsAnObject(line.Text))
+            {
+                recoveryStart = buffer.Length;
+                recoveryParentDepth = depth;
+            }
+
             // A line that opens a top-level object while one is already open, outside any array,
             // says the open one was damaged: the firmware writes a nested object either inside
             // an array ("ai", "di") or inline on one line ("meta"), never alone at the start of
@@ -81,6 +94,7 @@ internal static class SdCardJsonObjectReader
                 buffer.Clear();
                 depth = 0;
                 escaped = false;
+                recoveryStart = -1;
             }
 
             foreach (var character in line.Text)
@@ -99,6 +113,7 @@ internal static class SdCardJsonObjectReader
                     bracketDepth = 0;
                     inString = false;
                     escaped = false;
+                    recoveryStart = -1;
                     continue;
                 }
 
@@ -144,11 +159,26 @@ internal static class SdCardJsonObjectReader
                         break;
                     case '}':
                         depth--;
+                        if (recoveryStart >= 0 && depth == recoveryParentDepth)
+                        {
+                            var candidate = buffer.ToString(recoveryStart, buffer.Length - recoveryStart);
+                            recoveryStart = -1;
+                            if (IsLogObject(candidate))
+                            {
+                                yield return new SdCardJsonObject(candidate, line.BytesRead);
+                                buffer.Clear();
+                                depth = 0;
+                                bracketDepth = 0;
+                                break;
+                            }
+                        }
+
                         if (depth == 0)
                         {
                             yield return new SdCardJsonObject(buffer.ToString(), line.BytesRead);
                             buffer.Clear();
                             bracketDepth = 0;
+                            recoveryStart = -1;
                         }
 
                         break;
@@ -172,6 +202,7 @@ internal static class SdCardJsonObjectReader
                 bracketDepth = 0;
                 inString = false;
                 escaped = false;
+                recoveryStart = -1;
                 continue;
             }
 
@@ -183,12 +214,38 @@ internal static class SdCardJsonObjectReader
                 bracketDepth = 0;
                 inString = false;
                 escaped = false;
+                recoveryStart = -1;
                 continue;
             }
 
             // The line terminator the reader stripped still separates two JSON tokens, so put a
             // newline back in its place.
             buffer.Append('\n');
+        }
+    }
+
+    private static bool IsLogObject(string candidate)
+    {
+        if (!candidate.Contains("\"analog\"", StringComparison.Ordinal)
+            && !candidate.Contains("\"ai\"", StringComparison.Ordinal)
+            && !candidate.Contains("\"di\"", StringComparison.Ordinal)
+            && !candidate.Contains("\"meta\"", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(candidate);
+            var root = document.RootElement;
+            return root.TryGetProperty("analog", out _)
+                || root.TryGetProperty("ai", out _)
+                || root.TryGetProperty("di", out _)
+                || root.TryGetProperty("meta", out _);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

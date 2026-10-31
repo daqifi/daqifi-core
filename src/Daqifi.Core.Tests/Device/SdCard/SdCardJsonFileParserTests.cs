@@ -1114,6 +1114,24 @@ public sealed class SdCardJsonFileParserTests
             $"{shape}: expected {expectedAnalogSamples} samples with analog readings, got {analogSamples}");
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ParseAsync_UnclosedAnalogArray_DoesNotHideLaterObjects(bool firmware, bool multiline)
+    {
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"ts\":100,\"analog\":[1]}",
+            firmware ? "{\"ts\":150,\"ai\":[{\"ch\":0," : "{\"ts\":150,\"analog\":[",
+            multiline ? "{\n\"ts\":200,\n\"ai\":[{\"ch\":0,\"val\":2}]\n}" : "{\"ts\":200,\"analog\":[2]}",
+            "{\"ts\":300,\"analog\":[3]}");
+        var session = await new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser()
+            .ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+        Assert.Equal(3, samples.Count);
+    }
+
     private static async Task<List<T>> ToListAsync<T>(IAsyncEnumerable<T> source)
     {
         var list = new List<T>();
