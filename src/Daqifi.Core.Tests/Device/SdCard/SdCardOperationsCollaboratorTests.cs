@@ -75,6 +75,7 @@ public class SdCardOperationsCollaboratorTests
     private const string ListFiles = "SYSTem:STORage:SD:LIST?";
     private const string SystemError = "SYSTem:ERRor?";
     private const string StopStreaming = "SYSTem:StopStreamData";
+    private const string SetProtobufFormat = "SYSTem:STReam:FORmat 0";
 
     private const string NoErrorTerminator = "0,\"No error\"";
 
@@ -502,6 +503,45 @@ public class SdCardOperationsCollaboratorTests
         Assert.Equal(1, host.StartStreamingCallCount);
     }
 
+    [Fact]
+    public async Task GetSdCardFilesAsync_WhileLogging_ThrowsBusyAndSendsNothing()
+    {
+        // #851 (a): the listing had no busy guard, so it stopped the stream, sent SD:ENAble 0 --
+        // which the firmware treats as a release of the write session -- and then restarted
+        // streaming to a card it was no longer writing to. The recording was over and
+        // IsLoggingToSdCard still said true. A listing is a read, so it must leave the session
+        // alone, and refusing is the only way to do that: the firmware answers SD:LIST? with -200
+        // while the SD manager is busy, and both branches of its SD:ENAble handler set the manager
+        // mode to NONE, so no command order lists safely during a session.
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingSessionAsync("session.bin");
+        var callsBeforeTheListing = host.Calls;
+
+        await Assert.ThrowsAsync<SdCardBusyException>(() => ops.GetSdCardFilesAsync());
+
+        // Asserted on the ordered call list rather than on the exception alone: the defect was
+        // what the method sent, so the proof is that it appended nothing at all.
+        Assert.Equal(callsBeforeTheListing, host.Calls);
+        Assert.Equal(0, host.ExchangeCount);
+        Assert.True(ops.IsLoggingToSdCard);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_AfterTheSessionStops_ListsNormally()
+    {
+        // The other half of the guard: refusing during a session must not outlive it.
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingSessionAsync("session.bin");
+        await ops.StopSdCardLoggingAsync();
+        host.EnqueueResponse("Daqifi/session.bin 512", NoErrorTerminator);
+
+        var files = await ops.GetSdCardFilesAsync();
+
+        Assert.Equal("session.bin", Assert.Single(files).FileName);
+    }
+
     #endregion
 
     #region GetSdCardStorageAsync
@@ -787,6 +827,7 @@ public class SdCardOperationsCollaboratorTests
             new[]
             {
                 "send:" + StopStreaming,
+                "send:" + SetProtobufFormat,
                 "send:" + DisableSd,
                 "send:SYSTem:STReam:INTerface 0",
                 "send:" + EnableLan,
@@ -805,7 +846,11 @@ public class SdCardOperationsCollaboratorTests
 
         await ops.StopSdCardLoggingAsync();
 
-        Assert.Equal(new[] { "send:" + StopStreaming, "send:" + DisableSd }, host.Calls);
+        // The format restore applies on every transport — the firmware's encoding is global —
+        // so it is here too, while LAN:ENAbled 1 is not.
+        Assert.Equal(
+            new[] { "send:" + StopStreaming, "send:" + SetProtobufFormat, "send:" + DisableSd },
+            host.Calls);
     }
 
     [Fact]
@@ -819,6 +864,36 @@ public class SdCardOperationsCollaboratorTests
         await ops.StopSdCardLoggingAsync();
 
         Assert.False(ops.IsLoggingToSdCard);
+    }
+
+    [Theory]
+    [InlineData(SdCardLogFormat.Json)]
+    [InlineData(SdCardLogFormat.Csv)]
+    [InlineData(SdCardLogFormat.Protobuf)]
+    public async Task StopSdCardLoggingAsync_RestoresTheProtobufStreamFormat(SdCardLogFormat format)
+    {
+        // #851 (b): the start sets SYSTem:STReam:FORmat to the log format and the firmware keeps
+        // one encoding for every interface, so a stop that did not set it back left live
+        // streaming emitting JSON or CSV text that the protobuf consumer drops. The restore runs
+        // for every format, Protobuf included, because the flag the library holds is the format
+        // it asked for, not the format the device is in.
+        var host = new FakeHost();
+        var ops = new SdCardOperations(host);
+        await ops.StartSdCardLoggingSessionAsync("data." + format, format: format);
+        var callsBeforeTheStop = host.Calls;
+
+        await ops.StopSdCardLoggingAsync();
+
+        Assert.Equal(
+            callsBeforeTheStop.Concat(new[]
+            {
+                "send:" + StopStreaming,
+                "send:" + SetProtobufFormat,
+                "send:" + DisableSd,
+                "send:SYSTem:STReam:INTerface 0",
+                "send:" + EnableLan,
+            }),
+            host.Calls);
     }
 
     #endregion
