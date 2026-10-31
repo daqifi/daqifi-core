@@ -30,6 +30,7 @@ public class Pic32BootloaderEmptyImageTests
 
     private const byte EraseFlashOpcode = 0x02;
     private const byte ProgramFlashOpcode = 0x03;
+    private const byte ReadCrcOpcode = 0x04;
     private const byte JumpToApplicationOpcode = 0x05;
 
     private const byte DleEscape = 0x10;
@@ -48,6 +49,8 @@ public class Pic32BootloaderEmptyImageTests
         { "an empty file", [] },
         { "blank lines only", ["", "   ", ""] },
         { "an end-of-file record only", [":00000001FF"] },
+        { "data only below application flash", [":010000007F80", ":00000001FF"] },
+        { "data only in the boot flash", [":020000041FC01B", ":010000007F80", ":00000001FF"] },
         {
             "an extended-linear-address record and an end-of-file record",
             [":020000041D00DD", ":00000001FF"]
@@ -124,12 +127,14 @@ public class Pic32BootloaderEmptyImageTests
         var hidTransport = new FakeHidTransport();
         hidTransport.EnqueueRead([0x01, 0x10]); // version
         hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the address record
         hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the data record
         hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the end-of-file record
-        hidTransport.EnqueueRead([0x01, 0x10]); // version, read again to verify
+        hidTransport.EnqueueRead(CrcReply(Enumerable.Range(0, 16).Select(value => (byte)value).ToArray()));
 
         var service = CreateService(hidTransport);
         var hexPath = WriteTempHexFile([
+            ":020000041D00DD",
             ":10000000000102030405060708090A0B0C0D0E0F78",
             ":00000001FF"
         ]);
@@ -145,15 +150,16 @@ public class Pic32BootloaderEmptyImageTests
 
         Assert.Equal(FirmwareUpdateState.Complete, service.CurrentState);
 
-        // One data record of 16 bytes is enough to program, so the erase still goes out and both
-        // records still follow it. This is the row of the table that must not change.
+        // One data record of 16 bytes is enough to program, so the erase still goes out and all
+        // three records still follow it. This is the row of the table that must not change.
         Assert.Equal<byte[]>(
             [
                 ReadVersionOpcode,
                 EraseFlashOpcode,
                 ProgramFlashOpcode,
                 ProgramFlashOpcode,
-                ReadVersionOpcode,
+                ProgramFlashOpcode,
+                ReadCrcOpcode,
                 JumpToApplicationOpcode
             ],
             hidTransport.Writes.Select(OpcodeOf).ToArray());
@@ -167,12 +173,13 @@ public class Pic32BootloaderEmptyImageTests
         var hidTransport = new FakeHidTransport();
         hidTransport.EnqueueRead([0x01, 0x10]); // version
         hidTransport.EnqueueRead([0x01, 0x02]); // erase ack
+        hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the address record
         hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the data record
         hidTransport.EnqueueRead([0x01, 0x03]); // program ack, the end-of-file record
-        hidTransport.EnqueueRead([0x01, 0x10]); // version, read again to verify
+        hidTransport.EnqueueRead(CrcReply([0x7F]));
 
         var service = CreateService(hidTransport);
-        var hexPath = WriteTempHexFile([":010000007F80", ":00000001FF"]);
+        var hexPath = WriteTempHexFile([":020000041D00DD", ":010000007F80", ":00000001FF"]);
 
         try
         {
@@ -238,6 +245,27 @@ public class Pic32BootloaderEmptyImageTests
 
     /// <summary>Strips the framing and the escapes and returns the opcode the frame carries.</summary>
     private static byte OpcodeOf(byte[] frame) => frame[1] == DleEscape ? frame[2] : frame[1];
+
+    private static byte[] CrcReply(byte[] data)
+    {
+        var flashCrc = new Crc16(data).Crc;
+        byte[] content = [ReadCrcOpcode, (byte)flashCrc, (byte)(flashCrc >> 8)];
+        var frameCrc = new Crc16(content).Crc;
+        byte[] body = [.. content, (byte)frameCrc, (byte)(frameCrc >> 8)];
+        var frame = new List<byte> { 0x01 };
+        foreach (var value in body)
+        {
+            if (value is 0x01 or 0x04 or 0x10)
+            {
+                frame.Add(DleEscape);
+            }
+
+            frame.Add(value);
+        }
+
+        frame.Add(0x04);
+        return frame.ToArray();
+    }
 
     private static FirmwareUpdateService CreateService(FakeHidTransport hidTransport)
     {

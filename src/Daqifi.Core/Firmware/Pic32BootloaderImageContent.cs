@@ -30,14 +30,16 @@ internal static class Pic32BootloaderImageContent
     private const int IntelHexRecordOverhead = 5;
 
     /// <summary>
-    /// Counts the data bytes <paramref name="records"/> will program. Only a well-formed type-00
-    /// data record adds to the total, and it adds its byte count, not its length.
+    /// Counts the data bytes <paramref name="records"/> will program in application flash.
+    /// Tracks extended addresses and mirrors the bootloader's per-word address check, so
+    /// linker data outside application flash cannot make an otherwise empty image pass.
     /// </summary>
     /// <param name="records">The records the HEX image parsed to, after protected-range filtering.</param>
     /// <returns>The number of flash bytes the image programs.</returns>
     internal static long CountProgrammableDataBytes(IReadOnlyList<byte[]> records)
     {
         long dataBytes = 0;
+        uint baseAddress = 0;
 
         foreach (var record in records)
         {
@@ -51,8 +53,22 @@ internal static class Pic32BootloaderImageContent
                 continue;
             }
 
+            if (record[3] == 0x04 && record.Length == 7 && record[0] == 2)
+            {
+                baseAddress = ((uint)record[4] << 24) | ((uint)record[5] << 16);
+                continue;
+            }
+
+            if (record[3] == 0x02 && record.Length == 7 && record[0] == 2)
+            {
+                baseAddress = ((uint)record[4] << 12) | ((uint)record[5] << 4);
+                continue;
+            }
+
             if (record[3] != IntelHexDataRecordType)
             {
+                // EOF and unknown record types reset both address registers in the bootloader.
+                baseAddress = 0;
                 continue;
             }
 
@@ -61,7 +77,18 @@ internal static class Pic32BootloaderImageContent
             // with one is not a case to interpret.
             if (record[0] == record.Length - IntelHexRecordOverhead)
             {
-                dataBytes += record[0];
+                var address = unchecked(baseAddress + (uint)((record[1] << 8) | record[2]));
+                // APP_ProgramHexRecord advances in words and ignores writes outside application
+                // flash. Data in a linker section at address zero is not firmware to restore
+                // after the erase. Mirror its address test, including the KSEG0 conversion.
+                for (var offset = 0; offset < record[0]; offset += 4)
+                {
+                    var target = unchecked(address + (uint)offset) | 0x80000000u;
+                    if (target >= 0x9D000000u && target <= 0x9D1FFFFFu)
+                    {
+                        dataBytes += Math.Min(4, record[0] - offset);
+                    }
+                }
             }
         }
 
@@ -85,7 +112,7 @@ internal static class Pic32BootloaderImageContent
 
         throw new InvalidDataException(
             $"Firmware HEX file did not contain any writable records. It parsed to {records.Count} " +
-            "record(s), and none of them is a data record that carries a byte to program, so there " +
+            "record(s), and none of them carries a byte in application flash to program, so there " +
             "is nothing to write to the device. The image is refused and the device flash is " +
             "untouched.");
     }
