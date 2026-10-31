@@ -853,6 +853,108 @@ public class SdCardFileParserTests
 
     #endregion
 
+    #region Same-timestamp frames
+
+    /// <summary>
+    /// One same-timestamp scenario: the frames the firmware wrote into the log, and every sample
+    /// the parser must produce from them, in order.
+    /// </summary>
+    /// <param name="Name">Scenario name, used as the theory case's display name.</param>
+    /// <param name="Frames">The log's stream frames, in file order.</param>
+    /// <param name="ExpectedSamples">The analog values and digital state of each expected sample.</param>
+    public sealed record SameTimestampCase(
+        string Name,
+        DaqifiOutMessage[] Frames,
+        (double[] Analog, uint Digital)[] ExpectedSamples)
+    {
+        /// <inheritdoc />
+        public override string ToString() => Name;
+    }
+
+    /// <summary>
+    /// Frames that share one tick combine only when each one carries a payload kind the others
+    /// do not. Analog and digital describe one instant, so they become one sample. Two frames of
+    /// the same payload kind are two real samples, so they stay two samples (issue #850).
+    /// </summary>
+    public static TheoryData<SameTimestampCase> SameTimestampCases() => new()
+    {
+        new SameTimestampCase(
+            "one analog frame",
+            new[] { AnalogFrame(1000, 1.0f, 2.0f) },
+            new[] { (new[] { 1.0, 2.0 }, 0u) }),
+        new SameTimestampCase(
+            "analog then digital at one tick merge",
+            new[] { AnalogFrame(1000, 1.0f, 2.0f), DigitalFrame(1000, 0x0F) },
+            new[] { (new[] { 1.0, 2.0 }, 0x0Fu) }),
+        new SameTimestampCase(
+            "digital then analog at one tick merge",
+            new[] { DigitalFrame(1000, 0x0F), AnalogFrame(1000, 1.0f, 2.0f) },
+            new[] { (new[] { 1.0, 2.0 }, 0x0Fu) }),
+        new SameTimestampCase(
+            "two analog frames at one tick stay two samples",
+            new[] { AnalogFrame(1000, 1.0f), AnalogFrame(1000, 2.0f) },
+            new[] { (new[] { 1.0 }, 0u), (new[] { 2.0 }, 0u) }),
+        new SameTimestampCase(
+            "two digital frames at one tick stay two samples",
+            new[] { DigitalFrame(1000, 0x01), DigitalFrame(1000, 0x02) },
+            new[] { (Array.Empty<double>(), 0x01u), (Array.Empty<double>(), 0x02u) }),
+        new SameTimestampCase(
+            "a raw analog frame does not fold into a float analog frame",
+            new[] { AnalogFrame(1000, 1.0f), RawAnalogFrame(1000, 7) },
+            new[] { (new[] { 1.0 }, 0u), (new[] { 7.0 }, 0u) }),
+        new SameTimestampCase(
+            "three frames at one tick: analog, digital, analog",
+            new[] { AnalogFrame(1000, 1.0f), DigitalFrame(1000, 0x0F), AnalogFrame(1000, 2.0f) },
+            new[] { (new[] { 1.0 }, 0x0Fu), (new[] { 2.0 }, 0u) }),
+        new SameTimestampCase(
+            "three frames at one tick: analog, analog, digital",
+            new[] { AnalogFrame(1000, 1.0f), AnalogFrame(1000, 2.0f), DigitalFrame(1000, 0x0F) },
+            new[] { (new[] { 1.0 }, 0u), (new[] { 2.0 }, 0x0Fu) }),
+    };
+
+    [Theory]
+    [MemberData(nameof(SameTimestampCases))]
+    public async Task ParseAsync_WithFramesSharingOneTick_KeepsEveryPayload(SameTimestampCase scenario)
+    {
+        // Arrange
+        var builder = new SdCardTestFileBuilder();
+        foreach (var frame in scenario.Frames)
+        {
+            builder.AddMessage(frame);
+        }
+
+        using var stream = builder.Build();
+
+        // Act
+        var session = await _parser.ParseAsync(stream, "same_tick.bin");
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert — no payload is dropped, and complementary frames still share one sample
+        Assert.Equal(scenario.ExpectedSamples.Length, samples.Count);
+        for (var i = 0; i < scenario.ExpectedSamples.Length; i++)
+        {
+            var expected = scenario.ExpectedSamples[i];
+            Assert.Equal(expected.Analog.Length, samples[i].AnalogValues.Count);
+            for (var v = 0; v < expected.Analog.Length; v++)
+            {
+                Assert.Equal(expected.Analog[v], samples[i].AnalogValues[v], 3);
+            }
+
+            Assert.Equal(expected.Digital, samples[i].DigitalData);
+        }
+    }
+
+    private static DaqifiOutMessage AnalogFrame(uint timestamp, params float[] values) =>
+        SdCardTestFileBuilder.CreateStreamMessage(timestamp, analogFloatValues: values);
+
+    private static DaqifiOutMessage RawAnalogFrame(uint timestamp, params int[] values) =>
+        SdCardTestFileBuilder.CreateStreamMessage(timestamp, analogIntValues: values);
+
+    private static DaqifiOutMessage DigitalFrame(uint timestamp, byte state) =>
+        SdCardTestFileBuilder.CreateStreamMessage(timestamp, digitalData: new[] { state });
+
+    #endregion
+
     #region HasDeviceTimestamp
 
     [Fact]
