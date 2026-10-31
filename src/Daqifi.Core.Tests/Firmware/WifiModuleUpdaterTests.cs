@@ -107,10 +107,14 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(options, runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Contains("/p COM42", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, "/p COM42 /d WINC1500 /k /e /i aio /w"),
+            runner.LastRequest!.Arguments);
         Assert.DoesNotContain("COM7", runner.LastRequest.Arguments, StringComparison.Ordinal);
     }
 
@@ -120,10 +124,14 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Contains("/p COM7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, "/p COM7 /d WINC1500 /k /e /i aio /w"),
+            runner.LastRequest!.Arguments);
     }
 
     [Fact]
@@ -159,12 +167,13 @@ public class WifiModuleUpdaterTests : IDisposable
         await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Contains("/p \"COM 42\"", runner.LastRequest!.Arguments, StringComparison.Ordinal);
-        Assert.Contains($"/f \"{firmwareDirectory}\"", runner.LastRequest.Arguments, StringComparison.Ordinal);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, $"/p \"COM 42\" /f \"{firmwareDirectory}\" /w"),
+            runner.LastRequest!.Arguments);
     }
 
     [Fact]
-    public async Task RunUpdate_EscapesEmbeddedQuotesWithoutWrappingASpacelessArgument()
+    public async Task RunUpdate_WrapsAnArgumentThatHoldsAQuote()
     {
         var options = CreateFastOptions();
         options.WifiPortOverride = "CO\"M7";
@@ -172,10 +181,27 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(options, runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        if (OperatingSystem.IsWindows())
+        {
+            // The tool is a .cmd, so the line goes through cmd.exe, and a quote cannot be
+            // encoded there. The value is refused instead of mangled. See
+            // WincFlashCommandLineTests for the whole rule.
+            var error = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory));
+
+            Assert.IsType<InvalidOperationException>(error.InnerException);
+            Assert.Equal(0, runner.RunCount);
+            return;
+        }
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Contains("/p CO\\\"M7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.Equal(
+            "/p \"CO\\\"M7\" /d WINC1500 /k /e /i aio /w",
+            runner.LastRequest!.Arguments);
     }
 
     [Fact]
@@ -193,14 +219,18 @@ public class WifiModuleUpdaterTests : IDisposable
         if (OperatingSystem.IsWindows())
         {
             // A .cmd is not directly executable by Process.Start's usual path, so it goes
-            // through cmd.exe with the tool path itself quoted as the first argument.
+            // through cmd.exe. The outer quote pair is the point: /s strips exactly that pair,
+            // so the quotes around the tool path survive. Written out in full here, rather than
+            // through the helper, so the shape is pinned at this level too.
             Assert.Equal("cmd.exe", runner.LastRequest!.FileName);
-            Assert.StartsWith($"/c \"{toolPath}\"", runner.LastRequest.Arguments, StringComparison.Ordinal);
+            Assert.Equal(
+                $"/d /s /v:off /c \"\"{toolPath}\" /p COM7 /d WINC1500 /k /e /i aio /w\"",
+                runner.LastRequest.Arguments);
         }
         else
         {
             Assert.Equal(toolPath, runner.LastRequest!.FileName);
-            Assert.StartsWith("/p ", runner.LastRequest.Arguments, StringComparison.Ordinal);
+            Assert.Equal("/p COM7 /d WINC1500 /k /e /i aio /w", runner.LastRequest.Arguments);
         }
 
         Assert.Equal(firmwareDirectory, runner.LastRequest.WorkingDirectory);
@@ -786,6 +816,29 @@ public class WifiModuleUpdaterTests : IDisposable
         LanChipInfoRetryDelay = TimeSpan.Zero,
         LanChipInfoTotalTimeout = TimeSpan.FromSeconds(10)
     };
+
+    /// <summary>
+    /// The whole <c>Arguments</c> string the updater is expected to produce for a tool found
+    /// under <paramref name="firmwareDirectory"/>, given the already-substituted
+    /// <paramref name="toolArguments"/>.
+    /// </summary>
+    /// <remarks>
+    /// Only the shell wrapper differs by platform; the substituted values do not. The wrapper's
+    /// exact shape is pinned on its own by
+    /// <c>RunUpdate_RunsACmdToolThroughTheWindowsShellAndAnythingElseDirectly</c> and,
+    /// exhaustively, by <c>WincFlashCommandLineTests</c>. What these cases are for is the value
+    /// substitution, which is why that half is written out literally by every caller.
+    /// </remarks>
+    private static string ExpectedCommandLine(string firmwareDirectory, string toolArguments)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return toolArguments;
+        }
+
+        var toolPath = Path.Combine(firmwareDirectory, "winc_flash_tool.cmd");
+        return $"/d /s /v:off /c \"\"{toolPath}\" {toolArguments}\"";
+    }
 
     private string CreateFirmwareDirectory(string? namePrefix = null)
     {
