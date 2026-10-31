@@ -537,6 +537,324 @@ public sealed class SdCardJsonFileParserTests
         Assert.All(samples, s => Assert.False(s.HasDeviceTimestamp));
     }
 
+    // -------------------------------------------------------------------------
+    // The real firmware shape (daqifi-core#847)
+    //
+    // Every fixture below is literal log text in the shape JSON_Encoder.c writes: a one-line
+    // {"meta":...} header, then sample objects that open with a bare "{" and spend one line on
+    // each field, with one {"ch","val"} entry per enabled channel and several samples packed
+    // into one object as repeated "ts"/"ai" keys.
+    // -------------------------------------------------------------------------
+
+    private const string FirmwareMetaHeader =
+        "{\"meta\":{\"dev\":\"Nyquist 1\",\"sn\":\"7E2815916200E898\",\"tick_hz\":42000000}}";
+
+    [Fact]
+    public async Task ParseAsync_FirmwareObjectStream_ReturnsEverySample()
+    {
+        // Arrange — one object carrying two samples of four channels.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":2103674123,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":0.0012},",
+            "{\"ch\":1, \"val\":0.0024},",
+            "{\"ch\":2, \"val\":0.0000},",
+            "{\"ch\":3, \"val\":0.0000}",
+            "],",
+            "\"ts\":2103674223,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":0.0013},",
+            "{\"ch\":1, \"val\":0.0025},",
+            "{\"ch\":2, \"val\":0.0000},",
+            "{\"ch\":3, \"val\":0.0000}",
+            "]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            SessionStartTime = new DateTime(2026, 10, 31, 9, 0, 0, DateTimeKind.Utc)
+        };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "log_20261031_090000.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert — both samples, both four channels wide.
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(new[] { 0.0012, 0.0024, 0.0, 0.0 }, samples[0].AnalogValues);
+        Assert.Equal(new[] { 0.0013, 0.0025, 0.0, 0.0 }, samples[1].AnalogValues);
+
+        // The two timestamps are 100 ticks apart on the 42 MHz clock the header states. One
+        // DateTime tick is 100 ns, which is coarser than one device tick, so allow for that.
+        Assert.Equal(options.SessionStartTime!.Value, samples[0].Timestamp);
+        Assert.Equal(
+            options.SessionStartTime!.Value.AddSeconds(100.0 / 42_000_000.0),
+            samples[1].Timestamp,
+            TimeSpan.FromTicks(1));
+        Assert.All(samples, s => Assert.True(s.HasDeviceTimestamp));
+    }
+
+    [Fact]
+    public async Task ParseAsync_FirmwareMetaHeader_StatesTheTickRateAndTheDevice()
+    {
+        // Arrange — the header states a 42 MHz clock, so no fallback guess is needed.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":10,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":1.5}",
+            "]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            FallbackTimestampFrequency = 50_000_000
+        };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "test.json", options);
+
+        // Assert
+        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(
+            global::Daqifi.Core.Device.SdCard.SdCardTimestampSource.LogFile,
+            session.TimestampFrequencySource);
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal(42_000_000u, session.DeviceConfig.TimestampFrequency);
+        Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
+        Assert.Equal("7E2815916200E898", session.DeviceConfig.DeviceSerialNumber);
+        Assert.Equal(1, session.DeviceConfig.AnalogPortCount);
+    }
+
+    [Fact]
+    public async Task ParseAsync_FirmwareMetaHeaderBeatsTheDeviceOverride()
+    {
+        // The file states its own clock, so a connected device cannot overrule it.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":10,",
+            "\"ai\":[{\"ch\":0, \"val\":1.5}]",
+            "}");
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 1,
+            DigitalPortCount: 0,
+            TimestampFrequency: 50_000_000,
+            DeviceSerialNumber: "OTHER",
+            DevicePartNumber: "OTHER",
+            FirmwareRevision: "3.8.0",
+            CalibrationValues: null);
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            ConfigurationOverride = overrideConfig
+        };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+
+        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(
+            global::Daqifi.Core.Device.SdCard.SdCardTimestampSource.LogFile,
+            session.TimestampFrequencySource);
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
+        // The file states no firmware revision, so the override still fills that gap.
+        Assert.Equal("3.8.0", session.DeviceConfig.FirmwareRevision);
+    }
+
+    [Fact]
+    public async Task ParseAsync_FirmwareTriggerTimestampBeforeDigital_IsNotASample()
+    {
+        // With digital sampling on, the firmware writes the trigger stamp and the "di" array
+        // ahead of the per-sample "ts"/"ai" pairs. The trigger stamp carries no reading, so it
+        // must not turn into a sample of its own.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":500,",
+            "\"di\":[{\"ts\":5, \"mask\":3, \"val\":1},{\"ts\":10, \"mask\":3, \"val\":2}],",
+            "\"ts\":600,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":1.5}",
+            "]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+        Assert.Equal(1.5, samples[0].AnalogValues[0]);
+        // The last entry of "di" is the state the port is left in.
+        Assert.Equal(2u, samples[0].DigitalData);
+    }
+
+    [Fact]
+    public async Task ParseAsync_FirmwareDigitalState_CarriesToLaterObjects()
+    {
+        // The firmware writes "di" only when digital samples are queued. A digital line holds
+        // its level until the next report, so a later object with no "di" keeps the last state.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"di\":[{\"ts\":5, \"mask\":3, \"val\":3}],",
+            "\"ts\":100,",
+            "\"ai\":[{\"ch\":0, \"val\":1.0}]",
+            "}",
+            "{",
+            "\"ts\":200,",
+            "\"ai\":[{\"ch\":0, \"val\":2.0}]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(3u, samples[0].DigitalData);
+        Assert.Equal(3u, samples[1].DigitalData);
+    }
+
+    [Fact]
+    public async Task ParseAsync_TruncatedFinalObject_IsDropped()
+    {
+        // A log cut short by a power loss or a failed transfer ends mid-object. Half a sample
+        // is not a sample, and the complete samples before it must still arrive.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":100,",
+            "\"ai\":[{\"ch\":0, \"val\":1.0}]",
+            "}",
+            "{",
+            "\"ts\":200,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":2.0");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+        Assert.Equal(1.0, samples[0].AnalogValues[0]);
+    }
+
+    [Fact]
+    public async Task ParseAsync_FirmwareRawAdcValues_AreScaledByTheOverride()
+    {
+        // In raw mode (CONF:ADC:USECal 2) the firmware writes integer ADC codes, which the
+        // device's calibration turns into volts — the same path the legacy shape uses.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":100,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":0},",
+            "{\"ch\":1, \"val\":22}",
+            "]",
+            "}");
+
+        var overrideConfig = new global::Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration(
+            AnalogPortCount: 2,
+            DigitalPortCount: 0,
+            TimestampFrequency: 0u,
+            DeviceSerialNumber: null,
+            DevicePartNumber: null,
+            FirmwareRevision: null,
+            CalibrationValues: new[] { (1.0, 0.0), (1.0, 0.0) },
+            Resolution: 65535,
+            PortRange: new[] { 10.0, 10.0 },
+            InternalScaleM: new[] { 1.0, 1.0 });
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            ConfigurationOverride = overrideConfig
+        };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+        Assert.Equal(0.0, samples[0].AnalogValues[0], precision: 5);
+        Assert.Equal(22.0 / 65535.0 * 10.0, samples[0].AnalogValues[1], precision: 5);
+    }
+
+    [Fact]
+    public async Task ParseAsync_MetaHeaderOnly_ReportsTheMetadataAndNoSamples()
+    {
+        // A session that stopped before the first sample still says which device wrote it.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(FirmwareMetaHeader);
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Empty(samples);
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal("Nyquist 1", session.DeviceConfig.DevicePartNumber);
+        Assert.Equal(42_000_000u, session.TimestampFrequency);
+        Assert.Equal(0, session.DeviceConfig.AnalogPortCount);
+    }
+
+    [Fact]
+    public async Task ParseAsync_BraceInsideAStringValue_IsNotObjectStructure()
+    {
+        // The object reader joins lines by brace depth, so it has to ignore braces that are
+        // text inside a string.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"meta\":{\"dev\":\"Nyquist {1}\",\"sn\":\"00\",\"tick_hz\":100}}",
+            "{",
+            "\"ts\":100,",
+            "\"ai\":[{\"ch\":0, \"val\":1.0}]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal("Nyquist {1}", session.DeviceConfig.DevicePartNumber);
+        Assert.Equal(100u, session.TimestampFrequency);
+    }
+
+    [Fact]
+    public async Task ParseAsync_FirmwareObjectStream_CanBeEnumeratedMoreThanOnce()
+    {
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":100,",
+            "\"ai\":[{\"ch\":0, \"val\":1.0}],",
+            "\"ts\":200,",
+            "\"ai\":[{\"ch\":0, \"val\":2.0}]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var first = await ToListAsync(session.Samples);
+        var second = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, first.Count);
+        Assert.Equal(
+            first.Select(s => (s.Timestamp, s.AnalogValues[0])),
+            second.Select(s => (s.Timestamp, s.AnalogValues[0])));
+    }
+
     private static async Task<List<T>> ToListAsync<T>(IAsyncEnumerable<T> source)
     {
         var list = new List<T>();
