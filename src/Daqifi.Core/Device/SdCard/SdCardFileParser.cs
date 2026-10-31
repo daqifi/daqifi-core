@@ -388,7 +388,8 @@ public sealed class SdCardFileParser
                     ? enumerator.Current
                     : null;
 
-                // Skip non-stream messages (no analog and no digital data)
+                // Skip non-stream messages (no analog and no digital data). The same reading
+                // also seeds the merge below with the kinds this entry already holds.
                 var mergedKinds = PayloadKindsOf(msg);
                 if (mergedKinds == StreamPayloadKinds.None)
                 {
