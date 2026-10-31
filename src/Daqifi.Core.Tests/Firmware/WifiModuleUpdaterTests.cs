@@ -107,14 +107,10 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(options, runner);
 
-        var firmwareDirectory = CreateFirmwareDirectory();
-
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Equal(
-            ExpectedCommandLine(firmwareDirectory, "/p COM42 /d WINC1500 /k /e /i aio /w"),
-            runner.LastRequest!.Arguments);
+        Assert.Contains("/p COM42", runner.LastRequest!.Arguments, StringComparison.Ordinal);
         Assert.DoesNotContain("COM7", runner.LastRequest.Arguments, StringComparison.Ordinal);
     }
 
@@ -124,14 +120,10 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
 
-        var firmwareDirectory = CreateFirmwareDirectory();
-
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Equal(
-            ExpectedCommandLine(firmwareDirectory, "/p COM7 /d WINC1500 /k /e /i aio /w"),
-            runner.LastRequest!.Arguments);
+        Assert.Contains("/p COM7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -234,6 +226,57 @@ public class WifiModuleUpdaterTests : IDisposable
         }
 
         Assert.Equal(firmwareDirectory, runner.LastRequest.WorkingDirectory);
+    }
+
+    // Two independent properties, kept in two sets of cases on purpose.
+    //
+    // WHICH value reaches /p is one property: the cases above —
+    // RunUpdate_PrefersThePortOverrideOverTheDeviceName and
+    // RunUpdate_WithoutAPortOverride_FlashesThroughTheDevicesOwnPort — own it, and issue #842
+    // rewrites them to set a device's display label apart from the port it sits on.
+    //
+    // WHAT the command line is, character for character, with that value already in it, is the
+    // other property, and these two cases own it (issue #844).
+    //
+    // They are apart because one file cannot hold both halves in one case body without each
+    // fix becoming the other fix's merge conflict: a resolution that keeps one body silently
+    // drops the other guard, and the suite still passes. The two cases below therefore name
+    // their double after its own port, which is all they need; nothing here says where the port
+    // came from.
+
+    [Fact]
+    public async Task RunUpdate_WithAPortOverride_BuildsTheWholeCommandLine()
+    {
+        var options = CreateFastOptions();
+        options.WifiPortOverride = "COM42";
+
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(options, runner);
+
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, "/p COM42 /d WINC1500 /k /e /i aio /w"),
+            runner.LastRequest!.Arguments);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WithoutAPortOverride_BuildsTheWholeCommandLineAroundTheResolvedPort()
+    {
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, "/p COM7 /d WINC1500 /k /e /i aio /w"),
+            runner.LastRequest!.Arguments);
     }
 
     // ---------------------------------------------------------------------------------------
