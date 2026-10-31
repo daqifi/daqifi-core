@@ -3,6 +3,17 @@ Daqifi.Core.Device.Discovery.MDnsDeviceFinder
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder() -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder(string! serviceType) -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.ServiceType.get -> string!
+Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit
+Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit.Millivolts = 2 -> Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit
+Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit.RawAdcCodes = 0 -> Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit
+Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit.Volts = 1 -> Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit
+Daqifi.Core.Device.SdCard.SdCardIntegerValueUnits
+Daqifi.Core.Device.SdCard.SdCardIntegerValueUnits.Millivolts = 1 -> Daqifi.Core.Device.SdCard.SdCardIntegerValueUnits
+Daqifi.Core.Device.SdCard.SdCardIntegerValueUnits.RawAdcCodes = 0 -> Daqifi.Core.Device.SdCard.SdCardIntegerValueUnits
+Daqifi.Core.Device.SdCard.SdCardLogEntry.SourceAnalogValueUnit.get -> Daqifi.Core.Device.SdCard.SdCardAnalogValueUnit
+Daqifi.Core.Device.SdCard.SdCardLogEntry.SourceAnalogValueUnit.init -> void
+Daqifi.Core.Device.SdCard.SdCardParseOptions.IntegerValueUnits.get -> Daqifi.Core.Device.SdCard.SdCardIntegerValueUnits?
+Daqifi.Core.Device.SdCard.SdCardParseOptions.IntegerValueUnits.set -> void
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException.BytesReceived.get -> long
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException.FileName.get -> string!

@@ -17,9 +17,22 @@ namespace Daqifi.Core.Device.SdCard;
 ///   <item><description>Up to three <c>#</c>-prefixed comment lines containing device metadata
 ///   (device name, serial number, and timestamp tick rate).</description></item>
 ///   <item><description>A column header row: <c>ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val</c></description></item>
-///   <item><description>Data rows with interleaved per-channel timestamp/value pairs.
-///   Analog values are raw ADC counts that require scaling.</description></item>
+///   <item><description>Data rows with interleaved per-channel timestamp/value pairs.</description></item>
 /// </list>
+/// </para>
+/// <para>
+/// An analog value is not always a raw ADC count. Firmware writes volts with a decimal point,
+/// and writes raw ADC counts and millivolts as whole numbers. The parser therefore reads the
+/// volts case from the file itself and leaves those values alone, and takes
+/// <see cref="SdCardParseOptions.IntegerValueUnits"/> for the whole-number case. Every sample
+/// reports the unit that was applied in
+/// <see cref="SdCardLogEntry.SourceAnalogValueUnit"/>. See
+/// <see cref="SdCardAnalogValueUnitRule"/> for the rule and why it is read from the file.
+/// </para>
+/// <para>
+/// A row that mixes the two forms states no single unit, so enumerating
+/// <see cref="SdCardLogSession.Samples"/> throws
+/// <see cref="System.IO.InvalidDataException"/> at that row instead of guessing.
 /// </para>
 /// </summary>
 public sealed class SdCardCsvFileParser
@@ -152,6 +165,7 @@ public sealed class SdCardCsvFileParser
             // be enumerated more than once must not shift its timestamps between reads when the
             // file name carries no date.
             fileCreatedDate ?? DateTime.UtcNow,
+            options.IntegerValueUnits,
             options.Progress,
             ct);
 
@@ -339,6 +353,7 @@ public sealed class SdCardCsvFileParser
         SdCardDeviceConfiguration config,
         CsvColumnLayout columnLayout,
         DateTime baseTime,
+        SdCardIntegerValueUnits? integerValueUnits,
         IProgress<SdCardParseProgress>? progress,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -376,10 +391,23 @@ public sealed class SdCardCsvFileParser
                 continue;
             }
 
-            var (rowTimestamp, rawAnalogValues, digitalData, perChannelTimestamps) = parsed.Value;
+            var (rowTimestamp, rawAnalogValues, digitalData, perChannelTimestamps, decimalFormCount) = parsed.Value;
 
-            // Scale raw ADC values using device calibration
-            var analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(rawAnalogValues, config);
+            // Read the row's unit from the file, then convert for that unit. A value the device
+            // already calibrated — volts or millivolts — must not go through the ADC-code
+            // conversion as well (closes #848).
+            var valueUnit = SdCardAnalogValueUnitRule.ResolveRowUnit(
+                rawAnalogValues.Count,
+                decimalFormCount,
+                integerValueUnits,
+                line);
+
+            var analogValues = valueUnit switch
+            {
+                SdCardAnalogValueUnit.Volts => rawAnalogValues,
+                SdCardAnalogValueUnit.Millivolts => SdCardAnalogValueUnitRule.MillivoltsToVolts(rawAnalogValues),
+                _ => SdCardAnalogScaling.ScaleRawAnalogValues(rawAnalogValues, config)
+            };
 
             // Reconstruct absolute timestamp using first channel timestamp
             var hasDeviceTimestamp = timestampReconstructor.HasDeviceClock;
@@ -389,7 +417,8 @@ public sealed class SdCardCsvFileParser
 
             yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps)
             {
-                HasDeviceTimestamp = hasDeviceTimestamp
+                HasDeviceTimestamp = hasDeviceTimestamp,
+                SourceAnalogValueUnit = valueUnit
             };
 
             // Report progress every 100 lines for efficiency
@@ -407,8 +436,14 @@ public sealed class SdCardCsvFileParser
     /// Parses a firmware CSV data row with interleaved per-channel timestamp/value pairs.
     /// Separates analog channel pairs from the digital I/O pair based on the column layout.
     /// Format: ain0_ts,ain0_val,...,dio_ts,dio_val
+    /// <para>
+    /// Also counts how many analog values the row wrote with a decimal point or an exponent.
+    /// That count is what says whether the row holds volts, and it has to be taken here,
+    /// from the text, because <c>245</c> and <c>245.0</c> parse to the same <c>double</c>
+    /// while meaning different units.
+    /// </para>
     /// </summary>
-    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, uint digitalData, IReadOnlyList<uint> perChannelTimestamps)?
+    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, uint digitalData, IReadOnlyList<uint> perChannelTimestamps, int decimalFormCount)?
         TryParseCsvDataRow(string line, CsvColumnLayout layout)
     {
         try
@@ -427,6 +462,7 @@ public sealed class SdCardCsvFileParser
 
             var analogValues = new List<double>(analogPairCount);
             var perChannelTimestamps = new List<uint>(analogPairCount);
+            var decimalFormCount = 0;
 
             // Parse analog channel pairs
             for (var ch = 0; ch < analogPairCount; ch++)
@@ -446,6 +482,11 @@ public sealed class SdCardCsvFileParser
 
                 perChannelTimestamps.Add(ts);
                 analogValues.Add(val);
+
+                if (SdCardAnalogValueUnitRule.IsDecimalForm(valCol))
+                {
+                    decimalFormCount++;
+                }
             }
 
             // Parse digital I/O pair if present (last pair)
@@ -473,7 +514,7 @@ public sealed class SdCardCsvFileParser
                 return null;
             }
 
-            return (rowTimestamp, analogValues, digitalData, perChannelTimestamps);
+            return (rowTimestamp, analogValues, digitalData, perChannelTimestamps, decimalFormCount);
         }
         catch
         {

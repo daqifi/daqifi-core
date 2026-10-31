@@ -69,6 +69,15 @@ internal static class SdCardTestJsonFileBuilder
 internal static class SdCardTestCsvFileBuilder
 {
     /// <summary>
+    /// How a value is written into a fixture. A whole number is written with no decimal point
+    /// and a fractional number keeps its decimals, which is how firmware writes the two: a raw
+    /// ADC code and a millivolt reading are whole numbers, and a voltage has decimals. The
+    /// parser reads the unit from that form (issue #848), so a fixture that wrote every value
+    /// as <c>22.000000</c> described a voltage even where the test meant an ADC code.
+    /// </summary>
+    private const string ValueFormat = "0.#########";
+
+    /// <summary>
     /// Builds a CSV log file stream from sample data in the real DAQiFi firmware format.
     /// </summary>
     /// <param name="channelCount">Number of analog channels.</param>
@@ -106,7 +115,7 @@ internal static class SdCardTestCsvFileBuilder
             var cols = row.SelectMany(pair => new[]
             {
                 pair.ts.ToString(CultureInfo.InvariantCulture),
-                pair.val.ToString("F6", CultureInfo.InvariantCulture)
+                pair.val.ToString(ValueFormat, CultureInfo.InvariantCulture)
             });
             writer.WriteLine(string.Join(",", cols));
         }
@@ -157,7 +166,7 @@ internal static class SdCardTestCsvFileBuilder
             var cols = analog.SelectMany((v, i) => new[]
             {
                 ts.ToString(CultureInfo.InvariantCulture),
-                v.ToString("F6", CultureInfo.InvariantCulture)
+                v.ToString(ValueFormat, CultureInfo.InvariantCulture)
             });
             writer.WriteLine(string.Join(",", cols));
         }
