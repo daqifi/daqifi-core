@@ -476,21 +476,21 @@ internal sealed class WifiModuleUpdater
         var toolPath = ResolveWifiToolPath(firmwarePath);
         var port = ResolveWifiPort(device);
 
-        var toolArguments = Options.WifiFlashToolArgumentsTemplate
-            .Replace("{port}", QuoteArgument(port), StringComparison.Ordinal)
-            .Replace("{firmwarePath}", QuoteArgument(firmwarePath), StringComparison.Ordinal);
-
-        var executablePath = toolPath;
-        var executableArguments = toolArguments;
-
+        // A .cmd or .bat tool is not directly executable, so on Windows it runs through cmd.exe.
+        // That shell parses the line itself, with rules of its own, so the whole command line is
+        // built in one place and tested as a pure string. See WincFlashCommandLine (issue #844).
         var extension = Path.GetExtension(toolPath);
-        if ((extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
+        var throughWindowsShell =
+            (extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
              extension.Equals(".bat", StringComparison.OrdinalIgnoreCase)) &&
-            OperatingSystem.IsWindows())
-        {
-            executablePath = "cmd.exe";
-            executableArguments = $"/c \"{toolPath}\" {toolArguments}";
-        }
+            OperatingSystem.IsWindows();
+
+        var command = WincFlashCommandLine.Build(
+            toolPath,
+            Options.WifiFlashToolArgumentsTemplate,
+            port,
+            firmwarePath,
+            throughWindowsShell);
 
         // Tracks the live device-flash phase (write/read/verify) from the tool's block-address
         // output so the bar advances across the multi-minute flash, instead of latching to the
@@ -500,8 +500,8 @@ internal sealed class WifiModuleUpdater
 
         return new ExternalProcessRequest
         {
-            FileName = executablePath,
-            Arguments = executableArguments,
+            FileName = command.FileName,
+            Arguments = command.Arguments,
             WorkingDirectory = Path.GetDirectoryName(toolPath),
             Timeout = Options.WifiProcessTimeout,
             OnStandardOutputLine = line =>
@@ -801,19 +801,6 @@ internal sealed class WifiModuleUpdater
             $"{nameof(FirmwareUpdateServiceOptions)}.{nameof(FirmwareUpdateServiceOptions.WifiPortOverride)} " +
             "to the port name (for example \"COM7\"). The device's name is a display label and " +
             "is not a serial port.");
-    }
-
-    private static string QuoteArgument(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return "\"\"";
-        }
-
-        var escaped = value.Replace("\"", "\\\"", StringComparison.Ordinal);
-        return escaped.IndexOfAny([' ', '\t']) >= 0
-            ? $"\"{escaped}\""
-            : escaped;
     }
 
     private static string BuildProcessLogExcerpt(ExternalProcessResult result)
