@@ -598,6 +598,65 @@ public sealed class SdCardJsonFileParserTests
     }
 
     [Fact]
+    public async Task ParseAsync_BenchCaptureText_ReturnsOneSamplePerAiArray()
+    {
+        // Arrange — the first three objects of log_20261031_080550.json, copied verbatim from a
+        // bench capture on firmware 3.8.0 (Nyquist 1, two analog channels, 100 Hz, digital
+        // sampling on). The first object carries a digital report and no reading at all, which
+        // is why the whole-file count is one sample per "ai" array and not one per "ts".
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"meta\":{\"dev\":\"Nyquist 1\",\"sn\":\"7E2815916200E898\",\"tick_hz\":42000000}}",
+            "{",
+            "\"ts\":2587155960,",
+            "\"di\":[{\"ts\":4294965913, \"mask\":65535, \"val\":0}]",
+            "}",
+            "{",
+            "\"ts\":2587575953,",
+            "\"di\":[{\"ts\":4294965890, \"mask\":65535, \"val\":0}],",
+            "\"ts\":2587575960,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":12},",
+            "{\"ch\":1, \"val\":16}",
+            "]",
+            "}",
+            "{",
+            "\"ts\":2587995959,",
+            "\"di\":[{\"ts\":4294965900, \"mask\":65535, \"val\":0}],",
+            "\"ts\":2587995960,",
+            "\"ai\":[",
+            "{\"ch\":0, \"val\":12},",
+            "{\"ch\":1, \"val\":15}",
+            "]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            SessionStartTime = new DateTime(2026, 10, 31, 8, 5, 50, DateTimeKind.Utc)
+        };
+
+        // Act
+        var session = await parser.ParseAsync(stream, "log_20261031_080550.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(new[] { 12.0, 16.0 }, samples[0].AnalogValues);
+        Assert.Equal(new[] { 12.0, 15.0 }, samples[1].AnalogValues);
+        Assert.All(samples, s => Assert.Equal(0u, s.DigitalData));
+
+        // The capture ran at 100 Hz, which 420000 ticks of the 42 MHz clock states exactly.
+        Assert.Equal(
+            options.SessionStartTime!.Value.AddSeconds(0.01),
+            samples[1].Timestamp,
+            TimeSpan.FromTicks(1));
+
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal(2, session.DeviceConfig.AnalogPortCount);
+        Assert.Equal(42_000_000u, session.TimestampFrequency);
+    }
+
+    [Fact]
     public async Task ParseAsync_FirmwareMetaHeader_StatesTheTickRateAndTheDevice()
     {
         // Arrange — the header states a 42 MHz clock, so no fallback guess is needed.
