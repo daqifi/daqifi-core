@@ -151,6 +151,42 @@ public sealed class SdCardCsvCalibrationByChannelTests
         Assert.NotEqual(VoltsFor(0, 500.0), sample.AnalogValues[0], 10);
     }
 
+    [Fact]
+    public async Task ParseAsync_TheReproFromIssue849_ReportsTwentyVoltsNotTen()
+    {
+        // Arrange — the issue's own numbers: one channel-7 column holding a full-scale count,
+        // a gain of 2 on channel 7, and a gain of 1 on channel 0. Channel 7's coefficients
+        // give 20 V; channel 0's give 10 V, which is what the file used to report.
+        var content =
+            "# Device: Nyquist 1\n" +
+            "# Timestamp Tick Rate: 1000 Hz\n" +
+            "ain7_ts,ain7_val\n" +
+            "1000,4095\n";
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+        var config = new SdCardDeviceConfiguration(
+            AnalogPortCount: 8,
+            DigitalPortCount: 0,
+            TimestampFrequency: 1000u,
+            DeviceSerialNumber: null,
+            DevicePartNumber: "Nyquist 1",
+            FirmwareRevision: null,
+            CalibrationValues: [(1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0),
+                                (1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
+            Resolution: 4095u,
+            PortRange: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            InternalScaleM: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+
+        // Act
+        var session = await new SdCardCsvFileParser().ParseAsync(
+            stream, "log.csv", new SdCardParseOptions { ConfigurationOverride = config });
+        var samples = await ToListAsync(session.Samples);
+
+        // Assert
+        var sample = Assert.Single(samples);
+        Assert.Equal(20.0, sample.AnalogValues[0], 10);
+    }
+
     // ---------------------------------------------------------------------
     // A header that cannot be matched fails instead of guessing
     // ---------------------------------------------------------------------
