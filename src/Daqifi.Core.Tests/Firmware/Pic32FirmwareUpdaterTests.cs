@@ -69,6 +69,35 @@ public class Pic32FirmwareUpdaterTests
     }
 
     // ---------------------------------------------------------------------------------------
+    // Choosing the board (#837)
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunUpdate_WithNoTargetAndASecondBoardInBootloaderMode_ErasesNothing()
+    {
+        // The whole point of the refusal: a second board already sitting in bootloader mode (a
+        // failed earlier update, or a bootloader-only board) must not be erased by an update that
+        // never named it. The run has to stop before the erase command goes out.
+        var harness = new Harness(new FakeHidDeviceEnumerator([], [
+            new HidDeviceInfo(0x04D8, 0x003C, "path-1", null, "DAQiFi Bootloader"),
+            new HidDeviceInfo(0x04D8, 0x003C, "path-2", null, "DAQiFi Bootloader")
+        ]));
+
+        var error = await Assert.ThrowsAsync<AmbiguousBootloaderTargetException>(
+            () => harness.RunUpdateAsync());
+
+        Assert.Equal(["path-1", "path-2"], error.CandidateDevicePaths);
+        Assert.Equal(FirmwareUpdateState.WaitingForBootloader, error.FailedState);
+
+        // No HID handle was opened and no bootloader command was written, so neither board was
+        // touched. The device itself was still rebooted into the bootloader, which is harmless.
+        Assert.Equal(0, harness.Transport.ConnectAttempts);
+        Assert.Empty(harness.Transport.Writes);
+        Assert.Equal(FirmwareUpdateState.Failed, harness.Context.CurrentState);
+        Assert.DoesNotContain(FirmwareUpdateState.CleaningUp, harness.StateTransitions);
+    }
+
+    // ---------------------------------------------------------------------------------------
     // The soft-reset recovery (#298)
     // ---------------------------------------------------------------------------------------
 
@@ -208,7 +237,12 @@ public class Pic32FirmwareUpdaterTests
     /// </summary>
     private sealed class Harness
     {
-        internal Harness()
+        /// <param name="enumerator">
+        /// HID enumeration to search for the bootloader. Defaults to one bootloader on
+        /// <c>path-1</c>, the ordinary single-board bench; a test passes its own to set up a
+        /// second board (#837).
+        /// </param>
+        internal Harness(IHidDeviceEnumerator? enumerator = null)
         {
             Options = new FirmwareUpdateServiceOptions
             {
@@ -237,7 +271,8 @@ public class Pic32FirmwareUpdaterTests
                 Context,
                 Transport,
                 Protocol,
-                new FakeHidDeviceEnumerator([], [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]),
+                enumerator ?? new FakeHidDeviceEnumerator(
+                    [], [new HidDeviceInfo(0x04D8, 0x003C, "path-1", "SN-1", "DAQiFi Bootloader")]),
                 new FakeUsbLocationProvider(new Dictionary<string, string>()));
 
             Context.WaitingForBootloaderTimeoutDetailProvider = Session.DescribeBootloaderSearch;

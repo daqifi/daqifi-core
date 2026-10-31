@@ -93,18 +93,52 @@ public class Pic32BootloaderSessionTests
     // ---------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task WaitForBootloaderDevice_WithNoTargetRequested_TakesTheFirstOneEnumerated()
+    public async Task WaitForBootloaderDevice_WithNoTargetAndTwoBootloaders_RefusesInsteadOfGuessing()
     {
         using var poll = PollBudget();
 
+        // #837. Two bootloaders, no target. A bootloader advertises no serial number, so the two
+        // are indistinguishable; taking the first one erases whichever board the OS listed first,
+        // which can be a board nobody asked to update. An erase cannot be undone, so the search
+        // stops here. The old behavior returned path-1.
         var (session, _) = CreateSession(
             new FakeHidTransport(),
             new FakeBootloaderProtocol([[0xA1]]),
             new FakeHidDeviceEnumerator([], [Bootloader("path-1"), Bootloader("path-2")]));
 
-        var found = await session.WaitForBootloaderDeviceAsync(null, null, poll.Token);
+        var error = await Assert.ThrowsAsync<AmbiguousBootloaderTargetException>(
+            () => session.WaitForBootloaderDeviceAsync(null, null, poll.Token));
 
-        Assert.Equal("path-1", found.DevicePath);
+        // The caller resolves this by naming a board, so the message has to carry the names.
+        Assert.Equal(["path-1", "path-2"], error.CandidateDevicePaths);
+        Assert.Contains("path-1", error.Message, StringComparison.Ordinal);
+        Assert.Contains("path-2", error.Message, StringComparison.Ordinal);
+        Assert.Equal(FirmwareUpdateState.WaitingForBootloader, error.FailedState);
+        Assert.Contains("device path", error.RecoveryGuidance!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WaitForBootloaderDevice_WithALocationKeyTarget_StillRefusesNothingWhenSeveralArePresent()
+    {
+        using var poll = PollBudget();
+
+        // The refusal is only for a run that named no board. A location key names one, so several
+        // candidates are expected and normal — resolve them and match.
+        var locations = new FakeUsbLocationProvider(new Dictionary<string, string>
+        {
+            ["path-1"] = "USB(1)",
+            ["path-2"] = "USB(2)"
+        });
+
+        var (session, _) = CreateSession(
+            new FakeHidTransport(),
+            new FakeBootloaderProtocol([[0xA1]]),
+            new FakeHidDeviceEnumerator([], [Bootloader("path-1"), Bootloader("path-2")]),
+            locations);
+
+        var found = await session.WaitForBootloaderDeviceAsync(null, "USB(2)", poll.Token);
+
+        Assert.Equal("path-2", found.DevicePath);
     }
 
     [Fact]

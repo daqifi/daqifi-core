@@ -336,8 +336,10 @@ internal sealed class FirmwareUpdateContext
         if (exception is FirmwareUpdateException firmwareUpdateException)
         {
             // Already a fully-contextualized firmware exception (carries its own
-            // guidance). No flash-path operation throws one today, so the
-            // caller-supplied guidance below never has to be merged in here.
+            // state, operation and guidance), so it reaches the caller as thrown.
+            // The bootloader search raises one (AmbiguousBootloaderTargetException,
+            // #837); nothing past it does, so the caller-supplied guidance below
+            // never has to be merged in here.
             return firmwareUpdateException;
         }
 
