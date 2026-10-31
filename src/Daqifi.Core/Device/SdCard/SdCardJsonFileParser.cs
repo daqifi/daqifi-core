@@ -25,7 +25,17 @@ namespace Daqifi.Core.Device.SdCard;
 ///   repeated <c>"ts"</c> and <c>"ai"</c> keys.</description></item>
 /// </list>
 /// <para>
-/// The older one-line shape, <c>{"ts":...,"analog":[...],"digital":"hex"}</c>, still parses.
+/// The older one-line shape, <c>{"ts":...,"analog":[...],"digital":"hex"}</c>, still parses,
+/// whatever order its fields come in.
+/// </para>
+/// <para>
+/// One rule covers every shape, rather than a case for each: <b>every reading an object states
+/// is a sample</b>. An <c>"ai"</c> array is a sample; so is each entry of a <c>"di"</c> array,
+/// which is a reading at a time of its own and needs no analog reading beside it. Field order
+/// matters only where the firmware's repeated <c>"ts"</c>/<c>"ai"</c> keys make order the one
+/// thing that pairs a reading with its time, so a legacy object parses in any order. And a
+/// damaged object costs one object, not the rest of the file
+/// (<see cref="SdCardJsonObjectReader"/>).
 /// </para>
 /// </summary>
 public sealed class SdCardJsonFileParser
@@ -199,9 +209,20 @@ public sealed class SdCardJsonFileParser
                 timestampFrequency = parsed.Meta.TickHz;
             }
 
-            if (parsed.Samples.Count > 0)
+            // A digital-only sample states no analog layout, so keep reading until a reading
+            // does. A log with no analog readings at all is read through here, which costs one
+            // pass over a file that holds nothing else to find.
+            foreach (var sample in parsed.Samples)
             {
-                analogChannelCount = parsed.Samples[0].AnalogValues.Count;
+                if (sample.AnalogValues.Count > 0)
+                {
+                    analogChannelCount = sample.AnalogValues.Count;
+                    break;
+                }
+            }
+
+            if (analogChannelCount > 0)
+            {
                 break;
             }
         }
@@ -305,6 +326,11 @@ public sealed class SdCardJsonFileParser
     /// <param name="DigitalData">The digital state in force when this sample was taken.</param>
     private sealed record JsonSample(uint Timestamp, IReadOnlyList<double> AnalogValues, uint DigitalData);
 
+    /// <summary>One digital reading: the state a port was left in, and when.</summary>
+    /// <param name="Timestamp">The raw device tick the reading was taken on.</param>
+    /// <param name="State">The port state the entry reports.</param>
+    private readonly record struct JsonDigitalReading(uint Timestamp, uint State);
+
     /// <summary>Everything one JSON object contributed.</summary>
     /// <param name="Meta">The metadata header, when this object was one.</param>
     /// <param name="Samples">The samples the object states, in order.</param>
@@ -321,12 +347,22 @@ public sealed class SdCardJsonFileParser
     /// <param name="digitalState">The digital state carried in from earlier objects.</param>
     /// <returns>What the object contributed, or <c>null</c> when it is not usable JSON.</returns>
     /// <remarks>
+    /// <para>
     /// The properties are walked in the order the file states them, because the firmware packs
     /// several samples into one object as repeated <c>"ts"</c> and <c>"ai"</c> keys and only
-    /// their order says which reading belongs to which timestamp. A <c>"ts"</c> therefore ends
-    /// the sample before it and starts a new one, and a sample is only reported once a reading
-    /// has arrived for it — which is what drops the single trigger timestamp the firmware writes
-    /// ahead of a <c>"di"</c> array.
+    /// their order says which reading belongs to which timestamp. Order is the tie-breaker and
+    /// not the rule, though: a field only ends the sample before it when it would overwrite a
+    /// slot that sample has already filled, so a legacy object states its fields in any order
+    /// and still reads as one sample.
+    /// </para>
+    /// <para>
+    /// Every reading becomes a sample. An <c>"ai"</c> array is one; so is each entry of a
+    /// <c>"di"</c> array, which the firmware times as <c>StreamTrigStamp - sampleTime</c>
+    /// (<c>JSON_Encoder.c</c>) and which therefore has a tick of its own — a digital reading on
+    /// an analog sample's tick is carried by that sample, and one on any other tick is a sample
+    /// with no analog values, as the binary parser's digital-only messages already are. A
+    /// trigger stamp with no reading against it is still not a sample.
+    /// </para>
     /// </remarks>
     private static JsonObjectContent? TryReadObject(string objectText, uint digitalState)
     {
@@ -349,26 +385,37 @@ public sealed class SdCardJsonFileParser
             }
 
             JsonMeta? meta = null;
-            var samples = new List<JsonSample>();
+            var analogReadings = new List<(uint Timestamp, IReadOnlyList<double> Values)>();
+            var digitalReadings = new List<JsonDigitalReading>();
 
             // The legacy "digital" hex string belongs to its own object: that shape puts one
             // self-contained sample on each line, so an object that states no digital field
             // states a state of zero rather than inheriting one. Only the firmware's "di"
             // reports carry forward, in digitalState.
-            var sampleDigital = digitalState;
+            var baselineDigital = digitalState;
+
+            // The first timestamp the object states, which every tick in it is ordered against.
+            uint? reference = null;
+
+            // The timestamp a "di" array's offsets are stated against: the trigger stamp the
+            // firmware writes ahead of the array.
+            uint? trigger = null;
 
             uint? pendingTimestamp = null;
             IReadOnlyList<double>? pendingAnalog = null;
 
-            void FlushPendingSample()
+            void CloseReading(bool keepTimestamp)
             {
                 if (pendingTimestamp != null && pendingAnalog != null)
                 {
-                    samples.Add(new JsonSample(pendingTimestamp.Value, pendingAnalog, sampleDigital));
+                    analogReadings.Add((pendingTimestamp.Value, pendingAnalog));
                 }
 
-                pendingTimestamp = null;
                 pendingAnalog = null;
+                if (!keepTimestamp)
+                {
+                    pendingTimestamp = null;
+                }
             }
 
             foreach (var property in root.EnumerateObject())
@@ -380,36 +427,59 @@ public sealed class SdCardJsonFileParser
                         break;
 
                     case "ts":
-                        FlushPendingSample();
-                        pendingTimestamp =
-                            property.Value.ValueKind == JsonValueKind.Number
-                            && property.Value.TryGetUInt32(out var timestamp)
-                                ? timestamp
-                                : null;
+                        // Only a second timestamp ends the sample before it. A first one, after
+                        // the readings it belongs to, simply names their time.
+                        if (pendingTimestamp != null)
+                        {
+                            CloseReading(keepTimestamp: false);
+                        }
+
+                        if (property.Value.ValueKind == JsonValueKind.Number
+                            && property.Value.TryGetUInt32(out var timestamp))
+                        {
+                            pendingTimestamp = timestamp;
+                            trigger = timestamp;
+                            reference ??= timestamp;
+                        }
+                        else
+                        {
+                            pendingTimestamp = null;
+                        }
+
                         break;
 
                     case "ai":
+                        if (pendingAnalog != null)
+                        {
+                            CloseReading(keepTimestamp: true);
+                        }
+
                         pendingAnalog = TryReadAnalogObjects(property.Value);
                         break;
 
                     case "analog":
+                        if (pendingAnalog != null)
+                        {
+                            CloseReading(keepTimestamp: true);
+                        }
+
                         pendingAnalog = TryReadAnalogNumbers(property.Value);
                         break;
 
                     case "di":
-                        if (TryReadDigitalSamples(property.Value, out var reported))
-                        {
-                            digitalState = reported;
-                            sampleDigital = reported;
-                        }
-
+                        ReadDigitalReadings(
+                            property.Value,
+                            trigger,
+                            digitalReadings,
+                            ref digitalState,
+                            ref baselineDigital);
                         break;
 
                     case "digital":
                         if (property.Value.ValueKind == JsonValueKind.String)
                         {
                             var hexString = property.Value.GetString();
-                            sampleDigital = string.IsNullOrEmpty(hexString)
+                            baselineDigital = string.IsNullOrEmpty(hexString)
                                 ? 0u
                                 : ParseDigitalHexString(hexString);
                         }
@@ -418,10 +488,123 @@ public sealed class SdCardJsonFileParser
                 }
             }
 
-            FlushPendingSample();
+            CloseReading(keepTimestamp: false);
 
-            return new JsonObjectContent(meta, samples, digitalState);
+            return new JsonObjectContent(
+                meta,
+                BuildSamples(analogReadings, digitalReadings, reference, baselineDigital),
+                digitalState);
         }
+    }
+
+    /// <summary>
+    /// Turns one object's readings into its samples, in the order they were taken.
+    /// </summary>
+    /// <param name="analogReadings">The analog readings and the ticks they state.</param>
+    /// <param name="digitalReadings">The digital readings and the ticks they state.</param>
+    /// <param name="reference">
+    /// The first tick the object states, which the others are ordered against as signed offsets
+    /// from it, so an object the 32-bit tick counter wraps inside still orders correctly.
+    /// </param>
+    /// <param name="baselineDigital">
+    /// The digital state in force before the object's own digital readings — carried from the
+    /// objects before it, or stated by a legacy <c>"digital"</c> field.
+    /// </param>
+    private static IReadOnlyList<JsonSample> BuildSamples(
+        List<(uint Timestamp, IReadOnlyList<double> Values)> analogReadings,
+        List<JsonDigitalReading> digitalReadings,
+        uint? reference,
+        uint baselineDigital)
+    {
+        if (analogReadings.Count == 0 && digitalReadings.Count == 0)
+        {
+            return Array.Empty<JsonSample>();
+        }
+
+        var anchor = reference ?? 0u;
+        int Order(uint tick) => unchecked((int)(tick - anchor));
+
+        // The firmware pops its digital queue from the front, so the entries arrive oldest
+        // first; sorted anyway, so that a state is never read out of order. Two entries on one
+        // tick keep the order the file states them in, so the later one is the state it leaves.
+        var digitalOrder = new int[digitalReadings.Count];
+        for (var i = 0; i < digitalReadings.Count; i++)
+        {
+            digitalOrder[i] = i;
+        }
+
+        Array.Sort(digitalOrder, (left, right) =>
+        {
+            var byTick = Order(digitalReadings[left].Timestamp)
+                .CompareTo(Order(digitalReadings[right].Timestamp));
+            return byTick != 0 ? byTick : left.CompareTo(right);
+        });
+
+        var sortedDigital = new JsonDigitalReading[digitalReadings.Count];
+        for (var i = 0; i < digitalOrder.Length; i++)
+        {
+            sortedDigital[i] = digitalReadings[digitalOrder[i]];
+        }
+
+        var samples = new List<(int Order, int Index, JsonSample Sample)>(
+            analogReadings.Count + sortedDigital.Length);
+
+        foreach (var (tick, values) in analogReadings)
+        {
+            var order = Order(tick);
+
+            // The state in force when this reading was taken, not the state the object ends in.
+            var state = baselineDigital;
+            foreach (var digital in sortedDigital)
+            {
+                if (Order(digital.Timestamp) > order)
+                {
+                    break;
+                }
+
+                state = digital.State;
+            }
+
+            samples.Add((order, samples.Count, new JsonSample(tick, values, state)));
+        }
+
+        foreach (var digital in sortedDigital)
+        {
+            var order = Order(digital.Timestamp);
+
+            // A digital reading on an analog sample's tick is already carried by that sample.
+            var carried = false;
+            foreach (var (tick, _) in analogReadings)
+            {
+                if (Order(tick) == order)
+                {
+                    carried = true;
+                    break;
+                }
+            }
+
+            if (!carried)
+            {
+                samples.Add((
+                    order,
+                    samples.Count,
+                    new JsonSample(digital.Timestamp, Array.Empty<double>(), digital.State)));
+            }
+        }
+
+        samples.Sort((left, right) =>
+        {
+            var byTick = left.Order.CompareTo(right.Order);
+            return byTick != 0 ? byTick : left.Index.CompareTo(right.Index);
+        });
+
+        var ordered = new JsonSample[samples.Count];
+        for (var i = 0; i < samples.Count; i++)
+        {
+            ordered[i] = samples[i].Sample;
+        }
+
+        return ordered;
     }
 
     private static JsonMeta ReadMeta(JsonElement element)
@@ -508,41 +691,65 @@ public sealed class SdCardJsonFileParser
     }
 
     /// <summary>
-    /// Reads the firmware's <c>"di":[{"ts":..,"mask":..,"val":..},...]</c> array and returns the
-    /// digital state it leaves behind.
+    /// Reads the firmware's <c>"di":[{"ts":..,"mask":..,"val":..},...]</c> array.
     /// </summary>
     /// <param name="element">The <c>"di"</c> value.</param>
-    /// <param name="state">The last state the array reports.</param>
-    /// <returns><c>true</c> when the array reported a state at all.</returns>
+    /// <param name="trigger">
+    /// The trigger stamp the entries' offsets are stated against, or <c>null</c> when the object
+    /// has stated no timestamp yet.
+    /// </param>
+    /// <param name="readings">Collects each entry's state and the tick it was taken on.</param>
+    /// <param name="carriedState">
+    /// The state to carry into the objects that follow. A digital line holds its level until the
+    /// next report, so the last state reported carries forward.
+    /// </param>
+    /// <param name="baselineState">
+    /// The state a sample takes when no reading in this object precedes it.
+    /// </param>
     /// <remarks>
-    /// Each entry carries its own timestamp, relative to the object's trigger stamp. An
-    /// <see cref="SdCardLogEntry"/> holds one digital word per analog sample and no place for a
-    /// digital-only reading, so the last entry — the state the port is left in — is what the
-    /// samples report.
+    /// The firmware writes each entry's time as <c>StreamTrigStamp - sampleTime</c>
+    /// (<c>JSON_Encoder.c</c>), so the entry was taken on tick <c>trigger - ts</c>, counted the
+    /// way the device's own 32-bit counter counts. An entry read before the object has stated
+    /// any timestamp names no tick, so it sets the state without becoming a sample.
     /// </remarks>
-    private static bool TryReadDigitalSamples(JsonElement element, out uint state)
+    private static void ReadDigitalReadings(
+        JsonElement element,
+        uint? trigger,
+        List<JsonDigitalReading> readings,
+        ref uint carriedState,
+        ref uint baselineState)
     {
-        state = 0u;
-
         if (element.ValueKind != JsonValueKind.Array)
         {
-            return false;
+            return;
         }
 
-        var reported = false;
         foreach (var item in element.EnumerateArray())
         {
-            if (item.ValueKind == JsonValueKind.Object
-                && item.TryGetProperty("val", out var value)
-                && value.ValueKind == JsonValueKind.Number
-                && value.TryGetUInt32(out var reading))
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("val", out var value)
+                || value.ValueKind != JsonValueKind.Number
+                || !value.TryGetUInt32(out var state))
             {
-                state = reading;
-                reported = true;
+                continue;
             }
-        }
 
-        return reported;
+            carriedState = state;
+
+            if (trigger == null)
+            {
+                baselineState = state;
+                continue;
+            }
+
+            var offset = item.TryGetProperty("ts", out var ts)
+                         && ts.ValueKind == JsonValueKind.Number
+                         && ts.TryGetUInt32(out var stated)
+                ? stated
+                : 0u;
+
+            readings.Add(new JsonDigitalReading(unchecked(trigger.Value - offset), state));
+        }
     }
 
     private static uint ParseDigitalHexString(string hexString)

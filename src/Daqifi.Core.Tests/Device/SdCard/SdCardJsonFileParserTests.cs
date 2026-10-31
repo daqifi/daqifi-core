@@ -598,12 +598,12 @@ public sealed class SdCardJsonFileParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_BenchCaptureText_ReturnsOneSamplePerAiArray()
+    public async Task ParseAsync_BenchCaptureText_KeepsEveryAnalogAndDigitalReading()
     {
         // Arrange — the first three objects of log_20261031_080550.json, copied verbatim from a
         // bench capture on firmware 3.8.0 (Nyquist 1, two analog channels, 100 Hz, digital
-        // sampling on). The first object carries a digital report and no reading at all, which
-        // is why the whole-file count is one sample per "ai" array and not one per "ts".
+        // sampling on). The first object carries a digital report and no analog reading at all,
+        // which is why a log's sample count is one per reading and not one per "ts".
         await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
             "{\"meta\":{\"dev\":\"Nyquist 1\",\"sn\":\"7E2815916200E898\",\"tick_hz\":42000000}}",
             "{",
@@ -639,16 +639,21 @@ public sealed class SdCardJsonFileParserTests
         var session = await parser.ParseAsync(stream, "log_20261031_080550.json", options);
         var samples = await ToListAsync(session.Samples);
 
-        // Assert
-        Assert.Equal(2, samples.Count);
-        Assert.Equal(new[] { 12.0, 16.0 }, samples[0].AnalogValues);
-        Assert.Equal(new[] { 12.0, 15.0 }, samples[1].AnalogValues);
+        // Assert — two analog readings and three digital ones, each on its own tick. The two
+        // "ai" arrays are samples 1 and 3; the "di" entries sit between and after them, 1383 to
+        // 1406 ticks off the trigger stamp their offsets are stated against.
+        Assert.Equal(5, samples.Count);
+        Assert.Equal(new[] { 12.0, 16.0 }, samples[1].AnalogValues);
+        Assert.Equal(new[] { 12.0, 15.0 }, samples[3].AnalogValues);
+        Assert.Empty(samples[0].AnalogValues);
+        Assert.Empty(samples[2].AnalogValues);
+        Assert.Empty(samples[4].AnalogValues);
         Assert.All(samples, s => Assert.Equal(0u, s.DigitalData));
 
         // The capture ran at 100 Hz, which 420000 ticks of the 42 MHz clock states exactly.
         Assert.Equal(
-            options.SessionStartTime!.Value.AddSeconds(0.01),
-            samples[1].Timestamp,
+            samples[1].Timestamp.AddSeconds(0.01),
+            samples[3].Timestamp,
             TimeSpan.FromTicks(1));
 
         Assert.NotNull(session.DeviceConfig);
@@ -729,16 +734,19 @@ public sealed class SdCardJsonFileParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_FirmwareTriggerTimestampBeforeDigital_IsNotASample()
+    public async Task ParseAsync_FirmwareTriggerTimestamp_IsNotASampleOfItsOwn()
     {
         // With digital sampling on, the firmware writes the trigger stamp and the "di" array
         // ahead of the per-sample "ts"/"ai" pairs. The trigger stamp carries no reading, so it
-        // must not turn into a sample of its own.
+        // must not turn into a sample of its own — three readings here, not four.
+        //
+        // The entries' offsets are stated as trigger - sampleTime and the firmware pops its
+        // digital queue oldest first, so they count down: ticks 490 and 495.
         await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
             FirmwareMetaHeader,
             "{",
             "\"ts\":500,",
-            "\"di\":[{\"ts\":5, \"mask\":3, \"val\":1},{\"ts\":10, \"mask\":3, \"val\":2}],",
+            "\"di\":[{\"ts\":10, \"mask\":3, \"val\":1},{\"ts\":5, \"mask\":3, \"val\":2}],",
             "\"ts\":600,",
             "\"ai\":[",
             "{\"ch\":0, \"val\":1.5}",
@@ -750,10 +758,11 @@ public sealed class SdCardJsonFileParserTests
         var session = await parser.ParseAsync(stream, "test.json");
         var samples = await ToListAsync(session.Samples);
 
-        Assert.Single(samples);
-        Assert.Equal(1.5, samples[0].AnalogValues[0]);
-        // The last entry of "di" is the state the port is left in.
-        Assert.Equal(2u, samples[0].DigitalData);
+        Assert.Equal(3, samples.Count);
+        Assert.Equal(new uint[] { 1u, 2u, 2u }, samples.Select(s => s.DigitalData));
+        Assert.Empty(samples[0].AnalogValues);
+        Assert.Empty(samples[1].AnalogValues);
+        Assert.Equal(1.5, samples[2].AnalogValues[0]);
     }
 
     [Fact]
@@ -912,6 +921,197 @@ public sealed class SdCardJsonFileParserTests
         Assert.Equal(
             first.Select(s => (s.Timestamp, s.AnalogValues[0])),
             second.Select(s => (s.Timestamp, s.AnalogValues[0])));
+    }
+
+    [Fact]
+    public async Task ParseAsync_DigitalOnlyObject_KeepsEveryDigitalReading()
+    {
+        // The firmware writes a digital report with no "ai" array whenever only digital samples
+        // are queued. Each entry of "di" is a reading at a time of its own, so it is a sample of
+        // its own with no analog values — the shape the binary parser already produces for a
+        // message that carries digital data and no analog data.
+        //
+        // "di" states each entry's time as StreamTrigStamp - sampleTime (JSON_Encoder.c), so the
+        // entry at offset 100 was taken at tick 100 and the one at offset 0 at tick 200.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"meta\":{\"dev\":\"Nyquist 1\",\"sn\":\"00\",\"tick_hz\":100}}",
+            "{\"ts\":200,\"di\":[{\"ts\":100,\"mask\":1,\"val\":1},{\"ts\":0,\"mask\":1,\"val\":0}]}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+        var options = new global::Daqifi.Core.Device.SdCard.SdCardParseOptions
+        {
+            SessionStartTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+
+        var session = await parser.ParseAsync(stream, "test.json", options);
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.Empty(s.AnalogValues));
+        Assert.Equal(1u, samples[0].DigitalData);
+        Assert.Equal(0u, samples[1].DigitalData);
+
+        // 100 ticks apart on the 100 Hz clock the header states, so one second.
+        Assert.Equal(options.SessionStartTime!.Value, samples[0].Timestamp);
+        Assert.Equal(
+            options.SessionStartTime!.Value.AddSeconds(1.0),
+            samples[1].Timestamp,
+            TimeSpan.FromTicks(1));
+
+        Assert.NotNull(session.DeviceConfig);
+        Assert.Equal(0, session.DeviceConfig.AnalogPortCount);
+    }
+
+    [Fact]
+    public async Task ParseAsync_TwoAnalogSamplesInOneObject_EachTakesTheDigitalStateOfItsOwnTime()
+    {
+        // The two digital entries above, with analog readings at the same two ticks. The state
+        // at tick 100 is 1 and at tick 200 it is 0: the last entry's state must not be applied
+        // to every analog sample in the object. Each digital reading lands on an analog tick,
+        // so that sample carries it instead of repeating it.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            FirmwareMetaHeader,
+            "{",
+            "\"ts\":200,",
+            "\"di\":[{\"ts\":100, \"mask\":1, \"val\":1},{\"ts\":0, \"mask\":1, \"val\":0}],",
+            "\"ts\":100,",
+            "\"ai\":[{\"ch\":0, \"val\":1.0}],",
+            "\"ts\":200,",
+            "\"ai\":[{\"ch\":0, \"val\":2.0}]",
+            "}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(new[] { 1.0 }, samples[0].AnalogValues);
+        Assert.Equal(new[] { 2.0 }, samples[1].AnalogValues);
+        Assert.Equal(new uint[] { 1u, 0u }, samples.Select(s => s.DigitalData));
+    }
+
+    [Fact]
+    public async Task ParseAsync_LegacyAnalogBeforeItsTimestamp_IsStillASample()
+    {
+        // A JSON object states no order for its fields. The legacy one-line shape with "analog"
+        // ahead of "ts" is the same sample as "ts" ahead of "analog".
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"analog\":[1.0],\"digital\":\"01\",\"ts\":100}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Single(samples);
+        Assert.Equal(new[] { 1.0 }, samples[0].AnalogValues);
+        Assert.Equal(1u, samples[0].DigitalData);
+    }
+
+    [Fact]
+    public async Task ParseAsync_DamagedLineLeftAnObjectOpen_LaterObjectsStillParse()
+    {
+        // One bad byte must cost one object and not the rest of the file. The unclosed brace on
+        // the damaged line used to hold the reader's brace depth above zero, so every later
+        // object stayed in the buffer and was discarded at the end of the file.
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(
+            "{\"ts\":100,\"analog\":[1.0],\"digital\":\"\"}",
+            "{bad",
+            "{\"ts\":200,\"analog\":[2.0],\"digital\":\"\"}",
+            "{\"ts\":300,\"analog\":[3.0],\"digital\":\"\"}");
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.Equal(3, samples.Count);
+        Assert.Equal(new[] { 1.0, 2.0, 3.0 }, samples.Select(s => s.AnalogValues[0]));
+    }
+
+    /// <summary>
+    /// The shapes a log can take, and how many samples each holds. One rule covers all of them:
+    /// every reading in an object is a sample, field order is irrelevant except where the
+    /// firmware's repeated keys make it the only thing pairing a reading with its time, and a
+    /// damaged object costs one object rather than the rest of the file.
+    /// </summary>
+    public static TheoryData<string, string[], int, int> ObjectShapes() => new()
+    {
+        {
+            "analog only",
+            new[] { "{\"ts\":100,\"ai\":[{\"ch\":0, \"val\":1.0}]}" },
+            1, 1
+        },
+        {
+            "digital only",
+            new[] { "{\"ts\":200,\"di\":[{\"ts\":100, \"mask\":1, \"val\":1}]}" },
+            1, 0
+        },
+        {
+            "analog and digital at one tick",
+            new[] { "{\"ts\":100,\"di\":[{\"ts\":0, \"mask\":1, \"val\":1}],\"ai\":[{\"ch\":0, \"val\":1.0}]}" },
+            1, 1
+        },
+        {
+            "legacy order, timestamp first",
+            new[] { "{\"ts\":100,\"analog\":[1.0],\"digital\":\"01\"}" },
+            1, 1
+        },
+        {
+            "legacy order, analog first",
+            new[] { "{\"analog\":[1.0],\"ts\":100,\"digital\":\"01\"}" },
+            1, 1
+        },
+        {
+            "damaged line between good objects",
+            new[]
+            {
+                "{\"ts\":100,\"analog\":[1.0]}",
+                "{bad",
+                "{\"ts\":200,\"analog\":[2.0]}"
+            },
+            2, 2
+        },
+        {
+            "object left open across lines, then a good object",
+            new[]
+            {
+                "{",
+                "\"ts\":100,",
+                "{\"ts\":200,\"analog\":[2.0]}"
+            },
+            1, 1
+        },
+        {
+            "empty file",
+            Array.Empty<string>(),
+            0, 0
+        }
+    };
+
+    [Theory]
+    [MemberData(nameof(ObjectShapes))]
+    public async Task ParseAsync_ObjectShape_KeepsEveryReading(
+        string shape,
+        string[] lines,
+        int expectedSamples,
+        int expectedAnalogSamples)
+    {
+        await using var stream = SdCardTestJsonFileBuilder.BuildRawJsonFile(lines);
+
+        var parser = new global::Daqifi.Core.Device.SdCard.SdCardJsonFileParser();
+
+        var session = await parser.ParseAsync(stream, "test.json");
+        var samples = await ToListAsync(session.Samples);
+
+        Assert.True(
+            samples.Count == expectedSamples,
+            $"{shape}: expected {expectedSamples} samples, got {samples.Count}");
+        var analogSamples = samples.Count(s => s.AnalogValues.Count > 0);
+        Assert.True(
+            analogSamples == expectedAnalogSamples,
+            $"{shape}: expected {expectedAnalogSamples} samples with analog readings, got {analogSamples}");
     }
 
     private static async Task<List<T>> ToListAsync<T>(IAsyncEnumerable<T> source)

@@ -27,6 +27,12 @@ internal readonly record struct SdCardJsonObject(string Text, long BytesRead);
 /// of its fields (<c>JSON_Encoder.c</c>). A line-at-a-time reader therefore sees no complete
 /// object at all. This reader joins the lines back into objects by brace depth, so the same
 /// file parses whether the firmware puts an object on one line or on twenty.
+/// <para>
+/// Joining lines by brace depth means a damaged line that opens a brace it never closes would
+/// otherwise swallow every object after it. The reader therefore resynchronizes as soon as the
+/// text in hand can no longer be the beginning of one object, and picks the log up again at the
+/// next object boundary, so one bad line costs one object rather than the rest of the file.
+/// </para>
 /// </remarks>
 internal static class SdCardJsonObjectReader
 {
@@ -51,7 +57,8 @@ internal static class SdCardJsonObjectReader
     /// Text outside an object — whitespace, separators, or a line of something that is not JSON
     /// at all — is discarded. An object left unclosed at the end of the file is discarded too: a
     /// log cut short by a power loss or by a failed transfer ends with a partial object, and half
-    /// a sample is not a sample.
+    /// a sample is not a sample. An object left unclosed in the middle of the file is discarded
+    /// as soon as the reader can tell, and reading carries on with the objects after it.
     /// </remarks>
     public static async IAsyncEnumerable<SdCardJsonObject> ReadObjectsAsync(
         Func<CancellationToken, IAsyncEnumerable<SdCardLogLine>> openLines,
@@ -59,11 +66,23 @@ internal static class SdCardJsonObjectReader
     {
         var buffer = new StringBuilder();
         var depth = 0;
+        var bracketDepth = 0;
         var inString = false;
         var escaped = false;
 
         await foreach (var line in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
+            // A line that opens a top-level object while one is already open, outside any array,
+            // says the open one was damaged: the firmware writes a nested object either inside
+            // an array ("ai", "di") or inline on one line ("meta"), never alone at the start of
+            // a line. Abandoning the damaged text here resynchronizes on this line's object.
+            if (depth > 0 && bracketDepth == 0 && !inString && StartsAnObject(line.Text))
+            {
+                buffer.Clear();
+                depth = 0;
+                escaped = false;
+            }
+
             foreach (var character in line.Text)
             {
                 if (depth == 0)
@@ -77,6 +96,7 @@ internal static class SdCardJsonObjectReader
                     buffer.Clear();
                     buffer.Append(character);
                     depth = 1;
+                    bracketDepth = 0;
                     inString = false;
                     escaped = false;
                     continue;
@@ -112,12 +132,23 @@ internal static class SdCardJsonObjectReader
                     case '{':
                         depth++;
                         break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                        {
+                            bracketDepth--;
+                        }
+
+                        break;
                     case '}':
                         depth--;
                         if (depth == 0)
                         {
                             yield return new SdCardJsonObject(buffer.ToString(), line.BytesRead);
                             buffer.Clear();
+                            bracketDepth = 0;
                         }
 
                         break;
@@ -129,11 +160,27 @@ internal static class SdCardJsonObjectReader
                 continue;
             }
 
+            // A line boundary inside an object has to fall between two JSON tokens: the firmware
+            // breaks its objects after a brace, a bracket or a comma, and JSON has no multi-line
+            // string. Text that ends anywhere else — a word, a half-written keyword, a string
+            // left open — is damage, and waiting for a closing brace it will never see would
+            // cost every object after it.
+            if (inString || !EndsBetweenTokens(buffer))
+            {
+                buffer.Clear();
+                depth = 0;
+                bracketDepth = 0;
+                inString = false;
+                escaped = false;
+                continue;
+            }
+
             if (buffer.Length > MaxObjectLength)
             {
                 // Give up on this object and resynchronize at the next opening brace.
                 buffer.Clear();
                 depth = 0;
+                bracketDepth = 0;
                 inString = false;
                 escaped = false;
                 continue;
@@ -143,5 +190,55 @@ internal static class SdCardJsonObjectReader
             // newline back in its place.
             buffer.Append('\n');
         }
+    }
+
+    /// <summary>
+    /// Whether a line's first character of substance opens a JSON object.
+    /// </summary>
+    private static bool StartsAnObject(string lineText)
+    {
+        foreach (var character in lineText)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                continue;
+            }
+
+            return character == '{';
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the text accumulated so far ends where one JSON token ends and the next may
+    /// begin, which is the only place a line of a well-formed object can break.
+    /// </summary>
+    /// <remarks>
+    /// Structure (<c>{ } [ ] , :</c>) ends a token. So does a closing quote, a digit or any of
+    /// the characters a number may end on, and the last letter of <c>true</c>, <c>false</c> or
+    /// <c>null</c>. Anything else — the <c>d</c> of a line reading <c>{bad</c>, say — cannot be
+    /// the end of a JSON token, so the object is damaged.
+    /// </remarks>
+    private static bool EndsBetweenTokens(StringBuilder buffer)
+    {
+        for (var i = buffer.Length - 1; i >= 0; i--)
+        {
+            var character = buffer[i];
+            if (char.IsWhiteSpace(character))
+            {
+                continue;
+            }
+
+            return character switch
+            {
+                '{' or '}' or '[' or ']' or ',' or ':' or '"' => true,
+                '-' or '+' or '.' or 'e' or 'E' => true,
+                'l' => true,
+                _ => character >= '0' && character <= '9'
+            };
+        }
+
+        return true;
     }
 }
