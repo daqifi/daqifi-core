@@ -36,7 +36,14 @@ public interface ISdCardOperations
     /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
-    /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (e.g. corrupt card, unreadable directory).</exception>
+    /// <exception cref="SdCardFilesystemException">
+    /// Thrown when the SD card filesystem cannot satisfy the request (e.g. corrupt card,
+    /// unreadable directory). A log directory that is simply not on the card is not one of
+    /// these: a new card has no log directory until the first capture writes one, so the listing
+    /// reports it as an empty card and returns an empty list (closes #730). An absent card still
+    /// throws <see cref="SdCardNotPresentException"/>, and a directory the device could not read
+    /// for any other reason still throws this.
+    /// </exception>
     /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. An empty directory returns an empty list rather than throwing.</exception>
     /// <exception cref="SdCardListIncompleteException">
     /// Thrown when the listing cannot be trusted as complete. Either the device did not answer

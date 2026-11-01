@@ -305,7 +305,36 @@ internal sealed class SdCardOperations
                 throw new SdCardListIncompleteException(lines);
             }
 
-            ThrowIfSdCardListError(listing);
+            try
+            {
+                ThrowIfSdCardListError(listing);
+            }
+            catch (SdCardDirectoryNotFoundException)
+            {
+                // A log directory that is not on the card is an empty card, and that is
+                // what this method reports: no files. A new card has no log directory
+                // until the first capture writes one, so the old exception made the
+                // normal state of a new card look like a fault, and a caller had to
+                // catch to learn there was nothing to list (closes #730).
+                //
+                // Here rather than in ThrowIfSdCardListError, because the helper has a
+                // second caller: DeleteSdCardFileAsync relists in the delete's own
+                // exchange, and there the missing directory leaves "is the file I named
+                // gone?" unanswered. That caller still needs the exception, so the
+                // helper keeps throwing for both and the read path decides for itself.
+                //
+                // Catching the helper's own answer rather than testing the lines first:
+                // the helper already ranks the conditions, so a reply that says both "no
+                // SD card" and "no directory" still raises SdCardNotPresentException. A
+                // separate pre-check would have to repeat that order to stay correct.
+                //
+                // The return is immediate. The device's end-of-listing marker below reads
+                // FAILED on this reply, which is right -- the walk could not open the
+                // directory -- but there is no directory to walk, so it has nothing left
+                // to tell us.
+                _sdCardFiles = Array.Empty<SdCardFileInfo>();
+                return _sdCardFiles;
+            }
 
             // The device's own end-of-listing marker (firmware #794), when it sends
             // one. FAILED means the walk could not open the directory at all, so an
