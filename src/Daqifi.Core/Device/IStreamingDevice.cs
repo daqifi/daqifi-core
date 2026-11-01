@@ -421,6 +421,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// The channel number is negative, or the voltage falls outside the range the device stated
     /// for a channel it described.
     /// </exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
     void SetAnalogOutput(int channelNumber, double voltage);
 
     /// <summary>
@@ -434,6 +435,7 @@ public interface IStreamingDevice : IDevice, IConfirmingDeviceAdministration
     /// <param name="cancellationToken">A cancellation token to observe before sending.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled.</exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
     Task SetAnalogOutputAsync(int channelNumber, double voltage, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

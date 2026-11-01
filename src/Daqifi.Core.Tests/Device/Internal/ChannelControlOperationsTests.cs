@@ -827,6 +827,9 @@ public class ChannelControlOperationsTests
             return Task.FromResult<IReadOnlyList<string>>(lines);
         }
 
+        public void EnsureSupported(DeviceFeature feature)
+            => Assert.Equal(DeviceFeature.AnalogOutput, feature);
+
         // Outside this collaborator's remit — reaching for any of these is a regression.
         public DeviceMetadata Metadata => throw new NotSupportedException();
         public void StopStreaming() => throw new NotSupportedException();
@@ -839,7 +842,7 @@ public class ChannelControlOperationsTests
             Func<System.IO.Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
-        public void EnsureSupported(DeviceFeature feature) => throw new NotSupportedException();
+
         public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
             => throw new NotSupportedException();
         public void RaiseStreamFrameDiscarded(StreamFrameDiscardedEventArgs e) => throw new NotSupportedException();

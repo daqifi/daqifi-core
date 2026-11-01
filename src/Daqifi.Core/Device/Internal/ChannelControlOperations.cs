@@ -371,6 +371,8 @@ internal sealed class ChannelControlOperations
 
         _host.EnsureConnected();
 
+        _host.EnsureSupported(DeviceFeature.AnalogOutput);
+
         _host.Send(ScpiMessageProducer.SetAnalogOutputVoltage(channelNumber, voltage));
         channel?.Stage(voltage);
     }
@@ -379,6 +381,8 @@ internal sealed class ChannelControlOperations
     internal void LatchAnalogOutputs()
     {
         _host.EnsureConnected();
+
+        _host.EnsureSupported(DeviceFeature.AnalogOutput);
 
         _host.Send(ScpiMessageProducer.UpdateDacOutputs);
 
@@ -401,6 +405,8 @@ internal sealed class ChannelControlOperations
         _host.EnsureConnected();
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        _host.EnsureSupported(DeviceFeature.AnalogOutput);
 
         var lines = await _host.ExecuteTextCommandAsync(
             () => _host.Send(query),
