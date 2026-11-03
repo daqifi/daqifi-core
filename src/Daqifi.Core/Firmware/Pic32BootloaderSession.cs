@@ -49,17 +49,32 @@ internal sealed class Pic32BootloaderSession
     /// records, the CRC regions used by the post-programming verify pass and the total byte count.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Everything this method decides, it decides before the flow can erase the device. That is
-    /// the point of it. A PROGRAM_FLASH frame has to fit one HID OUT report, and DLE escaping can
-    /// take a legal 32-byte HEX record past that length; the transport then refuses the write
-    /// during programming, with the application flash already erased (#840). So the records are
-    /// re-packed to fit here, and an image that still cannot fit is refused here, while the device
-    /// is whole.
+    /// the point of it: the flow erases the application flash first and programs second, so an
+    /// image refused any later than here costs the board its firmware.
+    /// </para>
+    /// <para>
+    /// Two separate conditions are checked here, and both have to hold. An image that programs no
+    /// flash byte at all is refused, because erasing the board to write nothing leaves it with no
+    /// application (#838). And a record that cannot be framed inside one HID OUT report is
+    /// refused: a PROGRAM_FLASH frame has to fit one report, and DLE escaping can take a legal
+    /// 32-byte HEX record past that length; the transport then refuses the write during
+    /// programming, with the application flash already erased (#840). So the records are re-packed
+    /// to fit here, and an image that still cannot fit is refused here, while the device is whole.
+    /// </para>
     /// </remarks>
     internal (IReadOnlyList<byte[]> HexRecords, IReadOnlyList<FlashCrcRegion> CrcRegions, long TotalBytes)
         PrepareHexImage(string[] hexLines)
     {
         var parsedRecords = _bootloaderProtocol.ParseHexFile(hexLines);
+
+        // Count the bytes the device will program, not the bytes the records are made of. An
+        // end-of-file record is 5 bytes long and programs nothing, so a file holding only
+        // non-data records has a byte total above zero and nothing to write (#838). Asked of the
+        // parsed records, before the re-packing below, so the count the refusal reports is the
+        // count the file itself parsed to.
+        Pic32BootloaderImageContent.EnsureImageHasDataToProgram(parsedRecords);
 
         // Split any record whose escaped frame could outgrow one HID report, then confirm that
         // nothing is left over. Same bytes, same addresses — only the records they arrive in
@@ -67,11 +82,8 @@ internal sealed class Pic32BootloaderSession
         var hexRecords = Pic32BootloaderFrameBudget.FitRecordsToOneReport(parsedRecords);
         Pic32BootloaderFrameBudget.EnsureEveryRecordFitsOneReport(hexRecords);
 
+        // Record bytes, which is what the Programming progress band counts out.
         var totalBytes = hexRecords.Sum(record => (long)record.Length);
-        if (totalBytes <= 0)
-        {
-            throw new InvalidDataException("Firmware HEX file did not contain any writable records.");
-        }
 
         // Computed up front (alongside parsing) so the post-programming Verifying
         // state can checksum exactly the bytes we programmed via the bootloader
