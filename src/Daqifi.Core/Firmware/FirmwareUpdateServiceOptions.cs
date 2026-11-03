@@ -68,9 +68,27 @@ public sealed class FirmwareUpdateServiceOptions
     public TimeSpan PostForceBootDelay { get; set; } = TimeSpan.FromMilliseconds(1500);
 
     /// <summary>
-    /// Delay after switching LAN firmware update mode before disconnecting serial.
+    /// Delay between <c>SYSTem:COMMUnicate:LAN:FWUpdate</c> (which only *requests* WiFi
+    /// firmware-update mode) and the <c>SYSTem:COMMunicate:LAN:APPLY</c> that acts on the request
+    /// and takes the device into the USB-to-WINC bridge. The managed-connection twin of the pause
+    /// <see cref="WifiBridgeActivator"/> keeps between the same two commands on a raw serial port:
+    /// the firmware sets the request flag in its SCPI handler and its WiFi manager reads it on the
+    /// next REINIT, so the two commands are paced rather than written back to back. See
+    /// <see cref="PostLanBridgeEntryDelay"/> for the wait that follows the apply.
     /// </summary>
     public TimeSpan PostLanFirmwareModeDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Delay after the <c>SYSTem:COMMunicate:LAN:APPLY</c> that enters the USB-to-WINC bridge and
+    /// before the managed serial connection is disconnected. Entering the bridge is a device-side
+    /// mode transition, not an instantaneous one: the firmware has to enqueue the apply, run its
+    /// WiFi-manager REINIT and bring the bridge up before the external WINC flash tool can find
+    /// it. A board that cannot reach its access point defers that transition by up to its station
+    /// retry backoff (about 30 seconds), so a host on such a board can lengthen this wait to stop
+    /// the flash tool starting before the bridge exists. Set to <see cref="TimeSpan.Zero"/> to
+    /// skip the wait (e.g. unit tests).
+    /// </summary>
+    public TimeSpan PostLanBridgeEntryDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Delay after the managed serial connection is disconnected (entering WiFi update mode)
@@ -408,10 +426,11 @@ public sealed class FirmwareUpdateServiceOptions
         ValidatePositive(WifiProcessTimeout, nameof(WifiProcessTimeout));
         ValidatePositive(WifiFlashRetryDelay, nameof(WifiFlashRetryDelay));
 
-        // These three permit Zero (= "skip the wait"); only reject negatives.
+        // These four permit Zero (= "skip the wait"); only reject negatives.
         ValidateNonNegative(PostLanDisconnectPortReleaseDelay, nameof(PostLanDisconnectPortReleaseDelay));
         ValidateNonNegative(WincBootPromptResponseDelay, nameof(WincBootPromptResponseDelay));
         ValidateNonNegative(PostUsbTransparentModeExitDelay, nameof(PostUsbTransparentModeExitDelay));
+        ValidateNonNegative(PostLanBridgeEntryDelay, nameof(PostLanBridgeEntryDelay));
 
         if (WifiFlashAttempts < 1)
         {

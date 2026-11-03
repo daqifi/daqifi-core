@@ -14,6 +14,8 @@ Daqifi.Core.Device.SdCard.SdCardTransferErrorException.SdCardTransferErrorExcept
 Daqifi.Core.Firmware.AmbiguousBootloaderTargetException
 Daqifi.Core.Firmware.AmbiguousBootloaderTargetException.AmbiguousBootloaderTargetException(System.Collections.Generic.IReadOnlyList<string!>! candidateDevicePaths) -> void
 Daqifi.Core.Firmware.AmbiguousBootloaderTargetException.CandidateDevicePaths.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.get -> System.TimeSpan
+Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.set -> void
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Compare(Daqifi.Core.Logging.Export.ChannelDescriptor? x, Daqifi.Core.Logging.Export.ChannelDescriptor? y) -> int
 Daqifi.Core.Logging.Export.ChannelNameComparer

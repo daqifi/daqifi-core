@@ -29,6 +29,32 @@ internal sealed class WifiModuleUpdater
     private const string WifiReadXoFailedMarker = "Reading XO (offset) failed";
     private const string WifiBuildImageFailedMarker = "Building programming image failed";
 
+    /// <summary>
+    /// How far the prepare step took the device into WiFi firmware-update mode. The firmware has
+    /// two states here and <c>LAN:APPLY</c> means the opposite thing in each, so recovery has to
+    /// know which one it is talking to (#853).
+    /// </summary>
+    private enum LanUpdateModeProgress
+    {
+        /// <summary>
+        /// Nothing was sent. The device is in its normal mode and there is nothing to recover.
+        /// </summary>
+        NotRequested,
+
+        /// <summary>
+        /// <c>LAN:FWUpdate</c> is on the wire but the <c>LAN:APPLY</c> that acts on it is not.
+        /// The firmware holds a request flag, keeps answering its console, and has no bridge. An
+        /// apply sent from here ENTERS the bridge.
+        /// </summary>
+        UpdateRequested,
+
+        /// <summary>
+        /// The <c>LAN:APPLY</c> that enters the bridge is on the wire, so the device may be
+        /// bridged and its console silent. An apply sent from here LEAVES the bridge.
+        /// </summary>
+        BridgeEntered
+    }
+
     private readonly FirmwareUpdateContext _context;
     private readonly IExternalProcessRunner _externalProcessRunner;
     private readonly IFirmwareDownloadService _firmwareDownloadService;
@@ -56,14 +82,13 @@ internal sealed class WifiModuleUpdater
     {
         const long totalBytes = 100;
 
-        // Read only by the failure paths at the bottom of this method. Once the update-mode command
-        // is on the wire the device may be sitting in LAN firmware-update / USB-transparent bridge
-        // mode, where the SCPI console is bypassed until something takes it back out. The cancel
-        // and failure paths both hand this flag to TryLeaveLanUpdateModeAfterFailureAsync, which
-        // sends the bridge-exit sequence when it is set (see that method for what it does and does
-        // not restore). Armed inside the prepare step, at the one point where "may be bridged"
-        // becomes true.
-        var mayBeInLanUpdateMode = false;
+        // Read only by the failure paths at the bottom of this method. How far the prepare step got
+        // decides what recovery is allowed to send, because the firmware's two update-mode states
+        // react to LAN:APPLY in opposite directions: from "requested" an APPLY ENTERS the bridge,
+        // and from "bridged" the same APPLY leaves it. Recovery that cannot tell the two apart
+        // either strands a bridged device or bridges a device that was still answering (#853).
+        // Advanced inside the prepare step, at each point where the device's state actually moves.
+        var lanUpdateProgress = LanUpdateModeProgress.NotRequested;
 
         try
         {
@@ -108,21 +133,47 @@ internal sealed class WifiModuleUpdater
                         }
                     }
 
+                    // LAN:FWUpdate only REQUESTS WiFi firmware-update mode: the firmware's SCPI
+                    // handler raises a request flag and nothing else. The device keeps answering
+                    // its console and the WINC bridge does not exist yet.
                     device.Send(ScpiMessageProducer.SetLanFirmwareUpdateMode);
 
-                    // Armed here rather than before the whole prepare step. Everything above this
-                    // line fails with the update-mode command definitively un-sent, and arming for
-                    // those turns an immediate "device must be connected" failure into a full
-                    // ReconnectingAfterFlash wait for a transport that was never gone. Immediately
-                    // *after* the Send is as early as it can honestly be: Send is synchronous and
-                    // no await separates it from this line, so nothing can interleave between them.
-                    // From here on Core must assume the mode took — a cancel or state timeout can
-                    // land while the device is still acting on a command it already received. A
-                    // redundant bridge-exit on a device that never entered update mode is a no-op;
-                    // a skipped one leaves a bridged device needing a power cycle.
-                    mayBeInLanUpdateMode = true;
+                    // Advanced here rather than before the whole prepare step. Everything above
+                    // this line fails with the update-mode command definitively un-sent, and
+                    // arming for those turns an immediate "device must be connected" failure into
+                    // a full ReconnectingAfterFlash wait for a transport that was never gone.
+                    // Immediately *after* the Send is as early as it can honestly be: Send is
+                    // synchronous and no await separates it from this line, so nothing can
+                    // interleave between them. From here on Core must assume the request took — a
+                    // cancel or state timeout can land while the device is still acting on a
+                    // command it already received.
+                    lanUpdateProgress = LanUpdateModeProgress.UpdateRequested;
 
                     await Task.Delay(Options.PostLanFirmwareModeDelay, stateToken).ConfigureAwait(false);
+
+                    // The command that actually enters the bridge. The firmware's WiFi manager
+                    // reads the request flag on its next REINIT, and LAN:APPLY is what queues that
+                    // REINIT: it moves the module into WiFi-firmware-update mode, brings the
+                    // USB-to-WINC serial bridge up and turns USB-transparent mode on. Without it
+                    // the device stays in "requested" forever and the flash tool finds no bridge
+                    // to talk to — the first half of #853. It is also the order the firmware's own
+                    // utility script uses (POWer:STATe 1, LAN:FWUpdate, LAN:APPLY) and the order
+                    // WifiBridgeActivator.Activate already drives over a raw serial port.
+                    device.Send(ScpiMessageProducer.ApplyNetworkLan);
+
+                    // Same reasoning as above, one state further on: the apply is on the wire, so
+                    // the device may now be bridged and recovery must take it back out. From here
+                    // a recovery LAN:APPLY leaves the bridge instead of entering it.
+                    lanUpdateProgress = LanUpdateModeProgress.BridgeEntered;
+
+                    // Let the bridge come up before the port is handed to the flash tool. See
+                    // PostLanBridgeEntryDelay: on a board that cannot reach its access point the
+                    // firmware defers this transition by up to its station retry backoff.
+                    if (Options.PostLanBridgeEntryDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(Options.PostLanBridgeEntryDelay, stateToken).ConfigureAwait(false);
+                    }
+
                     device.Disconnect();
 
                     // The OS does not free the USB-CDC COM handle the instant Disconnect returns.
@@ -220,7 +271,7 @@ internal sealed class WifiModuleUpdater
             // Before reporting the outcome: a canceled WiFi flash is the single most likely way to
             // leave the module bridged, so the exit runs here too — on its own token, since the
             // caller's is already canceled by definition on this path.
-            await TryLeaveLanUpdateModeAfterFailureAsync(device, mayBeInLanUpdateMode).ConfigureAwait(false);
+            await TryLeaveLanUpdateModeAfterFailureAsync(device, lanUpdateProgress).ConfigureAwait(false);
 
             _context.TransitionToState(FirmwareUpdateState.Failed, "WiFi module update canceled.");
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, _context.CurrentOperation, 0, totalBytes);
@@ -234,7 +285,7 @@ internal sealed class WifiModuleUpdater
 
             // Captured above first, so the reported failure names the step that actually failed
             // rather than the recovery attempt that follows it.
-            await TryLeaveLanUpdateModeAfterFailureAsync(device, mayBeInLanUpdateMode).ConfigureAwait(false);
+            await TryLeaveLanUpdateModeAfterFailureAsync(device, lanUpdateProgress).ConfigureAwait(false);
 
             _context.TransitionToState(FirmwareUpdateState.Failed, failedOperation);
             _context.ReportProgress(progress, FirmwareUpdateState.Failed, _context.LastReportedPercent, failedOperation, 0, totalBytes);
@@ -826,25 +877,45 @@ internal sealed class WifiModuleUpdater
     /// replace it.
     /// </summary>
     /// <remarks>
-    /// This is the managed-connection twin of <see cref="WifiBridgeActivator.Deactivate"/>, and
-    /// sends the same two commands in the same order:
-    /// <c>SYSTem:USB:SetTransparentMode 0</c> hands the port back to the SCPI console, then
-    /// <c>LAN:APPLY</c> kicks the WiFi manager out of its bridge-mode state machine. The pause
-    /// between them is <see cref="FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay"/>,
-    /// the same settle the success path waits before its LAN restore. A host that lengthens the
-    /// option because the bridge is slow to drop is pacing this path too — the one that most
-    /// needs it. The default matches <see cref="WifiBridgeActivator.InterCommandDelay"/>. The
-    /// wait is not cancelled: the caller token is already cancelled on this path, and aborting
-    /// the settle would skip <c>LAN:APPLY</c>.
+    /// What it sends depends on <paramref name="progress"/>, because the firmware's two
+    /// update-mode states react to <c>LAN:APPLY</c> in opposite directions.
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="LanUpdateModeProgress.BridgeEntered"/> — the device may be bridged, so this is
+    /// the managed-connection twin of <see cref="WifiBridgeActivator.Deactivate"/> and sends the
+    /// same two commands in the same order: <c>SYSTem:USB:SetTransparentMode 0</c> hands the port
+    /// back to the SCPI console, then <c>LAN:APPLY</c> kicks the WiFi manager out of its
+    /// bridge-mode state machine. From this state the apply clears the bridge flags and leaves
+    /// the bridge.
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="LanUpdateModeProgress.UpdateRequested"/> — the update was requested but the
+    /// apply that enters the bridge never went out, so the device is still answering its console.
+    /// Only the transparent-mode exit is sent, and it is a no-op here. <c>LAN:APPLY</c> is
+    /// deliberately withheld: from this state it would ENTER the bridge, which is the opposite of
+    /// recovery and is exactly how a failed update used to leave the console dead until a power
+    /// cycle (#853). The firmware keeps its request flag until an apply consumes it, so the log
+    /// says so — the next apply a host sends on its own will enter the bridge.
+    /// </description></item>
+    /// </list>
+    /// The pause before <c>LAN:APPLY</c> is
+    /// <see cref="FirmwareUpdateServiceOptions.PostUsbTransparentModeExitDelay"/>, the same settle
+    /// the success path waits before its LAN restore. A host that lengthens the option because the
+    /// bridge is slow to drop is pacing this path too — the one that most needs it. The default
+    /// matches <see cref="WifiBridgeActivator.InterCommandDelay"/>. The wait is not cancelled: the
+    /// caller token is already cancelled on this path, and aborting the settle would skip
+    /// <c>LAN:APPLY</c>.
     /// <para>
     /// Deliberately NOT the success path's full <c>LAN:ENAbled</c>/<c>APPLY</c>/<c>SAVE</c>
     /// restore: that persists a configuration, which has no business running off the back of a
     /// flash that did not complete. The job here is only to make the device answerable again.
     /// </para>
     /// </remarks>
-    private async Task TryLeaveLanUpdateModeAfterFailureAsync(IStreamingDevice device, bool mayBeInLanUpdateMode)
+    private async Task TryLeaveLanUpdateModeAfterFailureAsync(
+        IStreamingDevice device,
+        LanUpdateModeProgress progress)
     {
-        if (!mayBeInLanUpdateMode)
+        if (progress == LanUpdateModeProgress.NotRequested)
         {
             return;
         }
@@ -874,6 +945,19 @@ internal sealed class WifiModuleUpdater
             // bounded either way. The caller token is already cancelled on this path and must not
             // abort the exit — the settle observes neither it nor the recovery budget.
             device.Send(ScpiMessageProducer.SetUsbTransparencyMode(0));
+
+            // The device never reached the bridge, so stop here. An apply from the "requested"
+            // state would enter the bridge rather than leave it (#853), and the transparent-mode
+            // exit above has already made sure the port belongs to the SCPI console.
+            if (progress == LanUpdateModeProgress.UpdateRequested)
+            {
+                Logger.LogInformation(
+                    "WiFi update mode was requested but never applied, so the device is not bridged; sent the " +
+                    "transparent-mode exit only. LAN:APPLY is withheld here because from this state it would " +
+                    "enter the bridge. The firmware keeps the request until an apply consumes it, so the next " +
+                    "LAN:APPLY will enter WiFi firmware-update mode.");
+                return;
+            }
 
             // Same settle as the success path, including the zero escape hatch. Leaving the bridge
             // is a device-side mode transition: until the SCPI console path is back, bytes on the

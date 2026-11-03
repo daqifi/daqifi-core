@@ -805,6 +805,182 @@ public class WifiModuleUpdaterTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------
+    // Bridge-entry and bridge-exit command sequence (#853)
+    // ---------------------------------------------------------------------------------------
+    //
+    // These cases assert the ORDERED list of SCPI commands the updater puts on the wire, because
+    // the whole defect was which commands go out and in what order. The firmware has two WiFi
+    // update-mode states and LAN:APPLY means the opposite thing in each one:
+    //
+    //   normal --LAN:FWUpdate--> requested --LAN:APPLY--> bridged --LAN:APPLY--> normal
+    //
+    // So "send the exit, then an apply" is recovery from "bridged" and is the bug from
+    // "requested". A test that only checked a return value could not tell the two apart.
+
+    [Fact]
+    public async Task RunUpdate_EntersTheBridgeBeforeItRunsTheFlashTool()
+    {
+        // LAN:FWUpdate only raises the firmware's request flag; the LAN:APPLY after it is what
+        // runs the WiFi manager's REINIT, brings the USB-to-WINC bridge up and turns transparent
+        // mode on. The updater used to send the request and nothing else, so the flash tool was
+        // launched against a device that was still answering its own console and had no bridge.
+        var device = new FakeStreamingDevice("COM7");
+        var runner = SucceedingRunner();
+
+        // The claim is not just "an apply was sent at some point" but "the bridge was entered
+        // before the tool was launched", so the command list is sampled at the launch itself.
+        List<string>? commandsAtToolLaunch = null;
+        runner.OnRun = () => commandsAtToolLaunch = [.. device.SentCommands];
+
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        await RunUpdateAsync(updater, device, CreateFirmwareDirectory());
+
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:ENAbled 1",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:COMMunicate:LAN:SAVE"
+            ],
+            device.SentCommands);
+
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY"
+            ],
+            commandsAtToolLaunch);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenTheFlashFailsAfterTheBridgeWasEntered_SendsTheApplyThatLeavesIt()
+    {
+        // The device is bridged when the flash fails, so the two-command exit is right here: the
+        // transparent-mode exit hands the port back to the SCPI console and the apply takes the
+        // WiFi manager out of its bridge-mode state machine.
+        var device = new FakeStreamingDevice("COM7");
+        var runner = new FakeExternalProcessRunner
+        {
+            NextResult = Result(exitCode: 1, stdout: ["some output"], stderr: ["fatal"])
+        };
+
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => RunUpdateAsync(updater, device, CreateFirmwareDirectory()));
+
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:APPLY"
+            ],
+            device.SentCommands);
+
+        // A failed flash must not persist a network configuration.
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", device.SentCommands);
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:SAVE", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenCanceledBeforeTheBridgeWasEntered_SendsNoApplyAtAll()
+    {
+        // The dangerous case. The update was requested but the apply that enters the bridge never
+        // went out, so the device still answers its console. The old recovery sent the exit and
+        // then an apply unconditionally, and from the "requested" state that apply ENTERS the
+        // bridge: the recovery left the console dead until someone power-cycled the device.
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM7");
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:COMMUnicate:LAN:FWUpdate")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var options = CreateFastOptions();
+        // Positive so the pace between the request and the apply is a real await point. The token
+        // is already cancelled when that wait starts, so the case holds by construction and not
+        // by a race between a timer and a cancel.
+        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(10);
+
+        var (updater, _) = CreateUpdater(options, SucceedingRunner());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => updater.RunUpdateAsync(
+                device,
+                CreateFirmwareDirectory(),
+                progress: null,
+                skipVersionCheck: true,
+                cts.Token));
+
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:USB:SetTransparentMode 0"
+            ],
+            device.SentCommands);
+
+        // Stated on its own terms, because it is the one command that must never appear here:
+        // there is no bridge to leave, and an apply would build one.
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:APPLY", device.SentCommands);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenCanceledAfterTheBridgeWasEntered_StillSendsTheExit()
+    {
+        // The mirror image: the apply that enters the bridge is already on the wire, so the device
+        // may be bridged and the exit must go out. Here the recovery apply is the one that LEAVES
+        // the bridge, which is why it is withheld in the case above and sent in this one.
+        using var cts = new CancellationTokenSource();
+        var device = new FakeStreamingDevice("COM7");
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:COMMunicate:LAN:APPLY")
+            {
+                cts.Cancel();
+            }
+        };
+
+        var options = CreateFastOptions();
+        // Positive for the same reason as above: the settle after the bridge-entering apply is the
+        // await point that observes the already-requested cancel.
+        options.PostLanBridgeEntryDelay = TimeSpan.FromMilliseconds(10);
+
+        var (updater, _) = CreateUpdater(options, SucceedingRunner());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => updater.RunUpdateAsync(
+                device,
+                CreateFirmwareDirectory(),
+                progress: null,
+                skipVersionCheck: true,
+                cts.Token));
+
+        Assert.Equal(
+            [
+                "SYSTem:POWer:STATe 1",
+                "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
+                "SYSTem:USB:SetTransparentMode 0",
+                "SYSTem:COMMunicate:LAN:APPLY"
+            ],
+            device.SentCommands);
+
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", device.SentCommands);
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:SAVE", device.SentCommands);
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------------------
 
@@ -911,6 +1087,7 @@ public class WifiModuleUpdaterTests : IDisposable
         // an OS releasing a COM handle, a WINC finishing bridge init. Collapsed to nothing so
         // these tests measure behavior rather than sleep.
         PostLanFirmwareModeDelay = TimeSpan.Zero,
+        PostLanBridgeEntryDelay = TimeSpan.Zero,
         PostLanDisconnectPortReleaseDelay = TimeSpan.Zero,
         PostWifiReconnectDelay = TimeSpan.Zero,
         PostUsbTransparentModeExitDelay = TimeSpan.Zero,

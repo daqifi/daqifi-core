@@ -1589,12 +1589,15 @@ public class FirmwareUpdateServiceTests
 
         // The canonical WiFi-update prep and post-flash recovery sequences Core now owns end to
         // end (part of #269). The power-on leads the prep because LAN commands are rejected while
-        // the WINC is unpowered, and the transparent-mode exit leads the recovery because the LAN
-        // commands after it would otherwise be forwarded to the WINC instead of interpreted.
+        // the WINC is unpowered; the apply after LAN:FWUpdate is what actually enters the
+        // USB-to-WINC bridge, since the FWUpdate command only requests it (#853); and the
+        // transparent-mode exit leads the recovery because the LAN commands after it would
+        // otherwise be forwarded to the WINC instead of interpreted.
         Assert.Equal(
             [
                 "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
                 "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:COMMunicate:LAN:ENAbled 1",
                 "SYSTem:COMMunicate:LAN:APPLY",
@@ -1662,6 +1665,7 @@ public class FirmwareUpdateServiceTests
         Assert.Equal(
             [
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
                 "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:COMMunicate:LAN:ENAbled 1",
                 "SYSTem:COMMunicate:LAN:APPLY",
@@ -1730,15 +1734,17 @@ public class FirmwareUpdateServiceTests
         }
 
         // The restore is LAN:ENAbled -> APPLY -> SAVE, and the settle holds back all three: not one
-        // of them is here. The APPLY below is a different command with a different job — the
-        // failure recovery's bridge-exit kick, which the cancel itself arms. Two things tell it
-        // apart from a restore that leaked half way out: it re-sends the transparent-mode exit
-        // ahead of itself, and it is never accompanied by ENAbled or SAVE. It persists nothing,
-        // so a canceled flash still cannot write a network configuration.
+        // of them is here. Two other applies are, and neither is part of a restore. The first is
+        // prep's, which enters the bridge. The last is the failure recovery's bridge-exit kick,
+        // which the cancel itself arms; two things tell it apart from a restore that leaked half
+        // way out — it re-sends the transparent-mode exit ahead of itself, and it is never
+        // accompanied by ENAbled or SAVE. It persists nothing, so a canceled flash still cannot
+        // write a network configuration.
         Assert.Equal(
             [
                 "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
                 "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:COMMunicate:LAN:APPLY"
@@ -1803,6 +1809,7 @@ public class FirmwareUpdateServiceTests
             [
                 "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
                 "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:COMMunicate:LAN:ENAbled 1",
                 "SYSTem:COMMunicate:LAN:APPLY",
@@ -1847,22 +1854,32 @@ public class FirmwareUpdateServiceTests
         TimeSpan? lanApplyAt = null;
         device.OnCommandSent = command =>
         {
-            if (command == "SYSTem:COMMUnicate:LAN:FWUpdate")
+            if (command == "SYSTem:COMMunicate:LAN:APPLY")
             {
-                cts.Cancel();
+                if (transparentModeExitAt is null)
+                {
+                    // Prep's apply, the one that enters the bridge. Cancelling on it puts the
+                    // failure after the bridge entry, which is the state whose recovery sends the
+                    // two-command exit this case measures. The apply recorded below is the other
+                    // one — the exit's — and it only exists in this state (#853).
+                    cts.Cancel();
+                }
+                else
+                {
+                    lanApplyAt ??= clock.Elapsed;
+                }
             }
             else if (command == "SYSTem:USB:SetTransparentMode 0")
             {
                 transparentModeExitAt ??= clock.Elapsed;
             }
-            else if (command == "SYSTem:COMMunicate:LAN:APPLY")
-            {
-                lanApplyAt ??= clock.Elapsed;
-            }
         };
 
         var options = CreateFastOptions();
         options.PostUsbTransparentModeExitDelay = delay;
+        // The await right after the bridge-entering apply, so the cancel requested on that apply
+        // is observed there rather than racing the rest of prep.
+        options.PostLanBridgeEntryDelay = TimeSpan.FromMilliseconds(10);
         // Shorter than the settle, so a wait that observes the recovery budget cannot
         // satisfy the gap assertion below — and cannot send LAN:APPLY either.
         options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
@@ -1894,6 +1911,7 @@ public class FirmwareUpdateServiceTests
             [
                 "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
+                "SYSTem:COMMunicate:LAN:APPLY",
                 "SYSTem:USB:SetTransparentMode 0",
                 "SYSTem:COMMunicate:LAN:APPLY"
             ],
@@ -2192,12 +2210,14 @@ public class FirmwareUpdateServiceTests
             // twin: hand the port back to the SCPI console, then kick the WiFi manager out of its
             // bridge-mode state machine. Deliberately no LAN:ENAbled/SAVE — persisting a network
             // configuration off the back of a flash that did not complete is not this step's job.
-            // The leading power-on is prep's, not the recovery's: LAN commands are rejected while
-            // the WINC is unpowered, so LAN:FWUpdate has to be preceded by it.
+            // The leading power-on and apply are prep's, not the recovery's: LAN commands are
+            // rejected while the WINC is unpowered, so LAN:FWUpdate has to be preceded by the
+            // power-on, and the apply after it is what enters the bridge the recovery then leaves.
             Assert.Equal(
                 [
                     "SYSTem:POWer:STATe 1",
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:COMMunicate:LAN:APPLY",
                     "SYSTem:USB:SetTransparentMode 0",
                     "SYSTem:COMMunicate:LAN:APPLY"
                 ],
@@ -2215,16 +2235,20 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public async Task UpdateWifiModuleAsync_WhenCanceledAfterEnteringUpdateMode_StillTakesDeviceBackOut()
+    public async Task UpdateWifiModuleAsync_WhenCanceledAfterRequestingUpdateMode_HandsTheConsoleBackWithoutEnteringTheBridge()
     {
-        // The worst stranding case: LAN:FWUpdate is already on the wire and the caller cancels
-        // before prep even gets to the disconnect. The caller's token is canceled by definition
-        // here, so the recovery has to run on a token of its own or it would never send anything.
+        // LAN:FWUpdate is already on the wire, but the apply that acts on it is not, so the device
+        // is still answering its own console. The recovery hands the port back and stops there:
+        // an apply from this state would ENTER the bridge, and a recovery that bridges the device
+        // is how a canceled update used to leave the console dead until a power cycle (#853).
+        // The caller's token is canceled by definition here, so the recovery runs on a token of
+        // its own or it would never send anything.
         var device = new FakeStreamingDevice("COM12");
 
         var options = CreateFastOptions();
         // Long enough that cancellation lands inside it, and inside the 2s PreparingDeviceTimeout
-        // so the state timeout is not what ends the wait.
+        // so the state timeout is not what ends the wait. This is the pace between the request and
+        // the apply, so a cancel here is a cancel before the bridge.
         options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
 
         var service = new FirmwareUpdateService(
@@ -2253,10 +2277,12 @@ public class FirmwareUpdateServiceTests
                 [
                     "SYSTem:POWer:STATe 1",
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
-                    "SYSTem:USB:SetTransparentMode 0",
-                    "SYSTem:COMMunicate:LAN:APPLY"
+                    "SYSTem:USB:SetTransparentMode 0"
                 ],
                 device.SentCommands);
+
+            // Said on its own terms: this is the one state where an apply is the wrong command.
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:APPLY", device.SentCommands);
 
             // Cancellation landed before prep reached the disconnect, so the recovery found the
             // transport already up — the exit is not conditional on having been disconnected.
@@ -2278,10 +2304,22 @@ public class FirmwareUpdateServiceTests
         // goes out. Stopping half way would hand the console back while leaving the WiFi manager
         // in its bridge-mode state machine, which is a worse place to leave the device than
         // either end of the sequence.
+        using var cts = new CancellationTokenSource();
         var device = new FakeStreamingDevice("COM13");
 
+        // The two-command exit only runs when the device may be bridged, so the cancel has to land
+        // after prep's bridge-entering apply. Requested on that apply and observed in the settle
+        // that follows it, which makes the case hold by construction rather than on a timer.
+        device.OnCommandSent = command =>
+        {
+            if (command == "SYSTem:COMMunicate:LAN:APPLY")
+            {
+                cts.Cancel();
+            }
+        };
+
         var options = CreateFastOptions();
-        options.PostLanFirmwareModeDelay = TimeSpan.FromSeconds(1);
+        options.PostLanBridgeEntryDelay = TimeSpan.FromMilliseconds(10);
         // Also the ReconnectingAfterFlash budget, which is what bounds the recovery.
         options.VerifyingTimeout = TimeSpan.FromMilliseconds(50);
         // Longer than that budget. A settle that observed it would be cancelled before LAN:APPLY.
@@ -2299,9 +2337,6 @@ public class FirmwareUpdateServiceTests
         var firmwareDir = CreateTempDirectory();
         File.WriteAllText(Path.Combine(firmwareDir, "winc_flash_tool.cmd"), "@echo off");
 
-        using var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
-
         try
         {
             // The original cancellation still surfaces — the recovery must never turn into the
@@ -2313,6 +2348,7 @@ public class FirmwareUpdateServiceTests
                 [
                     "SYSTem:POWer:STATe 1",
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:COMMunicate:LAN:APPLY",
                     "SYSTem:USB:SetTransparentMode 0",
                     "SYSTem:COMMunicate:LAN:APPLY"
                 ],
@@ -2374,12 +2410,14 @@ public class FirmwareUpdateServiceTests
             // The flash failure, not the recovery's timeout, is what the caller sees.
             Assert.Equal(FirmwareUpdateState.Programming, exception.FailedState);
 
-            // Prep's power-on and LAN:FWUpdate, and nothing after them: the recovery gave up in the
-            // reconnect wait, so neither half of the bridge exit was sent down a dead transport.
+            // Prep's power-on, LAN:FWUpdate and the apply that enters the bridge, and nothing after
+            // them: the recovery gave up in the reconnect wait, so neither half of the bridge exit
+            // was sent down a dead transport.
             Assert.Equal(
                 [
                     "SYSTem:POWer:STATe 1",
-                    "SYSTem:COMMUnicate:LAN:FWUpdate"
+                    "SYSTem:COMMUnicate:LAN:FWUpdate",
+                    "SYSTem:COMMunicate:LAN:APPLY"
                 ],
                 device.SentCommands);
             Assert.True(device.ConnectAttempts >= 1);
@@ -5011,6 +5049,7 @@ public class FirmwareUpdateServiceTests
             // releases its port synchronously and the fake process runner needs no
             // prompt/bridge-init window, so these delays are pure latency here.
             PostLanDisconnectPortReleaseDelay = TimeSpan.Zero,
+            PostLanBridgeEntryDelay = TimeSpan.Zero,
             WincBootPromptResponseDelay = TimeSpan.Zero,
             WifiFlashRetryDelay = TimeSpan.FromMilliseconds(5),
             // Disable the macOS USB CDC stale-handle settling delay for unit

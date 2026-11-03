@@ -306,11 +306,20 @@ internal sealed class FakeExternalProcessRunner : IExternalProcessRunner
     /// </summary>
     public List<(string Line, string Response)> PromptResponses { get; } = [];
 
+    /// <summary>
+    /// Invoked at the start of each <see cref="RunAsync"/> call, before anything else. Lets a test
+    /// observe the world as the flash tool sees it — in particular which SCPI commands have
+    /// already reached the device by the time the tool is launched, which is the whole question
+    /// behind the bridge-entry sequence (#853).
+    /// </summary>
+    public Action? OnRun { get; set; }
+
     public Task<ExternalProcessResult> RunAsync(
         ExternalProcessRequest request,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        OnRun?.Invoke();
         LastRequest = request;
         Requests.Add(request);
         RunCount++;
