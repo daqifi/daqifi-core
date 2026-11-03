@@ -14,6 +14,21 @@ Daqifi.Core.Device.SdCard.SdCardTransferErrorException.SdCardTransferErrorExcept
 Daqifi.Core.Firmware.AmbiguousBootloaderTargetException
 Daqifi.Core.Firmware.AmbiguousBootloaderTargetException.AmbiguousBootloaderTargetException(System.Collections.Generic.IReadOnlyList<string!>! candidateDevicePaths) -> void
 Daqifi.Core.Firmware.AmbiguousBootloaderTargetException.CandidateDevicePaths.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Daqifi.Core.Firmware.LanChipInfoProbeProgress
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.Attempt.get -> int
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.Attempt.init -> void
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.Deconstruct(out int Attempt, out int MaxAttempts, out bool WasLanNotInitialized, out System.TimeSpan RetryDelay) -> void
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.Equals(Daqifi.Core.Firmware.LanChipInfoProbeProgress other) -> bool
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.LanChipInfoProbeProgress() -> void
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.LanChipInfoProbeProgress(int Attempt, int MaxAttempts, bool WasLanNotInitialized, System.TimeSpan RetryDelay) -> void
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.MaxAttempts.get -> int
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.MaxAttempts.init -> void
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.RetryDelay.get -> System.TimeSpan
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.RetryDelay.init -> void
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.WasLanNotInitialized.get -> bool
+Daqifi.Core.Firmware.LanChipInfoProbeProgress.WasLanNotInitialized.init -> void
+Daqifi.Core.Firmware.LanChipInfoRetryOptions.Progress.get -> System.IProgress<Daqifi.Core.Firmware.LanChipInfoProbeProgress>?
+Daqifi.Core.Firmware.LanChipInfoRetryOptions.Progress.init -> void
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer
 Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Compare(Daqifi.Core.Logging.Export.ChannelDescriptor? x, Daqifi.Core.Logging.Export.ChannelDescriptor? y) -> int
 Daqifi.Core.Logging.Export.ChannelNameComparer
@@ -60,12 +75,17 @@ const Daqifi.Core.Firmware.IntelHexParser.DefaultEndProtectedAddress = 488636416
 const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DefaultDeviceName = "Daqifi" -> string!
 const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DigitalChannelName = "DIO" -> string!
 override Daqifi.Core.Device.Discovery.MDnsDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
+override Daqifi.Core.Firmware.LanChipInfoProbeProgress.GetHashCode() -> int
 override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.GetHashCode() -> int
+static Daqifi.Core.Firmware.LanChipInfoProbeProgress.operator !=(Daqifi.Core.Firmware.LanChipInfoProbeProgress left, Daqifi.Core.Firmware.LanChipInfoProbeProgress right) -> bool
+static Daqifi.Core.Firmware.LanChipInfoProbeProgress.operator ==(Daqifi.Core.Firmware.LanChipInfoProbeProgress left, Daqifi.Core.Firmware.LanChipInfoProbeProgress right) -> bool
 static Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Default.get -> Daqifi.Core.Logging.Export.ChannelDescriptorComparer!
 static Daqifi.Core.Logging.Export.ChannelNameComparer.Instance.get -> Daqifi.Core.Logging.Export.ChannelNameComparer!
 static Daqifi.Core.Logging.Export.LiveCsvRecordingExtensions.RecordLiveSamplesToCsvAsync(this Daqifi.Core.Device.IStreamingDevice! device, System.IO.TextWriter! writer, Daqifi.Core.Logging.Export.CsvExportOptions? options = null, System.TimeSpan? duration = null, int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Logging.Export.LiveCsvRecordingResult>!
 static Daqifi.Core.Logging.Export.LiveCsvRecordingResult.operator !=(Daqifi.Core.Logging.Export.LiveCsvRecordingResult left, Daqifi.Core.Logging.Export.LiveCsvRecordingResult right) -> bool
 static Daqifi.Core.Logging.Export.LiveCsvRecordingResult.operator ==(Daqifi.Core.Logging.Export.LiveCsvRecordingResult left, Daqifi.Core.Logging.Export.LiveCsvRecordingResult right) -> bool
 static Daqifi.Core.Logging.Export.SdCardLogSessionExtensions.AsSampleSource(this Daqifi.Core.Device.SdCard.SdCardLogSession! session, Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration? fallbackConfiguration = null, string? deviceName = null) -> Daqifi.Core.Logging.Export.SdCardLogSampleSource!
+~override Daqifi.Core.Firmware.LanChipInfoProbeProgress.Equals(object obj) -> bool
+~override Daqifi.Core.Firmware.LanChipInfoProbeProgress.ToString() -> string
 ~override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.Equals(object obj) -> bool
 ~override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.ToString() -> string
