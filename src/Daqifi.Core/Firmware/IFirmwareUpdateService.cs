@@ -38,6 +38,12 @@ public interface IFirmwareUpdateService
     /// <see cref="FirmwareUpdateState.Failed"/>. The exception's
     /// <see cref="FirmwareUpdateException.FailedState"/> always reports where the
     /// original failure occurred, regardless of cleanup outcome.
+    /// <para>
+    /// This overload names no board. When more than one HID bootloader device is present, the
+    /// board to update is ambiguous and the update stops with an
+    /// <see cref="AmbiguousBootloaderTargetException"/> before any flash is erased (#837). Use one
+    /// of the targeted overloads to name the board.
+    /// </para>
     /// </remarks>
     Task UpdateFirmwareAsync(
         IStreamingDevice device,

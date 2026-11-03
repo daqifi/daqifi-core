@@ -328,12 +328,32 @@ public class SerialDeviceFinderTests
         // exception). Pre-fix, Task.WhenAll never settled and the healthy port's
         // device was never reported. The hung probe is simulated with a
         // never-completing task; the hard per-port timeout must abandon it.
+        //
+        // The abandonment is proved by construction, not by a clock (issue #802). COM_HUNG's
+        // probe returns a TaskCompletionSource that this test never completes, so the sweep
+        // cannot settle at all unless the hard timeout abandons that probe: the sweep returning
+        // IS the fact. A wall-clock bound measured something else — how promptly the runner
+        // dispatched Task.Delay(PortProbeHardTimeoutMs)'s continuation and the sweep's own
+        // continuations off a saturated thread pool. On Windows net9 CI that added over three
+        // seconds to a 2s ceiling and the 5s bound failed at 5155 ms and 5282 ms, while the
+        // device assertions below passed in the same run. SweepGuard replaces it: it is a
+        // hang-breaker, so a real regression fails the run instead of blocking it forever.
         var hungForever = new TaskCompletionSource<IDeviceInfo?>();
+        // Guards against the fact going vacuous: if COM_HUNG is never probed, the sweep
+        // settles with nothing to abandon and every assertion below still passes.
+        var hungProbeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var finder = CreateFinderWithProbes(
             new[] { "COM_HUNG", "COM_OK" },
-            (port, _) => port == "COM_HUNG"
-                ? hungForever.Task
-                : Task.FromResult<IDeviceInfo?>(FakeDevice(port)),
+            (port, _) =>
+            {
+                if (port != "COM_HUNG")
+                {
+                    return Task.FromResult<IDeviceInfo?>(FakeDevice(port));
+                }
+
+                hungProbeStarted.TrySetResult();
+                return hungForever.Task;
+            },
             // 2000, not 300: the healthy probe is dispatched with Task.Run, so it has to be
             // handed a thread-pool thread before it can complete, and it races
             // Task.Delay(PortProbeHardTimeoutMs) to do it. Once the pool is saturated,
@@ -344,14 +364,12 @@ public class SerialDeviceFinderTests
             // CreateFinderWithProbes.
             hardTimeoutMs: 2000);
 
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var devices = (await finder.DiscoverAsync(CancellationToken.None)).ToList();
-        stopwatch.Stop();
+        var devices = (await finder.DiscoverAsync(CancellationToken.None).WaitAsync(SweepGuard)).ToList();
 
+        Assert.True(hungProbeStarted.Task.IsCompleted,
+            "COM_HUNG was never probed, so the sweep settled with no hung probe to abandon.");
         var device = Assert.Single(devices);
         Assert.Equal("COM_OK", device.PortName);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5),
-            $"Discovery took {stopwatch.ElapsedMilliseconds}ms — the hard timeout did not abandon the hung probe.");
     }
 
     [Fact]

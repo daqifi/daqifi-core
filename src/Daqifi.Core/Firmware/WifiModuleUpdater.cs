@@ -1,5 +1,6 @@
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware.Winc;
 using Microsoft.Extensions.Logging;
 
@@ -475,21 +476,21 @@ internal sealed class WifiModuleUpdater
         var toolPath = ResolveWifiToolPath(firmwarePath);
         var port = ResolveWifiPort(device);
 
-        var toolArguments = Options.WifiFlashToolArgumentsTemplate
-            .Replace("{port}", QuoteArgument(port), StringComparison.Ordinal)
-            .Replace("{firmwarePath}", QuoteArgument(firmwarePath), StringComparison.Ordinal);
-
-        var executablePath = toolPath;
-        var executableArguments = toolArguments;
-
+        // A .cmd or .bat tool is not directly executable, so on Windows it runs through cmd.exe.
+        // That shell parses the line itself, with rules of its own, so the whole command line is
+        // built in one place and tested as a pure string. See WincFlashCommandLine (issue #844).
         var extension = Path.GetExtension(toolPath);
-        if ((extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
+        var throughWindowsShell =
+            (extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
              extension.Equals(".bat", StringComparison.OrdinalIgnoreCase)) &&
-            OperatingSystem.IsWindows())
-        {
-            executablePath = "cmd.exe";
-            executableArguments = $"/c \"{toolPath}\" {toolArguments}";
-        }
+            OperatingSystem.IsWindows();
+
+        var command = WincFlashCommandLine.Build(
+            toolPath,
+            Options.WifiFlashToolArgumentsTemplate,
+            port,
+            firmwarePath,
+            throughWindowsShell);
 
         // Tracks the live device-flash phase (write/read/verify) from the tool's block-address
         // output so the bar advances across the multi-minute flash, instead of latching to the
@@ -499,8 +500,8 @@ internal sealed class WifiModuleUpdater
 
         return new ExternalProcessRequest
         {
-            FileName = executablePath,
-            Arguments = executableArguments,
+            FileName = command.FileName,
+            Arguments = command.Arguments,
             WorkingDirectory = Path.GetDirectoryName(toolPath),
             Timeout = Options.WifiProcessTimeout,
             OnStandardOutputLine = line =>
@@ -774,25 +775,32 @@ internal sealed class WifiModuleUpdater
             return Options.WifiPortOverride;
         }
 
-        if (!string.IsNullOrWhiteSpace(device.Name))
+        // The port goes to the Microchip flash tool as /p <port>, so it has to be a name the
+        // operating system can open — COM7, /dev/cu.usbmodem1101 — and the only place that name
+        // exists is the device's serial transport.
+        //
+        // This used to read device.Name. A device's name is a display label, not a port: the
+        // factory fills it from DeviceConnectionOptions.DeviceName, whose default is
+        // "DAQiFi Device". So unless the caller set WifiPortOverride, the tool was launched with
+        // /p "DAQiFi Device" and reported a confusing failure to open the port (issue #842).
+        if (device is ISerialPortNamed serialDevice)
         {
-            return device.Name;
+            var portName = serialDevice.SerialPortName;
+            if (!string.IsNullOrWhiteSpace(portName))
+            {
+                return portName;
+            }
         }
 
-        throw new InvalidOperationException("Unable to resolve a serial port name for WiFi update.");
-    }
-
-    private static string QuoteArgument(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return "\"\"";
-        }
-
-        var escaped = value.Replace("\"", "\\\"", StringComparison.Ordinal);
-        return escaped.IndexOfAny([' ', '\t']) >= 0
-            ? $"\"{escaped}\""
-            : escaped;
+        // Fail here rather than pass something the tool cannot open. A guess costs the caller a
+        // tool error that names the wrong problem; this names the real one.
+        throw new InvalidOperationException(
+            "Unable to resolve a serial port for the WiFi module update. The WiFi flash tool is " +
+            "launched with the serial port the device is on, and this device does not report one " +
+            "— it is not connected over serial. Connect the device over USB/serial, or set " +
+            $"{nameof(FirmwareUpdateServiceOptions)}.{nameof(FirmwareUpdateServiceOptions.WifiPortOverride)} " +
+            "to the port name (for example \"COM7\"). The device's name is a display label and " +
+            "is not a serial port.");
     }
 
     private static string BuildProcessLogExcerpt(ExternalProcessResult result)

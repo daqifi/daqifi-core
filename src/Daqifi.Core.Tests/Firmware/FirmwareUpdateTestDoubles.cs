@@ -5,6 +5,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
 using Daqifi.Core.Device.Discovery;
+using Daqifi.Core.Device.Internal;
 using Daqifi.Core.Firmware;
 
 namespace Daqifi.Core.Tests.Firmware;
@@ -18,17 +19,34 @@ namespace Daqifi.Core.Tests.Firmware;
 // the same double; the only additions are the extra observation hooks noted below. Doubles with a
 // single caller deliberately stay nested where they are used.
 
-internal class FakeStreamingDevice : IStreamingDevice
+internal class FakeStreamingDevice : IStreamingDevice, ISerialPortNamed
 {
     private ConnectionStatus _status = ConnectionStatus.Connected;
 
-    public FakeStreamingDevice(string name)
+    /// <param name="name">The device's display label, the thing <see cref="Name"/> returns.</param>
+    /// <param name="serialPortName">
+    /// The serial port the double sits on. It defaults to <paramref name="name"/> because most
+    /// firmware tests name the double after its port and only care that one port goes through.
+    /// The port-resolution tests (issue #842) pass the two apart on purpose: a real device's
+    /// label is "DAQiFi Device" and its port is something like COM7, and only a double that can
+    /// hold both at once can tell the two sources apart. Pass <c>null</c> for a device that is
+    /// not on a serial transport at all, set this property to <c>null</c> after construction.
+    /// </param>
+    public FakeStreamingDevice(string name, string? serialPortName = null)
     {
         Name = name;
+        SerialPortName = serialPortName ?? name;
         IsConnected = true;
     }
 
     public string Name { get; }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Settable so a test can say "this device is on no serial port" with
+    /// <c>{ SerialPortName = null }</c>, which the constructor's fallback cannot express.
+    /// </remarks>
+    public string? SerialPortName { get; set; }
     public IPAddress? IpAddress => null;
     public bool IsConnected { get; private set; }
     public ConnectionStatus Status => _status;

@@ -41,21 +41,70 @@ public class LifecycleGateTests
     /// Every contention test needs a holder; racing two real operations would make the tests
     /// depend on scheduling, which is the thing they exist to be independent of.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two details here are load-bearing, and issue #804 is what happens without them.
+    /// </para>
+    /// <para>
+    /// <b>The holder waits with no timeout.</b> A bounded wait makes the holder release the gate
+    /// on its own while the test is still waiting for the contention to be reported. The waiter
+    /// then acquires the free gate and reports that it ran, so the test reads a successful
+    /// operation where it asserted an abandoned one. Nothing ordered those two timers, so the
+    /// result was decided by which fired first: the gate's contention budget (100 ms / 150 ms) or
+    /// the holder's own release. On a loaded CI runner the contention budget can be reported late,
+    /// and then the holder wins and the test fails. With no timeout the gate stays held for the
+    /// whole test, so a late report is still an abandoned report and the outcome no longer depends
+    /// on timing at all. Every caller sets <c>Release</c> in a <c>finally</c>, and the thread is a
+    /// background thread, so an unreleased holder cannot keep the test process alive.
+    /// </para>
+    /// <para>
+    /// <b>The holder runs on its own thread, not on the thread pool.</b> The holder blocks for the
+    /// whole test. A pool item that blocks occupies a pool thread, and the pool adds threads only
+    /// slowly, so several of these tests in parallel can leave the pool with no thread free to
+    /// start the next holder — which made even entering the gate a race against
+    /// <see cref="EventTimeout"/>. A dedicated thread always starts, and it returns the pool
+    /// thread to the work the gate's own timers need.
+    /// </para>
+    /// </remarks>
     private static (ManualResetEventSlim Release, Task Holder) HoldGate(LifecycleGate gate)
     {
         var entered = new ManualResetEventSlim(false);
         var release = new ManualResetEventSlim(false);
+        var holder = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var holder = Task.Run(() => gate.Run(
-            () =>
+        var thread = new Thread(() =>
+        {
+            try
             {
-                entered.Set();
-                release.Wait(EventTimeout);
-            },
-            LifecycleContention.Abandon));
+                gate.Run(
+                    () =>
+                    {
+                        entered.Set();
+                        release.Wait();
+                    },
+                    LifecycleContention.Abandon);
+                holder.SetResult();
+            }
+            catch (Exception ex)
+            {
+                holder.SetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "lifecycle-gate-holder",
+        };
+        thread.Start();
 
-        Assert.True(entered.Wait(EventTimeout), "the holder never entered the gate");
-        return (release, holder);
+        if (!entered.Wait(EventTimeout))
+        {
+            // Release first. The holder waits without a timeout, so abandoning it here without
+            // releasing would leak a blocked thread for the rest of the test run.
+            release.Set();
+            Assert.Fail("the holder never entered the gate");
+        }
+
+        return (release, holder.Task);
     }
 
     #region Construction
