@@ -116,6 +116,7 @@ public class LanChipInfoProviderExtensionsTests
         Assert.False(result.Succeeded);
         Assert.True(result.WasLanNotInitialized);
         Assert.Equal(1, device.LanApplySentCount);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
     }
 
     [Fact]
@@ -133,6 +134,7 @@ public class LanChipInfoProviderExtensionsTests
 
         Assert.False(result.Succeeded);
         Assert.False(result.WasLanNotInitialized);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
     }
 
     [Fact]
@@ -228,10 +230,14 @@ public class LanChipInfoProviderExtensionsTests
         await cts.CancelAsync();
         var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+        var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => device.GetLanChipInfoWithRetryAsync(FastOptions(), cancellationToken: cts.Token));
 
+        // The token the probe surfaces is the linked one, so identity is not the assertion —
+        // what matters is that it reports cancellation, and that nothing was queried.
+        Assert.True(ex.CancellationToken.IsCancellationRequested);
         Assert.Equal(0, device.GetLanChipInfoCallCount);
+        Assert.Equal(0, device.LanApplySentCount);
     }
 
     [Fact]
@@ -410,8 +416,31 @@ public class LanChipInfoProviderExtensionsTests
     {
         ILanChipInfoProvider? provider = null;
 
-        await Assert.ThrowsAsync<ArgumentNullException>(
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(
             () => provider!.GetLanChipInfoWithRetryAsync());
+
+        Assert.Equal("provider", ex.ParamName);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WithTheRecordDefaultAttemptCount_QueriesExactlyThatManyTimes()
+    {
+        // Pins the retry budget's attempt count to the record's own default rather than to a
+        // literal, so a change to the shipped default cannot slip past this file. The delay and
+        // the ceiling are overridden to keep the test fast; the attempt count is not.
+        var defaultAttempts = new LanChipInfoRetryOptions().MaxAttempts;
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new LanChipInfoRetryOptions
+        {
+            RetryDelay = TimeSpan.FromMilliseconds(5),
+            TotalTimeout = TimeSpan.FromSeconds(30),
+        };
+
+        var result = await device.GetLanChipInfoWithRetryAsync(options);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(3, defaultAttempts);
+        Assert.Equal(defaultAttempts, device.GetLanChipInfoCallCount);
     }
 
     /// <summary>
