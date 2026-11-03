@@ -49,19 +49,38 @@ internal sealed class Pic32BootloaderSession
     /// records, the CRC regions used by the post-programming verify pass and the total byte count.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Everything this method decides, it decides before the flow can erase the device. That is
     /// the point of it: the flow erases the application flash first and programs second, so an
     /// image refused any later than here costs the board its firmware.
+    /// </para>
+    /// <para>
+    /// Two separate conditions are checked here, and both have to hold. An image that programs no
+    /// flash byte at all is refused, because erasing the board to write nothing leaves it with no
+    /// application (#838). And a record that cannot be framed inside one HID OUT report is
+    /// refused: a PROGRAM_FLASH frame has to fit one report, and DLE escaping can take a legal
+    /// 32-byte HEX record past that length; the transport then refuses the write during
+    /// programming, with the application flash already erased (#840). So the records are re-packed
+    /// to fit here, and an image that still cannot fit is refused here, while the device is whole.
+    /// </para>
     /// </remarks>
     internal (IReadOnlyList<byte[]> HexRecords, IReadOnlyList<FlashCrcRegion> CrcRegions, long TotalBytes)
         PrepareHexImage(string[] hexLines)
     {
-        var hexRecords = _bootloaderProtocol.ParseHexFile(hexLines);
+        var parsedRecords = _bootloaderProtocol.ParseHexFile(hexLines);
 
         // Count the bytes the device will program, not the bytes the records are made of. An
         // end-of-file record is 5 bytes long and programs nothing, so a file holding only
-        // non-data records has a byte total above zero and nothing to write (#838).
-        Pic32BootloaderImageContent.EnsureImageHasDataToProgram(hexRecords);
+        // non-data records has a byte total above zero and nothing to write (#838). Asked of the
+        // parsed records, before the re-packing below, so the count the refusal reports is the
+        // count the file itself parsed to.
+        Pic32BootloaderImageContent.EnsureImageHasDataToProgram(parsedRecords);
+
+        // Split any record whose escaped frame could outgrow one HID report, then confirm that
+        // nothing is left over. Same bytes, same addresses — only the records they arrive in
+        // change. Both steps run before any device I/O.
+        var hexRecords = Pic32BootloaderFrameBudget.FitRecordsToOneReport(parsedRecords);
+        Pic32BootloaderFrameBudget.EnsureEveryRecordFitsOneReport(hexRecords);
 
         // Record bytes, which is what the Programming progress band counts out.
         var totalBytes = hexRecords.Sum(record => (long)record.Length);
@@ -131,6 +150,10 @@ internal sealed class Pic32BootloaderSession
     /// Polls HID enumeration until a bootloader matching the requested target appears. Bounded by
     /// the caller's state timeout.
     /// </summary>
+    /// <exception cref="AmbiguousBootloaderTargetException">
+    /// No target was requested and more than one bootloader device is present, so the board to
+    /// update cannot be identified (#837).
+    /// </exception>
     internal async Task<HidDeviceInfo> WaitForBootloaderDeviceAsync(
         string? targetDevicePath,
         string? targetLocationKey,
@@ -170,8 +193,7 @@ internal sealed class Pic32BootloaderSession
             // location key was requested, resolve each candidate's physical-location key and match
             // on that — this is what lets a caller target the bootloader a device rebooted INTO,
             // before its device path exists, using the location it observed while the device was
-            // still in serial/app mode. Otherwise take the first match, preserving the
-            // single-device behavior.
+            // still in serial/app mode. With no target at all, see SelectUntargeted below.
             // Ordinal (case-sensitive): a device path is an OS identifier and, in this flow, comes from
             // the same in-process HID enumeration (via IHidPlatform) the caller used to obtain targetDevicePath.
             var match = targetDevicePath != null
@@ -183,7 +205,7 @@ internal sealed class Pic32BootloaderSession
                             ResolveLocationCached(d.DevicePath, locationCache),
                             targetLocationKey,
                             StringComparison.Ordinal))
-                    : devices.FirstOrDefault();
+                    : SelectUntargeted(devices);
             if (match != null)
             {
                 return match;
@@ -191,6 +213,33 @@ internal sealed class Pic32BootloaderSession
 
             await Task.Delay(Options.PollInterval, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Chooses the bootloader for a run that named no target: the single candidate when there is
+    /// one, nothing while none has enumerated yet, and a refusal when several are present.
+    /// </summary>
+    /// <remarks>
+    /// #837. A bootloader device carries no serial number, so several of them are
+    /// indistinguishable. Taking the first one erases whichever board the OS happened to list
+    /// first, which can be a board the caller never meant to touch — a board left in bootloader
+    /// mode by an earlier failed update, or a bootloader-only board. Erasing flash cannot be
+    /// undone, so an ambiguous run stops instead of guessing. The caller resolves it by naming the
+    /// board (device path or USB location key). One candidate is still accepted, because that is
+    /// the ordinary single-board update and it is not ambiguous.
+    /// </remarks>
+    /// <exception cref="AmbiguousBootloaderTargetException">
+    /// More than one bootloader device is present and no target was requested.
+    /// </exception>
+    private static HidDeviceInfo? SelectUntargeted(IReadOnlyList<HidDeviceInfo> devices)
+    {
+        if (devices.Count > 1)
+        {
+            throw new AmbiguousBootloaderTargetException(
+                devices.Select(d => d.DevicePath).ToArray());
+        }
+
+        return devices.Count == 1 ? devices[0] : null;
     }
 
     private string? ResolveLocationCached(string devicePath, Dictionary<string, string?> cache)
@@ -205,10 +254,22 @@ internal sealed class Pic32BootloaderSession
         return resolved;
     }
 
+    /// <summary>
+    /// Opens the HID handle on <paramref name="bootloaderDevice"/>, the board
+    /// <see cref="WaitForBootloaderDeviceAsync"/> selected, with the configured transient retry.
+    /// </summary>
+    /// <remarks>
+    /// #837. The connect always addresses the selected board by its device path. It never asks the
+    /// transport for a VID/PID first-match, not even when the caller named no target.
+    /// <see cref="IHidTransport.ConnectAsync(int,int,string?,CancellationToken)"/> reads HID
+    /// enumeration again and opens its own first match, and a bootloader advertises no serial
+    /// number to narrow that search. A second board entering bootloader mode between the search
+    /// and this connect would therefore hand back a different board, and the erase that follows
+    /// would destroy it. Addressing the selected path cannot pick the wrong board: if that exact
+    /// board is gone, the open fails and the run stops, which is the safe outcome.
+    /// </remarks>
     internal async Task ConnectWithRetryAsync(
         HidDeviceInfo bootloaderDevice,
-        string? targetDevicePath,
-        string? targetLocationKey,
         CancellationToken cancellationToken)
     {
         await _context.ExecuteWithRetryAsync(
@@ -222,24 +283,9 @@ internal sealed class Pic32BootloaderSession
                     await _hidTransport.DisconnectAsync().ConfigureAwait(false);
                 }
 
-                // When a specific device was requested (by path or by location, several identical
-                // bootloaders present), connect to that exact device by path — bootloaderDevice was
-                // already matched on the requested criterion in WaitForBootloaderDeviceAsync.
-                // Otherwise fall back to VID/PID(+serial) first-match for the single-device case.
-                if (targetDevicePath != null || targetLocationKey != null)
-                {
-                    await _hidTransport
-                        .ConnectByPathAsync(bootloaderDevice.DevicePath, ct)
-                        .ConfigureAwait(false);
-                }
-                else
-                {
-                    await _hidTransport.ConnectAsync(
-                        Options.BootloaderVendorId,
-                        Options.BootloaderProductId,
-                        bootloaderDevice.SerialNumber,
-                        ct).ConfigureAwait(false);
-                }
+                await _hidTransport
+                    .ConnectByPathAsync(bootloaderDevice.DevicePath, ct)
+                    .ConfigureAwait(false);
             },
             ex => ex is IOException or TimeoutException or InvalidOperationException,
             cancellationToken).ConfigureAwait(false);

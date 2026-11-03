@@ -6,6 +6,17 @@ namespace Daqifi.Core.Firmware;
 /// <summary>
 /// Represents a parsed firmware version with semantic versioning and pre-release support.
 /// </summary>
+/// <remarks>
+/// Equality is the same ranking <see cref="CompareTo"/> applies, not a string match on
+/// <see cref="PreLabel"/>. A pre-release label has aliases — <c>b</c> and <c>beta</c> name one
+/// label, as do <c>rc</c> and <c>releasecandidate</c> — and the alias is also case-insensitive,
+/// so <c>3.2.0b1</c>, <c>3.2.0beta1</c> and <c>3.2.0B1</c> are one version: they are equal, they
+/// have the same hash code, and they collapse to a single entry in a
+/// <see cref="System.Collections.Generic.HashSet{T}"/>, a dictionary key or
+/// <c>Distinct()</c>. A label the type does not recognize carries no rank of its own, so two
+/// unrecognized labels with the same number are equal too. <see cref="PreLabel"/> and
+/// <see cref="ToString"/> still report the raw text the device sent.
+/// </remarks>
 public readonly record struct FirmwareVersion(
     int Major,
     int Minor,
@@ -42,6 +53,25 @@ public readonly record struct FirmwareVersion(
         if (thisRank != otherRank) return thisRank.CompareTo(otherRank);
         return PreNumber.CompareTo(other.PreNumber);
     }
+
+    /// <summary>
+    /// Compares two versions by the same ranked key <see cref="CompareTo"/> uses, so a zero
+    /// <see cref="CompareTo"/> result always means the two versions are equal. The compiler-
+    /// generated equality would instead match <see cref="PreLabel"/> as a raw string, which
+    /// made two spellings of one label (<c>3.2.0b1</c> and <c>3.2.0beta1</c>) unequal while
+    /// <see cref="CompareTo"/> ranked them the same.
+    /// </summary>
+    /// <param name="other">The version to compare against.</param>
+    /// <returns><c>true</c> when both versions name the same release.</returns>
+    public bool Equals(FirmwareVersion other) => CompareTo(other) == 0;
+
+    /// <summary>
+    /// Hashes the same ranked key <see cref="Equals(FirmwareVersion)"/> compares, so every
+    /// spelling of one label hashes alike.
+    /// </summary>
+    /// <returns>A hash code consistent with <see cref="Equals(FirmwareVersion)"/>.</returns>
+    public override int GetHashCode() =>
+        HashCode.Combine(Major, Minor, Patch, GetPrecedenceRank(PreLabel), PreNumber);
 
     /// <summary>
     /// Attempts to parse a version string (e.g. "v3.2.0", "3.2.0b2", "v1.0.0rc1").

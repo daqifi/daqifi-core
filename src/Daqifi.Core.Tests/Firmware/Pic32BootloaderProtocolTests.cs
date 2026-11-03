@@ -46,30 +46,33 @@ public class Pic32BootloaderProtocolTests
     [Fact]
     public void DecodeVersionResponse_DelegatesToConsumer()
     {
-        var data = new byte[] { 0x01, 0x10, 0x01, 0x02, 0x05 };
+        var data = FrameResponse([0x01, 0x02, 0x05]);
         var expected = Pic32BootloaderMessageConsumer.DecodeVersionResponse(data);
         var result = _protocol.DecodeVersionResponse(data);
 
+        Assert.Equal("2.5", expected);
         Assert.Equal(expected, result);
     }
 
     [Fact]
     public void DecodeProgramFlashResponse_DelegatesToConsumer()
     {
-        var data = new byte[] { 0x01, 0x03 };
+        var data = FrameResponse([0x03]);
         var expected = Pic32BootloaderMessageConsumer.DecodeProgramFlashResponse(data);
         var result = _protocol.DecodeProgramFlashResponse(data);
 
+        Assert.True(expected);
         Assert.Equal(expected, result);
     }
 
     [Fact]
     public void DecodeEraseFlashResponse_DelegatesToConsumer()
     {
-        var data = new byte[] { 0x01, 0x02 };
+        var data = FrameResponse([0x02]);
         var expected = Pic32BootloaderMessageConsumer.DecodeEraseFlashResponse(data);
         var result = _protocol.DecodeEraseFlashResponse(data);
 
+        Assert.True(expected);
         Assert.Equal(expected, result);
     }
 
@@ -218,13 +221,20 @@ public class Pic32BootloaderProtocolTests
         Assert.Empty(regions);
     }
 
-    private static byte[] FrameReadCrcResponse(ushort flashCrc)
+    private static byte[] FrameReadCrcResponse(ushort flashCrc) =>
+        FrameResponse([0x04, (byte)(flashCrc & 0xFF), (byte)(flashCrc >> 8)]);
+
+    /// <summary>
+    /// Frames a response the way the firmware does: a CRC-16 over the content, then SOH/EOT
+    /// framing with DLE escaping. The decoders reject anything else, so a delegation test has to
+    /// hand them a real frame to be delegating a real answer.
+    /// </summary>
+    private static byte[] FrameResponse(byte[] content)
     {
         const byte soh = 0x01;
         const byte eot = 0x04;
         const byte dle = 0x10;
 
-        byte[] content = [0x04, (byte)(flashCrc & 0xFF), (byte)(flashCrc >> 8)];
         var frameCrc = new Crc16(content).Crc;
         var body = new List<byte>(content) { (byte)(frameCrc & 0xFF), (byte)(frameCrc >> 8) };
 

@@ -35,6 +35,12 @@ public interface ISdCardOperations
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>A task that represents the asynchronous operation, containing the list of files.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
+    /// <exception cref="SdCardBusyException">
+    /// Thrown when a logging session is running (<see cref="IsLoggingToSdCard"/>). The device
+    /// cannot serve a listing from a card it is writing to, and taking the card off streaming to
+    /// read the directory would end the recording, so the listing refuses instead of changing the
+    /// session. Stop the session first (closes #851).
+    /// </exception>
     /// <exception cref="SdCardNotPresentException">Thrown when no SD card is installed in the device.</exception>
     /// <exception cref="SdCardFilesystemException">Thrown when the SD card filesystem cannot satisfy the request (e.g. corrupt card, unreadable directory).</exception>
     /// <exception cref="SdCardOperationException">Thrown when the device returned an SCPI error that did not match a more specific condition. An empty directory returns an empty list rather than throwing.</exception>
@@ -152,8 +158,16 @@ public interface ISdCardOperations
     Task<SdCardLoggingSession> StartSdCardLoggingSessionAsync(string? fileName = null, string? channelMask = null, SdCardLogFormat format = SdCardLogFormat.Protobuf, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Stops logging data to the SD card.
+    /// Stops logging data to the SD card and returns the device to the state a live stream
+    /// expects: the stream encoding back to protobuf, the stream interface back to USB, and the
+    /// LAN interface back on.
     /// </summary>
+    /// <remarks>
+    /// The encoding is one global firmware setting shared by every interface, so a JSON or CSV
+    /// session changed it for live streaming too. This call sets it back to protobuf, the format
+    /// the library establishes on every connection and the only one its frame decoder reads. A
+    /// caller that chose a different live format by hand must set it again (closes #851).
+    /// </remarks>
     /// <param name="cancellationToken">A cancellation token to observe while waiting for the task to complete.</param>
     /// <returns>A task that represents the asynchronous operation.</returns>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>

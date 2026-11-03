@@ -733,6 +733,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// The channel number is negative, or the voltage falls outside the channel's stated range.
     /// </exception>
     /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
     public void StageAnalogOutput(int channelNumber, double voltage)
         => _channelControl.StageAnalogOutput(channelNumber, voltage);
 
@@ -745,6 +746,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// Analog output is available on NQ3 hardware only.
     /// </remarks>
     /// <exception cref="DeviceNotConnectedException">The device is not connected.</exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
     public void LatchAnalogOutputs() => _channelControl.LatchAnalogOutputs();
 
     /// <summary>
@@ -765,6 +767,7 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <exception cref="InvalidOperationException">
     /// The device rejected the query or answered with something that is not a voltage.
     /// </exception>
+    /// <exception cref="FeatureNotSupportedException">The known board does not support analog output.</exception>
     public Task<double> GetAnalogOutputAsync(int channelNumber, CancellationToken cancellationToken = default)
         => _channelControl.GetAnalogOutputAsync(channelNumber, cancellationToken);
 

@@ -232,6 +232,26 @@ public class SdCardOperationsTests
     }
 
     [Fact]
+    public async Task GetSdCardFilesAsync_WhenLogging_ThrowsSdCardBusyException()
+    {
+        // #851 (a): a listing used to stop the stream and send SD:ENAble 0, which ends the
+        // recording on the card. Listing is a read, so it now refuses while a session runs, the
+        // same as the sibling operations do.
+        var device = new TestableSdCardStreamingDevice("TestDevice");
+        device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
+        device.Connect();
+        await device.StartSdCardLoggingAsync("test.bin");
+        device.SentMessages.Clear();
+
+        await Assert.ThrowsAsync<SdCardBusyException>(
+            () => device.GetSdCardFilesAsync());
+
+        // The defect was in the commands, so that is what this asserts: none were sent.
+        Assert.Empty(device.SentMessages);
+        Assert.True(device.IsLoggingToSdCard);
+    }
+
+    [Fact]
     public async Task GetSdCardFilesAsync_HonorsCancellationDuringSettleDelay()
     {
         // Regression for #221: the SD interface settle wait used Thread.Sleep,
@@ -425,11 +445,12 @@ public class SdCardOperationsTests
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Equal(4, sentCommands.Count);
+        Assert.Equal(5, sentCommands.Count);
         Assert.Equal("SYSTem:StopStreamData", sentCommands[0]);
-        Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[1]);
-        Assert.Equal("SYSTem:STReam:INTerface 0", sentCommands[2]); // Restore USB
-        Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[3]); // Re-enable LAN
+        Assert.Equal("SYSTem:STReam:FORmat 0", sentCommands[1]); // Restore protobuf (#851)
+        Assert.Equal("SYSTem:STORage:SD:ENAble 0", sentCommands[2]);
+        Assert.Equal("SYSTem:STReam:INTerface 0", sentCommands[3]); // Restore USB
+        Assert.Equal("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands[4]); // Re-enable LAN
     }
 
     [Fact]
@@ -2220,7 +2241,16 @@ public class SdCardOperationsTests
         await device.StopSdCardLoggingAsync();
 
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
-        Assert.Equal(new[] { "SYSTem:StopStreamData", "SYSTem:STORage:SD:ENAble 0" }, sentCommands);
+        Assert.Equal(
+            new[]
+            {
+                "SYSTem:StopStreamData",
+                // The encoding is one global firmware setting, so the restore runs on every
+                // transport (#851) — unlike LAN:ENAbled 1, which is USB only.
+                "SYSTem:STReam:FORmat 0",
+                "SYSTem:STORage:SD:ENAble 0",
+            },
+            sentCommands);
     }
 
     #endregion

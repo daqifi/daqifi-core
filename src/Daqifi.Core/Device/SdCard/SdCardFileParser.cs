@@ -388,42 +388,52 @@ public sealed class SdCardFileParser
                     ? enumerator.Current
                     : null;
 
-                // Skip non-stream messages (no analog and no digital data)
-                if (!HasStreamPayload(msg))
+                // Skip non-stream messages (no analog and no digital data). The same reading
+                // also seeds the merge below with the kinds this entry already holds.
+                var mergedKinds = PayloadKindsOf(msg);
+                if (mergedKinds == StreamPayloadKinds.None)
                 {
                     continue;
                 }
 
-                // Merge consecutive messages at the same timestamp into a single entry.
-                // Device firmware often sends separate analog and digital messages per sample
-                // period with the same MsgTimeStamp. A message without stream payload ends the
-                // merge without being consumed, so the loop above skips it on the next turn.
-                while (current != null &&
-                       current.MsgTimeStamp == msg.MsgTimeStamp &&
-                       HasStreamPayload(current))
+                // Merge consecutive messages at the same timestamp into a single entry, but only
+                // while each one adds a payload kind the entry does not have yet. Device firmware
+                // often sends an analog message and a digital message per sample period with the
+                // same MsgTimeStamp; those describe one instant, so they become one entry. A
+                // second message of a kind the entry already holds is a distinct sample, so it
+                // ends the merge instead of overwriting what is there (issue #850). A message
+                // that ends the merge is not consumed, so the loop above handles it next turn.
+                while (current != null && current.MsgTimeStamp == msg.MsgTimeStamp)
                 {
+                    var nextKinds = PayloadKindsOf(current);
+                    if (nextKinds == StreamPayloadKinds.None || (nextKinds & mergedKinds) != 0)
+                    {
+                        break;
+                    }
+
                     var next = current;
                     current = await enumerator.MoveNextAsync().ConfigureAwait(false)
                         ? enumerator.Current
                         : null;
+                    mergedKinds |= nextKinds;
 
-                    // Take analog data from whichever message has it
-                    if (msg.AnalogInDataFloat.Count == 0 && next.AnalogInDataFloat.Count > 0)
+                    // Take the kinds this message adds. The guard above means every assignment
+                    // here lands on an empty field, so nothing can be overwritten.
+                    if (next.AnalogInDataFloat.Count > 0)
                     {
                         msg.AnalogInDataFloat.AddRange(next.AnalogInDataFloat);
                     }
-                    else if (msg.AnalogInData.Count == 0 && next.AnalogInData.Count > 0)
+                    else if (next.AnalogInData.Count > 0)
                     {
                         msg.AnalogInData.AddRange(next.AnalogInData);
                     }
 
-                    // Take digital data from whichever message has it
-                    if (msg.DigitalData.Length == 0 && next.DigitalData.Length > 0)
+                    if (next.DigitalData.Length > 0)
                     {
                         msg.DigitalData = next.DigitalData;
                     }
 
-                    // Take per-channel timestamps from whichever message has them
+                    // Per-channel timestamps ride along with the analog payload they describe.
                     if (msg.AnalogInDataTs.Count == 0 && next.AnalogInDataTs.Count > 0)
                     {
                         msg.AnalogInDataTs.AddRange(next.AnalogInDataTs);
@@ -485,14 +495,52 @@ public sealed class SdCardFileParser
 
 
     /// <summary>
+    /// The kinds of sample payload a stream message can carry. Firmware splits one sample period
+    /// across one message per kind, so the kinds are what decides whether two messages that share
+    /// a timestamp describe one instant or two separate samples.
+    /// </summary>
+    [Flags]
+    private enum StreamPayloadKinds
+    {
+        /// <summary>No sample payload: the message is a status or configuration message.</summary>
+        None = 0,
+
+        /// <summary>
+        /// Analog channel readings, as floats or as raw ADC counts. One kind, not two: a log
+        /// reports a sample's analog values in one form or the other, and the decoder reads only
+        /// the float form when both are present.
+        /// </summary>
+        Analog = 1,
+
+        /// <summary>Digital port state.</summary>
+        Digital = 2,
+    }
+
+    /// <summary>
+    /// Reports which sample payload kinds a message carries.
+    /// </summary>
+    private static StreamPayloadKinds PayloadKindsOf(DaqifiOutMessage message)
+    {
+        var kinds = StreamPayloadKinds.None;
+
+        if (message.AnalogInDataFloat.Count > 0 || message.AnalogInData.Count > 0)
+        {
+            kinds |= StreamPayloadKinds.Analog;
+        }
+
+        if (message.DigitalData.Length > 0)
+        {
+            kinds |= StreamPayloadKinds.Digital;
+        }
+
+        return kinds;
+    }
+
+    /// <summary>
     /// Determines whether a message contains stream sample payload fields.
     /// </summary>
-    private static bool HasStreamPayload(DaqifiOutMessage message)
-    {
-        return message.AnalogInData.Count > 0 ||
-               message.AnalogInDataFloat.Count > 0 ||
-               message.DigitalData.Length > 0;
-    }
+    private static bool HasStreamPayload(DaqifiOutMessage message) =>
+        PayloadKindsOf(message) != StreamPayloadKinds.None;
 
     /// <summary>
     /// Collects the device configuration fields that firmware may embed in streaming data

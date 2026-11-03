@@ -521,6 +521,54 @@ public class DaqifiStreamingDeviceAnalogOutputTests
 
     #endregion
 
+    [Theory]
+    [InlineData(DeviceType.Nyquist1)]
+    [InlineData(DeviceType.Nyquist2)]
+    public async Task AnalogOutput_KnownUnsupportedBoard_ThrowsBeforeSending(DeviceType board)
+    {
+        using var device = new CapturingAnalogOutputDevice();
+        device.Connect();
+        device.Metadata.DeviceType = board;
+        device.SentCommands.Clear();
+
+        var setError = Assert.Throws<FeatureNotSupportedException>(() => device.SetAnalogOutput(0, 1.0));
+        Assert.Equal(DeviceFeature.AnalogOutput, setError.Feature);
+        Assert.Equal(board, setError.Board);
+        Assert.Empty(device.SentCommands);
+
+        await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.SetAnalogOutputAsync(0, 1.0));
+        Assert.Empty(device.SentCommands);
+
+        Assert.Throws<FeatureNotSupportedException>(() => device.StageAnalogOutput(0, 1.0));
+        Assert.Empty(device.SentCommands);
+
+        Assert.Throws<FeatureNotSupportedException>(() => device.LatchAnalogOutputs());
+        Assert.Empty(device.SentCommands);
+
+        await Assert.ThrowsAsync<FeatureNotSupportedException>(() => device.GetAnalogOutputAsync(0));
+        Assert.Empty(device.SentCommands);
+    }
+
+    [Theory]
+    [InlineData(DeviceType.Unknown)]
+    [InlineData(DeviceType.Nyquist3)]
+    public async Task AnalogOutput_WithoutChannelDocument_PreservesNumberedCommands(DeviceType board)
+    {
+        using var device = new CapturingAnalogOutputDevice();
+        device.Connect();
+        device.Metadata.DeviceType = board;
+        device.CannedTextResponse.Add("1.25");
+        device.SentCommands.Clear();
+
+        await device.SetAnalogOutputAsync(2, 1.25);
+        Assert.Equal(1.25, await device.GetAnalogOutputAsync(2));
+
+        Assert.Equal(
+            new[] { "SOURce:VOLTage:LEVel 2,1.25", "CONFigure:DAC:UPDATE", "SOURce:VOLTage:LEVel? 2" },
+            device.SentCommands);
+        Assert.Empty(OutputChannels(device));
+    }
+
     private static CapturingAnalogOutputDevice ConnectedDeviceWith(string capabilityJson)
     {
         Assert.True(CapabilityDocumentParser.TryParse(capabilityJson, out var document));
