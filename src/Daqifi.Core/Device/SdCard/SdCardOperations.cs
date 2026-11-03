@@ -241,6 +241,24 @@ internal sealed class SdCardOperations
     {
         _host.EnsureConnected();
 
+        // Refuse while a logging session is running, the same as the sibling operations above and
+        // below (storage query, delete, both downloads). Without this the listing ended the
+        // recording: it stops the stream, and its LAN restore sends SD:ENAble 0, which the
+        // firmware treats as a release of the card from streaming
+        // (SCPIStorageSD.c, Streaming_SdInterfaceReleased). The stream was then resumed, but no
+        // longer to the card, while IsLoggingToSdCard still reported true — a call that reads
+        // like a query silently threw away the rest of the capture (closes #851).
+        //
+        // Refusing is the only side-effect-free answer. Skipping the SD:ENAble pair does not make
+        // a listing safe: both branches of the firmware's SD:ENAble handler set the SD manager
+        // mode to NONE, which tears down a write session, and SD:LIST? is answered with -200
+        // while the manager is busy. So there is no command order that lists during a session
+        // without ending it.
+        if (_isLoggingToSdCard)
+        {
+            throw new SdCardBusyException(Array.Empty<string>());
+        }
+
         EnsureSdFileTransferSupportedOnTransport();
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -794,6 +812,25 @@ internal sealed class SdCardOperations
         // Defensive: always send stop command even if IsStreaming is stale (see issue #118)
         _host.Send(ScpiMessageProducer.StopStreaming);
         _host.IsStreaming = false;
+
+        // Put the stream encoding back to protobuf, the format the library runs live streaming in
+        // (DaqifiDevice.InitializeAsync sets it at connect time, and the frame decoder reads
+        // nothing else). StartSdCardLoggingSessionAsync sets SYSTem:STReam:FORmat to the session's
+        // log format, and the firmware holds ONE encoding for every interface
+        // (SCPIInterface.c, streaming.c), so a JSON or CSV session left live streaming emitting
+        // text that the protobuf consumer silently dropped until the next reconnect (closes #851).
+        //
+        // Protobuf rather than "whatever the format was before the session": the library keeps no
+        // record of the device's previous encoding, and it cannot read one back here — the query
+        // needs a text exchange, which the firmware refuses while the SD manager is still busy.
+        // Protobuf is not a guess, though: it is the format the library itself establishes on
+        // every connection, so for any session this library started it IS the format the session
+        // started from. A caller that chose a different live format by hand must set it again.
+        //
+        // Sent right after the stop and ahead of the bus teardown: it mirrors the position the
+        // start sends it from, and it is the one command here that applies on every transport,
+        // so it stays out of the USB-only block below.
+        _host.Send(ScpiMessageProducer.SetProtobufStreamFormat);
 
         _host.Send(ScpiMessageProducer.DisableStorageSd);
 

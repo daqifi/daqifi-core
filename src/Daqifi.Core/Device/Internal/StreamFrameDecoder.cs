@@ -1,5 +1,6 @@
 using Daqifi.Core.Channel;
 using Daqifi.Core.Communication.Messages;
+using Daqifi.Core.Firmware;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -66,6 +67,20 @@ internal sealed class StreamFrameDecoder
     /// shared across devices, so the key only needs to be stable within this instance.
     /// </summary>
     private const string StreamTimestampKey = "stream";
+
+    /// <summary>
+    /// The first firmware release that does not latch the last frame of a stopped session and
+    /// emit it into the next one: the firmware fix for that defect, daqifi-nyquist-firmware
+    /// #535, shipped in v3.6.0.
+    /// </summary>
+    /// <remarks>
+    /// Firmware v3.5.x still latches, and v3.5.0 is <see cref="DaqifiDevice.MinSupportedFirmware"/>
+    /// — so the defect sits inside the supported range and the first session of a connection has
+    /// to be guarded against it (issue #773). Below this version the guard that holds the first
+    /// frame is armed; from this version on it is not, because the frame it looks for cannot
+    /// arrive and the hold would delay every first sample by a sample period for nothing.
+    /// </remarks>
+    private static readonly FirmwareVersion FirstFirmwareWithoutFrameLatch = new(3, 6, 0, null, 0);
 
     private readonly IDeviceOperationHost _host;
 
@@ -194,8 +209,14 @@ internal sealed class StreamFrameDecoder
         Interlocked.Exchange(ref _decodeFailureCount, 0);
 
         // Re-arm the cross-session leftover guard against the counter value this session
-        // inherits, and at this session's rate — the window is measured in sample periods.
-        _frameGate.BeginSession(timestampFrequency, streamingFrequencyHz);
+        // inherits, and at this session's rate — the window is measured in sample periods. On
+        // the first session of this instance there is no counter value to inherit, so the gate
+        // holds the first frame and judges it against the next one instead — but only for the
+        // firmware that latches frames, because the hold costs a sample period.
+        _frameGate.BeginSession(
+            timestampFrequency,
+            streamingFrequencyHz,
+            validateFirstFramesWithoutReference: DeviceLatchesFramesAcrossSessions());
         Interlocked.Exchange(ref _discardedStreamFrameCount, 0);
     }
 
@@ -227,6 +248,12 @@ internal sealed class StreamFrameDecoder
             return;
         }
 
+        if (_host.IsStreaming && _frameGate.IsAwaitingFirstFramePair)
+        {
+            AdmitFirstFrameOfSession(message);
+            return;
+        }
+
         _frameGate.TrackFrame(message.MsgTimeStamp);
 
         // Only decode into channel samples while an app-driven stream is active. A stray frame
@@ -239,6 +266,57 @@ internal sealed class StreamFrameDecoder
 
         EmitStreamFrame(message);
     }
+
+    /// <summary>
+    /// Runs a frame of a session that began with no counter reference through the gate's
+    /// hold-and-compare guard, and acts on its verdict.
+    /// </summary>
+    /// <remarks>
+    /// Nothing reaches a consumer until the gate releases it, raw-frame consumers included: a
+    /// frame the device latched before the session began is as unusable to them as it is to the
+    /// decoded path (issue #425). The release delivers the held frame first, so it — not its
+    /// successor — anchors the session clock, exactly as it would have had the gate never held
+    /// it.
+    /// </remarks>
+    /// <param name="message">The frame that just arrived.</param>
+    private void AdmitFirstFrameOfSession(DaqifiOutMessage message)
+    {
+        switch (_frameGate.AdmitFirstFrameOfSession(message, out var heldFrame))
+        {
+            case StreamFrameAdmission.Hold:
+                return;
+
+            case StreamFrameAdmission.DiscardHeldFrame:
+                RaiseStreamFrameDiscarded(
+                    StreamFrameDiscardReason.StaleLeftoverFrame,
+                    heldFrame!,
+                    CountAnalogValues(heldFrame!),
+                    GetActiveAnalogChannels().Length);
+                return;
+
+            default: // StreamFrameAdmission.ReleaseHeldFrameThenThisOne
+                EmitStreamFrame(heldFrame!);
+                EmitStreamFrame(message);
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Whether this device's firmware is in the range that latches the last frame of a stopped
+    /// session and emits it into the next one (below
+    /// <see cref="FirstFirmwareWithoutFrameLatch"/>).
+    /// </summary>
+    /// <remarks>
+    /// A device that reports no parseable version is treated as fixed firmware and is not
+    /// guarded. That is the same version string
+    /// <see cref="DaqifiDevice.IsFirmwareVersionSupported"/> reads, and it reports false on an
+    /// unparseable version too, so a device whose version cannot be parsed is already outside
+    /// the supported contract; holding its first frame would buy it nothing and would cost a
+    /// sample period on every connection that has not reported a version yet.
+    /// </remarks>
+    private bool DeviceLatchesFramesAcrossSessions()
+        => FirmwareVersion.TryParse(_host.Metadata.FirmwareVersion, out var firmware)
+            && firmware < FirstFirmwareWithoutFrameLatch;
 
     /// <summary>
     /// Delivers a frame that has cleared <see cref="_frameGate"/>: re-raises it for raw-frame

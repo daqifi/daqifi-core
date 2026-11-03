@@ -40,11 +40,20 @@ public enum StreamFrameDiscardReason
     /// The frame belonged to the previous streaming session.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The device latches the final frame of a stopped session in its transmit path and emits it
     /// as the first frame of the next one (daqifi-nyquist-firmware #533). Its device-tick counter
     /// sits about one sample period after the last frame of the previous session rather than at
     /// the new session's start, so it would anchor the session clock to a time that never
     /// happened.
+    /// </para>
+    /// <para>
+    /// The latch survives a disconnect, so it can also reach the first session of a connection,
+    /// which has no earlier counter value to recognize it by. There the frame is recognized by
+    /// the gap to the frame after it instead, which holds the first sample of that session back
+    /// by one sample period. The firmware fix shipped in v3.6.0, so this happens only on a
+    /// device reporting firmware below that.
+    /// </para>
     /// </remarks>
     StaleLeftoverFrame,
 }

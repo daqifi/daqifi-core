@@ -287,6 +287,17 @@ public class IntelHexParser
         return BitConverter.ToUInt16(bytes, 0);
     }
 
+    /// <summary>
+    /// Tells whether a record puts any byte in the protected memory range.
+    /// </summary>
+    /// <remarks>
+    /// A data record carries its byte count bytes from its own address, and the bootloader
+    /// programs every one of them. The test is therefore an overlap of two address intervals,
+    /// not a test of the record's start address: a record that starts below
+    /// <see cref="_beginProtectedAddress" /> and runs into the range used to pass this test and
+    /// have its trailing bytes programmed into protected flash. The whole record is dropped
+    /// when any part of it overlaps.
+    /// </remarks>
     private bool IsProtectedHexRecord(byte[] hexRecord, ushort baseAddress)
     {
         var recordType = hexRecord[3];
@@ -295,8 +306,53 @@ public class IntelHexParser
             return false;
         }
 
-        var hexRecordAddress = ComputeFullAddress(hexRecord, baseAddress);
+        // ValidateRecordLength has already checked that the byte-count field agrees with the
+        // data actually present, so the count is the real length of the record's span.
+        uint dataLength = hexRecord[0];
 
-        return hexRecordAddress >= _beginProtectedAddress && hexRecordAddress <= _endProtectedAddress;
+        // A zero-length data record programs no byte, so it has no span to overlap. Judge it on
+        // its start address alone, which is the decision this parser has always made for it and
+        // which costs nothing either way, because such a record writes nothing wherever it lands.
+        var spanLength = dataLength == 0 ? 1u : dataLength;
+
+        var offset = ReadBigEndianUInt16(hexRecord, 1);
+        var pageBase = (uint)baseAddress << 16;
+        var recordAddress = ComputeFullAddress(hexRecord, baseAddress);
+
+        if (OverlapsProtectedRange(recordAddress, spanLength))
+        {
+            return true;
+        }
+
+        // An Intel HEX record offset is 16 bits wide, so a byte count that takes the record past
+        // the end of its own 64 KB page is malformed, and tools do not agree on what it means:
+        // some carry the data on linearly into the next page, which is the span tested above;
+        // some wrap it round to the bottom of the same page. Test the wrapped tail as well, so
+        // that neither reading can put bytes in the protected range unnoticed.
+        var bytesPastPage = offset + spanLength;
+        if (bytesPastPage > 0x10000)
+        {
+            return OverlapsProtectedRange(pageBase, bytesPastPage - 0x10000);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Tells whether the inclusive address interval of <paramref name="length" /> bytes starting
+    /// at <paramref name="start" /> overlaps the inclusive protected range. Both ends of the
+    /// protected range are inclusive, which is the convention the shipped default constants use.
+    /// </summary>
+    private bool OverlapsProtectedRange(uint start, uint length)
+    {
+        if (start > _endProtectedAddress)
+        {
+            return false;
+        }
+
+        // The interval's last address is start + length - 1, which can pass 0xFFFFFFFF for a
+        // record near the top of the address space. Ask instead whether the record is long
+        // enough to reach the start of the range, so that address is never formed.
+        return start >= _beginProtectedAddress || length - 1 >= _beginProtectedAddress - start;
     }
 }

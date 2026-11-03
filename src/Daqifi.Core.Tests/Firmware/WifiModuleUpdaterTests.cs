@@ -107,11 +107,15 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(options, runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        await RunUpdateAsync(
+            updater,
+            new FakeStreamingDevice("DAQiFi Device", serialPortName: "COM7"),
+            CreateFirmwareDirectory());
 
         Assert.NotNull(runner.LastRequest);
         Assert.Contains("/p COM42", runner.LastRequest!.Arguments, StringComparison.Ordinal);
         Assert.DoesNotContain("COM7", runner.LastRequest.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("DAQiFi Device", runner.LastRequest.Arguments, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -120,21 +124,79 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        // The label and the port are set apart on purpose. A double whose name equals its port
+        // cannot tell the two sources apart, so it passes whichever one the code reads — which is
+        // how issue #842 stayed hidden behind a test named for the port.
+        await RunUpdateAsync(
+            updater,
+            new FakeStreamingDevice("Nq1 on the bench", serialPortName: "COM7"),
+            CreateFirmwareDirectory());
 
         Assert.NotNull(runner.LastRequest);
         Assert.Contains("/p COM7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("Nq1 on the bench", runner.LastRequest.Arguments, StringComparison.Ordinal);
     }
 
+    // Issue #842. The device name is a display label: the factory fills it from
+    // DeviceConnectionOptions.DeviceName, whose default is "DAQiFi Device". Reading the port off
+    // it launched the flash tool with /p "DAQiFi Device", which the tool cannot open. This is the
+    // exact device every caller who never set a name has, so it is the case that has to hold.
     [Fact]
-    public async Task RunUpdate_WhenNoPortCanBeResolved_FailsRatherThanFlashingAnEmptyPort()
+    public async Task RunUpdate_WhenTheDeviceCarriesTheDefaultLabel_StillFlashesThroughItsRealPort()
     {
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
 
-        // No override, and a device that cannot name its own port.
+        var device = new FakeStreamingDevice(
+            new DeviceConnectionOptions().DeviceName,
+            serialPortName: "COM7");
+
+        // Guards the premise: the default really is a label, not a port.
+        Assert.Equal("DAQiFi Device", device.Name);
+
+        await RunUpdateAsync(updater, device, CreateFirmwareDirectory());
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Contains("/p COM7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("DAQiFi Device", runner.LastRequest.Arguments, StringComparison.Ordinal);
+    }
+
+    // The other half of #842: when no port is known, say so. Handing the tool the label instead
+    // bought a failure that named the wrong problem, so this must fail loudly and before the
+    // tool runs.
+    [Fact]
+    public async Task RunUpdate_WhenNoPortCanBeResolved_FailsLoudlyAndNeverRunsTheTool()
+    {
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        // A named device on no serial transport — a TCP connection, for instance.
+        var device = new FakeStreamingDevice("DAQiFi Device") { SerialPortName = null };
+
         var error = await Assert.ThrowsAsync<FirmwareUpdateException>(
-            () => RunUpdateAsync(updater, new FakeStreamingDevice(string.Empty), CreateFirmwareDirectory()));
+            () => RunUpdateAsync(updater, device, CreateFirmwareDirectory()));
+
+        var inner = Assert.IsType<InvalidOperationException>(error.InnerException);
+
+        // The message has to say what is missing and what the caller can do about it, and must
+        // not offer the device name as a port.
+        Assert.Contains("serial port", inner.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(nameof(FirmwareUpdateServiceOptions.WifiPortOverride), inner.Message, StringComparison.Ordinal);
+        Assert.Equal(0, runner.RunCount);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WhenTheDeviceReportsABlankPort_FailsTheSameWay()
+    {
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        // Whitespace is not a port either, and it is what an unquoted /p argument would swallow
+        // silently.
+        var device = new FakeStreamingDevice("DAQiFi Device") { SerialPortName = "   " };
+
+        var error = await Assert.ThrowsAsync<FirmwareUpdateException>(
+            () => RunUpdateAsync(updater, device, CreateFirmwareDirectory()));
 
         Assert.IsType<InvalidOperationException>(error.InnerException);
         Assert.Equal(0, runner.RunCount);
@@ -159,12 +221,13 @@ public class WifiModuleUpdaterTests : IDisposable
         await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Contains("/p \"COM 42\"", runner.LastRequest!.Arguments, StringComparison.Ordinal);
-        Assert.Contains($"/f \"{firmwareDirectory}\"", runner.LastRequest.Arguments, StringComparison.Ordinal);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, $"/p \"COM 42\" /f \"{firmwareDirectory}\" /w"),
+            runner.LastRequest!.Arguments);
     }
 
     [Fact]
-    public async Task RunUpdate_EscapesEmbeddedQuotesWithoutWrappingASpacelessArgument()
+    public async Task RunUpdate_WrapsAnArgumentThatHoldsAQuote()
     {
         var options = CreateFastOptions();
         options.WifiPortOverride = "CO\"M7";
@@ -172,10 +235,27 @@ public class WifiModuleUpdaterTests : IDisposable
         var runner = SucceedingRunner();
         var (updater, _) = CreateUpdater(options, runner);
 
-        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), CreateFirmwareDirectory());
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        if (OperatingSystem.IsWindows())
+        {
+            // The tool is a .cmd, so the line goes through cmd.exe, and a quote cannot be
+            // encoded there. The value is refused instead of mangled. See
+            // WincFlashCommandLineTests for the whole rule.
+            var error = await Assert.ThrowsAsync<FirmwareUpdateException>(
+                () => RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory));
+
+            Assert.IsType<InvalidOperationException>(error.InnerException);
+            Assert.Equal(0, runner.RunCount);
+            return;
+        }
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
 
         Assert.NotNull(runner.LastRequest);
-        Assert.Contains("/p CO\\\"M7", runner.LastRequest!.Arguments, StringComparison.Ordinal);
+        Assert.Equal(
+            "/p \"CO\\\"M7\" /d WINC1500 /k /e /i aio /w",
+            runner.LastRequest!.Arguments);
     }
 
     [Fact]
@@ -193,17 +273,72 @@ public class WifiModuleUpdaterTests : IDisposable
         if (OperatingSystem.IsWindows())
         {
             // A .cmd is not directly executable by Process.Start's usual path, so it goes
-            // through cmd.exe with the tool path itself quoted as the first argument.
+            // through cmd.exe. The outer quote pair is the point: /s strips exactly that pair,
+            // so the quotes around the tool path survive. Written out in full here, rather than
+            // through the helper, so the shape is pinned at this level too.
             Assert.Equal("cmd.exe", runner.LastRequest!.FileName);
-            Assert.StartsWith($"/c \"{toolPath}\"", runner.LastRequest.Arguments, StringComparison.Ordinal);
+            Assert.Equal(
+                $"/d /s /v:off /c \"\"{toolPath}\" /p COM7 /d WINC1500 /k /e /i aio /w\"",
+                runner.LastRequest.Arguments);
         }
         else
         {
             Assert.Equal(toolPath, runner.LastRequest!.FileName);
-            Assert.StartsWith("/p ", runner.LastRequest.Arguments, StringComparison.Ordinal);
+            Assert.Equal("/p COM7 /d WINC1500 /k /e /i aio /w", runner.LastRequest.Arguments);
         }
 
         Assert.Equal(firmwareDirectory, runner.LastRequest.WorkingDirectory);
+    }
+
+    // Two independent properties, kept in two sets of cases on purpose.
+    //
+    // WHICH value reaches /p is one property: the cases above —
+    // RunUpdate_PrefersThePortOverrideOverTheDeviceName and
+    // RunUpdate_WithoutAPortOverride_FlashesThroughTheDevicesOwnPort — own it, and issue #842
+    // rewrites them to set a device's display label apart from the port it sits on.
+    //
+    // WHAT the command line is, character for character, with that value already in it, is the
+    // other property, and these two cases own it (issue #844).
+    //
+    // They are apart because one file cannot hold both halves in one case body without each
+    // fix becoming the other fix's merge conflict: a resolution that keeps one body silently
+    // drops the other guard, and the suite still passes. The two cases below therefore name
+    // their double after its own port, which is all they need; nothing here says where the port
+    // came from.
+
+    [Fact]
+    public async Task RunUpdate_WithAPortOverride_BuildsTheWholeCommandLine()
+    {
+        var options = CreateFastOptions();
+        options.WifiPortOverride = "COM42";
+
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(options, runner);
+
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, "/p COM42 /d WINC1500 /k /e /i aio /w"),
+            runner.LastRequest!.Arguments);
+    }
+
+    [Fact]
+    public async Task RunUpdate_WithoutAPortOverride_BuildsTheWholeCommandLineAroundTheResolvedPort()
+    {
+        var runner = SucceedingRunner();
+        var (updater, _) = CreateUpdater(CreateFastOptions(), runner);
+
+        var firmwareDirectory = CreateFirmwareDirectory();
+
+        await RunUpdateAsync(updater, new FakeStreamingDevice("COM7"), firmwareDirectory);
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Equal(
+            ExpectedCommandLine(firmwareDirectory, "/p COM7 /d WINC1500 /k /e /i aio /w"),
+            runner.LastRequest!.Arguments);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -786,6 +921,29 @@ public class WifiModuleUpdaterTests : IDisposable
         LanChipInfoRetryDelay = TimeSpan.Zero,
         LanChipInfoTotalTimeout = TimeSpan.FromSeconds(10)
     };
+
+    /// <summary>
+    /// The whole <c>Arguments</c> string the updater is expected to produce for a tool found
+    /// under <paramref name="firmwareDirectory"/>, given the already-substituted
+    /// <paramref name="toolArguments"/>.
+    /// </summary>
+    /// <remarks>
+    /// Only the shell wrapper differs by platform; the substituted values do not. The wrapper's
+    /// exact shape is pinned on its own by
+    /// <c>RunUpdate_RunsACmdToolThroughTheWindowsShellAndAnythingElseDirectly</c> and,
+    /// exhaustively, by <c>WincFlashCommandLineTests</c>. What these cases are for is the value
+    /// substitution, which is why that half is written out literally by every caller.
+    /// </remarks>
+    private static string ExpectedCommandLine(string firmwareDirectory, string toolArguments)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return toolArguments;
+        }
+
+        var toolPath = Path.Combine(firmwareDirectory, "winc_flash_tool.cmd");
+        return $"/d /s /v:off /c \"\"{toolPath}\" {toolArguments}\"";
+    }
 
     private string CreateFirmwareDirectory(string? namePrefix = null)
     {

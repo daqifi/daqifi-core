@@ -34,6 +34,14 @@ namespace Daqifi.Core.Device.SdCard;
 /// <see cref="SdCardLogSession.Samples"/> throws
 /// <see cref="System.IO.InvalidDataException"/> at that row instead of guessing.
 /// </para>
+/// <para>
+/// The header names only the channels the recording had enabled, and it names them by number,
+/// so a file of channel 7 alone reads <c>ain7_ts,ain7_val</c>. Each column that holds a raw ADC
+/// code is therefore scaled with the calibration, port range, and internal scale of the channel
+/// its own header names, not of the channel sitting at its position. A column header that states
+/// no channel number fails the parse with an <see cref="InvalidDataException"/>, because scaling
+/// it by position would report a wrong voltage and say nothing about it.
+/// </para>
 /// </summary>
 public sealed class SdCardCsvFileParser
 {
@@ -47,6 +55,10 @@ public sealed class SdCardCsvFileParser
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="SdCardParseOptions.BufferSize"/> is not greater than zero.
+    /// </exception>
+    /// <exception cref="InvalidDataException">
+    /// An analog column header states no channel number, so the column cannot be matched to a
+    /// channel's calibration.
     /// </exception>
     /// <remarks>
     /// The session reads <paramref name="fileStream"/> lazily: keep the stream open and do not
@@ -83,6 +95,10 @@ public sealed class SdCardCsvFileParser
     /// <returns>An <see cref="SdCardLogSession"/> providing lazy access to sample data.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="SdCardParseOptions.BufferSize"/> is not greater than zero.
+    /// </exception>
+    /// <exception cref="InvalidDataException">
+    /// An analog column header states no channel number, so the column cannot be matched to a
+    /// channel's calibration.
     /// </exception>
     /// <remarks>
     /// The returned session opens its own read of the file each time
@@ -181,7 +197,14 @@ public sealed class SdCardCsvFileParser
     /// </summary>
     /// <param name="AnalogPairCount">Number of analog channel column pairs (ts + val).</param>
     /// <param name="HasDigitalPair">Whether the last column pair is a digital I/O pair (dio_ts, dio_val).</param>
-    private sealed record CsvColumnLayout(int AnalogPairCount, bool HasDigitalPair);
+    /// <param name="AnalogChannelIndices">
+    /// The channel number each analog column pair carries, read from the header name
+    /// (<c>ain7_ts</c> is channel 7). Empty when the file states no column header at all.
+    /// </param>
+    private sealed record CsvColumnLayout(
+        int AnalogPairCount,
+        bool HasDigitalPair,
+        IReadOnlyList<int> AnalogChannelIndices);
 
     /// <summary>
     /// The result of the header scan: everything the sample pass needs to know before it
@@ -215,6 +238,7 @@ public sealed class SdCardCsvFileParser
         var analogChannelCount = 0;
         var digitalChannelCount = 0;
         var hasDigitalPair = false;
+        var analogChannelIndices = new List<int>();
 
         var index = 0;
         var dataStartIndex = -1;
@@ -265,23 +289,34 @@ public sealed class SdCardCsvFileParser
                 if (!headerDone)
                 {
                     // Column header: ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val
-                    // Count channel pairs and identify digital columns
+                    // Count channel pairs, identify digital columns, and read the channel
+                    // number out of every analog column name. The firmware names only the
+                    // enabled channels, so a column's position is not its channel number.
                     var cols = line.Split(',');
                     var totalPairs = cols.Length / 2;
 
-                    // Check each pair to distinguish analog from digital
                     for (var p = 0; p < totalPairs; p++)
                     {
-                        var nameCol = cols[p * 2]; // e.g., "ain0_ts" or "dio_ts"
+                        // Trimmed once, so that a hand-edited file with a space after each
+                        // comma classifies its columns exactly as the firmware's own does.
+                        var nameCol = cols[p * 2].Trim(); // e.g., "ain0_ts" or "dio_ts"
                         if (nameCol.StartsWith("dio", StringComparison.OrdinalIgnoreCase))
                         {
                             hasDigitalPair = true;
                             digitalChannelCount = 1;
+                            continue;
                         }
-                        else
+
+                        if (!TryParseAnalogChannelIndex(nameCol, out var channelIndex))
                         {
-                            analogChannelCount++;
+                            throw new InvalidDataException(
+                                $"SD card CSV column header '{nameCol}' names no analog channel. " +
+                                "Expected 'ain<N>_ts', 'ch<N>_ts', or a 'dio' pair. Calibration is " +
+                                "applied per channel number, so this column cannot be scaled.");
                         }
+
+                        analogChannelCount++;
+                        analogChannelIndices.Add(channelIndex);
                     }
 
                     // Only the first column header states the layout; anything after it is
@@ -320,7 +355,54 @@ public sealed class SdCardCsvFileParser
             sawAnyLine,
             dataStartIndex,
             config,
-            new CsvColumnLayout(analogChannelCount, hasDigitalPair));
+            new CsvColumnLayout(analogChannelCount, hasDigitalPair, analogChannelIndices));
+    }
+
+    /// <summary>
+    /// Reads the channel number out of an analog column name: <c>ain7_ts</c> and <c>ch7_val</c>
+    /// are both channel 7. The firmware names only the enabled channels
+    /// (<c>csv_encoder.c</c>), so this number — not the column's position — says which
+    /// channel's calibration, port range, and internal scale the column needs.
+    /// </summary>
+    /// <param name="columnName">One column name from the header row.</param>
+    /// <param name="channelIndex">The channel number, when the name states one.</param>
+    /// <returns><c>true</c> when the name states a channel number; <c>false</c> otherwise.</returns>
+    private static bool TryParseAnalogChannelIndex(string columnName, out int channelIndex)
+    {
+        channelIndex = -1;
+
+        var name = columnName.Trim();
+
+        // Drop the "_ts" / "_val" suffix, so only the channel token is left.
+        var underscore = name.IndexOf('_');
+        var token = underscore >= 0 ? name[..underscore] : name;
+
+        int digitsStart;
+        if (token.StartsWith("ain", StringComparison.OrdinalIgnoreCase))
+        {
+            digitsStart = 3;
+        }
+        else if (token.StartsWith("ch", StringComparison.OrdinalIgnoreCase))
+        {
+            digitsStart = 2;
+        }
+        else
+        {
+            return false;
+        }
+
+        var digits = token[digitsStart..];
+
+        // NumberStyles.None rejects a sign, a decimal point, and surrounding space, so only a
+        // plain channel number gets through.
+        if (digits.Length == 0
+            || !int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return false;
+        }
+
+        channelIndex = parsed;
+        return true;
     }
 
     /// <summary>
@@ -402,11 +484,17 @@ public sealed class SdCardCsvFileParser
                 integerValueUnits,
                 line);
 
+            // Only a raw ADC code needs that conversion, and the conversion uses each column's
+            // own channel calibration, named by the header rather than implied by the column's
+            // position (#849).
             var analogValues = valueUnit switch
             {
                 SdCardAnalogValueUnit.Volts => rawAnalogValues,
                 SdCardAnalogValueUnit.Millivolts => SdCardAnalogValueUnitRule.MillivoltsToVolts(rawAnalogValues),
-                _ => SdCardAnalogScaling.ScaleRawAnalogValues(rawAnalogValues, config)
+                _ => SdCardAnalogScaling.ScaleRawAnalogValues(
+                    rawAnalogValues,
+                    config,
+                    columnLayout.AnalogChannelIndices)
             };
 
             // Reconstruct absolute timestamp using first channel timestamp
