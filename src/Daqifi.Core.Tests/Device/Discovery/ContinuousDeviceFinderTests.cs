@@ -480,16 +480,57 @@ public class ContinuousDeviceFinderTests
     [Fact]
     public void Reconcile_RefreshesMetadataForExistingDevice_WithoutRediscovering()
     {
+        // A metadata-only change raises NO event of any kind: not Discovered (the device is
+        // already known), not Lost (it is still there), not ScanError. The live set quietly
+        // carries the newer instance. This is half of what issue #725 is about — the other half
+        // is the timed-out pass below — so the assertions name every channel, not just the one
+        // the original version of this test checked.
         using var finder = NewFinder(new StubDeviceFinder());
         var discovered = new List<IDeviceInfo>();
+        var lost = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
         finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
 
-        finder.Reconcile(new[] { Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10")) });
-        finder.Reconcile(new[] { Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.20")) });
+        var first = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10"));
+        var renumbered = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.20"));
+
+        finder.Reconcile(new[] { first });
+        finder.Reconcile(new[] { renumbered });
 
         Assert.Single(discovered);
+        Assert.Empty(lost);
+        Assert.Empty(errors);
         Assert.Single(finder.Devices);
+        Assert.Same(renumbered, finder.Devices[0]);
         Assert.Equal(IPAddress.Parse("192.168.1.20"), finder.Devices[0].IPAddress);
+    }
+
+    [Fact]
+    public void Reconcile_APassThatRepeatsTheSameDeviceUnchanged_RaisesNothingAtAll()
+    {
+        // The quiet pass. A device that is simply still there produces no event, which is
+        // correct and is also why a consumer cannot tell this pass from one that never ran.
+        var device = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10"));
+        using var finder = NewFinder(new StubDeviceFinder());
+        var discovered = new List<IDeviceInfo>();
+        var lost = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+
+        finder.Reconcile(new[] { device });
+        discovered.Clear();
+
+        finder.Reconcile(new[] { device });
+        finder.Reconcile(new[] { device });
+
+        Assert.Empty(discovered);
+        Assert.Empty(lost);
+        Assert.Empty(errors);
+        Assert.Single(finder.Devices);
     }
 
     #endregion
@@ -839,6 +880,46 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
+    public async Task Start_WhenEveryLaterPassTimesOut_KeepsTheLiveSetAndRaisesNothing()
+    {
+        // The degraded pass. The first pass finds the device; every later pass runs out of its
+        // own PassTimeout and the finder answers with OperationCanceledException. The loop treats
+        // that as a skipped pass: the device is NOT missed (MissThreshold is 1 here, so a single
+        // counted miss would lose it), and it is NOT an error either.
+        //
+        // That is the behaviour issue #725 asks to keep and to make visible: with no event on any
+        // channel, a consumer watching this finder sees exactly what it sees during a healthy
+        // quiet pass, even though discovery has stopped working.
+        var device = Wifi("AA:BB:CC:DD:EE:01");
+        var inner = new TimingOutDeviceFinder(new[] { (IDeviceInfo)device });
+        using var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            MissThreshold = 1,
+            Interval = TimeSpan.FromMilliseconds(10),
+            PassTimeout = TimeSpan.FromMilliseconds(50)
+        });
+
+        var discovered = new List<IDeviceInfo>();
+        var lost = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => inner.PassesStarted >= 4,
+            () => $"the finder only started {inner.PassesStarted} passes; three timed-out passes were needed",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Single(discovered);
+        Assert.Empty(lost);
+        Assert.Empty(errors);
+        Assert.Contains(finder.Devices, d => ReferenceEquals(d, device));
+    }
+
+    [Fact]
     public async Task StopAsync_CancelsInFlightPass_WithoutWaitingForPassTimeout()
     {
         // PassTimeout is huge; if the in-flight pass were not cancellable, StopAsync would block
@@ -972,6 +1053,45 @@ public class ContinuousDeviceFinderTests
 
             return Task.FromResult<IEnumerable<IDeviceInfo>>(next);
         }
+    }
+
+    /// <summary>
+    /// Finder that answers one scripted pass and then never answers again: every later pass waits
+    /// on the pass token and throws <see cref="OperationCanceledException"/> when it fires. That
+    /// is what a finder which honours cancellation does when
+    /// <see cref="ContinuousDiscoveryOptions.PassTimeout"/> expires, so it is how a timed-out pass
+    /// is reproduced without a wall-clock sleep.
+    /// </summary>
+    private sealed class TimingOutDeviceFinder : IDeviceFinder
+    {
+        private readonly IReadOnlyList<IDeviceInfo> _firstPassResults;
+        private int _passesStarted;
+
+        public TimingOutDeviceFinder(IReadOnlyList<IDeviceInfo> firstPassResults)
+        {
+            _firstPassResults = firstPassResults;
+        }
+
+        public int PassesStarted => Volatile.Read(ref _passesStarted);
+
+#pragma warning disable CS0067 // Events are part of the interface but unused by this fake.
+        public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
+        public event EventHandler? DiscoveryCompleted;
+#pragma warning restore CS0067
+
+        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _passesStarted) == 1)
+            {
+                return _firstPassResults;
+            }
+
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return Array.Empty<IDeviceInfo>();
+        }
+
+        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+            => DiscoverAsync(CancellationToken.None);
     }
 
     /// <summary>
