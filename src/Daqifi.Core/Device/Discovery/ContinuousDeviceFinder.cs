@@ -280,6 +280,8 @@ public class ContinuousDeviceFinder : IDisposable
     /// adds and announces newly seen devices, refreshes metadata for devices still present,
     /// and increments the miss count for absent devices — removing and announcing those that
     /// have now missed <see cref="ContinuousDiscoveryOptions.MissThreshold"/> consecutive passes.
+    /// A pass whose results are only partial counts no misses at all, because absence from an
+    /// unfinished list says nothing about a device.
     /// Exposed internally so the dedup/stale logic can be unit-tested without timing.
     /// </summary>
     /// <param name="passResults">Devices observed in the most recent pass.</param>
@@ -288,6 +290,14 @@ public class ContinuousDeviceFinder : IDisposable
     /// report that. A tracked device on one of these has not gone away — the probe just could not
     /// reach it — so it keeps its place in the live set instead of counting a miss (issue #532).
     /// </param>
+    /// <param name="resultsMayBePartial">
+    /// <see langword="true"/> when the pass ended before it could finish, so
+    /// <paramref name="passResults"/> is only the part it managed to collect. Absence from a
+    /// partial list is no evidence that a device went away, so no miss is counted and no device
+    /// is removed: the devices this pass did not reach keep their place in the live set. The
+    /// devices it did find are still added and still refreshed, because seeing a device is
+    /// positive evidence whether or not the pass finished.
+    /// </param>
     /// <returns>
     /// What the pass changed, for <see cref="ContinuousDiscoveryOptions.Progress"/>. The counts
     /// are produced whether or not a sink is configured: they cost a few comparisons per known
@@ -295,7 +305,8 @@ public class ContinuousDeviceFinder : IDisposable
     /// </returns>
     internal DiscoveryPassChanges Reconcile(
         IReadOnlyCollection<IDeviceInfo> passResults,
-        IReadOnlyCollection<BusyPort>? busyPorts = null)
+        IReadOnlyCollection<BusyPort>? busyPorts = null,
+        bool resultsMayBePartial = false)
     {
         var newlyDiscovered = new List<IDeviceInfo>();
         var lost = new List<IDeviceInfo>();
@@ -344,8 +355,21 @@ public class ContinuousDeviceFinder : IDisposable
                 }
             }
 
+            // A pass that ran out of time can hand back only the part of the system it reached.
+            // SerialDeviceFinder does exactly that: it catches the pass cancellation and returns
+            // the port probes that had already finished. Treating absence from that list as a
+            // miss removes devices that are still plugged in, and at MissThreshold 1 it removes
+            // them on the first such pass. So a partial pass counts no misses at all: the
+            // devices it did not reach keep their place and their miss counts, and the next pass
+            // that actually finishes decides whether they are gone.
+            // Which tracked devices this pass is allowed to age toward removal: all of them after
+            // a pass that finished, none after a partial one.
+            var devicesToAge = resultsMayBePartial
+                ? Enumerable.Empty<KeyValuePair<string, TrackedDevice>>()
+                : _devices;
+
             List<string>? toRemove = null;
-            foreach (var pair in _devices)
+            foreach (var pair in devicesToAge)
             {
                 if (seen.Contains(pair.Key))
                 {
@@ -611,7 +635,11 @@ public class ContinuousDeviceFinder : IDisposable
                 {
                     changes = Reconcile(
                         results,
-                        (_finder as IBusyPortReporter)?.TakeBusyPortsFromLastPass());
+                        (_finder as IBusyPortReporter)?.TakeBusyPortsFromLastPass(),
+                        // A pass that did not end as Completed answered with whatever it had
+                        // collected when its time ran out, which is not the whole system. Its
+                        // list is evidence about the devices in it and about nothing else.
+                        resultsMayBePartial: outcome != DiscoveryPassOutcome.Completed);
                 }
                 catch (Exception ex)
                 {

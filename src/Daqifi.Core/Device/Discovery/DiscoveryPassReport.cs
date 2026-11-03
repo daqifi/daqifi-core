@@ -16,9 +16,11 @@ public enum DiscoveryPassOutcome
 
     /// <summary>
     /// The pass used up <see cref="ContinuousDiscoveryOptions.PassTimeout"/>. Whatever the pass
-    /// returned is incomplete, and a finder that answers cancellation by throwing returns
-    /// nothing at all — in which case the live set is left exactly as it was, rather than
-    /// counting every device as missing.
+    /// returned is incomplete: a finder that answers cancellation by throwing returns nothing at
+    /// all, and a finder that returns what it had collected returns only part of the system.
+    /// Either way no device is counted as missing and no device is removed, so a slow pass never
+    /// drops a device that is still connected. A device the pass did find is still added, and a
+    /// device it found with new metadata is still refreshed.
     /// </summary>
     TimedOut = 1,
 
@@ -55,7 +57,8 @@ public enum DiscoveryPassOutcome
 /// <param name="Outcome">How the pass ended.</param>
 /// <param name="DevicesSeen">
 /// How many distinct devices the pass returned, counted by identity, so a device the pass listed
-/// twice counts once. Zero for a pass that returned nothing and for a pass that did not finish.
+/// twice counts once. Zero for a pass that returned nothing. A pass that ran out of time reports
+/// the part it had collected, which can be fewer devices than are live.
 /// </param>
 /// <param name="NewDevices">
 /// How many of those devices were not in the live set before this pass. Each one also raised
@@ -69,13 +72,15 @@ public enum DiscoveryPassOutcome
 /// <param name="LostDevices">
 /// How many devices this pass removed from the live set, after
 /// <see cref="ContinuousDiscoveryOptions.MissThreshold"/> consecutive misses. Each one also
-/// raised <see cref="ContinuousDeviceFinder.DeviceLost"/>.
+/// raised <see cref="ContinuousDeviceFinder.DeviceLost"/>. Always zero for a pass that did not
+/// finish: a pass that ran out of time counts no miss, because a device missing from an
+/// unfinished list may simply be one the pass never reached.
 /// </param>
 /// <param name="LiveDeviceCount">
 /// How many devices the live set holds now that the pass is folded in: the size of
 /// <see cref="ContinuousDeviceFinder.Devices"/> at the moment of the report. A pass that did not
-/// finish still reports this, because the devices found earlier are still live — only the counts
-/// above are zero.
+/// finish still reports this, because the devices found earlier are still live. That is why it
+/// can exceed <see cref="DevicesSeen"/> on a timed-out pass.
 /// </param>
 /// <param name="NextPassDelay">
 /// The pause before the next pass starts, which is

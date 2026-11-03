@@ -615,6 +615,87 @@ public class ContinuousDeviceFinderTests
         Assert.Equal(2, discovered.Count);
     }
 
+    [Fact]
+    public void Reconcile_PartialResults_KeepsTheDevicesThePassDidNotSee()
+    {
+        // A pass that runs out of time can answer with only the part of the system it reached.
+        // SerialDeviceFinder does exactly that: it catches the pass cancellation and returns the
+        // port probes that had already finished. Absence from that list is not evidence that a
+        // device went away, so it must not count as a miss. With MissThreshold 1 the old
+        // behaviour removed a device that was still plugged in on the very first partial pass.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 1);
+        var lost = new List<IDeviceInfo>();
+        var discovered = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+
+        var reached = Serial("SN-1", port: "COM3");
+        var notReached = Serial("SN-2", port: "COM7");
+        finder.Reconcile(new[] { (IDeviceInfo)reached, notReached });
+
+        // The partial pass reached COM3 and a device on COM9 that is new, and never got to COM7.
+        var arrived = Serial("SN-3", port: "COM9");
+        var changes = finder.Reconcile(
+            new[] { (IDeviceInfo)reached, arrived },
+            busyPorts: null,
+            resultsMayBePartial: true);
+
+        Assert.Empty(lost);
+        Assert.Equal(0, changes.LostDevices);
+        Assert.Contains(finder.Devices, d => ReferenceEquals(d, notReached));
+
+        // What the pass did find is still taken at face value: seeing a device is positive
+        // evidence whether or not the pass finished.
+        Assert.Equal(2, changes.DevicesSeen);
+        Assert.Equal(1, changes.NewDevices);
+        Assert.Contains(discovered, d => ReferenceEquals(d, arrived));
+        Assert.Equal(3, finder.Devices.Count);
+    }
+
+    [Fact]
+    public void Reconcile_PartialResultsThenACompletePass_StillLosesADeviceThatIsGone()
+    {
+        // The partial pass holds a device; it does not make it immortal. The next pass that
+        // actually finishes decides, and a device absent from THAT list is lost as before.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 1);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        var device = Serial("SN-1", port: "COM3");
+        finder.Reconcile(new[] { (IDeviceInfo)device });
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), busyPorts: null, resultsMayBePartial: true);
+
+        Assert.Empty(lost);
+
+        var changes = finder.Reconcile(Array.Empty<IDeviceInfo>());
+
+        Assert.Single(lost);
+        Assert.Same(device, lost[0]);
+        Assert.Equal(1, changes.LostDevices);
+        Assert.Empty(finder.Devices);
+    }
+
+    [Fact]
+    public void Reconcile_PartialResults_DoesNotResetTheMissCountItSkipped()
+    {
+        // A partial pass neither counts a miss nor forgives the misses already counted. With
+        // MissThreshold 2, one real miss followed by a partial pass followed by one real miss is
+        // still two counted misses, so the device is lost on the second one.
+        using var finder = NewFinder(new StubDeviceFinder(), missThreshold: 2);
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Reconcile(new[] { (IDeviceInfo)Serial("SN-1", port: "COM3") });
+        finder.Reconcile(Array.Empty<IDeviceInfo>());                                     // miss 1
+        finder.Reconcile(Array.Empty<IDeviceInfo>(), null, resultsMayBePartial: true);    // not a miss
+        Assert.Empty(lost);
+
+        finder.Reconcile(Array.Empty<IDeviceInfo>());                                     // miss 2 -> lost
+
+        Assert.Single(lost);
+        Assert.Empty(finder.Devices);
+    }
+
     #endregion
 
     #region Reconcile: identity
@@ -1087,6 +1168,54 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
+    public async Task Start_WhenATimedOutPassAnswersWithPartOfTheSystem_KeepsTheRest()
+    {
+        // The same degraded run, but with the finder that answers a timeout by handing back what
+        // it had collected instead of throwing. SerialDeviceFinder is that finder: it catches the
+        // pass cancellation and returns the port probes that already finished, and
+        // AllTransportsDeviceFinder passes that through. The pass therefore arrives as a SHORT
+        // list of real devices, and the device the probe never reached must keep its place.
+        //
+        // MissThreshold is 1 here, so counting that device as a miss would drop a device that is
+        // still plugged in on the first slow pass.
+        var reached = Serial("SN-1", port: "COM3");
+        var notReached = Serial("SN-2", port: "COM7");
+        var progress = new RecordingPassProgress();
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.Finds(reached, notReached),
+            ScriptedPassFinder.TimesOutReturning(reached));
+
+        using var finder = NewReportingFinder(inner, progress);
+        var lost = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 3,
+            () => $"only {progress.Count} passes were reported",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Empty(lost);
+        Assert.Empty(errors);
+        Assert.Contains(finder.Devices, d => ReferenceEquals(d, notReached));
+        Assert.Equal(2, finder.Devices.Count);
+
+        Assert.Equal(
+            [
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 2, newDevices: 2, liveDeviceCount: 2),
+
+                // The pass saw one of the two devices and ran out of time. It is reported as
+                // TimedOut with one device seen and nothing lost, and both devices stay live.
+                Report(DiscoveryPassOutcome.TimedOut, devicesSeen: 1, liveDeviceCount: 2),
+                Report(DiscoveryPassOutcome.TimedOut, devicesSeen: 1, liveDeviceCount: 2),
+            ],
+            progress.Snapshot().Take(3));
+    }
+
+    [Fact]
     public async Task Start_WhenOnlyMetadataChanged_ReportsTheUpdateAndStillRaisesNoEvent()
     {
         // The report is additive, not a replacement: the metadata refresh is still silent on the
@@ -1471,6 +1600,26 @@ public class ContinuousDeviceFinderTests
             {
                 await Task.Delay(Timeout.Infinite, token);
                 return Array.Empty<IDeviceInfo>();
+            };
+
+        /// <summary>
+        /// A pass that never answers on its own and, when the pass timeout cancels it, returns
+        /// the part it had collected instead of throwing. That is what
+        /// <c>SerialDeviceFinder.DiscoverAsync(CancellationToken)</c> does: it catches the
+        /// cancellation and returns the port probes that already finished, so a timed-out pass
+        /// arrives as a short list of real devices rather than as an exception.
+        /// </summary>
+        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> TimesOutReturning(
+            params IDeviceInfo[] collectedSoFar)
+            => async token =>
+            {
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (token.Register(() => cancelled.TrySetResult(true)))
+                {
+                    await cancelled.Task.ConfigureAwait(false);
+                }
+
+                return collectedSoFar;
             };
 
         /// <summary>A pass that fails.</summary>
