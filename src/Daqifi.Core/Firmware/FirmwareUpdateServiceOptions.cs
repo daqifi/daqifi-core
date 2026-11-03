@@ -89,6 +89,13 @@ public sealed class FirmwareUpdateServiceOptions
     /// <see cref="FirmwareUpdateState.PreparingDevice"/> step, so a host that lengthens it past
     /// what is left of <see cref="PreparingDeviceTimeout"/> must raise that budget too. Set to
     /// <see cref="TimeSpan.Zero"/> to skip the wait (e.g. unit tests).
+    /// <para>
+    /// Failure recovery spends the same wait once more, and only when an update fails or is
+    /// canceled while this window is still open: the queued transition has to land before the
+    /// recovery <c>LAN:APPLY</c> goes out, or that apply enters the bridge instead of leaving it.
+    /// So a host that lengthens this option also lengthens the worst-case recovery by the same
+    /// amount.
+    /// </para>
     /// </summary>
     public TimeSpan PostLanBridgeEntryDelay { get; set; } = TimeSpan.FromSeconds(2);
 
