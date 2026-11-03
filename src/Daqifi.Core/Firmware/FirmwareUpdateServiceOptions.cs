@@ -85,8 +85,10 @@ public sealed class FirmwareUpdateServiceOptions
     /// WiFi-manager REINIT and bring the bridge up before the external WINC flash tool can find
     /// it. A board that cannot reach its access point defers that transition by up to its station
     /// retry backoff (about 30 seconds), so a host on such a board can lengthen this wait to stop
-    /// the flash tool starting before the bridge exists. Set to <see cref="TimeSpan.Zero"/> to
-    /// skip the wait (e.g. unit tests).
+    /// the flash tool starting before the bridge exists. The wait is spent inside the
+    /// <see cref="FirmwareUpdateState.PreparingDevice"/> step, so a host that lengthens it past
+    /// what is left of <see cref="PreparingDeviceTimeout"/> must raise that budget too. Set to
+    /// <see cref="TimeSpan.Zero"/> to skip the wait (e.g. unit tests).
     /// </summary>
     public TimeSpan PostLanBridgeEntryDelay { get; set; } = TimeSpan.FromSeconds(2);
 
