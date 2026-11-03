@@ -1,4 +1,29 @@
 #nullable enable
+Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
+Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.Completed = 0 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.Failed = 2 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.TimedOut = 1 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassReport
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Deconstruct(out Daqifi.Core.Device.Discovery.DiscoveryPassOutcome Outcome, out int DevicesSeen, out int NewDevices, out int MetadataUpdates, out int LostDevices, out int LiveDeviceCount, out System.TimeSpan NextPassDelay) -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DevicesSeen.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DevicesSeen.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DiscoveryPassReport() -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DiscoveryPassReport(Daqifi.Core.Device.Discovery.DiscoveryPassOutcome Outcome, int DevicesSeen, int NewDevices, int MetadataUpdates, int LostDevices, int LiveDeviceCount, System.TimeSpan NextPassDelay) -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(Daqifi.Core.Device.Discovery.DiscoveryPassReport other) -> bool
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LiveDeviceCount.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LiveDeviceCount.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LostDevices.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LostDevices.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.MetadataUpdates.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.MetadataUpdates.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NewDevices.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NewDevices.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.get -> System.TimeSpan
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.get -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.init -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder() -> void
 Daqifi.Core.Device.Discovery.MDnsDeviceFinder.MDnsDeviceFinder(string! serviceType) -> void
@@ -59,13 +84,18 @@ const Daqifi.Core.Firmware.IntelHexParser.DefaultBeginProtectedAddress = 4885053
 const Daqifi.Core.Firmware.IntelHexParser.DefaultEndProtectedAddress = 488636416 -> uint
 const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DefaultDeviceName = "Daqifi" -> string!
 const Daqifi.Core.Logging.Export.SdCardLogSampleSource.DigitalChannelName = "DIO" -> string!
+override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
 override Daqifi.Core.Device.Discovery.MDnsDeviceFinder.DiscoverAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Daqifi.Core.Device.Discovery.IDeviceInfo!>!>!
 override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.GetHashCode() -> int
+static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
+static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Logging.Export.ChannelDescriptorComparer.Default.get -> Daqifi.Core.Logging.Export.ChannelDescriptorComparer!
 static Daqifi.Core.Logging.Export.ChannelNameComparer.Instance.get -> Daqifi.Core.Logging.Export.ChannelNameComparer!
 static Daqifi.Core.Logging.Export.LiveCsvRecordingExtensions.RecordLiveSamplesToCsvAsync(this Daqifi.Core.Device.IStreamingDevice! device, System.IO.TextWriter! writer, Daqifi.Core.Logging.Export.CsvExportOptions? options = null, System.TimeSpan? duration = null, int? bufferCapacity = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Daqifi.Core.Logging.Export.LiveCsvRecordingResult>!
 static Daqifi.Core.Logging.Export.LiveCsvRecordingResult.operator !=(Daqifi.Core.Logging.Export.LiveCsvRecordingResult left, Daqifi.Core.Logging.Export.LiveCsvRecordingResult right) -> bool
 static Daqifi.Core.Logging.Export.LiveCsvRecordingResult.operator ==(Daqifi.Core.Logging.Export.LiveCsvRecordingResult left, Daqifi.Core.Logging.Export.LiveCsvRecordingResult right) -> bool
 static Daqifi.Core.Logging.Export.SdCardLogSessionExtensions.AsSampleSource(this Daqifi.Core.Device.SdCard.SdCardLogSession! session, Daqifi.Core.Device.SdCard.SdCardDeviceConfiguration? fallbackConfiguration = null, string? deviceName = null) -> Daqifi.Core.Logging.Export.SdCardLogSampleSource!
+~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(object obj) -> bool
+~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.ToString() -> string
 ~override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.Equals(object obj) -> bool
 ~override Daqifi.Core.Logging.Export.LiveCsvRecordingResult.ToString() -> string

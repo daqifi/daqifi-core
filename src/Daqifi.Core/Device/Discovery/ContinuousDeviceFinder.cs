@@ -55,6 +55,17 @@ public class ContinuousDeviceFinder : IDisposable
         public int WeakRescueCount { get; set; }
     }
 
+    /// <summary>
+    /// What one reconciliation changed. The scan loop adds the outcome of the pass and the
+    /// cadence to make the <see cref="DiscoveryPassReport"/> a consumer sees, so the counting
+    /// stays in <see cref="Reconcile"/>, where the live set is held under its lock.
+    /// </summary>
+    internal readonly record struct DiscoveryPassChanges(
+        int DevicesSeen,
+        int NewDevices,
+        int MetadataUpdates,
+        int LostDevices);
+
     #endregion
 
     #region Private Fields
@@ -72,6 +83,7 @@ public class ContinuousDeviceFinder : IDisposable
     private readonly int _missThreshold;
     private readonly Func<IDeviceInfo, string>? _identitySelector;
     private readonly bool _leaveInnerFinderOpen;
+    private readonly IProgress<DiscoveryPassReport>? _progress;
 
     private readonly Dictionary<string, TrackedDevice> _devices = new(StringComparer.Ordinal);
     private readonly object _devicesLock = new();
@@ -151,6 +163,7 @@ public class ContinuousDeviceFinder : IDisposable
         _missThreshold = options.MissThreshold;
         _identitySelector = options.IdentitySelector;
         _leaveInnerFinderOpen = options.LeaveInnerFinderOpen;
+        _progress = options.Progress;
     }
 
     #endregion
@@ -275,12 +288,19 @@ public class ContinuousDeviceFinder : IDisposable
     /// report that. A tracked device on one of these has not gone away — the probe just could not
     /// reach it — so it keeps its place in the live set instead of counting a miss (issue #532).
     /// </param>
-    internal void Reconcile(
+    /// <returns>
+    /// What the pass changed, for <see cref="ContinuousDiscoveryOptions.Progress"/>. The counts
+    /// are produced whether or not a sink is configured: they cost a few comparisons per known
+    /// device, and computing them always keeps one code path.
+    /// </returns>
+    internal DiscoveryPassChanges Reconcile(
         IReadOnlyCollection<IDeviceInfo> passResults,
         IReadOnlyCollection<BusyPort>? busyPorts = null)
     {
         var newlyDiscovered = new List<IDeviceInfo>();
         var lost = new List<IDeviceInfo>();
+        int devicesSeen;
+        var metadataUpdates = 0;
 
         lock (_devicesLock)
         {
@@ -300,6 +320,16 @@ public class ContinuousDeviceFinder : IDisposable
                 {
                     // Already known — refresh metadata (IP, port, power state, etc. can
                     // change between passes) and clear the miss counter.
+                    //
+                    // The refresh raises no event, by design: the device neither arrived nor
+                    // went away. That is exactly why it is counted. A consumer holding a row
+                    // for this device has no other way to learn the row is now out of date
+                    // (#725).
+                    if (MetadataDiffers(tracked.Info, device))
+                    {
+                        metadataUpdates++;
+                    }
+
                     tracked.Info = device;
                     tracked.MissCount = 0;
 
@@ -386,6 +416,8 @@ public class ContinuousDeviceFinder : IDisposable
                     _devices.Remove(key);
                 }
             }
+
+            devicesSeen = seen.Count;
         }
 
         // Raise events outside the lock so subscriber callbacks cannot deadlock against
@@ -402,6 +434,44 @@ public class ContinuousDeviceFinder : IDisposable
         {
             SafeRaise(() => OnDeviceLost(device));
         }
+
+        return new DiscoveryPassChanges(
+            devicesSeen,
+            newlyDiscovered.Count,
+            metadataUpdates,
+            lost.Count);
+    }
+
+    /// <summary>
+    /// Whether a device the live set already holds came back from a pass with different metadata.
+    /// </summary>
+    /// <remarks>
+    /// Every member of <see cref="IDeviceInfo"/> is compared, because every one of them can
+    /// change between passes without the device arriving or going away: a WiFi device gets a new
+    /// IP from the router, a serial device gets a new port name after a re-enumeration, a device
+    /// reports itself powered off. A finder that hands back the same instance twice — the common
+    /// case for a cached pass result — is settled by the reference check and costs nothing.
+    /// </remarks>
+    private static bool MetadataDiffers(IDeviceInfo previous, IDeviceInfo current)
+    {
+        if (ReferenceEquals(previous, current))
+        {
+            return false;
+        }
+
+        return !string.Equals(previous.Name, current.Name, StringComparison.Ordinal)
+            || !string.Equals(previous.SerialNumber, current.SerialNumber, StringComparison.Ordinal)
+            || !string.Equals(previous.FirmwareVersion, current.FirmwareVersion, StringComparison.Ordinal)
+            || !string.Equals(previous.MacAddress, current.MacAddress, StringComparison.Ordinal)
+            || !string.Equals(previous.PortName, current.PortName, StringComparison.Ordinal)
+            || !string.Equals(previous.DevicePath, current.DevicePath, StringComparison.Ordinal)
+            || !string.Equals(previous.LocationKey, current.LocationKey, StringComparison.Ordinal)
+            || !Equals(previous.IPAddress, current.IPAddress)
+            || !Equals(previous.LocalInterfaceAddress, current.LocalInterfaceAddress)
+            || previous.Port != current.Port
+            || previous.Type != current.Type
+            || previous.IsPowerOn != current.IsPowerOn
+            || previous.ConnectionType != current.ConnectionType;
     }
 
     /// <summary>
@@ -486,6 +556,8 @@ public class ContinuousDeviceFinder : IDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             IReadOnlyCollection<IDeviceInfo>? results = null;
+            var outcome = DiscoveryPassOutcome.Completed;
+            var changes = default(DiscoveryPassChanges);
 
             using (var passCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
@@ -509,7 +581,20 @@ public class ContinuousDeviceFinder : IDisposable
                 }
                 catch (Exception ex)
                 {
+                    outcome = DiscoveryPassOutcome.Failed;
                     SafeScanError(ex);
+                }
+
+                // The pass spent its whole budget, whether the finder answered with an exception
+                // or handed back the part it had collected. Either way what it returned is
+                // incomplete, which is the "degraded" case a consumer has to be able to see.
+                // A pass that also raised an exception keeps Failed: that is the more specific
+                // thing to say about it, and the exception itself went to ScanError.
+                if (outcome == DiscoveryPassOutcome.Completed &&
+                    passCts.IsCancellationRequested &&
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    outcome = DiscoveryPassOutcome.TimedOut;
                 }
             }
 
@@ -524,20 +609,86 @@ public class ContinuousDeviceFinder : IDisposable
             {
                 try
                 {
-                    Reconcile(
+                    changes = Reconcile(
                         results,
                         (_finder as IBusyPortReporter)?.TakeBusyPortsFromLastPass());
                 }
                 catch (Exception ex)
                 {
+                    // A reconciliation that threw part-way through can say nothing reliable about
+                    // what the pass changed, so the report carries the failure and no counts.
+                    outcome = DiscoveryPassOutcome.Failed;
+                    changes = default;
                     SafeScanError(ex);
                 }
             }
+
+            // Every outcome above meets here, so there is exactly one report per pass and they
+            // arrive in pass order. It sits after reconciliation on purpose: a consumer sees the
+            // pass's DeviceDiscovered and DeviceLost events first, then the summary that explains
+            // them. A pass that stop or dispose cut short never reaches this point, which is why
+            // the reports simply end when discovery ends.
+            //
+            // The live-set size is read here rather than taken from the reconciliation, so that a
+            // pass which skipped reconciliation still reports how many devices are live. A
+            // timed-out pass that said "0 devices" while three were on screen would be worse than
+            // saying nothing.
+            ReportPass(new DiscoveryPassReport(
+                outcome,
+                changes.DevicesSeen,
+                changes.NewDevices,
+                changes.MetadataUpdates,
+                changes.LostDevices,
+                CurrentDeviceCount,
+                _interval));
 
             if (!await DelayBetweenPassesAsync(cancellationToken).ConfigureAwait(false))
             {
                 break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Hands one pass report to the caller's sink without letting the sink affect the scan loop.
+    /// </summary>
+    /// <remarks>
+    /// A faulty report handler is routed to <see cref="ScanError"/>, which is where this class
+    /// already sends a faulty <see cref="DeviceDiscovered"/> or <see cref="DeviceLost"/> handler,
+    /// and <see cref="SafeScanError"/> swallows a faulty <see cref="ScanError"/> handler in turn.
+    /// So a consumer drawing a status line can neither stop discovery nor lose the devices the
+    /// pass found; the events for them were raised before this runs.
+    /// </remarks>
+    /// <summary>
+    /// The number of devices in the live set, without copying it the way
+    /// <see cref="Devices"/> does.
+    /// </summary>
+    private int CurrentDeviceCount
+    {
+        get
+        {
+            lock (_devicesLock)
+            {
+                return _devices.Count;
+            }
+        }
+    }
+
+    private void ReportPass(DiscoveryPassReport report)
+    {
+        var progress = _progress;
+        if (progress == null)
+        {
+            return;
+        }
+
+        try
+        {
+            progress.Report(report);
+        }
+        catch (Exception ex)
+        {
+            SafeScanError(ex);
         }
     }
 

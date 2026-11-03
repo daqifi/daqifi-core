@@ -45,6 +45,34 @@ public class ContinuousDiscoveryOptions
     public Func<IDeviceInfo, string>? IdentitySelector { get; set; }
 
     /// <summary>
+    /// Gets or sets an optional sink that receives one <see cref="DiscoveryPassReport"/> for every
+    /// discovery pass, so a consumer can tell a pass that found nothing from a pass that ran out
+    /// of time. <see langword="null"/> — the default — reports nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="ContinuousDeviceFinder"/> raises an event when a device arrives and when a
+    /// device goes away. A pass that times out raises nothing, and so does a pass that found the
+    /// devices it already knew about. A user looking at an empty device list therefore cannot
+    /// tell "nothing is here" from "discovery is not working" (#725). This sink carries that
+    /// difference.
+    /// </para>
+    /// <para>
+    /// The sink lives on this options object rather than on a method, which is the shape
+    /// <see cref="Daqifi.Core.Device.SdCard.SdCardParseOptions.Progress"/> already uses. Like
+    /// every other value here it is read once, at construction, so setting it afterwards has no
+    /// effect.
+    /// </para>
+    /// <para>
+    /// Reporting is best effort. An exception from the sink is caught and sent to
+    /// <see cref="ContinuousDeviceFinder.ScanError"/>, which is where this class sends every other
+    /// faulty handler. It never stops the scan loop and it never discards the devices the pass
+    /// found.
+    /// </para>
+    /// </remarks>
+    public IProgress<DiscoveryPassReport>? Progress { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the wrapped finder should be left open
     /// when the <see cref="ContinuousDeviceFinder"/> is disposed. When false (the
     /// default), a wrapped finder implementing <see cref="IDisposable"/> is disposed

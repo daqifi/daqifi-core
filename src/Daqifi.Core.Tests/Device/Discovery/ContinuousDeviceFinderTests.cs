@@ -969,6 +969,334 @@ public class ContinuousDeviceFinderTests
         Assert.True(inner.Disposed); // inner finder disposed only after the loop stopped
     }
 
+    #endregion
+
+    #region Pass reports
+
+    // The cadence every report test runs at. Small enough to keep the tests quick, and the
+    // interval is what a report carries as NextPassDelay, so it appears in the expected values.
+    private static readonly TimeSpan ReportInterval = TimeSpan.FromMilliseconds(10);
+    private static readonly TimeSpan ReportPassTimeout = TimeSpan.FromMilliseconds(50);
+
+    private static ContinuousDeviceFinder NewReportingFinder(
+        IDeviceFinder inner,
+        IProgress<DiscoveryPassReport>? progress)
+        => new(inner, new ContinuousDiscoveryOptions
+        {
+            // One miss loses a device, so a pass that finds nothing shows up as a loss in the
+            // very next report instead of the one after it.
+            MissThreshold = 1,
+            Interval = ReportInterval,
+            PassTimeout = ReportPassTimeout,
+            Progress = progress
+        });
+
+    private static DiscoveryPassReport Report(
+        DiscoveryPassOutcome outcome,
+        int devicesSeen = 0,
+        int newDevices = 0,
+        int metadataUpdates = 0,
+        int lostDevices = 0,
+        int liveDeviceCount = 0)
+        => new(outcome, devicesSeen, newDevices, metadataUpdates, lostDevices, liveDeviceCount, ReportInterval);
+
+    [Fact]
+    public async Task Start_WithEveryKindOfPassInARow_ReportsThemInOrder()
+    {
+        // The whole point of issue #725 in one assertion. Six passes, each a different kind, and
+        // the sink sees six reports that tell them apart. Without the sink, passes 1, 3 and 4
+        // raise nothing at all, so a consumer sees the same thing for a pass that broke, a pass
+        // that was quiet, and a pass that changed a device's address.
+        var device = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10"));
+        var readdressed = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.20"));
+        var progress = new RecordingPassProgress();
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.TimesOut(),
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(readdressed),
+            ScriptedPassFinder.Finds(),
+            ScriptedPassFinder.Throws(new InvalidOperationException("the transport went away")));
+
+        using var finder = NewReportingFinder(inner, progress);
+        finder.ScanError += (_, _) => { };
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 6,
+            () => $"only {progress.Count} of the 6 scripted passes were reported",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Equal(
+            [
+                // 1. The pass ran out of its own PassTimeout. Nothing was reconciled, so every
+                //    count is zero — and the live set is empty, which it says rather than guesses.
+                Report(DiscoveryPassOutcome.TimedOut),
+
+                // 2. A device arrived. DeviceDiscovered was raised for it before this report.
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, newDevices: 1, liveDeviceCount: 1),
+
+                // 3. The quiet pass: the same device, unchanged. No event, and now a report that
+                //    says the pass worked and found nothing new.
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, liveDeviceCount: 1),
+
+                // 4. The same device on a new IP address. Still no event, because it neither
+                //    arrived nor went away, so this count is the only way to learn the row is
+                //    out of date.
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, metadataUpdates: 1, liveDeviceCount: 1),
+
+                // 5. The device is gone. MissThreshold is 1, so it leaves the live set at once
+                //    and DeviceLost was raised before this report.
+                Report(DiscoveryPassOutcome.Completed, lostDevices: 1),
+
+                // 6. The pass threw. The exception itself went to ScanError; the report says the
+                //    pass produced nothing usable.
+                Report(DiscoveryPassOutcome.Failed),
+            ],
+            progress.Snapshot().Take(6));
+    }
+
+    [Fact]
+    public async Task Start_WhenEveryLaterPassTimesOut_KeepsReportingTimedOutWithTheDeviceStillLive()
+    {
+        // The degraded run, which is the case a user actually suffers: discovery stopped working
+        // but the device list still looks right. Every report says TimedOut and says one device
+        // is still live, so a consumer can mark the list as stale instead of trusting it.
+        var device = Wifi("AA:BB:CC:DD:EE:01");
+        var progress = new RecordingPassProgress();
+        var inner = new TimingOutDeviceFinder(new[] { (IDeviceInfo)device });
+        using var finder = NewReportingFinder(inner, progress);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 4,
+            () => $"only {progress.Count} passes were reported",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Equal(
+            [
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, newDevices: 1, liveDeviceCount: 1),
+                Report(DiscoveryPassOutcome.TimedOut, liveDeviceCount: 1),
+                Report(DiscoveryPassOutcome.TimedOut, liveDeviceCount: 1),
+                Report(DiscoveryPassOutcome.TimedOut, liveDeviceCount: 1),
+            ],
+            progress.Snapshot().Take(4));
+        Assert.Contains(finder.Devices, d => ReferenceEquals(d, device));
+    }
+
+    [Fact]
+    public async Task Start_WhenOnlyMetadataChanged_ReportsTheUpdateAndStillRaisesNoEvent()
+    {
+        // The report is additive, not a replacement: the metadata refresh is still silent on the
+        // event channels, exactly as the guarding test above pins it.
+        var device = Serial("SN-1", port: "COM3");
+        var moved = Serial("SN-1", port: "COM7");
+        var progress = new RecordingPassProgress();
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(moved),
+            ScriptedPassFinder.Finds(moved));
+
+        using var finder = NewReportingFinder(inner, progress);
+        var discovered = new List<IDeviceInfo>();
+        var lost = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 3,
+            () => $"only {progress.Count} passes were reported",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Equal(
+            [
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, newDevices: 1, liveDeviceCount: 1),
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, metadataUpdates: 1, liveDeviceCount: 1),
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, liveDeviceCount: 1),
+            ],
+            progress.Snapshot().Take(3));
+        Assert.Single(discovered);
+        Assert.Empty(lost);
+        Assert.Empty(errors);
+        Assert.Equal("COM7", finder.Devices[0].PortName);
+    }
+
+    [Fact]
+    public async Task Start_ReportsThePassAfterItsOwnEvents()
+    {
+        // Order within a pass: the events first, then the summary that explains them. A consumer
+        // that redraws on the report therefore sees a live set the report already matches.
+        var device = Wifi("AA:BB:CC:DD:EE:01");
+        var order = new List<string>();
+        var progress = new RecordingPassProgress(_ =>
+        {
+            lock (order)
+            {
+                order.Add("report");
+            }
+        });
+        var inner = new ScriptedPassFinder(ScriptedPassFinder.Finds(device));
+
+        using var finder = NewReportingFinder(inner, progress);
+        finder.DeviceDiscovered += (_, _) =>
+        {
+            lock (order)
+            {
+                order.Add("discovered");
+            }
+        };
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 1,
+            "the first pass was never reported",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        lock (order)
+        {
+            Assert.Equal(["discovered", "report"], order.Take(2));
+        }
+    }
+
+    [Fact]
+    public async Task Start_WithNoProgressSink_BehavesExactlyAsBefore()
+    {
+        // The seam is optional and additive. A caller that sets nothing gets the default, and the
+        // same script produces the same events, the same live set and the same errors as it does
+        // with a sink attached.
+        Assert.Null(new ContinuousDiscoveryOptions().Progress);
+
+        var device = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.10"));
+        var readdressed = Wifi("AA:BB:CC:DD:EE:01", ip: IPAddress.Parse("192.168.1.20"));
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.TimesOut(),
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(readdressed),
+            ScriptedPassFinder.Finds(),
+            ScriptedPassFinder.Throws(new InvalidOperationException("the transport went away")));
+
+        using var finder = NewReportingFinder(inner, progress: null);
+        var discovered = new List<IDeviceInfo>();
+        var lost = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => inner.PassesStarted >= 6 && errors.Count >= 1,
+            () => $"the script was not played out: {inner.PassesStarted} passes, {errors.Count} errors",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Same(device, Assert.Single(discovered));
+        Assert.Same(readdressed, Assert.Single(lost));
+        Assert.IsType<InvalidOperationException>(errors[0]);
+        Assert.Empty(finder.Devices);
+        Assert.True(finder.IsRunning == false);
+    }
+
+    [Fact]
+    public async Task Start_WhenTheProgressHandlerThrows_KeepsTheLoopAndTheDevices()
+    {
+        // A consumer's status handler must not be able to stop discovery or discard the devices a
+        // pass found. The events for them are raised before the report, and the exception goes to
+        // ScanError, which is where this class sends every other faulty handler.
+        var device = Wifi("AA:BB:CC:DD:EE:01");
+        var progress = new RecordingPassProgress(_ => throw new InvalidOperationException("handler blew up"));
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(device));
+
+        using var finder = NewReportingFinder(inner, progress);
+        var discovered = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
+        finder.DeviceDiscovered += (_, e) => discovered.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 3,
+            () => $"the loop stopped after {progress.Count} reports",
+            WaitTimeout);
+
+        Assert.True(finder.IsRunning);
+        Assert.Same(device, Assert.Single(discovered));
+        Assert.Contains(finder.Devices, d => ReferenceEquals(d, device));
+        Assert.All(errors, error => Assert.IsType<InvalidOperationException>(error));
+        Assert.NotEmpty(errors);
+
+        await finder.StopAsync();
+    }
+
+    [Fact]
+    public async Task Start_WhenTheProgressHandlerThrowsOperationCanceled_DoesNotStopTheLoop()
+    {
+        // Cancellation belongs to Stop and Dispose. A handler that throws this exception — by
+        // checking a token of its own, say — must not look like one.
+        var device = Wifi("AA:BB:CC:DD:EE:01");
+        var progress = new RecordingPassProgress(_ => throw new OperationCanceledException("not the loop's token"));
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(device),
+            ScriptedPassFinder.Finds(device));
+
+        using var finder = NewReportingFinder(inner, progress);
+        finder.ScanError += (_, _) => { };
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 3,
+            () => $"the loop stopped after {progress.Count} reports",
+            WaitTimeout);
+
+        Assert.True(finder.IsRunning);
+        Assert.Contains(finder.Devices, d => ReferenceEquals(d, device));
+
+        await finder.StopAsync();
+    }
+
+    [Fact]
+    public async Task Start_WhenTheSinkIsSetAfterConstruction_ReportsNothing()
+    {
+        // Every value on the options object is read once, at construction. The sink is no
+        // different, and the doc comment says so.
+        var options = new ContinuousDiscoveryOptions
+        {
+            MissThreshold = 1,
+            Interval = ReportInterval,
+            PassTimeout = ReportPassTimeout
+        };
+        var inner = new ScriptedPassFinder(ScriptedPassFinder.Finds(Wifi("AA:BB:CC:DD:EE:01")));
+        using var finder = new ContinuousDeviceFinder(inner, options);
+
+        var progress = new RecordingPassProgress();
+        options.Progress = progress;
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => inner.PassesStarted >= 3,
+            () => $"the finder only started {inner.PassesStarted} passes",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Equal(0, progress.Count);
+    }
+
+    #endregion
+
+    #region Scan loop helpers
+
     private static async Task<T> AwaitSignal<T>(TaskCompletionSource<T> signal)
     {
         var completed = await Task.WhenAny(signal.Task, Task.Delay(WaitTimeout));
@@ -1053,6 +1381,122 @@ public class ContinuousDeviceFinderTests
 
             return Task.FromResult<IEnumerable<IDeviceInfo>>(next);
         }
+    }
+
+    /// <summary>
+    /// Records every pass report in arrival order, and can throw from the handler afterwards to
+    /// stand in for a consumer whose status code is broken.
+    /// </summary>
+    /// <remarks>
+    /// A direct <see cref="IProgress{T}"/> rather than <see cref="Progress{T}"/>: the BCL class
+    /// posts to a synchronization context, which would both reorder the assertions and hide a
+    /// throwing handler behind its own marshalling. This one reports on the scan loop's own
+    /// thread, which is the strict case.
+    /// </remarks>
+    private sealed class RecordingPassProgress(Action<DiscoveryPassReport>? onReport = null)
+        : IProgress<DiscoveryPassReport>
+    {
+        private readonly List<DiscoveryPassReport> _reports = [];
+
+        public int Count
+        {
+            get
+            {
+                lock (_reports)
+                {
+                    return _reports.Count;
+                }
+            }
+        }
+
+        public IReadOnlyList<DiscoveryPassReport> Snapshot()
+        {
+            lock (_reports)
+            {
+                return _reports.ToList();
+            }
+        }
+
+        public void Report(DiscoveryPassReport value)
+        {
+            // Recorded before the handler runs, so a throwing handler still shows what it saw.
+            lock (_reports)
+            {
+                _reports.Add(value);
+            }
+
+            onReport?.Invoke(value);
+        }
+    }
+
+    /// <summary>
+    /// Finder that plays one scripted behaviour per pass — found these devices, ran out of time,
+    /// threw. Pass kinds are written as <see cref="Finds"/>, <see cref="TimesOut"/> and
+    /// <see cref="Throws"/>, so a test reads as the sequence of passes it means to produce.
+    /// </summary>
+    /// <remarks>
+    /// Once the script is spent, the last step repeats for as long as the loop runs. Finding
+    /// nothing instead would quietly add a pass the test did not ask for — one that loses the
+    /// device and raises DeviceLost — in the gap between the test's last assertion and the stop
+    /// taking effect, which makes an otherwise deterministic assertion depend on the clock.
+    /// </remarks>
+    private sealed class ScriptedPassFinder : IDeviceFinder
+    {
+        private readonly Queue<Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>> _steps;
+        private Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>? _lastStep;
+        private int _passesStarted;
+
+        public ScriptedPassFinder(params Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>[] steps)
+        {
+            _steps = new Queue<Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>>(steps);
+        }
+
+        public int PassesStarted => Volatile.Read(ref _passesStarted);
+
+#pragma warning disable CS0067 // Events are part of the interface but unused by this fake.
+        public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
+        public event EventHandler? DiscoveryCompleted;
+#pragma warning restore CS0067
+
+        /// <summary>A pass that answers with exactly these devices.</summary>
+        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> Finds(params IDeviceInfo[] devices)
+            => _ => Task.FromResult<IEnumerable<IDeviceInfo>>(devices);
+
+        /// <summary>
+        /// A pass that never answers on its own and throws when the pass timeout cancels it,
+        /// which is what a finder that honours cancellation does.
+        /// </summary>
+        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> TimesOut()
+            => async token =>
+            {
+                await Task.Delay(Timeout.Infinite, token);
+                return Array.Empty<IDeviceInfo>();
+            };
+
+        /// <summary>A pass that fails.</summary>
+        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> Throws(Exception error)
+            => _ => throw error;
+
+        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _passesStarted);
+
+            Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> step;
+            lock (_steps)
+            {
+                if (_steps.Count > 0)
+                {
+                    _lastStep = _steps.Dequeue();
+                }
+
+                step = _lastStep ?? Finds();
+            }
+
+            return step(cancellationToken);
+        }
+
+        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+            => DiscoverAsync(CancellationToken.None);
     }
 
     /// <summary>
