@@ -633,14 +633,7 @@ public class ContinuousDeviceFinder : IDisposable
             // pass which skipped reconciliation still reports how many devices are live. A
             // timed-out pass that said "0 devices" while three were on screen would be worse than
             // saying nothing.
-            ReportPass(new DiscoveryPassReport(
-                outcome,
-                changes.DevicesSeen,
-                changes.NewDevices,
-                changes.MetadataUpdates,
-                changes.LostDevices,
-                CurrentDeviceCount,
-                _interval));
+            ReportPass(outcome, changes);
 
             if (!await DelayBetweenPassesAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -674,13 +667,24 @@ public class ContinuousDeviceFinder : IDisposable
         }
     }
 
-    private void ReportPass(DiscoveryPassReport report)
+    private void ReportPass(DiscoveryPassOutcome outcome, DiscoveryPassChanges changes)
     {
         var progress = _progress;
         if (progress == null)
         {
+            // Nothing to tell, and nothing is read: a caller that configured no sink does not pay
+            // for the live-set lock below.
             return;
         }
+
+        var report = new DiscoveryPassReport(
+            outcome,
+            changes.DevicesSeen,
+            changes.NewDevices,
+            changes.MetadataUpdates,
+            changes.LostDevices,
+            CurrentDeviceCount,
+            _interval);
 
         try
         {
