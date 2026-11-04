@@ -18,6 +18,8 @@ Daqifi.Core.Device.SdCard.SdCardLogEntry.SourceAnalogValueUnit.get -> Daqifi.Cor
 Daqifi.Core.Device.SdCard.SdCardLogEntry.SourceAnalogValueUnit.init -> void
 Daqifi.Core.Device.SdCard.SdCardParseOptions.IntegerValueUnits.get -> Daqifi.Core.Device.SdCard.SdCardIntegerValueUnits?
 Daqifi.Core.Device.SdCard.SdCardParseOptions.IntegerValueUnits.set -> void
+Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.get -> int
+Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException.BytesReceived.get -> long
 Daqifi.Core.Device.SdCard.SdCardTransferErrorException.FileName.get -> string!
