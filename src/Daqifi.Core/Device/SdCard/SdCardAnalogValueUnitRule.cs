@@ -5,8 +5,9 @@ using System.IO;
 namespace Daqifi.Core.Device.SdCard;
 
 /// <summary>
-/// Decides what unit a text log's analog values are in, and converts them to volts. Shared by
-/// the CSV and JSON paths so the two can never disagree about the same reading.
+/// Decides what unit a text log's analog values are in, and converts them to volts. Used by the
+/// CSV path; the JSON path still scales every value as a raw ADC code and does not consult this
+/// rule.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,6 +23,15 @@ namespace Daqifi.Core.Device.SdCard;
 /// mixes the two forms states no single unit at all, and that is an error rather than a guess —
 /// a reading that is wrong by a factor of 1000 is worse than a refused file.
 /// </para>
+/// <para>
+/// A non-finite reading is outside all of that. Firmware's <c>printf("%f")</c> writes
+/// <c>nan</c> or <c>inf</c> for one, and neither token carries a unit: there is no quantity to
+/// be wrong by a factor of 1000. So a non-finite value is excluded from the counts the rule
+/// decides on, and a row whose finite values all agree resolves to their form rather than being
+/// refused because one channel read non-finite (closes #883). A row with no finite value at all
+/// falls back to the caller's whole-number default, which changes nothing: no conversion in this
+/// file alters a NaN or an infinity.
+/// </para>
 /// </remarks>
 internal static class SdCardAnalogValueUnitRule
 {
@@ -36,10 +46,29 @@ internal static class SdCardAnalogValueUnitRule
         token.AsSpan().IndexOfAny('.', 'e', 'E') >= 0;
 
     /// <summary>
+    /// Reports whether a parsed value states no unit, so that <see cref="ResolveRowUnit"/> must
+    /// not read a form off it. That is every non-finite reading: <c>nan</c>, <c>inf</c>,
+    /// <c>Infinity</c>, their signed and differently-cased spellings, and the infinity symbol.
+    /// </summary>
+    /// <remarks>
+    /// This test is on the parsed number rather than on the token, which is the opposite of
+    /// <see cref="IsDecimalForm"/> and deliberate. The lexical test exists only because
+    /// <c>245</c> and <c>245.0</c> are the same number in different units; a non-finite value
+    /// has no such ambiguity, and matching the parsed value covers every spelling the parser
+    /// accepts instead of a list of words that has to be kept in step with it.
+    /// </remarks>
+    /// <param name="value">One analog value, already parsed.</param>
+    /// <returns><c>true</c> when the value carries no unit.</returns>
+    internal static bool IsUnitlessValue(double value) => !double.IsFinite(value);
+
+    /// <summary>
     /// Decides one row's unit from how many of its values are written in the volts form.
     /// </summary>
-    /// <param name="valueCount">How many analog values the row holds.</param>
-    /// <param name="decimalFormCount">How many of them are written in the volts form.</param>
+    /// <param name="finiteValueCount">
+    /// How many analog values the row holds that state a unit — that is, every value except the
+    /// non-finite ones, which <see cref="IsUnitlessValue"/> identifies.
+    /// </param>
+    /// <param name="decimalFormCount">How many of those are written in the volts form.</param>
     /// <param name="integerValueUnits">
     /// What the caller says a whole number means. <c>null</c> means the caller did not say, and
     /// the row is then read as raw ADC codes, which is what every release before this one did.
@@ -50,12 +79,12 @@ internal static class SdCardAnalogValueUnitRule
     /// The row mixes the volts form and the whole-number form, so no single unit covers it.
     /// </exception>
     internal static SdCardAnalogValueUnit ResolveRowUnit(
-        int valueCount,
+        int finiteValueCount,
         int decimalFormCount,
         SdCardIntegerValueUnits? integerValueUnits,
         string line)
     {
-        if (decimalFormCount == valueCount && valueCount > 0)
+        if (decimalFormCount == finiteValueCount && finiteValueCount > 0)
         {
             return SdCardAnalogValueUnit.Volts;
         }

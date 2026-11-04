@@ -204,6 +204,127 @@ public sealed class SdCardCsvValueUnitTests
     }
 
     // -------------------------------------------------------------------------
+    // A non-finite reading states no unit (issue #883)
+    // -------------------------------------------------------------------------
+
+    [Theory]
+    // The volts control from the issue's table: nothing non-finite, two decimal-form values.
+    [InlineData("2000,0.123,2000,0.456", null, SdCardAnalogValueUnit.Volts, 0.123, false)]
+    // Whole numbers plus a NaN. This case parsed before the fix as well, because none of the
+    // row's finite values is in the decimal form either.
+    [InlineData("2000,100,2000,nan", null, SdCardAnalogValueUnit.RawAdcCodes, 100.0 / 4095.0 * 10.0, true)]
+    // The regression: a volts row with one NaN. Before the fix the NaN counted as a whole
+    // number, the row read as mixed, and the exception refused the whole file.
+    [InlineData("2000,0.123,2000,nan", null, SdCardAnalogValueUnit.Volts, 0.123, true)]
+    // The same row with the caller's whole-number default set. The NaN is still unit-less, so
+    // the row is still volts and the finite value is not divided by 1000.
+    [InlineData("2000,0.123,2000,nan", SdCardIntegerValueUnits.Millivolts, SdCardAnalogValueUnit.Volts, 0.123, true)]
+    // The .NET spellings of an infinity, which double.TryParse accepts today. Both used to be
+    // read as whole numbers and refuse a volts file.
+    [InlineData("2000,0.123,2000,Infinity", null, SdCardAnalogValueUnit.Volts, 0.123, true)]
+    [InlineData("2000,0.123,2000,-Infinity", null, SdCardAnalogValueUnit.Volts, 0.123, true)]
+    [InlineData("2000,0.123,2000,infinity", null, SdCardAnalogValueUnit.Volts, 0.123, true)]
+    [InlineData("2000,0.123,2000,NAN", null, SdCardAnalogValueUnit.Volts, 0.123, true)]
+    // Whole-number millivolts with a NaN alongside: the finite value still divides by 1000.
+    [InlineData("2000,245,2000,nan", SdCardIntegerValueUnits.Millivolts, SdCardAnalogValueUnit.Millivolts, 0.245, true)]
+    public async Task ParseAsync_NonFiniteValue_DoesNotDecideOrVetoTheRowUnit(
+        string dataRow,
+        SdCardIntegerValueUnits? integerValueUnits,
+        SdCardAnalogValueUnit expectedUnit,
+        double expectedFirstValue,
+        bool secondValueIsNonFinite)
+    {
+        // Arrange — a clean volts row ahead of the row under test, exactly as the issue measured
+        // it, so a file-level refusal is visible as the loss of both rows rather than one.
+        await using var stream = Csv(
+            "ain0_ts,ain0_val,ain1_ts,ain1_val",
+            "1000,0.100,1000,0.200",
+            dataRow);
+
+        // Act
+        var samples = await ParseAsync(stream, Options(withOverride: true, channelCount: 2, integerValueUnits));
+
+        // Assert — both rows survive, and the row under test reports the unit its finite values
+        // state.
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(SdCardAnalogValueUnit.Volts, samples[0].SourceAnalogValueUnit);
+        Assert.Equal(expectedUnit, samples[1].SourceAnalogValueUnit);
+        Assert.Equal(expectedFirstValue, samples[1].AnalogValues[0], 9);
+
+        if (secondValueIsNonFinite)
+        {
+            // The reading is reported as the non-finite value it is, not dropped and not
+            // laundered into a number: that is what tells a caller the channel read nothing.
+            Assert.False(double.IsFinite(samples[1].AnalogValues[1]));
+        }
+        else
+        {
+            Assert.Equal(0.456, samples[1].AnalogValues[1], 9);
+        }
+    }
+
+    [Fact]
+    public async Task ParseAsync_RowHoldsOnlyNonFiniteValues_TakesTheCallersWholeNumberDefault()
+    {
+        // Arrange — no value in the row states a unit, so there is nothing to read the unit
+        // from. The caller's default is the only answer available, and it costs nothing:
+        // no conversion changes a NaN.
+        await using var stream = Csv(
+            "ain0_ts,ain0_val,ain1_ts,ain1_val",
+            "1000,0.100,1000,0.200",
+            "2000,nan,2000,nan");
+
+        // Act
+        var samples = await ParseAsync(stream, Options(
+            withOverride: true,
+            channelCount: 2,
+            integerValueUnits: SdCardIntegerValueUnits.Millivolts));
+
+        // Assert
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(SdCardAnalogValueUnit.Millivolts, samples[1].SourceAnalogValueUnit);
+        Assert.All(samples[1].AnalogValues, v => Assert.True(double.IsNaN(v)));
+    }
+
+    [Fact]
+    public async Task ParseAsync_RowStillMixesTwoFiniteForms_StillFails()
+    {
+        // Arrange — the mixed-form rule is not relaxed by #883: a NaN alongside a genuine
+        // decimal/whole-number mix does not excuse the mix, because the two finite values still
+        // disagree about the row's unit.
+        await using var stream = Csv(
+            "ain0_ts,ain0_val,ain1_ts,ain1_val,ain2_ts,ain2_val",
+            "1000,0.001200,1000,245,1000,nan");
+
+        // Act + assert
+        var error = await Assert.ThrowsAsync<InvalidDataException>(
+            () => ParseAsync(stream, Options(withOverride: true, channelCount: 3, integerValueUnits: null)));
+        Assert.Contains("no single unit", error.Message);
+    }
+
+    [Fact]
+    public async Task ParseAsync_NonFiniteValueInAVoltsRow_DoesNotRefuseTheRestOfTheFile()
+    {
+        // Arrange — the issue's headline cost: before the fix the exception came out of the
+        // parser and the caller imported nothing at all, so rows after the offending one were
+        // lost as well.
+        await using var stream = Csv(
+            "ain0_ts,ain0_val,ain1_ts,ain1_val",
+            "1000,0.100,1000,0.200",
+            "2000,0.123,2000,nan",
+            "3000,0.300,3000,0.400");
+
+        // Act
+        var samples = await ParseAsync(stream, Options(withOverride: true, channelCount: 2, integerValueUnits: null));
+
+        // Assert
+        Assert.Equal(3, samples.Count);
+        Assert.All(samples, s => Assert.Equal(SdCardAnalogValueUnit.Volts, s.SourceAnalogValueUnit));
+        Assert.Equal(0.300, samples[2].AnalogValues[0], 9);
+        Assert.Equal(0.400, samples[2].AnalogValues[1], 9);
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
