@@ -473,13 +473,15 @@ public sealed class SdCardCsvFileParser
                 continue;
             }
 
-            var (rowTimestamp, rawAnalogValues, digitalData, perChannelTimestamps, decimalFormCount) = parsed.Value;
+            var (rowTimestamp, rawAnalogValues, digitalData, perChannelTimestamps, finiteValueCount, decimalFormCount) = parsed.Value;
 
             // Read the row's unit from the file, then convert for that unit. A value the device
             // already calibrated — volts or millivolts — must not go through the ADC-code
-            // conversion as well (closes #848).
+            // conversion as well (closes #848). Only the values that state a unit are counted:
+            // a non-finite reading states none, so it cannot make a volts row look mixed
+            // (closes #883).
             var valueUnit = SdCardAnalogValueUnitRule.ResolveRowUnit(
-                rawAnalogValues.Count,
+                finiteValueCount,
                 decimalFormCount,
                 integerValueUnits,
                 line);
@@ -528,10 +530,11 @@ public sealed class SdCardCsvFileParser
     /// Also counts how many analog values the row wrote with a decimal point or an exponent.
     /// That count is what says whether the row holds volts, and it has to be taken here,
     /// from the text, because <c>245</c> and <c>245.0</c> parse to the same <c>double</c>
-    /// while meaning different units.
+    /// while meaning different units. Non-finite readings are left out of both counts, since
+    /// they state no unit at all — see <see cref="SdCardAnalogValueUnitRule"/>.
     /// </para>
     /// </summary>
-    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, uint digitalData, IReadOnlyList<uint> perChannelTimestamps, int decimalFormCount)?
+    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, uint digitalData, IReadOnlyList<uint> perChannelTimestamps, int finiteValueCount, int decimalFormCount)?
         TryParseCsvDataRow(string line, CsvColumnLayout layout)
     {
         try
@@ -550,6 +553,7 @@ public sealed class SdCardCsvFileParser
 
             var analogValues = new List<double>(analogPairCount);
             var perChannelTimestamps = new List<uint>(analogPairCount);
+            var finiteValueCount = 0;
             var decimalFormCount = 0;
 
             // Parse analog channel pairs
@@ -570,6 +574,15 @@ public sealed class SdCardCsvFileParser
 
                 perChannelTimestamps.Add(ts);
                 analogValues.Add(val);
+
+                // A NaN or an infinity is not written in either unit form, so it is evidence
+                // for neither and is kept out of both counts.
+                if (SdCardAnalogValueUnitRule.IsUnitlessValue(val))
+                {
+                    continue;
+                }
+
+                finiteValueCount++;
 
                 if (SdCardAnalogValueUnitRule.IsDecimalForm(valCol))
                 {
@@ -602,7 +615,7 @@ public sealed class SdCardCsvFileParser
                 return null;
             }
 
-            return (rowTimestamp, analogValues, digitalData, perChannelTimestamps, decimalFormCount);
+            return (rowTimestamp, analogValues, digitalData, perChannelTimestamps, finiteValueCount, decimalFormCount);
         }
         catch
         {
