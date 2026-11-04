@@ -93,6 +93,66 @@ public sealed class SdCardCsvNonFiniteValueTests
     }
 
     [Theory]
+    [InlineData(null, SdCardAnalogValueUnit.RawAdcCodes)]
+    [InlineData(SdCardIntegerValueUnits.RawAdcCodes, SdCardAnalogValueUnit.RawAdcCodes)]
+    [InlineData(SdCardIntegerValueUnits.Millivolts, SdCardAnalogValueUnit.Millivolts)]
+    public async Task ParseAsync_RowOfNothingButCSpelledInfinities_ParsesAndKeepsItsUnit(
+        SdCardIntegerValueUnits? integerValueUnits,
+        SdCardAnalogValueUnit expectedUnit)
+    {
+        // Arrange — where the two fixes meet. #883 excluded a non-finite reading from the
+        // decimal-form tally by testing the parsed number rather than the token, and #884 then
+        // taught the parser C's lowercase spellings. Had #884 instead matched token text, this
+        // row would read as two whole numbers in a volts file and ResolveRowUnit would throw
+        // the mixed-form InvalidDataException — exactly the bug #883 fixed. Both signs are here
+        // because the sign is stripped before the word is matched.
+        await using var stream = Csv(
+            "ain0_ts,ain0_val,ain1_ts,ain1_val",
+            "1000,0.100,1000,0.200",
+            "2000,inf,2000,-inf");
+
+        // Act — no throw is half the assertion.
+        var (samples, progress) = await ParseAsync(stream, Options(integerValueUnits));
+
+        // Assert — the row survives whole, and because it holds no finite value at all it takes
+        // the caller's whole-number default rather than refusing. That default is harmless: no
+        // conversion in the parser alters an infinity.
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(SdCardAnalogValueUnit.Volts, samples[0].SourceAnalogValueUnit);
+        Assert.Equal(expectedUnit, samples[1].SourceAnalogValueUnit);
+        Assert.True(double.IsPositiveInfinity(samples[1].AnalogValues[0]));
+        Assert.True(double.IsNegativeInfinity(samples[1].AnalogValues[1]));
+
+        // And nothing was dropped, so the count stays at zero.
+        Assert.Equal(0, progress[^1].RowsSkipped);
+    }
+
+    [Fact]
+    public async Task ParseAsync_CSpelledInfinityMixedWithNan_StillStatesNoUnit()
+    {
+        // Arrange — the other half of the meeting point: C's inf alongside the nan that
+        // double.TryParse already took, in a volts row. Neither states a unit, so the row
+        // resolves on its one finite reading instead of being refused as mixed-form.
+        await using var stream = Csv(
+            "ain0_ts,ain0_val,ain1_ts,ain1_val,ain2_ts,ain2_val",
+            "1000,0.100,1000,0.200,1000,0.300",
+            "2000,0.123,2000,-inf,2000,nan");
+
+        // Act
+        var options = Options(integerValueUnits: null);
+        options.ConfigurationOverride = Override(3);
+        var (samples, progress) = await ParseAsync(stream, options);
+
+        // Assert
+        Assert.Equal(2, samples.Count);
+        Assert.Equal(SdCardAnalogValueUnit.Volts, samples[1].SourceAnalogValueUnit);
+        Assert.Equal(0.123, samples[1].AnalogValues[0], 9);
+        Assert.True(double.IsNegativeInfinity(samples[1].AnalogValues[1]));
+        Assert.True(double.IsNaN(samples[1].AnalogValues[2]));
+        Assert.Equal(0, progress[^1].RowsSkipped);
+    }
+
+    [Theory]
     // A word that merely starts like the spelling is not a reading, and neither is a sign on its
     // own: the parser must keep refusing these rather than inventing an infinity for them.
     [InlineData("info")]
