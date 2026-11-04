@@ -35,6 +35,14 @@ namespace Daqifi.Core.Device.SdCard;
 /// <see cref="System.IO.InvalidDataException"/> at that row instead of guessing.
 /// </para>
 /// <para>
+/// A non-finite reading — firmware's <c>printf("%f")</c> writes <c>nan</c>, <c>inf</c> or
+/// <c>-inf</c> for one — is reported as the NaN or infinity it is, rather than dropped or
+/// turned into a zero, and it states no unit, so it neither decides a row's unit nor refuses
+/// the row. A data row the parser cannot read at all is skipped so the rest of the file still
+/// imports, and counted in <see cref="SdCardParseProgress.RowsSkipped"/> so that the loss is
+/// visible to a caller watching <see cref="SdCardParseOptions.Progress"/>.
+/// </para>
+/// <para>
 /// The header names only the channels the recording had enabled, and it names them by number,
 /// so a file of channel 7 alone reads <c>ain7_ts,ain7_val</c>. Each column that holds a raw ADC
 /// code is therefore scaled with the calibration, port range, and internal scale of the channel
@@ -446,6 +454,7 @@ public sealed class SdCardCsvFileParser
         var bytesRead = 0L;
         var totalBytes = totalBytesProvider();
         var skipped = 0;
+        var rowsSkipped = 0;
 
         await foreach (var entry in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
@@ -469,7 +478,10 @@ public sealed class SdCardCsvFileParser
             var parsed = TryParseCsvDataRow(line, columnLayout);
             if (parsed == null)
             {
-                // Skip malformed lines
+                // Skip the row so the rest of the file still imports, but count it: these are
+                // readings the caller never receives, and a silent drop costs a user data
+                // without telling them (closes #884).
+                rowsSkipped++;
                 continue;
             }
 
@@ -514,12 +526,88 @@ public sealed class SdCardCsvFileParser
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)
             {
-                progress.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
+                progress.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
+                {
+                    RowsSkipped = rowsSkipped
+                });
             }
         }
 
-        // Final progress report
-        progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
+        // Final progress report. This one always goes out, so a caller that watches progress
+        // learns the file's whole skipped-row count even when the file is shorter than the
+        // reporting interval.
+        progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
+        {
+            RowsSkipped = rowsSkipped
+        });
+    }
+
+    /// <summary>
+    /// Parses one analog value token, accepting both spellings of a non-finite reading.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Firmware writes a non-finite reading with <c>printf("%f")</c>, which produces C's
+    /// <c>nan</c>, <c>inf</c> and <c>-inf</c>. <see cref="double.TryParse(string?, NumberStyles, IFormatProvider?, out double)"/>
+    /// takes <c>nan</c> and <c>Infinity</c> but not <c>inf</c>, so a row holding one used to
+    /// fail the parse and be dropped whole — the reading, the other channels' readings on that
+    /// row, and its timestamp, with nothing said about it (closes #884).
+    /// </para>
+    /// <para>
+    /// So <c>inf</c> is accepted here the way <c>nan</c> already was, with an optional sign and
+    /// without regard to case. The value is reported as the infinity it is, which is what tells
+    /// a caller the channel saturated rather than read zero.
+    /// </para>
+    /// </remarks>
+    /// <param name="token">One value token, as the file wrote it.</param>
+    /// <param name="value">The parsed value.</param>
+    /// <returns><c>true</c> when the token is a value this parser understands.</returns>
+    private static bool TryParseAnalogValue(string token, out double value)
+    {
+        if (double.TryParse(token, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        return TryParseCInfinity(token, out value);
+    }
+
+    /// <summary>
+    /// Parses C's <c>inf</c> spelling of an infinity: the word <c>inf</c> or <c>infinity</c>,
+    /// in any case, optionally signed, with the surrounding whitespace
+    /// <see cref="NumberStyles.Float"/> would itself have allowed.
+    /// </summary>
+    /// <param name="token">One value token, as the file wrote it.</param>
+    /// <param name="value">
+    /// <see cref="double.PositiveInfinity"/> or <see cref="double.NegativeInfinity"/> on
+    /// success; <c>0</c> otherwise.
+    /// </param>
+    /// <returns><c>true</c> when the token is C's spelling of an infinity.</returns>
+    private static bool TryParseCInfinity(string token, out double value)
+    {
+        value = 0;
+
+        var text = token.AsSpan().Trim();
+        if (text.IsEmpty)
+        {
+            return false;
+        }
+
+        var negative = false;
+        if (text[0] is '+' or '-')
+        {
+            negative = text[0] == '-';
+            text = text[1..];
+        }
+
+        if (!text.Equals("inf", StringComparison.OrdinalIgnoreCase) &&
+            !text.Equals("infinity", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        value = negative ? double.NegativeInfinity : double.PositiveInfinity;
+        return true;
     }
 
     /// <summary>
@@ -567,7 +655,7 @@ public sealed class SdCardCsvFileParser
                     return null;
                 }
 
-                if (!double.TryParse(valCol, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var val))
+                if (!TryParseAnalogValue(valCol, out var val))
                 {
                     return null;
                 }

@@ -1,1 +1,3 @@
 #nullable enable
+Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.get -> int
+Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
