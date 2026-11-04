@@ -21,6 +21,11 @@ namespace Daqifi.Core.Device.SdCard;
 /// what settles that: when the caller passes one, the receiver reads at least that many bytes of
 /// content and the marker text inside them is file content like any other (#852).
 /// </para>
+/// <para>
+/// A listed size of <c>0</c> is the one case where nothing is owed at all. Such a transfer cannot
+/// stall, because there is no content left for the device to send: it completes with an empty
+/// stream however the device ends its reply, and the inactivity window never applies to it (#888).
+/// </para>
 /// </remarks>
 public sealed class SdCardFileReceiver
 {
@@ -87,6 +92,38 @@ public sealed class SdCardFileReceiver
     /// the cap keeps a transport that emits nothing but line endings from holding the call.
     /// </summary>
     private const int MaxEndOfFileConfirmationReads = 4;
+
+    /// <summary>
+    /// How long a transfer whose listing reports the file as empty waits for another byte, once
+    /// the device's reply has started arriving, before it reports the empty file as complete.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is owed on such a transfer, so this window is not a stall budget — it is how long
+    /// the terminator is given to turn up behind the reply that is already arriving, and the
+    /// firmware puts the two in the same reply. The inactivity window above is the budget for a
+    /// device that went quiet with file content still outstanding, which cannot be the case here.
+    /// <para>
+    /// It deliberately does not shorten the wait for the FIRST byte: a device that has not
+    /// answered at all is a different question, and cutting that short would risk concluding the
+    /// transfer while the reply — terminator and all — was still in flight, leaving it in the
+    /// transport buffer for the next exchange to trip over.
+    /// </para>
+    /// </remarks>
+    internal static readonly TimeSpan ListedEmptyFileQuietWindow = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// How many bytes of a listed-empty file's transfer are held in memory, rather than written
+    /// to the destination stream, while it is still unknown whether they are file content at all.
+    /// </summary>
+    /// <remarks>
+    /// A listing that reports 0 bytes says every byte before the terminator is reply framing, not
+    /// content — but a listing can be stale, so bytes that a terminator then confirms as content
+    /// must still reach the caller. Holding them until the terminator settles it is what lets the
+    /// empty case deliver an empty stream instead of the framing. Past this limit the listing is
+    /// plainly stale, a real transfer is under way, and the bytes are released to the destination
+    /// so the transfer behaves like any other from then on.
+    /// </remarks>
+    internal const int ListedEmptyFileHoldBackLimitBytes = 65536;
 
     private readonly Stream _sourceStream;
     private readonly int _bufferSize;
@@ -208,7 +245,9 @@ public sealed class SdCardFileReceiver
     /// that ends short of it raises <see cref="SdCardTruncatedTransferException"/>, and one with no
     /// content bytes at all raises <see cref="SdCardEmptyTransferException"/>. It is also the only
     /// thing that separates a wedged SD subsystem from a genuinely 0-byte file, so pass <c>0</c>
-    /// for a listed empty file to have it return 0 bytes as a legitimate empty download. When
+    /// for a listed empty file to have it return 0 bytes as a legitimate empty download —
+    /// whichever way the device ends its reply, including by simply going quiet, since a file with
+    /// no content cannot stall part-way through (#888). When
     /// <c>null</c> (no listing available) there is nothing to judge the length against: a short
     /// transfer cannot be detected, and a file whose own content holds the marker text raises
     /// <see cref="SdCardAmbiguousTransferException"/> instead of returning a truncated file.
@@ -217,7 +256,9 @@ public sealed class SdCardFileReceiver
     /// <exception cref="SdCardTransferStalledException">
     /// Thrown when the transfer stops making progress before the EOF marker arrives — the
     /// transport went quiet, closed, or the timeout elapsed. Inspect
-    /// <see cref="SdCardTransferStalledException.Reason"/> to tell those apart.
+    /// <see cref="SdCardTransferStalledException.Reason"/> to tell those apart. Never thrown for a
+    /// file <paramref name="listedFileSizeBytes"/> reports as empty, which has no content left to
+    /// stall on and completes with an empty stream instead (#888).
     /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     /// <exception cref="SdCardEmptyTransferException">
@@ -283,6 +324,33 @@ public sealed class SdCardFileReceiver
         var buffer = new byte[_bufferSize];
         long totalBytesReceived = 0;
 
+        // A listing that reports 0 bytes says this file has no content, so until a terminal marker
+        // proves otherwise every byte that arrives is the device's reply framing rather than file
+        // content, and must not reach the caller's stream: that is what lets an empty log download
+        // as an empty file instead of as the framing around it (#888). A stale listing is still
+        // honored — a marker commits whatever preceded it, and content past the hold-back limit is
+        // released and the transfer carries on as any other.
+        using var heldContent = listedFileSizeBytes is 0
+            ? new HeldContentStream(destinationStream, ListedEmptyFileHoldBackLimitBytes)
+            : null;
+        var contentTarget = heldContent is null ? destinationStream : (Stream)heldContent;
+
+        // Set once any byte of the device's reply has arrived. Only then does the quiet window for
+        // a listed-empty file apply; see ListedEmptyFileQuietWindow.
+        var replyStarted = false;
+
+        // Reports the listed-empty file as the complete, zero-byte download it is, discarding the
+        // reply framing no marker ever claimed as content. Called wherever a transfer with content
+        // outstanding would be declared stalled: with nothing outstanding there is nothing to
+        // stall on, and the 20-second wait plus a message telling the user to power-cycle healthy
+        // hardware was the whole of issue #888.
+        long CompleteListedEmptyFile()
+        {
+            heldContent!.DiscardHeldBytes();
+            progress?.Report(new SdCardTransferProgress(0, fileName));
+            return 0;
+        }
+
         // We keep a trailing window of the last N bytes to detect a terminal marker
         // even when it's split across chunk boundaries.
         var trailingBytes = new byte[MaxMarkerLength];
@@ -301,14 +369,27 @@ public sealed class SdCardFileReceiver
             {
                 int bytesRead;
 
+                // A listed-empty file whose reply has started arriving waits only the short quiet
+                // window for the terminator behind it, and takes that window's expiry as the
+                // completion it is rather than as a stall. Once content has been released to the
+                // destination the listing was stale, a real transfer is under way, and the
+                // ordinary inactivity window is the right one again.
+                var idleWindow = _idleTimeout;
+                if (replyStarted && heldContent is { HasReleasedContent: false })
+                {
+                    idleWindow = idleWindow is { } configured && configured < ListedEmptyFileQuietWindow
+                        ? configured
+                        : ListedEmptyFileQuietWindow;
+                }
+
                 // One inactivity window per read. Allocated per iteration rather than reset in
                 // place because a CancellationTokenSource cannot be un-cancelled: reusing one
                 // would turn a byte that arrived at the exact instant the window closed into a
                 // permanently dead token for every read after it.
-                using var idleCts = _idleTimeout is null
+                using var idleCts = idleWindow is null
                     ? null
                     : CancellationTokenSource.CreateLinkedTokenSource(token);
-                idleCts?.CancelAfter(_idleTimeout!.Value);
+                idleCts?.CancelAfter(idleWindow!.Value);
 
                 try
                 {
@@ -317,6 +398,11 @@ public sealed class SdCardFileReceiver
                 }
                 catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
+                    if (heldContent is { HasReleasedContent: false })
+                    {
+                        return CompleteListedEmptyFile();
+                    }
+
                     ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
                     throw new SdCardTransferStalledException(
@@ -332,13 +418,18 @@ public sealed class SdCardFileReceiver
                     // deadline had anything to say — the device stopped feeding the transfer. This
                     // is the only stall signal a socket gives (see DefaultIdleTimeout); on serial
                     // the zero-length-read path below gets there first and this never fires.
+                    if (heldContent is { HasReleasedContent: false })
+                    {
+                        return CompleteListedEmptyFile();
+                    }
+
                     ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
                     throw new SdCardTransferStalledException(
                         fileName,
                         totalBytesReceived,
                         SdCardTransferStallReason.NoDataReceived,
-                        _idleTimeout,
+                        idleWindow,
                         ex);
                 }
 
@@ -364,10 +455,17 @@ public sealed class SdCardFileReceiver
                         ? SdCardTransferStallReason.TransportClosed
                         : SdCardTransferStallReason.NoDataReceived;
 
+                    if (heldContent is { HasReleasedContent: false })
+                    {
+                        return CompleteListedEmptyFile();
+                    }
+
                     ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
                     throw new SdCardTransferStalledException(fileName, totalBytesReceived, reason);
                 }
+
+                replyStarted = true;
 
                 // The listed size is a floor for the EOF marker: the marker is ASCII text, so a log
                 // file can contain it, and below the floor it is the file's own content rather than
@@ -407,7 +505,7 @@ public sealed class SdCardFileReceiver
                         var trailingToWrite = markerPosition;
                         if (trailingToWrite > 0)
                         {
-                            await destinationStream.WriteAsync(trailingBytes, 0, trailingToWrite, token)
+                            await contentTarget.WriteAsync(trailingBytes, 0, trailingToWrite, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += trailingToWrite;
                         }
@@ -417,7 +515,7 @@ public sealed class SdCardFileReceiver
                         // Write deferred trailing bytes
                         if (trailingCount > 0)
                         {
-                            await destinationStream.WriteAsync(trailingBytes, 0, trailingCount, token)
+                            await contentTarget.WriteAsync(trailingBytes, 0, trailingCount, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += trailingCount;
                         }
@@ -425,10 +523,19 @@ public sealed class SdCardFileReceiver
                         // Write the portion of new data before the marker
                         if (newDataFileBytes > 0)
                         {
-                            await destinationStream.WriteAsync(buffer, 0, newDataFileBytes, token)
+                            await contentTarget.WriteAsync(buffer, 0, newDataFileBytes, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += newDataFileBytes;
                         }
+                    }
+
+                    // A terminator settles what the held bytes of a listed-empty transfer were:
+                    // the listing was stale and they are file content, so they go to the caller's
+                    // stream now. This has to happen before the two throws below, both of which
+                    // document the content that arrived as left in the destination stream.
+                    if (heldContent is not null)
+                    {
+                        await heldContent.ReleaseHeldBytesAsync(token).ConfigureAwait(false);
                     }
 
                     if (isTransferError)
@@ -498,7 +605,7 @@ public sealed class SdCardFileReceiver
                         var fromTrailing = Math.Min(safeCount, trailingCount);
                         if (fromTrailing > 0)
                         {
-                            await destinationStream.WriteAsync(trailingBytes, 0, fromTrailing, token)
+                            await contentTarget.WriteAsync(trailingBytes, 0, fromTrailing, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += fromTrailing;
                         }
@@ -507,7 +614,7 @@ public sealed class SdCardFileReceiver
                         var fromNew = safeCount - fromTrailing;
                         if (fromNew > 0)
                         {
-                            await destinationStream.WriteAsync(buffer, 0, fromNew, token)
+                            await contentTarget.WriteAsync(buffer, 0, fromNew, token)
                                 .ConfigureAwait(false);
                             totalBytesReceived += fromNew;
                         }
@@ -542,6 +649,11 @@ public sealed class SdCardFileReceiver
         }
         catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
+            if (heldContent is { HasReleasedContent: false })
+            {
+                return CompleteListedEmptyFile();
+            }
+
             ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
             throw new SdCardTransferStalledException(
@@ -829,5 +941,144 @@ public sealed class SdCardFileReceiver
         }
 
         return (false, -1);
+    }
+
+    /// <summary>
+    /// A write-through stream that holds the first bytes written to it in memory instead of
+    /// passing them to the destination, until something settles whether they are file content at
+    /// all. Used only for a transfer whose listing reports the file as empty.
+    /// </summary>
+    /// <remarks>
+    /// The transfer loop writes content as it goes, which is right when the file is known to have
+    /// content: it keeps a long download off the heap. A listed-empty file is the opposite case —
+    /// the listing says there is no content, so the only bytes on the wire are the device's reply
+    /// framing, and writing them would hand the caller a "file" made of the framing around an
+    /// empty log. Holding them until a terminal marker claims them as content (a stale listing) or
+    /// the device finishes without one (the listing was right) is what makes both answers correct.
+    /// <para>
+    /// Past <see cref="ListedEmptyFileHoldBackLimitBytes"/> the listing is plainly stale, so the
+    /// held bytes are released and every later write goes straight through. Nothing disposes the
+    /// destination stream here; it belongs to the caller.
+    /// </para>
+    /// </remarks>
+    private sealed class HeldContentStream : Stream
+    {
+        private readonly Stream _destination;
+        private readonly int _holdBackLimitBytes;
+        private MemoryStream? _heldBytes = new();
+
+        public HeldContentStream(Stream destination, int holdBackLimitBytes)
+        {
+            _destination = destination;
+            _holdBackLimitBytes = holdBackLimitBytes;
+        }
+
+        /// <summary>
+        /// Whether any held byte has reached the destination stream. False means every byte
+        /// written so far is still unclaimed reply framing that
+        /// <see cref="DiscardHeldBytes"/> can still drop, so the transfer can still complete as
+        /// the empty download its listing describes.
+        /// </summary>
+        public bool HasReleasedContent { get; private set; }
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        /// <summary>
+        /// Hands every held byte to the destination stream and makes all later writes go straight
+        /// through. Releasing nothing — the marker-only case — leaves
+        /// <see cref="HasReleasedContent"/> false, because no content was ever claimed.
+        /// </summary>
+        public async Task ReleaseHeldBytesAsync(CancellationToken cancellationToken)
+        {
+            if (_heldBytes is not { } held)
+            {
+                return;
+            }
+
+            _heldBytes = null;
+
+            if (held.Length > 0)
+            {
+                HasReleasedContent = true;
+                await _destination.WriteAsync(held.GetBuffer(), 0, (int)held.Length, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            held.Dispose();
+        }
+
+        /// <summary>
+        /// Drops the held bytes without writing them. Called when the transfer ended with no
+        /// terminator, which for a listed-empty file means those bytes were never file content.
+        /// </summary>
+        public void DiscardHeldBytes()
+        {
+            _heldBytes?.Dispose();
+            _heldBytes = null;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (_heldBytes is not { } held)
+            {
+                _destination.Write(buffer, offset, count);
+                return;
+            }
+
+            held.Write(buffer, offset, count);
+
+            if (held.Length > _holdBackLimitBytes)
+            {
+                ReleaseHeldBytesAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+        }
+
+        public override async Task WriteAsync(
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_heldBytes is not { } held)
+            {
+                await _destination.WriteAsync(buffer, offset, count, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            held.Write(buffer, offset, count);
+
+            if (held.Length > _holdBackLimitBytes)
+            {
+                await ReleaseHeldBytesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        public override void Flush() => _destination.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Only the in-memory buffer. The destination stream is the caller's.
+                _heldBytes?.Dispose();
+                _heldBytes = null;
+            }
+
+            base.Dispose(disposing);
+        }
     }
 }

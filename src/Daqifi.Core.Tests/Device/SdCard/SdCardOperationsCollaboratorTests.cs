@@ -1235,6 +1235,29 @@ public class SdCardOperationsCollaboratorTests
     }
 
     [Fact]
+    public async Task DownloadSdCardFileAsync_ListedEmptyFileAnsweredWithoutAMarker_ReportsAnEmptyDownload()
+    {
+        // #888: the bench device answered a 0-byte log with reply framing and no terminator, and
+        // the download failed with a transfer stall telling the user to power-cycle healthy
+        // hardware. It is a completed, empty download instead — a zero-byte result the caller can
+        // tell apart from a broken transfer, which still throws — and it spends no extra GET.
+        var host = new FakeHost();
+        host.EnqueueResponse("Daqifi/empty.bin 0", NoErrorTerminator);
+        var ops = new SdCardOperations(host);
+        await ops.GetSdCardFilesAsync();
+
+        host.RawCaptureStreamFactory = () =>
+            ScriptedStream.Of(Encoding.ASCII.GetBytes("SYSTem:STORage:SD:GET \"empty.bin\"\r\nDAQIFI> "));
+        using var destination = new MemoryStream();
+
+        var result = await ops.DownloadSdCardFileAsync("empty.bin", destination);
+
+        Assert.Equal(0, result.FileSize);
+        Assert.Empty(destination.ToArray());
+        Assert.Equal(1, host.Calls.Count(c => c == "send:SYSTem:STORage:SD:GET \"empty.bin\""));
+    }
+
+    [Fact]
     public async Task DownloadSdCardFileAsync_TwoListedFilesShareAName_TreatsTheSizeAsUnknown()
     {
         // The listing keeps only the leaf name, so the same name can arrive from two directories.
