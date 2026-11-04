@@ -112,18 +112,24 @@ public sealed class SdCardFileReceiver
     internal static readonly TimeSpan ListedEmptyFileQuietWindow = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// How many bytes of a listed-empty file's transfer are held in memory, rather than written
-    /// to the destination stream, while it is still unknown whether they are file content at all.
+    /// How many bytes of a listed-empty file's transfer are held in memory, rather than written to
+    /// the destination stream, while it is still unknown whether they are file content at all.
     /// </summary>
     /// <remarks>
     /// A listing that reports 0 bytes says every byte before the terminator is reply framing, not
     /// content — but a listing can be stale, so bytes that a terminator then confirms as content
     /// must still reach the caller. Holding them until the terminator settles it is what lets the
-    /// empty case deliver an empty stream instead of the framing. Past this limit the listing is
-    /// plainly stale, a real transfer is under way, and the bytes are released to the destination
-    /// so the transfer behaves like any other from then on.
+    /// empty case deliver an empty stream instead of the framing around it.
+    /// <para>
+    /// The limit is sized as framing, not as a buffer: the device's reply to an SD <c>GET</c> is a
+    /// command echo and a prompt, measured at 48 bytes over WiFi and 79 with the echo on. Anything
+    /// substantially larger than that is not framing, so the listing is stale and a real transfer
+    /// is under way: the bytes are released to the destination and the transfer behaves like any
+    /// other from then on, inactivity window included. Keeping the limit this small is what stops
+    /// a listed-empty transfer from ever discarding a meaningful amount of real content.
+    /// </para>
     /// </remarks>
-    internal const int ListedEmptyFileHoldBackLimitBytes = 65536;
+    internal const int ListedEmptyFileReplyFramingLimitBytes = 256;
 
     private readonly Stream _sourceStream;
     private readonly int _bufferSize;
@@ -328,10 +334,10 @@ public sealed class SdCardFileReceiver
         // proves otherwise every byte that arrives is the device's reply framing rather than file
         // content, and must not reach the caller's stream: that is what lets an empty log download
         // as an empty file instead of as the framing around it (#888). A stale listing is still
-        // honored — a marker commits whatever preceded it, and content past the hold-back limit is
+        // honored — a marker commits whatever preceded it, and anything bigger than reply framing is
         // released and the transfer carries on as any other.
         using var heldContent = listedFileSizeBytes is 0
-            ? new HeldContentStream(destinationStream, ListedEmptyFileHoldBackLimitBytes)
+            ? new HeldContentStream(destinationStream, ListedEmptyFileReplyFramingLimitBytes)
             : null;
         var contentTarget = heldContent is null ? destinationStream : (Stream)heldContent;
 
@@ -443,6 +449,11 @@ public sealed class SdCardFileReceiver
 
                 if (bytesRead == 0)
                 {
+                    if (heldContent is { HasReleasedContent: false })
+                    {
+                        return CompleteListedEmptyFile();
+                    }
+
                     // A zero-byte read is NOT proof the stream closed on every transport. Over USB
                     // serial Core sets a per-read SerialPort.ReadTimeout and .NET's
                     // SerialStream.ReadAsync returns 0 on that timeout instead of throwing, so zero
@@ -454,11 +465,6 @@ public sealed class SdCardFileReceiver
                     var reason = _zeroLengthReadMeansClosed || !_sourceStream.CanRead
                         ? SdCardTransferStallReason.TransportClosed
                         : SdCardTransferStallReason.NoDataReceived;
-
-                    if (heldContent is { HasReleasedContent: false })
-                    {
-                        return CompleteListedEmptyFile();
-                    }
 
                     ThrowIfShortReplyEnded(fileName, shortReplyContentLength, listedFileSizeBytes);
 
@@ -956,7 +962,7 @@ public sealed class SdCardFileReceiver
     /// empty log. Holding them until a terminal marker claims them as content (a stale listing) or
     /// the device finishes without one (the listing was right) is what makes both answers correct.
     /// <para>
-    /// Past <see cref="ListedEmptyFileHoldBackLimitBytes"/> the listing is plainly stale, so the
+    /// Past <see cref="ListedEmptyFileReplyFramingLimitBytes"/> the listing is plainly stale, so the
     /// held bytes are released and every later write goes straight through. Nothing disposes the
     /// destination stream here; it belongs to the caller.
     /// </para>
@@ -964,13 +970,13 @@ public sealed class SdCardFileReceiver
     private sealed class HeldContentStream : Stream
     {
         private readonly Stream _destination;
-        private readonly int _holdBackLimitBytes;
+        private readonly int _framingLimitBytes;
         private MemoryStream? _heldBytes = new();
 
-        public HeldContentStream(Stream destination, int holdBackLimitBytes)
+        public HeldContentStream(Stream destination, int framingLimitBytes)
         {
             _destination = destination;
-            _holdBackLimitBytes = holdBackLimitBytes;
+            _framingLimitBytes = framingLimitBytes;
         }
 
         /// <summary>
@@ -1036,10 +1042,18 @@ public sealed class SdCardFileReceiver
 
             held.Write(buffer, offset, count);
 
-            if (held.Length > _holdBackLimitBytes)
+            if (held.Length <= _framingLimitBytes)
             {
-                ReleaseHeldBytesAsync(CancellationToken.None).GetAwaiter().GetResult();
+                return;
             }
+
+            // The synchronous twin of ReleaseHeldBytesAsync, rather than a blocking wait on it:
+            // the receiver only ever writes asynchronously, so this path exists to keep the
+            // Stream contract honest, not to be fast.
+            _heldBytes = null;
+            HasReleasedContent = true;
+            _destination.Write(held.GetBuffer(), 0, (int)held.Length);
+            held.Dispose();
         }
 
         public override async Task WriteAsync(
@@ -1054,7 +1068,7 @@ public sealed class SdCardFileReceiver
 
             held.Write(buffer, offset, count);
 
-            if (held.Length > _holdBackLimitBytes)
+            if (held.Length > _framingLimitBytes)
             {
                 await ReleaseHeldBytesAsync(cancellationToken).ConfigureAwait(false);
             }

@@ -442,12 +442,12 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
-    public async Task ReceiveAsync_ListedEmptyFileDeliversMoreThanTheHoldBackLimitThenGoesQuiet_StillStalls()
+    public async Task ReceiveAsync_ListedEmptyFileDeliversMoreThanReplyFramingThenGoesQuiet_StillStalls()
     {
-        // Past the hold-back limit the listing is plainly stale and a real transfer is under way,
+        // Past the reply-framing limit the listing is plainly stale and a real transfer is under way,
         // so the held bytes are released to the caller and the transfer behaves like any other —
         // including stalling when the device goes quiet before the terminator.
-        var content = new byte[SdCardFileReceiver.ListedEmptyFileHoldBackLimitBytes + 4096];
+        var content = new byte[SdCardFileReceiver.ListedEmptyFileReplyFramingLimitBytes + 4096];
         for (var i = 0; i < content.Length; i++)
         {
             content[i] = (byte)(i % 251);
@@ -462,8 +462,8 @@ public class SdCardFileReceiverTests
 
         Assert.Equal(SdCardTransferStallReason.NoDataReceived, ex.Reason);
         Assert.True(
-            destinationStream.Length > SdCardFileReceiver.ListedEmptyFileHoldBackLimitBytes,
-            "Content past the hold-back limit must reach the destination rather than stay held.");
+            destinationStream.Length > SdCardFileReceiver.ListedEmptyFileReplyFramingLimitBytes,
+            "Content past the reply-framing limit must reach the destination rather than stay held.");
     }
 
     [Fact]
