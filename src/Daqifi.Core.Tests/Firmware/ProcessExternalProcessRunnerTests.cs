@@ -44,6 +44,13 @@ public class ProcessExternalProcessRunnerTests
     /// </summary>
     private static readonly TimeSpan RealProcessLifetime = TimeSpan.FromSeconds(120);
 
+    /// <summary>
+    /// How long the Windows case below waits for its process family to get into position.
+    /// Deliberately well inside <see cref="RealProcessBound"/>, so a family that never gets
+    /// there fails saying what state it reached instead of as a bare run-level timeout.
+    /// </summary>
+    private static readonly TimeSpan RealProcessSetUpBound = TimeSpan.FromSeconds(30);
+
     /// <summary>Request timeout used by the cases that must time out.</summary>
     private static readonly TimeSpan ShortProcessTimeout = TimeSpan.FromMilliseconds(100);
 
@@ -270,7 +277,7 @@ public class ProcessExternalProcessRunnerTests
         // process id and exits, and the worker keeps the inherited output pipes open. The run
         // cannot drain them, so it times out, kills the job object, and the worker must die with
         // it - even though the process the runner started is long gone.
-        using var family = new ScriptedWindowsProcessFamily(RealProcessBound, RealProcessLifetime);
+        using var family = new ScriptedWindowsProcessFamily(RealProcessSetUpBound, RealProcessLifetime);
 
         var result = await new ProcessExternalProcessRunner(family).RunAsync(new ExternalProcessRequest
         {
