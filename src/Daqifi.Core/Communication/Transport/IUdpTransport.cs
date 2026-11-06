@@ -6,6 +6,16 @@ namespace Daqifi.Core.Communication.Transport;
 /// Represents a UDP transport mechanism for broadcast and unicast communication.
 /// Used primarily for device discovery and UDP-based messaging.
 /// </summary>
+/// <remarks>
+/// Unused and scheduled for removal — see issue #924. This seam was added so UDP traffic could be
+/// replaced in a test, but the library's own UDP code (<c>WiFiDeviceFinder</c> and
+/// <c>MDnsDeviceFinder</c>) opens <see cref="System.Net.Sockets.UdpClient"/> directly and never
+/// reaches it, and nothing outside the library implements it either.
+/// </remarks>
+[Obsolete("Unused: DAQiFi Core's own UDP discovery opens System.Net.Sockets.UdpClient directly "
+          + "rather than through this seam, and nothing else implements it. Use "
+          + "System.Net.Sockets.UdpClient for UDP, or IStreamTransport for a TCP/serial stream. "
+          + "This type will be removed in a future major version (#924).")]
 public interface IUdpTransport : IDisposable
 {
     /// <summary>
