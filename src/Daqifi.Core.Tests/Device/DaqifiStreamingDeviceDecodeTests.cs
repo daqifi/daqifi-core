@@ -309,14 +309,17 @@ public class DaqifiStreamingDeviceDecodeTests
     }
 
     [Fact]
-    public void Decode_Digital_SkipsOutputDirectionChannels()
+    public void Decode_Digital_SamplesOutputDirectionChannels()
     {
+        // #901. A driven output pin streams its true level, so it gets a sample like any other
+        // enabled pin. Before this fix the decoder skipped it and the channel got nothing, so a
+        // caller who drove a pin high had no way to see it in the stream.
         var device = CreateStreamingDevice(analogCount: 0, digitalCount: 2);
         var dio0 = DigitalChannel(device, 0);
         var dio1 = DigitalChannel(device, 1);
         dio0.IsEnabled = true;
         dio1.IsEnabled = true;
-        dio1.Direction = ChannelDirection.Output; // output channels are not sampled
+        dio1.Direction = ChannelDirection.Output;
         device.StartStreaming();
 
         var frame = new DaqifiOutMessage { MsgTimeStamp = 5 };
@@ -324,19 +327,20 @@ public class DaqifiStreamingDeviceDecodeTests
 
         device.InvokeStreamMessage(frame);
 
-        Assert.NotNull(dio0.ActiveSample);
         Assert.Equal(1.0, dio0.ActiveSample!.Value);
-        Assert.Null(dio1.ActiveSample); // output channel skipped
+        Assert.Equal(1.0, dio1.ActiveSample!.Value);
+        Assert.True(((IDigitalChannel)dio1).IsHigh);
     }
 
     [Fact]
-    public void Decode_Digital_SkipsOutputDirectionChannels_TheDeviceItselfReported()
+    public void Decode_Digital_SamplesAPinTheDeviceItselfReportedAsAnOutput()
     {
-        // Regression for #685. A pin left as an output by a previous session stays an output on
-        // the board across a reconnect, and nothing in Core's init sequence resets it. Before the
-        // fix Core hardcoded every freshly populated channel to Input, so the guard above never
-        // fired on a reconnect and the pin's own driven level was delivered as an input reading.
-        // Nobody calls SetDioDirection here — the direction comes only from the status frame.
+        // The other half of #901, and what #685 was really about. A pin left as an output by a
+        // previous session stays an output on the board across a reconnect, and the status frame
+        // reports it as one. #685 made Core trust that report instead of hardcoding Input, then
+        // used it to drop the reading. The direction report was right; dropping the reading was
+        // not — the level on the wire is the pin's real level either way. Nobody calls
+        // SetDioDirection here: the direction comes only from the status frame.
         var device = new DecodableStreamingDevice("TestDevice");
         device.Connect();
 
@@ -356,9 +360,8 @@ public class DaqifiStreamingDeviceDecodeTests
         device.InvokeStreamMessage(frame);
 
         Assert.Equal(ChannelDirection.Output, dio1.Direction);
-        Assert.NotNull(dio0.ActiveSample);
         Assert.Equal(1.0, dio0.ActiveSample!.Value);
-        Assert.Null(dio1.ActiveSample);
+        Assert.Equal(1.0, dio1.ActiveSample!.Value);
     }
 
     [Fact]

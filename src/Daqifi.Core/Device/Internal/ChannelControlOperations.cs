@@ -186,7 +186,11 @@ internal sealed class ChannelControlOperations
 
         if (channel is IDigitalChannel digitalChannel)
         {
+            // OutputValue is obsolete, but it stays correct while it is still part of the
+            // public surface: a caller who reads it must not see a stale level (#901).
+#pragma warning disable CS0618
             digitalChannel.OutputValue = value;
+#pragma warning restore CS0618
         }
 
         _host.Send(ScpiMessageProducer.SetDioPortState(channel.ChannelNumber, value ? 1 : 0));
@@ -243,7 +247,9 @@ internal sealed class ChannelControlOperations
                 // Direction is intentionally left as-is: the firmware keeps the channel's
                 // stored direction and re-applies it (resuming driving) on the next state or
                 // direction write, or on the next streaming tick — verified on hardware.
+#pragma warning disable CS0618 // obsolete, but kept correct while it is still public (#901)
                 digitalChannel.OutputValue = false;
+#pragma warning restore CS0618
             }
         }
 
