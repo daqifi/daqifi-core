@@ -2235,15 +2235,15 @@ public class FirmwareUpdateServiceTests
     }
 
     [Fact]
-    public async Task UpdateWifiModuleAsync_WhenCanceledAfterRequestingUpdateMode_DrivesThroughTheBridgeToConsumeTheRequest()
+    public async Task UpdateWifiModuleAsync_WhenCanceledAfterRequestingUpdateMode_RebootsToClearTheRequest()
     {
         // LAN:FWUpdate is already on the wire, but the apply that acts on it is not, so the device
-        // is still answering its own console with the firmware's update request held. The request
-        // is only cleared on a REINIT taken from inside the bridge, so recovery completes the
-        // entry and then leaves: handing the port back and stopping would keep the console now
-        // and arm the next LAN:APPLY from anywhere to bridge the device (#853). The caller's
-        // token is canceled by definition here, so the recovery runs on a token of its own or it
-        // would never send anything.
+        // is still answering its own console with the firmware's update request held. An apply
+        // from here would ENTER the bridge, and simply handing the port back would leave the
+        // request armed for the next LAN:APPLY from anywhere (#853). The flag is WiFi-manager RAM
+        // state and the firmware clears it only on the way out of the bridge, so recovery reboots
+        // instead. The caller's token is canceled by definition here, so the recovery runs on a
+        // token of its own or it would never send anything.
         var device = new FakeStreamingDevice("COM12");
 
         var options = CreateFastOptions();
@@ -2278,18 +2278,15 @@ public class FirmwareUpdateServiceTests
                 [
                     "SYSTem:POWer:STATe 1",
                     "SYSTem:COMMUnicate:LAN:FWUpdate",
-                    // Recovery completes the entry the request asked for...
-                    "SYSTem:COMMunicate:LAN:APPLY",
-                    // ...then takes the device straight back out, which consumes the request.
                     "SYSTem:USB:SetTransparentMode 0",
-                    "SYSTem:COMMunicate:LAN:APPLY"
+                    "SYSTem:REboot"
                 ],
                 device.SentCommands);
 
-            // Said on its own terms: the entry apply must never be the last thing on the wire,
-            // because that is the state this recovery exists to get the device out of.
-            Assert.Equal("SYSTem:COMMunicate:LAN:APPLY", device.SentCommands[^1]);
-            Assert.Equal("SYSTem:USB:SetTransparentMode 0", device.SentCommands[^2]);
+            // Said on its own terms: this is the one state where an apply is the wrong command,
+            // and the reboot is what clears the request it would otherwise act on.
+            Assert.DoesNotContain("SYSTem:COMMunicate:LAN:APPLY", device.SentCommands);
+            Assert.Equal("SYSTem:REboot", device.SentCommands[^1]);
 
             // Cancellation landed before prep reached the disconnect, so the recovery found the
             // transport already up — the exit is not conditional on having been disconnected.

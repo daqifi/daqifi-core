@@ -890,17 +890,20 @@ public class WifiModuleUpdaterTests : IDisposable
     }
 
     [Fact]
-    public async Task RunUpdate_WhenCanceledBeforeTheBridgeWasEntered_DrivesThroughTheBridgeToConsumeTheRequest()
+    public async Task RunUpdate_WhenCanceledBeforeTheBridgeWasEntered_RebootsToClearTheRequest()
     {
         // The dangerous case. The update was requested but the apply that enters the bridge never
-        // went out, so the device still answers its console — while holding the firmware's
-        // update request. Two wrong answers bracket the right one. The original recovery sent the
-        // exit and then an apply unconditionally, and from here that apply ENTERS the bridge and
-        // leaves the console dead until a power cycle. Withholding the apply instead keeps the
-        // console but leaves the request armed, and the firmware clears it only on a REINIT taken
-        // from inside the bridge — so the next LAN:APPLY from anywhere bridges the device, Core's
-        // own network-configuration apply and chip-info kick included, with no recovery watching.
-        // So recovery drives the device through the bridge and back out, which consumes it.
+        // went out, so the device still answers its console — while holding the firmware's update
+        // request. Three answers, and only one of them is safe. Sending the exit and then an apply
+        // unconditionally (the original) ENTERS the bridge from here and leaves the console dead
+        // until a power cycle. Withholding the apply keeps the console but leaves the request
+        // armed, and the firmware clears it only on a REINIT taken from inside the bridge — so the
+        // next LAN:APPLY from anywhere bridges the device, Core's own network-configuration apply
+        // and chip-info kick included, with no recovery watching. Driving the device through the
+        // bridge to consume the request depends on the queued entry landing inside the entry
+        // window, and the firmware's bridge init turns transparent mode back ON, so a late entry
+        // re-silences the console. A reboot drops the flag out of RAM with none of that: no queued
+        // transition, no apply gate, no window to lose. Nothing was flashed on this path.
         using var cts = new CancellationTokenSource();
         var device = new FakeStreamingDevice("COM7");
         device.OnCommandSent = command =>
@@ -931,93 +934,22 @@ public class WifiModuleUpdaterTests : IDisposable
             [
                 "SYSTem:POWer:STATe 1",
                 "SYSTem:COMMUnicate:LAN:FWUpdate",
-                // Recovery's, not prep's: prep was cancelled in the pace between the request and
-                // its own apply. This one completes the entry the request asked for.
-                "SYSTem:COMMunicate:LAN:APPLY",
-                // ...so that these two can take the device back out, which is what clears it.
                 "SYSTem:USB:SetTransparentMode 0",
-                "SYSTem:COMMunicate:LAN:APPLY"
+                "SYSTem:REboot"
             ],
             device.SentCommands);
 
-        // Said on its own terms, because leaving the device bridged is the failure this ordering
-        // exists to avoid: the entry apply must never be the last thing on the wire.
-        Assert.Equal("SYSTem:COMMunicate:LAN:APPLY", device.SentCommands[^1]);
-        Assert.Equal("SYSTem:USB:SetTransparentMode 0", device.SentCommands[^2]);
+        // Said on its own terms, because it is the one command that must never appear in this
+        // state: there is no bridge to leave, and an apply would build one.
+        Assert.DoesNotContain("SYSTem:COMMunicate:LAN:APPLY", device.SentCommands);
+
+        // And the reboot is the point — without it the device keeps the request and the next
+        // apply from anywhere bridges it.
+        Assert.Equal("SYSTem:REboot", device.SentCommands[^1]);
 
         // Still no network configuration written off the back of a cancelled flash.
         Assert.DoesNotContain("SYSTem:COMMunicate:LAN:ENAbled 1", device.SentCommands);
         Assert.DoesNotContain("SYSTem:COMMunicate:LAN:SAVE", device.SentCommands);
-    }
-
-    [Fact]
-    public async Task RunUpdate_WhenCanceledBeforeTheBridgeWasEntered_WaitsOutTheEntryWindowItOpened()
-    {
-        // Recovery from the requested state sends the apply that enters the bridge itself, so it
-        // owns the same entry window prep does — and has to spend it for the same reason. The
-        // apply only queues the transition, and the firmware holds an apply-in-progress gate from
-        // that apply until the bridge is up: an exit sent inside the window is rejected (-200) and
-        // the device stays bridged, which is the one outcome worse than the request it was sent to
-        // clear. Asserted as a lower bound, which can only fail if the wait is missing.
-        var entryWindow = TimeSpan.FromMilliseconds(400);
-
-        using var cts = new CancellationTokenSource();
-        var device = new FakeStreamingDevice("COM7");
-
-        var sinceEntryApply = new Stopwatch();
-        TimeSpan? elapsedAtExit = null;
-        device.OnCommandSent = command =>
-        {
-            if (command == "SYSTem:COMMUnicate:LAN:FWUpdate")
-            {
-                cts.Cancel();
-            }
-            else if (command == "SYSTem:COMMunicate:LAN:APPLY" && !sinceEntryApply.IsRunning)
-            {
-                // Prep never reaches its own apply here — the cancel above lands in the pace
-                // before it — so the first sighting is recovery's, the one that opens the window.
-                sinceEntryApply.Start();
-            }
-            else if (command == "SYSTem:USB:SetTransparentMode 0")
-            {
-                elapsedAtExit = sinceEntryApply.Elapsed;
-            }
-        };
-
-        var options = CreateFastOptions();
-        // Positive so the pace between the request and prep's apply is a real await point that
-        // the already-requested cancel is observed at, leaving the updater in the requested state.
-        options.PostLanFirmwareModeDelay = TimeSpan.FromMilliseconds(10);
-        options.PostLanBridgeEntryDelay = entryWindow;
-
-        var (updater, _) = CreateUpdater(options, SucceedingRunner());
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => updater.RunUpdateAsync(
-                device,
-                CreateFirmwareDirectory(),
-                progress: null,
-                skipVersionCheck: true,
-                cts.Token));
-
-        Assert.Equal(
-            [
-                "SYSTem:POWer:STATe 1",
-                "SYSTem:COMMUnicate:LAN:FWUpdate",
-                "SYSTem:COMMunicate:LAN:APPLY",
-                "SYSTem:USB:SetTransparentMode 0",
-                "SYSTem:COMMunicate:LAN:APPLY"
-            ],
-            device.SentCommands);
-
-        // The bound is below the window to leave room for timer granularity; it is still far
-        // above the ~0 ms an un-paced exit would produce.
-        Assert.NotNull(elapsedAtExit);
-        Assert.True(
-            elapsedAtExit >= TimeSpan.FromMilliseconds(300),
-            $"The bridge exit went out {elapsedAtExit!.Value.TotalMilliseconds:F0} ms after recovery's own " +
-            $"entry apply, inside the {entryWindow.TotalMilliseconds:F0} ms window in which that apply is " +
-            "still pending. The firmware's apply gate rejects an exit sent there.");
     }
 
     [Fact]
