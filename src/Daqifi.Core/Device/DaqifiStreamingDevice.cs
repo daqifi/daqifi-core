@@ -46,6 +46,16 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// the cost of asking early is one text exchange on a stream that was going to be slow
     /// anyway.
     /// </summary>
+    /// <remarks>
+    /// Measured on the bench NQ1 at firmware 3.8.0, two analog channels, as the time
+    /// <see cref="StartStreamingAsync"/> itself takes: 10–23 ms at 100 Hz and above, 213 ms at
+    /// 10 Hz. Those starts see their first frame immediately and never reach the queue read. A
+    /// 1 Hz start does not: the device's first frame took longer than this bound, so such a
+    /// start spends the full budget and then one <c>SYSTem:ERRor?</c> exchange, finds the queue
+    /// clean, and carries on — about 2.7 s in all, on top of the capability read. Raising the
+    /// bound to cover 1 Hz would buy that one case a faster start and cost every genuinely dead
+    /// start a slower diagnosis, which is the case this exists for.
+    /// </remarks>
     private const double MaxStartConfirmationMs = 2000;
 
     /// <summary>
