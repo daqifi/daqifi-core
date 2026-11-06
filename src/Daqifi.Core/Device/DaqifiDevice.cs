@@ -509,6 +509,19 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     private static readonly TimeSpan DefaultChannelPopulationTimeout = TimeSpan.FromSeconds(8);
 
     /// <summary>
+    /// Set while <see cref="WaitForChannelsPopulatedAsync"/> is in flight, so that wait can see
+    /// each status message itself and not only the channel counts the
+    /// <see cref="ChannelsPopulated"/> event carries.
+    /// </summary>
+    /// <remarks>
+    /// Invoked before the message is applied, on the same consumer thread that applies it, so
+    /// what it records is already in place when that event is raised further down the same call.
+    /// Only one such wait runs at a time -- a second concurrent <see cref="InitializeAsync"/> on
+    /// the same instance returns early -- so a single field is enough.
+    /// </remarks>
+    private Action<DaqifiOutMessage>? _initialStatusWatcher;
+
+    /// <summary>
     /// Interval at which <see cref="InitializeAsync"/> re-sends <c>GetDeviceInfo</c> while
     /// waiting for the first status message. Serial/CDC devices can miss the initial
     /// request while the port is still settling, so the request is repeated until
@@ -3150,8 +3163,11 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// stream orphaned by a crashed session). Set <see cref="PreserveActiveStream"/> before
     /// calling this to skip steps 2-4 and connect as a non-disruptive observer instead.
     ///
-    /// Rather than returning after a fixed delay, the method awaits the first
-    /// <see cref="ChannelsPopulated"/> event so callers receive a fully populated device.
+    /// Rather than returning after a fixed delay, the method awaits the first status message
+    /// that both reports channels and identifies the device — a part number and a firmware
+    /// version — so callers receive a device that is right about itself. A status that reports
+    /// channels and no identity is discarded and the request is re-sent; if the wait expires on
+    /// nothing better, the connect fails. See <see cref="WaitForChannelsPopulatedAsync"/>.
     /// Serial/CDC devices can take noticeably longer than the previous fixed wait to send
     /// their first status message, so <c>GetDeviceInfo</c> is re-sent periodically until
     /// channels populate or <paramref name="channelPopulationTimeout"/> elapses (which
@@ -3160,7 +3176,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="channelPopulationTimeout"/> is not positive.</exception>
     /// <exception cref="DeviceNotConnectedException">Thrown when the device is not connected.</exception>
     /// <exception cref="ScpiInitializationErrorException">Thrown when the device returns a SCPI error during initialization that persists after an internal retry.</exception>
-    /// <exception cref="TimeoutException">Thrown when the device does not report its channel configuration within <paramref name="channelPopulationTimeout"/>.</exception>
+    /// <exception cref="TimeoutException">Thrown when the device does not report a usable channel configuration within <paramref name="channelPopulationTimeout"/> — either because no status message arrived, or because every one that did could not identify the device.</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     public virtual async Task InitializeAsync(
         TimeSpan? channelPopulationTimeout = null,
@@ -3618,15 +3634,16 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     }
 
     /// <summary>
-    /// Sends <c>GetDeviceInfo</c> and waits for the device to report its channel
-    /// configuration via the <see cref="ChannelsPopulated"/> event, re-sending the request
-    /// periodically until channels populate or the timeout elapses.
+    /// Sends <c>GetDeviceInfo</c> and waits for the device to report a channel configuration
+    /// Core can use — channels, and an identity to read them by — re-sending the request
+    /// periodically until one arrives or the timeout elapses.
     /// </summary>
     /// <param name="timeout">Maximum time to wait before failing.</param>
     /// <param name="cancellationToken">A cancellation token to observe.</param>
     /// <returns>A task that completes once channels are populated.</returns>
     /// <exception cref="ChannelPopulationTimeoutException">
-    /// Thrown when no channels are populated within <paramref name="timeout"/>. It derives from
+    /// Thrown when no channels are populated within <paramref name="timeout"/>, and when the
+    /// only statuses that arrived could not identify the device. It derives from
     /// <see cref="TimeoutException"/> and carries what the device said when asked why.
     /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
@@ -3634,19 +3651,65 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     {
         var populatedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // What was rejected, for the failure message. Locals rather than fields: they belong to
+        // this one wait, and both the watcher and the event handler below run on the consumer
+        // thread, in that order, within the same call that delivers a status message. They are
+        // read once more, at the deadline, from the waiting thread and without a barrier of
+        // their own: a stale read there can only cost the more precise failure message, which
+        // is why they are counters and not the decision itself.
+        var identifiesDevice = false;
+        var rejectedCount = 0;
+        var rejectedAnalogCount = 0;
+        var rejectedDigitalCount = 0;
+        var rejectedMissing = string.Empty;
+
+        void OnStatusMessage(DaqifiOutMessage message)
+        {
+            identifiesDevice = StatusIdentifiesDevice(message);
+            if (!identifiesDevice)
+            {
+                rejectedMissing = DescribeMissingIdentity(message);
+            }
+        }
+
         void OnChannelsPopulated(object? sender, ChannelsPopulatedEventArgs e)
         {
             // Only complete on a status that actually reported channels. A status with zero
             // channels would otherwise satisfy the wait with an empty device — the exact
             // outcome this method exists to prevent.
-            if (e.AnalogChannelCount + e.DigitalChannelCount > 0)
+            if (e.AnalogChannelCount + e.DigitalChannelCount == 0)
             {
-                populatedTcs.TrySetResult(true);
+                return;
             }
+
+            // The same reasoning, one step further out: a channel count is not a device
+            // description. A status that cannot say which device sent it leaves the connect
+            // with nothing to work from — the part number is what picks the board's channel
+            // resolution and rate ceiling, and Supports() fails closed on an absent firmware
+            // version, which skips the capability-document read that would have corrected
+            // them. Taking such a status reports a device that is wrong about itself and says
+            // nothing about being wrong (issue #922). Discard the frame and keep waiting: the
+            // loop below re-asks, and a device that identifies itself on a later status is
+            // still a good connect.
+            if (!identifiesDevice)
+            {
+                rejectedCount++;
+                rejectedAnalogCount = e.AnalogChannelCount;
+                rejectedDigitalCount = e.DigitalChannelCount;
+                SafeLog(() => _logger.LogWarning(
+                    "[InitializeAsync] Ignoring a status message with {AnalogCount} analog and {DigitalCount} digital channel(s) that does not identify the device ({Missing}).",
+                    e.AnalogChannelCount,
+                    e.DigitalChannelCount,
+                    rejectedMissing));
+                return;
+            }
+
+            populatedTcs.TrySetResult(true);
         }
 
         // Subscribe before sending so a fast response cannot fire the event in the
         // window between Send() and subscription.
+        _initialStatusWatcher = OnStatusMessage;
         ChannelsPopulated += OnChannelsPopulated;
         try
         {
@@ -3676,6 +3739,20 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 var remaining = timeout - clock.GetElapsedTime(startedAt);
                 if (remaining <= TimeSpan.Zero)
                 {
+                    // Out of time. A device that answered with a status Core could not use is a
+                    // different failure from one that answered nothing, and the caller can only
+                    // act on it if it is told which happened — so say so here rather than fall
+                    // through to the generic message below.
+                    if (rejectedCount > 0 && !populatedTcs.Task.IsCompleted)
+                    {
+                        throw await BuildUnidentifiedStatusTimeoutAsync(
+                            timeout,
+                            rejectedAnalogCount,
+                            rejectedDigitalCount,
+                            rejectedMissing,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
                     break;
                 }
 
@@ -3718,7 +3795,52 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         finally
         {
             ChannelsPopulated -= OnChannelsPopulated;
+            _initialStatusWatcher = null;
         }
+    }
+
+    /// <summary>
+    /// Builds the exception for a wait that expired on status messages which reported channels
+    /// and could not say which device sent them (issue #922).
+    /// </summary>
+    /// <remarks>
+    /// The one question asked here is <c>*IDN?</c>, because its answer is the whole point: on the
+    /// bench the device answered it correctly on the same connection whose status messages
+    /// carried no identity at all. Saying so turns a puzzling failure into a plain one — the
+    /// device knows what it is, and its status message does not say — and it is also what makes
+    /// <see cref="ChannelPopulationTimeoutException.IsDeviceResponding"/> true, which it must be
+    /// for a device that just sent a status.
+    /// </remarks>
+    private async Task<ChannelPopulationTimeoutException> BuildUnidentifiedStatusTimeoutAsync(
+        TimeSpan timeout,
+        int analogChannelCount,
+        int digitalChannelCount,
+        string missingIdentity,
+        CancellationToken cancellationToken)
+    {
+        var keptLines = new List<string>();
+        var (identity, _) = await AskOneQuestionAsync(
+            ScpiMessageProducer.GetDeviceIdentity, "*IDN?", keptLines, cancellationToken).ConfigureAwait(false);
+
+        var message =
+            $"Device '{Name}' reported channels but never identified itself within {timeout.TotalSeconds:0.#}s. "
+            + $"Its last status message carried {analogChannelCount} analog and {digitalChannelCount} digital "
+            + $"channel(s), and {missingIdentity}. "
+            + "Core will not report a device it cannot identify: the channel resolution, the digital channels and "
+            + "the sample-rate ceiling would all be assumptions.";
+
+        if (identity != null)
+        {
+            message += $" The device does know what it is — it answered *IDN? with '{identity}' — so its status "
+                + "message is the problem, not the connection.";
+        }
+
+        message += " Reboot or power-cycle the device, then connect again.";
+
+        return new ChannelPopulationTimeoutException(
+            message,
+            deviceIdentity: identity,
+            rawDeviceResponse: keptLines);
     }
 
     /// <summary>
@@ -3885,6 +4007,13 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="message">The status message from the device.</param>
     protected virtual void OnStatusMessageReceived(DaqifiOutMessage message)
     {
+        // A connect waiting for the device to describe itself reads the message here, before
+        // anything is applied, because the fields it has to judge -- the part number and the
+        // firmware version -- are not on the ChannelsPopulated event, and Metadata cannot
+        // answer for them: UpdateFromProtobuf keeps what an earlier status already set, so a
+        // status carrying no identity at all would inherit the identity of the one before it.
+        _initialStatusWatcher?.Invoke(message);
+
         // Update device metadata
         Metadata.UpdateFromProtobuf(message);
 
@@ -3981,6 +4110,45 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
         {
             SafeLog(() => _logger.LogWarning(ex, "[{EventName}] classified-event subscriber threw", eventName));
         }
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when a status message says which device sent it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A part number and a firmware version are the two fields the rest of a connect is built
+    /// on. The part number selects the board, and with it the channel resolution, the digital
+    /// channel count and the sample-rate ceiling. The firmware version decides every
+    /// <see cref="Supports"/> check, including the capability-document read that would replace
+    /// those assumed values with the device's own.
+    /// </para>
+    /// <para>
+    /// The serial number is deliberately not required. It only names the unit, nothing reads it
+    /// to decide behaviour, and demanding it would fail a connect over a field that costs the
+    /// caller a column heading.
+    /// </para>
+    /// </remarks>
+    /// <param name="message">The status message to judge.</param>
+    private static bool StatusIdentifiesDevice(DaqifiOutMessage message)
+        => !string.IsNullOrWhiteSpace(message.DevicePn)
+           && !string.IsNullOrWhiteSpace(message.DeviceFwRev);
+
+    /// <summary>
+    /// Names the identity fields a status message did not carry, for the failure message.
+    /// </summary>
+    /// <param name="message">The status message that was rejected.</param>
+    private static string DescribeMissingIdentity(DaqifiOutMessage message)
+    {
+        var noPartNumber = string.IsNullOrWhiteSpace(message.DevicePn);
+        var noFirmwareVersion = string.IsNullOrWhiteSpace(message.DeviceFwRev);
+
+        if (noPartNumber && noFirmwareVersion)
+        {
+            return "no part number and no firmware version";
+        }
+
+        return noPartNumber ? "no part number" : "no firmware version";
     }
 
     /// <summary>

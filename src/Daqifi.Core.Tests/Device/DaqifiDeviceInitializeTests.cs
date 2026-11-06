@@ -1,6 +1,7 @@
 using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Device;
+using Daqifi.Core.Device.Capabilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,6 +14,26 @@ namespace Daqifi.Core.Tests.Device;
 
 public class DaqifiDeviceInitializeTests
 {
+    /// <summary>
+    /// The status message a working device answers <c>SYSInfoPB?</c> with: its channels AND
+    /// which device it is. Both halves matter — a connect rejects a status that reports channels
+    /// and cannot identify the device, because every value derived from it would be a guess
+    /// (issue #922).
+    /// </summary>
+    /// <remarks>
+    /// The doubles below hand this to <c>OnStatusMessageReceived</c>, which is the method the
+    /// protobuf protocol handler calls on a real connection, so a test exercises the same path
+    /// the device drives rather than the channel-population step alone.
+    /// </remarks>
+    private static DaqifiOutMessage HealthyStatus() => new()
+    {
+        DevicePn = "Nq1",
+        DeviceSn = 9090539562006014104,
+        DeviceFwRev = "3.8.0",
+        AnalogInPortNum = 2,
+        DigitalPortNum = 2
+    };
+
     [Fact]
     public async Task InitializeAsync_SendsAllConfigCommands()
     {
@@ -507,6 +528,108 @@ public class DaqifiDeviceInitializeTests
     }
 
     [Fact]
+    public async Task InitializeAsync_WhenTheStatusCannotIdentifyTheDevice_FailsInsteadOfReportingAWrongDevice()
+    {
+        // The bench state behind issue #922. The device answers with 16 analog channels, no
+        // digital channels and no identity at all. Everything the connect derives from that is
+        // wrong: half the channels are missing, the analog channels keep their assumed 65535
+        // counts instead of the board's real 4096, and the rate ceiling keeps the Unknown-board
+        // placeholder of 1000 Hz instead of 22000. Nothing downstream can tell, because the
+        // device reports Connected and has channels. So the connect has to fail.
+        var device = new TestableDaqifiDevice("TestDevice")
+        {
+            StatusForDeviceInfo = _ => new DaqifiOutMessage { AnalogInPortNum = 16 },
+            IdentityReply = "DAQiFi,Nq1,7E2815916200E898,01-02"
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(300)));
+
+        // The message names what was missing, so a caller is not left guessing at a device
+        // that answered.
+        Assert.Contains("never identified itself", ex.Message);
+        Assert.Contains("no part number and no firmware version", ex.Message);
+        Assert.Contains("16 analog and 0 digital", ex.Message);
+
+        // And it says the device knows what it is, which is what makes this a device to reboot
+        // rather than a connection to check. A device that just sent a status is responding.
+        Assert.True(ex.IsDeviceResponding);
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Contains("DAQiFi,Nq1,7E2815916200E898,01-02", ex.Message);
+
+        Assert.Equal(DeviceState.Error, device.State);
+        Assert.Empty(device.Metadata.PartNumber);
+        Assert.Equal(DeviceType.Unknown, device.Metadata.DeviceType);
+    }
+
+    [Theory]
+    [InlineData("", "3.8.0", "no part number")]
+    [InlineData("Nq1", "", "no firmware version")]
+    public async Task InitializeAsync_WhenTheStatusCarriesHalfAnIdentity_SaysWhichHalfIsMissing(
+        string partNumber, string firmwareVersion, string expectedMissing)
+    {
+        // Half an identity is not an identity. The part number selects the board, and with it
+        // the channel resolution and the rate ceiling; the firmware version decides whether the
+        // capability document that would replace those assumptions is read at all.
+        var device = new TestableDaqifiDevice("TestDevice")
+        {
+            StatusForDeviceInfo = _ => new DaqifiOutMessage
+            {
+                DevicePn = partNumber,
+                DeviceFwRev = firmwareVersion,
+                AnalogInPortNum = 16,
+                DigitalPortNum = 16
+            }
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(300)));
+
+        Assert.Contains(expectedMissing, ex.Message);
+        Assert.Equal(DeviceState.Error, device.State);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenAStatusWithoutIdentityIsFollowedByAGoodOne_Succeeds()
+    {
+        // A status that cannot identify the device is a frame to discard, not a verdict on the
+        // connect. The request is re-sent, and a device that identifies itself on a later status
+        // is a good connect.
+        var device = new TestableDaqifiDevice("TestDevice")
+        {
+            StatusForDeviceInfo = request => request == 1
+                ? new DaqifiOutMessage { AnalogInPortNum = 16 }
+                : HealthyStatus()
+        };
+        device.Connect();
+
+        await device.InitializeAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(DeviceState.Ready, device.State);
+        Assert.Equal(4, device.Channels.Count);
+        Assert.Equal("Nq1", device.Metadata.PartNumber);
+        Assert.Equal("3.8.0", device.Metadata.FirmwareVersion);
+        Assert.True(device.DeviceInfoRequestCount > 1, "The discarded status must be re-requested.");
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenNoStatusArrivesAtAll_DoesNotBlameTheIdentity()
+    {
+        // The two failures are different, and a caller acts on them differently: a device that
+        // sent nothing is a connection or routing problem, while a device that sent a status
+        // Core could not use is this one. The messages must not be interchangeable.
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false);
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(300)));
+
+        Assert.DoesNotContain("never identified itself", ex.Message);
+    }
+
+    [Fact]
     public async Task InitializeAsync_WhenChannelsPopulateAsynchronously_CompletesViaWaitLoop()
     {
         // Arrange — channels arrive on a background thread after a delay (as on real hardware
@@ -871,6 +994,26 @@ public class DaqifiDeviceInitializeTests
         public bool PopulateChannelsOnDeviceInfo { get; set; }
 
         /// <summary>
+        /// The status message to answer the n-th GetDeviceInfo request with, where n starts at 1.
+        /// <c>null</c>, the default, answers every request with <see cref="HealthyStatus"/>. A
+        /// test uses this to answer with a status a real device has been seen to send and a
+        /// connect must not accept — one that reports channels and does not say which device
+        /// sent it (issue #922).
+        /// </summary>
+        public Func<int, DaqifiOutMessage>? StatusForDeviceInfo { get; set; }
+
+        /// <summary>
+        /// The capability-document read is a text exchange of its own, and a connect makes it on
+        /// every device that reports a firmware version — which a real status message always
+        /// does, and which a connect now insists on (issue #922). Answered here without an
+        /// exchange so the counters above keep measuring the init setup sequence, which is what
+        /// the tests reading them are about. The read itself is covered by its own tests.
+        /// </summary>
+        public override Task<CapabilityDocument?> ReadCapabilityDocumentAsync(
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<CapabilityDocument?>(null);
+
+        /// <summary>
         /// When set, channels populate asynchronously after this delay on a background thread
         /// (simulating a status that arrives via the consumer thread) instead of synchronously
         /// inside Send. This exercises the production Task.WhenAny wait loop rather than the
@@ -961,25 +1104,20 @@ public class DaqifiDeviceInitializeTests
                     OnDeviceInfoRequested?.Invoke();
                     if (PopulateChannelsOnDeviceInfo)
                     {
+                        var requestNumber = DeviceInfoRequestCount;
+                        var status = StatusForDeviceInfo?.Invoke(requestNumber) ?? HealthyStatus();
+
                         if (AsyncPopulationDelay is { } delay)
                         {
                             _ = Task.Run(async () =>
                             {
                                 await Task.Delay(delay);
-                                PopulateChannelsFromStatus(new DaqifiOutMessage
-                                {
-                                    AnalogInPortNum = 2,
-                                    DigitalPortNum = 2
-                                });
+                                OnStatusMessageReceived(status);
                             });
                         }
                         else
                         {
-                            PopulateChannelsFromStatus(new DaqifiOutMessage
-                            {
-                                AnalogInPortNum = 2,
-                                DigitalPortNum = 2
-                            });
+                            OnStatusMessageReceived(status);
                         }
                     }
                 }
@@ -1174,11 +1312,7 @@ public class DaqifiDeviceInitializeTests
             if (message is IOutboundMessage<string> stringMessage &&
                 stringMessage.Data.Contains("SYSInfoPB"))
             {
-                PopulateChannelsFromStatus(new DaqifiOutMessage
-                {
-                    AnalogInPortNum = 2,
-                    DigitalPortNum = 2
-                });
+                OnStatusMessageReceived(HealthyStatus());
             }
         }
 
@@ -1306,11 +1440,7 @@ public class DaqifiDeviceInitializeTests
             if (message is IOutboundMessage<string> stringMessage &&
                 stringMessage.Data.Contains("SYSInfoPB"))
             {
-                PopulateChannelsFromStatus(new DaqifiOutMessage
-                {
-                    AnalogInPortNum = 2,
-                    DigitalPortNum = 2
-                });
+                OnStatusMessageReceived(HealthyStatus());
             }
         }
 
@@ -1444,11 +1574,10 @@ public class DaqifiDeviceInitializeTests
             // device still set to WiFi sends nothing back over USB. That is the whole of #897.
             if (stringMessage.Data.Contains("SYSInfoPB") && !StreamInterfaceIsWifi)
             {
-                PopulateChannelsFromStatus(new DaqifiOutMessage
-                {
-                    AnalogInPortNum = 2,
-                    DigitalPortNum = 2
-                });
+                // Through OnStatusMessageReceived, not PopulateChannelsFromStatus: the status
+                // has to pass the identity check #923 added, so this double answers the way a
+                // real device does rather than around the gate the connect now applies.
+                OnStatusMessageReceived(HealthyStatus());
             }
         }
 
