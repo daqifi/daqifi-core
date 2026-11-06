@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading.Channels;
 using Daqifi.Core.Firmware;
 using Daqifi.Core.Firmware.Internal;
@@ -29,6 +30,19 @@ public class ProcessExternalProcessRunnerTests
     /// ever reached by code that does not come back at all.
     /// </summary>
     private static readonly TimeSpan HardBound = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Wall-clock ceiling for a case that starts a real process. Generous, because it has to
+    /// cover whatever a loaded CI runner charges for process startup - it is a hang detector,
+    /// not a performance assertion. Nothing a case asserts may depend on startup beating it.
+    /// </summary>
+    private static readonly TimeSpan RealProcessBound = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a real process the cases below start keeps running on its own. Long enough that
+    /// a run which ends sooner can only have ended because the runner ended it.
+    /// </summary>
+    private static readonly TimeSpan RealProcessLifetime = TimeSpan.FromSeconds(120);
 
     /// <summary>Request timeout used by the cases that must time out.</summary>
     private static readonly TimeSpan ShortProcessTimeout = TimeSpan.FromMilliseconds(100);
@@ -209,7 +223,9 @@ public class ProcessExternalProcessRunnerTests
             Timeout = TimeSpan.FromSeconds(30)
         };
 
-        var result = await runner.RunAsync(request).WaitAsync(HardBound);
+        // RealProcessBound, not HardBound: this one pays for a real process start, and on a
+        // loaded Windows runner that alone can take seconds.
+        var result = await runner.RunAsync(request).WaitAsync(RealProcessBound);
 
         Assert.False(result.TimedOut);
         Assert.Equal(0, result.ExitCode);
@@ -229,12 +245,16 @@ public class ProcessExternalProcessRunnerTests
         };
 
         var elapsed = Stopwatch.StartNew();
-        var result = await runner.RunAsync(request).WaitAsync(HardBound);
+        var result = await runner.RunAsync(request).WaitAsync(RealProcessBound);
         elapsed.Stop();
 
         Assert.True(result.TimedOut, "the process sleeps far longer than its timeout");
+
+        // The bound is measured against the process's own lifetime, not against a fixed number
+        // of seconds the runner's startup has to fit inside: ending less than half way through
+        // the sleep can only mean the runner ended it.
         Assert.True(
-            elapsed.Elapsed < HardBound,
+            elapsed.Elapsed < RealProcessLifetime / 2,
             $"the run must be bounded; it took {elapsed.Elapsed.TotalSeconds:F1} s");
     }
 
@@ -246,51 +266,26 @@ public class ProcessExternalProcessRunnerTests
             return;
         }
 
-        var script = Path.Combine(Path.GetTempPath(), $"daqifi-worker-{Guid.NewGuid():N}.ps1");
-        File.WriteAllText(script,
-            "$child = Start-Process -FilePath cmd.exe -ArgumentList '/d /c ping -n 30 127.0.0.1' -NoNewWindow -PassThru\n" +
-            "[Console]::WriteLine($child.Id)\n");
-        int? workerId = null;
-        try
-        {
-            var result = await new ProcessExternalProcessRunner().RunAsync(new ExternalProcessRequest
-            {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{script}\"",
-                Timeout = TimeSpan.FromSeconds(5)
-            }).WaitAsync(TimeSpan.FromSeconds(15));
-            var idLine = Assert.Single(result.StandardOutputLines, line => int.TryParse(line, out _));
-            workerId = int.Parse(idLine, System.Globalization.CultureInfo.InvariantCulture);
-            Assert.True(result.TimedOut);
-            try
-            {
-                using var worker = Process.GetProcessById(workerId.Value);
-                await worker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));
-            }
-            catch (ArgumentException)
-            {
-                // The terminated worker has already been removed from the process table.
-            }
-        }
-        finally
-        {
-            if (workerId is { } id)
-            {
-                try
-                {
-                    using var worker = Process.GetProcessById(id);
-                    if (!worker.HasExited)
-                    {
-                        worker.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (ArgumentException)
-                {
-                }
-            }
+        // The real Windows family from issue #845: a launcher starts a worker, publishes its
+        // process id and exits, and the worker keeps the inherited output pipes open. The run
+        // cannot drain them, so it times out, kills the job object, and the worker must die with
+        // it - even though the process the runner started is long gone.
+        using var family = new ScriptedWindowsProcessFamily(RealProcessBound, RealProcessLifetime);
 
-            File.Delete(script);
-        }
+        var result = await new ProcessExternalProcessRunner(family).RunAsync(new ExternalProcessRequest
+        {
+            FileName = "powershell.exe",
+            Arguments = family.LauncherArguments,
+
+            // Only the drain of the pipes the worker holds has to fit inside this, because the
+            // family puts itself into position before the runner arms the timeout. The worker
+            // never releases those pipes, so the timeout always fires.
+            Timeout = TimeSpan.FromSeconds(1)
+        }).WaitAsync(RealProcessBound);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(result.TimedOut, "the surviving worker holds the pipes, so the run cannot drain them");
+        await family.AssertTheWorkerWasTerminatedAsync();
     }
 
     private static ProcessExternalProcessRunner NewRunner(IProcessHandle handle) =>
@@ -329,8 +324,8 @@ public class ProcessExternalProcessRunnerTests
 
     private static (string FileName, string Arguments) SleepCommand() =>
         OperatingSystem.IsWindows()
-            ? ("cmd.exe", "/c ping -n 30 127.0.0.1")
-            : ("/bin/sh", "-c \"sleep 30\"");
+            ? ("cmd.exe", $"/c ping -n {RealProcessLifetime.TotalSeconds:F0} 127.0.0.1")
+            : ("/bin/sh", $"-c \"sleep {RealProcessLifetime.TotalSeconds:F0}\"");
 
     /// <summary>
     /// A process the test drives directly: when it exits, whether the exit closes the redirected
@@ -433,6 +428,216 @@ public class ProcessExternalProcessRunnerTests
             catch (ChannelClosedException)
             {
                 return null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A real Windows process family for the launcher-exits-first case: a <c>powershell.exe</c>
+    /// launcher that starts a <c>cmd.exe</c> worker, publishes the worker's process id and
+    /// exits, leaving the worker holding the output pipes it inherited.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It is also the runner's process factory, which is what makes the case deterministic. The
+    /// runner arms the request timeout only once <see cref="Start"/> has returned, so holding
+    /// Start until the family is in position charges none of powershell's startup, and none of
+    /// <c>Start-Process</c>, to that timeout.
+    /// </para>
+    /// <para>
+    /// The earlier version of this case read the worker's id from the launcher's stdout inside a
+    /// five-second timeout, and failed roughly one Windows run in three: startup plus
+    /// <c>Start-Process</c> can exceed five seconds on a loaded runner, so the launcher was
+    /// killed before it ever reported the id and the assertion saw an empty collection. Nothing
+    /// here races a timeout: the id travels through a file this class polls, and the launcher's
+    /// exit is observed on the handle.
+    /// </para>
+    /// <para>
+    /// Holding Start is safe because nothing in this family writes to the redirected output -
+    /// the launcher prints nothing and the worker's own output goes to <c>nul</c> - so no pipe
+    /// can fill while the runner's readers have not started yet.
+    /// </para>
+    /// </remarks>
+    private sealed class ScriptedWindowsProcessFamily : IProcessHandleFactory, IDisposable
+    {
+        private readonly string _script = NewTempFilePath("ps1");
+        private readonly string _workerIdFile = NewTempFilePath("pid");
+        private readonly string _failureFile = NewTempFilePath("err");
+        private readonly TimeSpan _bound;
+        private int? _workerId;
+
+        internal ScriptedWindowsProcessFamily(TimeSpan bound, TimeSpan workerLifetime)
+        {
+            _bound = bound;
+            var staging = _workerIdFile + ".staging";
+            File.WriteAllText(
+                _script,
+                $$"""
+                  $ErrorActionPreference = 'Stop'
+                  try {
+                      $worker = Start-Process -FilePath cmd.exe -NoNewWindow -PassThru `
+                          -ArgumentList '/d /c ping -n {{workerLifetime.TotalSeconds:F0}} 127.0.0.1 > nul'
+                      Set-Content -LiteralPath '{{staging}}' -Value $worker.Id -Encoding ascii
+                      Move-Item -LiteralPath '{{staging}}' -Destination '{{_workerIdFile}}'
+                  }
+                  catch {
+                      Set-Content -LiteralPath '{{_failureFile}}' -Value $_.Exception.ToString() -Encoding ascii
+                      exit 1
+                  }
+                  """);
+        }
+
+        /// <summary>Gets the arguments that run the launcher script.</summary>
+        internal string LauncherArguments =>
+            $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{_script}\"";
+
+        /// <summary>
+        /// Starts the launcher and returns only once it has published its worker's process id
+        /// and exited, with the worker still running.
+        /// </summary>
+        public IProcessHandle Start(ExternalProcessRequest request)
+        {
+            var launcher = SystemProcessHandleFactory.Instance.Start(request);
+            try
+            {
+                _workerId = WaitUntilTheWorkerOutlivesItsLauncher(launcher);
+                return launcher;
+            }
+            catch
+            {
+                launcher.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>Asserts that the worker did not survive the run.</summary>
+        internal async Task AssertTheWorkerWasTerminatedAsync()
+        {
+            var id = _workerId ?? throw new InvalidOperationException("The launcher was never started.");
+
+            try
+            {
+                using var worker = Process.GetProcessById(id);
+                await worker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (ArgumentException)
+            {
+                // The terminated worker has already left the process table.
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail(
+                    $"worker {id} outlived the run. A worker whose launcher has already exited " +
+                    "is exactly what the job object is there to kill.");
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_workerId is { } id)
+            {
+                try
+                {
+                    using var worker = Process.GetProcessById(id);
+                    if (!worker.HasExited)
+                    {
+                        worker.Kill(entireProcessTree: true);
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    // Already gone, which is the expected outcome.
+                }
+                catch (InvalidOperationException)
+                {
+                    // Exited between the test and this check.
+                }
+            }
+
+            Delete(_script);
+            Delete(_workerIdFile);
+            Delete(_workerIdFile + ".staging");
+            Delete(_failureFile);
+        }
+
+        private int WaitUntilTheWorkerOutlivesItsLauncher(IProcessHandle launcher)
+        {
+            var waited = Stopwatch.StartNew();
+            int? workerId = null;
+
+            while (waited.Elapsed < _bound)
+            {
+                workerId ??= ReadWorkerId();
+                if (workerId is { } id && launcher.HasExited)
+                {
+                    Assert.False(
+                        HasExited(id),
+                        $"worker {id} did not outlive its launcher, so the case would prove nothing");
+
+                    return id;
+                }
+
+                Thread.Sleep(25);
+            }
+
+            throw new TimeoutException(
+                $"The launcher did not start a worker and exit within {_bound.TotalSeconds:F0} s. " +
+                $"Worker id: {workerId?.ToString(CultureInfo.InvariantCulture) ?? "never reported"}; " +
+                $"launcher exited: {launcher.HasExited}; script error: {Read(_failureFile) ?? "none"}.");
+        }
+
+        /// <summary>
+        /// Reads the published worker id, or <c>null</c> while there is none. The launcher writes
+        /// the id to a staging path and renames it, so a poll never sees a half-written number.
+        /// </summary>
+        private int? ReadWorkerId() =>
+            int.TryParse(Read(_workerIdFile)?.Trim(), CultureInfo.InvariantCulture, out var id) ? id : null;
+
+        private static bool HasExited(int processId)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(processId);
+                return process.HasExited;
+            }
+            catch (ArgumentException)
+            {
+                return true;
+            }
+        }
+
+        private static string NewTempFilePath(string extension) =>
+            Path.Combine(Path.GetTempPath(), $"daqifi-worker-{Guid.NewGuid():N}.{extension}");
+
+        private static string? Read(string path)
+        {
+            try
+            {
+                return File.ReadAllText(path);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        private static void Delete(string path)
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+                // A surviving process can still hold the file; the temp directory is cleaned up
+                // by the runner image.
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
     }
