@@ -377,6 +377,57 @@ public class SdCardLogSampleSourceTests
     }
 
     [Fact]
+    public void AsSampleSource_TakesTheWidthFromTheData_WhenNoConfigurationStatesOne()
+    {
+        // A protobuf log carries no configuration block, so the width of its entries is the only
+        // answer there is. Taking it as zero exported the digital column alone and threw the
+        // analog readings away (#902).
+        var session = Session(config: null, observedAnalogValueCount: 16);
+
+        var source = session.AsSampleSource();
+
+        Assert.Equal(16, source.AnalogChannelCount);
+        Assert.Equal("Daqifi:unknown:AI15", source.GetChannels()[15].Key);
+    }
+
+    [Fact]
+    public void AsSampleSource_TheDataOverrulesAStatedWidthItProvesShort()
+    {
+        // An entry with values and no column to hold them loses readings whichever side is
+        // wrong, so the wider of the two wins.
+        var session = Session(Config(analogPorts: 2, serial: "LOG-SN"), observedAnalogValueCount: 16);
+
+        var source = session.AsSampleSource();
+
+        Assert.Equal(16, source.AnalogChannelCount);
+    }
+
+    [Fact]
+    public void AsSampleSource_AStatedWidthWiderThanTheData_IsKept()
+    {
+        // A stated count the data does not fill is a recording of channels that read nothing,
+        // not a narrower log: the columns stay, and the cells come out empty.
+        var session = Session(Config(analogPorts: 8, serial: "LOG-SN"), observedAnalogValueCount: 3);
+
+        var source = session.AsSampleSource();
+
+        Assert.Equal(8, source.AnalogChannelCount);
+    }
+
+    [Fact]
+    public void AsSampleSource_NoAnalogChannels_AndNoAnalogValues_StillExportsTheDigitalColumnAlone()
+    {
+        // The other half of the same rule: a log from a device with no analog inputs carries no
+        // analog values, so nothing widens it and no invented columns appear.
+        var session = Session(Config(analogPorts: 0, serial: "LOG-SN"), observedAnalogValueCount: 0);
+
+        var source = session.AsSampleSource();
+
+        Assert.Equal(0, source.AnalogChannelCount);
+        Assert.Equal(new[] { "Daqifi:LOG-SN:DIO" }, source.GetChannels().Select(c => c.Key).ToArray());
+    }
+
+    [Fact]
     public void AsSampleSource_WithNoConfigurationAtAll_ExportsTheDigitalColumnForAnUnknownDevice()
     {
         var source = Session(config: null).AsSampleSource();
@@ -445,8 +496,13 @@ public class SdCardLogSampleSourceTests
     private static SdCardDeviceConfiguration Config(int analogPorts, string? serial) =>
         new(analogPorts, DigitalPortCount: 1, TimestampFrequency: 50000, serial, null, null, null);
 
-    private static SdCardLogSession Session(SdCardDeviceConfiguration? config) =>
-        new("log.bin", null, config, Entries());
+    private static SdCardLogSession Session(
+        SdCardDeviceConfiguration? config,
+        int observedAnalogValueCount = 0) =>
+        new("log.bin", null, config, Entries())
+        {
+            ObservedAnalogValueCount = observedAnalogValueCount
+        };
 
     private static IAsyncEnumerable<SdCardLogEntry> Entries(params SdCardLogEntry[] entries)
         => Stream(entries);

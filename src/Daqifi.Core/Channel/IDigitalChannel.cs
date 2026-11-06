@@ -10,10 +10,17 @@ public interface IDigitalChannel : IChannel
     /// This is local bookkeeping mirroring the last commanded state; use
     /// <c>IStreamingDevice.SetDioValue</c> to change the device.
     /// </summary>
+    [Obsolete(
+        "Read IsHigh instead: it now reports the pin's streamed state for an output as well as an input. "
+        + "To change the pin, call IStreamingDevice.SetDioValue. This property is a local note of the last "
+        + "commanded value and is never confirmed by the device. It will be removed in a future major version.")]
     bool OutputValue { get; set; }
 
     /// <summary>
-    /// Gets whether the digital input is currently high (true) or low (false).
+    /// Gets whether the pin is currently high (true) or low (false), as reported by the most
+    /// recent streamed sample. Valid for an input pin and for a driven output pin alike: the
+    /// firmware reads the pin back, not the direction register (#901). Returns
+    /// <see langword="false"/> until the first sample arrives.
     /// </summary>
     bool IsHigh { get; }
 

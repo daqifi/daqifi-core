@@ -46,8 +46,37 @@ public class SerialStreamTransportTests
 
         SerialStreamTransport.ApplyOperationalTimeouts(port);
 
-        Assert.Equal(500, port.ReadTimeout);
+        Assert.Equal(50, port.ReadTimeout);
         Assert.Equal(2000, port.WriteTimeout);
+    }
+
+    [Fact]
+    public void SerialStreamTransport_ApplyOperationalTimeouts_LeavesAReaderPromptlyStoppable()
+    {
+        // #900: the read timeout IS the stop latency. A StreamMessageConsumer checks its stop flag
+        // at the top of its loop and is otherwise parked in a blocking Read, and every stop path
+        // joins that thread — so a text exchange cannot send a byte until one read timeout has
+        // elapsed, and it pays the same again on the way out. At the 500ms this used to be, the
+        // three exchanges a connect runs cost 483-499ms each before anything went out. This bound
+        // is the requirement; the exact value above is the choice that meets it.
+        using var port = new SerialPort("COM1") { ReadTimeout = 30000 };
+
+        SerialStreamTransport.ApplyOperationalTimeouts(port);
+
+        Assert.InRange(port.ReadTimeout, 1, 100);
+    }
+
+    [Fact]
+    public void SerialStreamTransport_OperationalReadTimeout_MatchesTheTcpTransport()
+    {
+        // Both transports exist to feed the same consumer, and both pay the same join on a stop,
+        // so neither path should carry a stop latency the other does not (#900). Asserted through
+        // ApplyOperationalTimeouts because the serial constant is private.
+        using var port = new SerialPort("COM1") { ReadTimeout = 30000 };
+
+        SerialStreamTransport.ApplyOperationalTimeouts(port);
+
+        Assert.Equal(TcpStreamTransport.OperationalReceiveTimeoutMs, port.ReadTimeout);
     }
 
     [Fact]

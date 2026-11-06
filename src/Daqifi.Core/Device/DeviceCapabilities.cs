@@ -72,8 +72,26 @@ public class DeviceCapabilities
     }
 
     /// <summary>
-    /// Creates device capabilities based on the device type.
+    /// Creates the capabilities a board is known to have, before the device has described itself.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the bootstrap for <see cref="DeviceMetadata.Capabilities"/>: it answers as soon as
+    /// the part number is known, and it is the floor under every field the device's own
+    /// capability document does not state. A connected device overlays the document on top of it,
+    /// so read capabilities from <c>IStreamingDevice.Metadata.Capabilities</c>, not from this
+    /// method, whenever a device is attached.
+    /// </para>
+    /// <para>
+    /// The values come from two sources. The Nyquist1 row is pinned to a capability document read
+    /// from a real board (<c>DeviceCapabilitiesTests</c> fails if the two disagree). The Nyquist3
+    /// row is read from the firmware's board configuration (<c>NQ3BoardConfig.c</c>), not from a
+    /// connected board. The firmware has no Nyquist2 build configuration, so the Nyquist2 channel
+    /// counts are left at zero: the device reports them, and zero means "not stated here", not
+    /// "none". The sampling-rate ceiling is the firmware's own advertised ISR ceiling for the
+    /// board variant: 22 kHz for Nyquist1, 16 kHz for Nyquist2 and Nyquist3.
+    /// </para>
+    /// </remarks>
     /// <param name="deviceType">The type of the device.</param>
     /// <returns>A <see cref="DeviceCapabilities"/> instance configured for the specified device type.</returns>
     public static DeviceCapabilities FromDeviceType(DeviceType deviceType)
@@ -87,7 +105,10 @@ public class DeviceCapabilities
                 HasWiFi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                MaxSamplingRate = 1000
+                AnalogInputChannels = 16,
+                AnalogOutputChannels = 0,
+                DigitalChannels = 16,
+                MaxSamplingRate = 22000
             },
             DeviceType.Nyquist2 => new DeviceCapabilities
             {
@@ -96,7 +117,7 @@ public class DeviceCapabilities
                 HasWiFi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                MaxSamplingRate = 1000
+                MaxSamplingRate = 16000
             },
             DeviceType.Nyquist3 => new DeviceCapabilities
             {
@@ -105,7 +126,10 @@ public class DeviceCapabilities
                 HasWiFi = true,
                 HasWincWifiModule = true,
                 HasUsb = true,
-                MaxSamplingRate = 1000
+                AnalogInputChannels = 8,
+                AnalogOutputChannels = 8,
+                DigitalChannels = 16,
+                MaxSamplingRate = 16000
             },
             _ => new DeviceCapabilities()
         };

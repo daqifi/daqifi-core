@@ -59,6 +59,34 @@ public sealed class SdCardLogSession
     public SdCardTimestampSource TimestampFrequencySource { get; init; }
 
     /// <summary>
+    /// Gets how many analog values an entry of this log was seen to carry, or <c>0</c> when no
+    /// entry carrying values was seen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the width of the data, not a figure the file states. It is what
+    /// <see cref="Daqifi.Core.Logging.Export.SdCardLogSessionExtensions.AsSampleSource"/> reads
+    /// the export's column count from when the log carries no configuration block to state
+    /// <see cref="SdCardDeviceConfiguration.AnalogPortCount"/>. A protobuf log normally carries
+    /// none, and taking the column count as zero there discarded every analog reading in the
+    /// file while reporting a successful export (issue #902).
+    /// </para>
+    /// <para>
+    /// Only the protobuf path has to measure this. A CSV or JSON log names its columns in its
+    /// own header, so <see cref="DeviceConfig"/> already states the width and this stays
+    /// <c>0</c>.
+    /// </para>
+    /// <para>
+    /// It is the widest entry seen while the configuration scan ran, so it is bounded by
+    /// <see cref="SdCardParseOptions.ConfigurationScanMessageLimit"/> rather than by the file's
+    /// length. A log whose first values appear beyond that window still exports short, and
+    /// <see cref="Daqifi.Core.Logging.Export.SdCardLogSampleSource.DroppedAnalogColumns"/> is
+    /// what reports it.
+    /// </para>
+    /// </remarks>
+    public int ObservedAnalogValueCount { get; init; }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="SdCardLogSession"/> class.
     /// </summary>
     /// <param name="fileName">The source file name.</param>

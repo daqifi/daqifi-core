@@ -736,6 +736,75 @@ public class StreamFrameDecoderTests
         Assert.Equal(1.0, di0.ActiveSample.ScaledValue);
     }
 
+    [Theory]
+    [InlineData(ChannelDirection.Input)]
+    [InlineData(ChannelDirection.Output)]
+    public void DigitalChannels_AreDecodedWhicheverWayThePinIsSet(ChannelDirection direction)
+    {
+        // #901. The firmware reads the pin back, not the direction register, so the bit in the
+        // frame is the pin's true state for a driven output as well as for an input. Measured on
+        // an Nq1 (fw 3.8.0): all 16 pins driven to 0xAAAA streamed 0101010101010101 both ways.
+        // Before this fix an output-direction channel was skipped and got no sample at all, so a
+        // caller who drove a pin high could not see it.
+        var host = new FakeHost { IsStreaming = true };
+        var low = host.AddDigital(0, enabled: true, direction);
+        var high = host.AddDigital(1, enabled: true, direction);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        frame.DigitalData = ByteString.CopyFrom(0b0000_0010); // bit 0 low, bit 1 high
+
+        decoder.ProcessFrame(frame);
+
+        Assert.Equal(0.0, low.ActiveSample!.Value);
+        Assert.Equal(1.0, high.ActiveSample!.Value);
+        Assert.False(((IDigitalChannel)low).IsHigh);
+        Assert.True(((IDigitalChannel)high).IsHigh);
+    }
+
+    [Fact]
+    public void DigitalChannels_DisabledOutput_GetsNoSample()
+    {
+        // Direction no longer decides this; IsEnabled still does.
+        var host = new FakeHost { IsStreaming = true };
+        var disabled = host.AddDigital(0, enabled: false, ChannelDirection.Output);
+        var enabled = host.AddDigital(1, enabled: true, ChannelDirection.Output);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        frame.DigitalData = ByteString.CopyFrom(0b0000_0011);
+
+        decoder.ProcessFrame(frame);
+
+        Assert.Null(disabled.ActiveSample);
+        Assert.Equal(1.0, enabled.ActiveSample!.Value);
+    }
+
+    [Theory]
+    [InlineData(ChannelDirection.Input)]
+    [InlineData(ChannelDirection.Output)]
+    public void DigitalChannels_BeyondThePayload_GetNoSample(ChannelDirection direction)
+    {
+        // A one-byte payload describes pins 0-7 only. Pin 8 must get no sample rather than a
+        // false "low" — true for an output pin as it already was for an input pin.
+        var host = new FakeHost { IsStreaming = true };
+        var inPayload = host.AddDigital(7, enabled: true, direction);
+        var beyondPayload = host.AddDigital(8, enabled: true, direction);
+        var decoder = new StreamFrameDecoder(host);
+        decoder.BeginSession(TicksPerSecond, 100);
+
+        var frame = new DaqifiOutMessage { MsgTimeStamp = 1000 };
+        frame.DigitalData = ByteString.CopyFrom(0b1000_0000); // bit 7 high; no byte 1 at all
+
+        decoder.ProcessFrame(frame);
+
+        Assert.Equal(1.0, inPayload.ActiveSample!.Value);
+        Assert.Null(beyondPayload.ActiveSample);
+        Assert.False(((IDigitalChannel)beyondPayload).IsHigh);
+    }
+
     #endregion
 
     #region First session of a device instance (#773)
@@ -1099,9 +1168,10 @@ public class StreamFrameDecoderTests
             return channel;
         }
 
-        public IChannel AddDigital(int number, bool enabled)
+        public IChannel AddDigital(
+            int number, bool enabled, ChannelDirection direction = ChannelDirection.Input)
         {
-            var channel = new DigitalChannel(number) { IsEnabled = enabled, Direction = ChannelDirection.Input };
+            var channel = new DigitalChannel(number) { IsEnabled = enabled, Direction = direction };
             Track(channel);
             return channel;
         }
