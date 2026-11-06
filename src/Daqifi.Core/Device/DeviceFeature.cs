@@ -41,5 +41,21 @@ public enum DeviceFeature
     /// requires SD hardware. Over USB these operations are available on all SD-capable firmware
     /// and are not gated.
     /// </summary>
-    SdFileTransferOverWifi
+    SdFileTransferOverWifi,
+
+    /// <summary>
+    /// The end-of-listing marker on <c>SYSTem:STORage:SD:LISt?</c> (<c>__END_OF_LIST__</c>
+    /// followed by <c>OK</c>, <c>INCOMPLETE</c> or <c>FAILED</c>). Firmware-gated: introduced by
+    /// firmware <c>#794</c>/<c>#796</c> and first released in <b>v3.8.0</b>; requires SD
+    /// hardware.
+    /// </summary>
+    /// <remarks>
+    /// Unlike its siblings this gate does not decide whether to send a command — the listing
+    /// query is sent either way — it decides how much a reply can be trusted. On firmware that
+    /// emits the marker, a listing that arrives without one did not finish, so Core raises
+    /// <see cref="SdCard.SdCardListIncompleteException"/> rather than reporting the entries it
+    /// did get as the whole card (closes #887). On older firmware a missing marker is simply
+    /// the norm and carries no such information.
+    /// </remarks>
+    SdListingEndMarker
 }

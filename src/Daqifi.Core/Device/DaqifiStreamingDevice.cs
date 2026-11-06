@@ -1134,6 +1134,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
         CancellationToken cancellationToken)
         => ExecuteRawCaptureAsync(rawAction, cancellationToken);
 
+    bool IDeviceOperationHost.Supports(DeviceFeature feature) => Supports(feature);
+
     void IDeviceOperationHost.EnsureSupported(DeviceFeature feature) => EnsureSupported(feature);
 
     FeatureNotSupportedException IDeviceOperationHost.CreateFeatureNotSupportedException(DeviceFeature feature)

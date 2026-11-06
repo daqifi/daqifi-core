@@ -64,6 +64,20 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
+    public void RequirementTable_SdListingEndMarker_RequiresV3_8_0()
+    {
+        // The marker (firmware #794/#796) first shipped in v3.8.0, not in v3.7.3 where the
+        // rest of that SD work landed. Pinned because the gate reads the other way round from
+        // its siblings: relaxing it below v3.8.0 would make Core treat the absence of a marker
+        // on firmware that never emits one as a short directory walk, and an empty card would
+        // start throwing (#887).
+        var requirement = DeviceFeatureRequirements.For(DeviceFeature.SdListingEndMarker);
+
+        Assert.Equal(new FirmwareVersion(3, 8, 0, null, 0), requirement.MinVersion);
+        Assert.Equal(HardwareRequirement.SdCard, requirement.Hardware);
+    }
+
+    [Fact]
     public void RequirementTable_SdStorageQuery_ReportsTheSupportedFloorNotTheIntroducingVersion()
     {
         // SYSTem:STORage:SD:SPACe? shipped in v3.4.6b1, but the floor is what daqifi-core

@@ -1,4 +1,5 @@
 #nullable enable
+Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void
 Daqifi.Core.Device.Discovery.DiscoveryPassOutcome

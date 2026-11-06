@@ -56,9 +56,20 @@ public interface ISdCardOperations
     /// — the <c>SYSTem:ERRor?</c> terminator appended to the listing query never came back — or
     /// it did answer and its own end-of-listing marker reported the walk as incomplete or failed
     /// (<c>__END_OF_LIST__</c> with <c>INCOMPLETE</c>, <c>FAILED</c>, or any status other than
-    /// <c>OK</c>; firmware #794). An empty result therefore always means an empty card — never
-    /// an unreachable device or a walk the device itself called short — so callers can render it
-    /// as such (closes #396).
+    /// <c>OK</c>; firmware #794), or — on firmware that emits that marker, v3.8.0 and above —
+    /// the reply carried no marker at all with nothing to explain its absence, which is a walk
+    /// that never reached its own end (closes #887). An empty result therefore always means an
+    /// empty card — never an unreachable device or a walk the device itself called short — so
+    /// callers can render it as such (closes #396).
+    /// <para>
+    /// One case stays outside what Core can see: firmware that answers
+    /// <c>__END_OF_LIST__ OK</c> with no entries while the directory was in fact unreadable is
+    /// claiming a finished walk, and Core has no second source to contradict it. That is a
+    /// firmware-side report of "I could not look" as "there is nothing there", tracked as a
+    /// companion to <c>daqifi-nyquist-firmware#925</c>; below v3.8.0, where there is no marker,
+    /// Core cannot distinguish a short walk from a complete one at all and an empty listing is
+    /// taken at face value.
+    /// </para>
     /// </exception>
     Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default);
 

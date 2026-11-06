@@ -68,6 +68,15 @@ internal static class DeviceFeatureRequirements
     /// </summary>
     internal static readonly FirmwareVersion CapabilityDocumentMinFirmware = new(3, 5, 0, null, 0);
 
+    /// <summary>
+    /// Minimum firmware that appends the end-of-listing marker to
+    /// <c>SYSTem:STORage:SD:LISt?</c> (<c>__END_OF_LIST__ &lt;status&gt;</c>, firmware
+    /// <c>#794</c>/<c>#796</c>), first released in <b>v3.8.0</b>. Below this version a listing
+    /// simply stops, so its absence says nothing; at or above it, its absence means the walk did
+    /// not finish.
+    /// </summary>
+    internal static readonly FirmwareVersion SdListingEndMarkerMinFirmware = new(3, 8, 0, null, 0);
+
     private static readonly ImmutableArray<DeviceType> Nyquist3Only =
         ImmutableArray.Create(DeviceType.Nyquist3);
 
@@ -98,7 +107,17 @@ internal static class DeviceFeatureRequirements
             [DeviceFeature.SdFileTransferOverWifi] = new(
                 MinVersion: SdOverWifiMinFirmware,
                 Boards: null,
-                Hardware: HardwareRequirement.SdCard | HardwareRequirement.WiFi)
+                Hardware: HardwareRequirement.SdCard | HardwareRequirement.WiFi),
+
+            // Not a "may I send this?" gate like the rest of the table — the listing query goes
+            // out either way. It answers "may I believe a reply that carries no marker?", so an
+            // unparseable or absent firmware version resolves to not-supported, which is the
+            // same direction the other entries fail in and the safe one here: the pre-#794
+            // reading, where a missing marker is the norm and is not treated as a short walk.
+            [DeviceFeature.SdListingEndMarker] = new(
+                MinVersion: SdListingEndMarkerMinFirmware,
+                Boards: null,
+                Hardware: HardwareRequirement.SdCard)
         };
 
     /// <summary>

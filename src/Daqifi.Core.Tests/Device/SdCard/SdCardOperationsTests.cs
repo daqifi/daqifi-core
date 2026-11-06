@@ -1083,6 +1083,175 @@ public class SdCardOperationsTests
         Assert.NotEmpty(ex.RawDeviceResponse);
     }
 
+    #region Missing end-of-listing marker on marker-capable firmware (#887)
+
+    /// <summary>
+    /// A device on firmware that emits <c>__END_OF_LIST__</c> (v3.8.0 and above, firmware
+    /// #794/#796) with an SD card fitted, so <see cref="DeviceFeature.SdListingEndMarker"/>
+    /// resolves to supported.
+    /// </summary>
+    private static RetryableSdCardStreamingDevice MarkerCapableDevice()
+    {
+        var device = new RetryableSdCardStreamingDevice("TestDevice");
+        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.Metadata.FirmwareVersion = "3.8.0";
+        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        return device;
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAnswersWithNoMarker_ThrowsInsteadOfReportingAnEmptyCard()
+    {
+        // The #887 run. The card held five files, the SD subsystem was wedged on the shared
+        // SPI bus, and the listing came back as nothing but its own terminator: no entries, no
+        // __END_OF_LIST__, no SCPI error. Core reported "0 files" and the consumer rendered
+        // "SD card OK, 0 files" -- a confident wrong answer with nothing signalling a problem.
+        //
+        // On firmware that emits the marker, a reply the terminator closed without one is a
+        // walk that never reached its own end, so it must not be handed back as the card's
+        // contents.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>());
+        device.ResponseSequence.Enqueue(new List<string>());
+        device.Connect();
+
+        await Assert.ThrowsAsync<SdCardListIncompleteException>(
+            () => device.GetSdCardFilesAsync());
+
+        // Nothing cached either: a caller reading the property instead of the return value
+        // must not find an empty list standing in for the answer.
+        Assert.Empty(device.SdCardFiles);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAnswersWithEntriesButNoMarker_StillThrows()
+    {
+        // The same shape with some entries in hand. A partial walk is still a partial walk --
+        // the entries are real, but the caller is about to cache them and answer "is my file
+        // on the card?" from them, which is the question a short listing cannot answer.
+        var device = MarkerCapableDevice();
+        var response = new List<string> { "Daqifi/log_20261103_204314.bin 4608" };
+        device.ResponseSequence.Enqueue(new List<string>(response));
+        device.ResponseSequence.Enqueue(new List<string>(response));
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<SdCardListIncompleteException>(
+            () => device.GetSdCardFilesAsync());
+
+        Assert.Contains("log_20261103_204314.bin", string.Join("\n", ex.RawDeviceResponse));
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareMissesTheMarkerOnce_RetriesAndSucceeds()
+    {
+        // A missing marker is retried for the same reason a transient SCPI error is: the walk
+        // can be cut short by the shared SPI bus being briefly unavailable, and the second
+        // attempt is the one the user would have got by tapping Refresh.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>());
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "Daqifi/log_20261103_204314.bin 4608",
+            "Daqifi/default.bin 4608",
+            "__END_OF_LIST__ OK",
+        });
+        device.Connect();
+
+        var files = await device.GetSdCardFilesAsync();
+
+        Assert.Equal(2, files.Count);
+        Assert.Equal(2, device.ExecuteTextCommandCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAndAnEmptyMarkedListing_IsStillAnEmptyCard()
+    {
+        // The other side of the gate: the marker is there and says the walk finished, so no
+        // entries means no files. This is the case the contract's "an empty result always
+        // means an empty card" sentence is written for, and it must not start throwing.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string> { "__END_OF_LIST__ OK" });
+        device.Connect();
+
+        var files = await device.GetSdCardFilesAsync();
+
+        Assert.Empty(files);
+        Assert.Equal(1, device.ExecuteTextCommandCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_PreMarkerFirmwareAndAnEmptyListing_IsStillAnEmptyCard()
+    {
+        // Below v3.8.0 the device never emits a marker, so every reply is unterminated and its
+        // absence carries no information. Throwing here would turn the normal state of an
+        // empty card on most released firmware into a fault.
+        var device = new RetryableSdCardStreamingDevice("TestDevice");
+        device.Metadata.DeviceType = DeviceType.Nyquist1;
+        device.Metadata.FirmwareVersion = "3.7.2";
+        device.Metadata.Capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        device.ResponseSequence.Enqueue(new List<string>());
+        device.Connect();
+
+        var files = await device.GetSdCardFilesAsync();
+
+        Assert.Empty(files);
+        Assert.Equal(1, device.ExecuteTextCommandCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAndNoCard_KeepsTheMoreSpecificAnswerWithoutRetrying()
+    {
+        // A reply that explains its own missing marker keeps the better exception. "No SD card"
+        // is a more useful answer than "incomplete", and it is already definite, so it must not
+        // be re-read as an unexplained short walk and must not cost an extra exchange.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string> { "Error !! No SD Card Detected" });
+        device.Connect();
+
+        await Assert.ThrowsAsync<SdCardNotPresentException>(
+            () => device.GetSdCardFilesAsync());
+
+        Assert.Equal(1, device.ExecuteTextCommandCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAndAnUnreadableDirectory_StaysAFilesystemError()
+    {
+        // Same rule for the filesystem side: the marker is missing because the walk had
+        // nothing to walk, and "this directory would not open" says why.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "[Error:1]Failed to open directory [DAQiFi]",
+        });
+        device.Connect();
+
+        await Assert.ThrowsAsync<SdCardFilesystemException>(
+            () => device.GetSdCardFilesAsync());
+
+        Assert.Equal(1, device.ExecuteTextCommandCallCount);
+    }
+
+    [Fact]
+    public async Task GetSdCardFilesAsync_MarkerCapableFirmwareAndNoLogDirectory_IsStillAnEmptyCard()
+    {
+        // #730's answer survives the new check: a card with no log directory yet is an empty
+        // card, and the FAILED marker that comes with it has nothing further to add.
+        var device = MarkerCapableDevice();
+        device.ResponseSequence.Enqueue(new List<string>
+        {
+            "[Error:4]Failed to open directory [DAQiFi]",
+            "__END_OF_LIST__ FAILED",
+        });
+        device.Connect();
+
+        var files = await device.GetSdCardFilesAsync();
+
+        Assert.Empty(files);
+    }
+
+    #endregion
+
     [Theory]
     [InlineData(4)]   // SYS_FS_ERROR_NO_FILE
     [InlineData(5)]   // SYS_FS_ERROR_NO_PATH
@@ -2042,7 +2211,10 @@ public class SdCardOperationsTests
     {
         var device = new TestableNonUsbSdCardStreamingDevice("TestDevice");
         device.Metadata.FirmwareVersion = firmware;
-        device.CannedTextResponse = new List<string> { "Daqifi/log.bin" };
+        // The marker is what v3.8.0 firmware actually appends (#794/#796); on the two older
+        // versions it is simply absent from the real reply and harmless in this one, since the
+        // parser treats it as framing either way.
+        device.CannedTextResponse = new List<string> { "Daqifi/log.bin", "__END_OF_LIST__ OK" };
         device.Connect();
 
         var files = await device.GetSdCardFilesAsync();

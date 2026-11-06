@@ -827,6 +827,8 @@ public class ChannelControlOperationsTests
             return Task.FromResult<IReadOnlyList<string>>(lines);
         }
 
+        public bool Supports(DeviceFeature feature) => throw new NotSupportedException();
+
         public void EnsureSupported(DeviceFeature feature)
             => Assert.Equal(DeviceFeature.AnalogOutput, feature);
 
