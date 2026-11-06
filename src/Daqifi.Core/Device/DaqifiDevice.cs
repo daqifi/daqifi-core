@@ -3594,7 +3594,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="timeout">Maximum time to wait before failing.</param>
     /// <param name="cancellationToken">A cancellation token to observe.</param>
     /// <returns>A task that completes once channels are populated.</returns>
-    /// <exception cref="TimeoutException">Thrown when no channels are populated within <paramref name="timeout"/>.</exception>
+    /// <exception cref="ChannelPopulationTimeoutException">
+    /// Thrown when no channels are populated within <paramref name="timeout"/>. It derives from
+    /// <see cref="TimeoutException"/> and carries what the device said when asked why.
+    /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     private async Task WaitForChannelsPopulatedAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -3679,13 +3682,110 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 return;
             }
 
-            throw new TimeoutException(
-                $"Device '{Name}' did not report its channel configuration within {timeout.TotalSeconds:0.#}s. "
-                + "The device may be unresponsive or still initializing.");
+            throw await BuildChannelPopulationTimeoutAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             ChannelsPopulated -= OnChannelsPopulated;
+        }
+    }
+
+    /// <summary>
+    /// Asks the device why the channel-population wait came up empty, and builds the exception
+    /// from the answers rather than from a guess.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This runs only on the failure path, so a connect that works pays nothing for it. By the
+    /// time it runs the caller has already waited out the whole timeout, so two more text
+    /// queries are cheap, and they are asked on the connection that is already open.
+    /// </para>
+    /// <para>
+    /// The old message named two causes — unresponsive, or still starting — and the one seen
+    /// most often on the bench was neither: the device answered every text query at once and
+    /// was simply sending its output to another interface. Reading that message cost a real
+    /// bench session a dead-device diagnosis, a bootloader check and a power cycle before the
+    /// true cause was found (issue #911).
+    /// </para>
+    /// <para>
+    /// A device that does not answer <c>*IDN?</c> is not asked the second question: it has
+    /// already said what it had to say, and the original message is right for it.
+    /// </para>
+    /// </remarks>
+    private async Task<ChannelPopulationTimeoutException> BuildChannelPopulationTimeoutAsync(
+        TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var prefix = $"Device '{Name}' did not report its channel configuration within {timeout.TotalSeconds:0.#}s. ";
+        var lines = new List<string>();
+
+        var identity = await AskOneQuestionAsync(
+            ScpiMessageProducer.GetDeviceIdentity, "*IDN?", lines, cancellationToken).ConfigureAwait(false);
+
+        if (identity == null)
+        {
+            // Nothing came back, so the original wording is the accurate one.
+            return new ChannelPopulationTimeoutException(
+                prefix + "The device may be unresponsive or still initializing.",
+                rawDeviceResponse: lines);
+        }
+
+        var interfaceReply = await AskOneQuestionAsync(
+            ScpiMessageProducer.GetStreamInterface, "STReam:INTerface", lines, cancellationToken).ConfigureAwait(false);
+
+        int? streamInterface = int.TryParse(interfaceReply, out var parsed) ? parsed : null;
+
+        var message = prefix
+            + $"The device is responding — it answered *IDN? with '{identity}' — but sent no status this "
+            + "connection could read.";
+
+        if (streamInterface != null)
+        {
+            // Stated, not interpreted. Which interface counts as the wrong one depends on how
+            // the caller connected, and the number is what a reader needs either way.
+            message += $" It reports stream interface {streamInterface}, which is where it sends its "
+                + "output (0 = USB, 1 = WiFi, 2 = SD card).";
+        }
+
+        return new ChannelPopulationTimeoutException(
+            message,
+            deviceIdentity: identity,
+            streamInterface: streamInterface,
+            rawDeviceResponse: lines);
+    }
+
+    /// <summary>
+    /// Sends one text query and returns its reply, or <c>null</c> when the device did not
+    /// answer. Never throws: this runs while an exception is being built, and a failure to
+    /// diagnose must not replace the failure being reported.
+    /// </summary>
+    /// <remarks>
+    /// The reply is the last line that is not blank and is not the device echoing the query
+    /// back. A device that has not had <c>SYSTem:ECHO -1</c> applied echoes every command, and
+    /// by this point in initialization echo is off — but a device that was reset mid-session
+    /// has it on again, and the echo must not be mistaken for an answer.
+    /// </remarks>
+    private async Task<string?> AskOneQuestionAsync(
+        IOutboundMessage<string> query,
+        string echoMarker,
+        List<string> collectedLines,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(query),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            collectedLines.AddRange(lines);
+
+            return lines
+                .Select(l => l.Trim())
+                .LastOrDefault(l => l.Length > 0 && !l.Contains(echoMarker, StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            SafeLog(() => _logger.LogDebug(ex, "[InitializeAsync] Could not ask the device '{Query}' after the channel-population wait expired.", query.Data));
+            return null;
         }
     }
 

@@ -342,8 +342,10 @@ public class DaqifiDeviceInitializeTests
         var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false);
         device.Connect();
 
-        // Act & Assert — a clear timeout, not a silently-unpopulated device
-        await Assert.ThrowsAsync<TimeoutException>(
+        // Act & Assert — a clear timeout, not a silently-unpopulated device. ThrowsAny, because
+        // the thrown type is now the ChannelPopulationTimeoutException that carries what the
+        // device said when asked why (#911); it still derives from TimeoutException.
+        await Assert.ThrowsAnyAsync<TimeoutException>(
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
 
         Assert.Equal(DeviceState.Error, device.State);
@@ -370,8 +372,9 @@ public class DaqifiDeviceInitializeTests
         // The reconnected device does not report a fresh status.
         device.PopulateChannelsOnDeviceInfo = false;
 
-        // Act & Assert — times out instead of returning stale channels.
-        await Assert.ThrowsAsync<TimeoutException>(
+        // Act & Assert — times out instead of returning stale channels. ThrowsAny, because the
+        // thrown type is the ChannelPopulationTimeoutException that derives from it (#911).
+        await Assert.ThrowsAnyAsync<TimeoutException>(
             () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
         Assert.Equal(DeviceState.Error, device.State);
     }
@@ -533,6 +536,108 @@ public class DaqifiDeviceInitializeTests
         Assert.Equal(DeviceState.Connected, device.State);
     }
 
+    [Fact]
+    public async Task InitializeAsync_WhenChannelsNeverPopulateButTheDeviceAnswers_SaysSoAndNamesTheInterface()
+    {
+        // Issue #911. The old message named two causes, unresponsive or still starting, and the
+        // one seen most often on the bench was neither: the device answered every text query at
+        // once and was sending its output to another interface. Reading that message cost a
+        // bench session a dead-device diagnosis, a bootloader check and a power cycle.
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false)
+        {
+            IdentityReply = "DAQiFi,Nq1,7E2815916200E898,01-02",
+            StreamInterfaceReply = "1"
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Contains("did not report its channel configuration", ex.Message);
+        Assert.Contains("The device is responding", ex.Message);
+        Assert.Contains("DAQiFi,Nq1,7E2815916200E898,01-02", ex.Message);
+        Assert.Contains("stream interface 1", ex.Message);
+        Assert.DoesNotContain("may be unresponsive", ex.Message);
+
+        // As data, so an application can act on it rather than parse English.
+        Assert.True(ex.IsDeviceResponding);
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal(1, ex.StreamInterface);
+        Assert.Contains("DAQiFi,Nq1,7E2815916200E898,01-02", ex.RawDeviceResponse);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenChannelsNeverPopulateAndTheDeviceIsSilent_KeepsTheOldMessage()
+    {
+        // A device that will not answer *IDN? either really may be absent or starting, so the
+        // original wording is the accurate one and is kept. It is also not asked the second
+        // question: it has already said what it had to say.
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false);
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Contains("The device may be unresponsive or still initializing.", ex.Message);
+        Assert.DoesNotContain("is responding", ex.Message);
+        Assert.False(ex.IsDeviceResponding);
+        Assert.Null(ex.DeviceIdentity);
+        Assert.Null(ex.StreamInterface);
+        Assert.Equal(1, device.DiagnosticQueryCount);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheDeviceEchoesTheDiagnosticQuery_DoesNotReadTheEchoAsTheAnswer()
+    {
+        // A device reset mid-session has echo on again, so the first line back is the query
+        // itself. Reading it as the answer would report the device as responding with "*IDN?".
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false)
+        {
+            EchoesQueries = true,
+            IdentityReply = "DAQiFi,Nq1,7E2815916200E898,01-02",
+            StreamInterfaceReply = "0"
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal(0, ex.StreamInterface);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheDiagnosticQuestionsThemselvesFail_StillReportsTheTimeout()
+    {
+        // The questions run while an exception is being built. A failure to diagnose must not
+        // replace the failure being reported.
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false)
+        {
+            DiagnosticQueriesThrow = true
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Contains("The device may be unresponsive or still initializing.", ex.Message);
+        Assert.False(ex.IsDeviceResponding);
+        Assert.Equal(DeviceState.Error, device.State);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenItSucceeds_AsksNoDiagnosticQuestions()
+    {
+        // The questions are on the failure path only, so a connect that works pays nothing.
+        var device = new TestableDaqifiDevice("TestDevice");
+        device.Connect();
+
+        await device.InitializeAsync();
+
+        Assert.Equal(0, device.DiagnosticQueryCount);
+        Assert.DoesNotContain(device.DirectSentMessages.Select(m => m.Data), d => d.Contains("*IDN?"));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1000)]
@@ -613,6 +718,35 @@ public class DaqifiDeviceInitializeTests
         /// precise point in a command sequence rather than by waiting a guessed interval.
         /// </summary>
         public Action<string>? OnCommandSent { get; set; }
+
+        /// <summary>
+        /// The device's answer to <c>*IDN?</c>, or <c>null</c> for a device that does not
+        /// answer it at all.
+        /// </summary>
+        public string? IdentityReply { get; set; }
+
+        /// <summary>
+        /// The device's answer to <c>SYSTem:STReam:INTerface?</c>, or <c>null</c> for no answer.
+        /// </summary>
+        public string? StreamInterfaceReply { get; set; }
+
+        /// <summary>
+        /// When true, the device echoes a query back before answering it, the way one that has
+        /// not had <c>SYSTem:ECHO -1</c> applied does.
+        /// </summary>
+        public bool EchoesQueries { get; set; }
+
+        /// <summary>
+        /// When true, the two questions asked after a channel-population timeout throw instead
+        /// of answering.
+        /// </summary>
+        public bool DiagnosticQueriesThrow { get; set; }
+
+        /// <summary>
+        /// Number of diagnostic questions (<c>*IDN?</c>, <c>SYSTem:STReam:INTerface?</c>) the
+        /// device was asked. A connect that works must be charged none of them.
+        /// </summary>
+        public int DiagnosticQueryCount { get; private set; }
 
         public TestableDaqifiDevice(
             string name,
@@ -716,7 +850,37 @@ public class DaqifiDeviceInitializeTests
                 }
 
                 // Run the setup action so that Send() calls inside it are captured
+                var before = DirectSentMessages.Count;
                 await setupActionAsync(cancellationToken).ConfigureAwait(false);
+                var sentThisCall = DirectSentMessages.Skip(before).Select(m => m.Data).ToList();
+
+                // The two questions asked only after a channel-population timeout (#911).
+                var identityQuery = sentThisCall.FirstOrDefault(d => d.Contains("*IDN?"));
+                var interfaceQuery = sentThisCall.FirstOrDefault(d => d.Contains("STReam:INTerface?"));
+                if (identityQuery != null || interfaceQuery != null)
+                {
+                    DiagnosticQueryCount++;
+                    if (DiagnosticQueriesThrow)
+                    {
+                        throw new InvalidOperationException("no transport");
+                    }
+
+                    var query = identityQuery ?? interfaceQuery!;
+                    var answer = identityQuery != null ? IdentityReply : StreamInterfaceReply;
+                    var replyLines = new List<string>();
+                    if (EchoesQueries)
+                    {
+                        replyLines.Add(query);
+                    }
+
+                    if (answer != null)
+                    {
+                        replyLines.Add(answer);
+                    }
+
+                    return replyLines;
+                }
+
                 TextCommandAttemptCount++;
 
                 if (_failFirstAttempt && TextCommandAttemptCount == 1)

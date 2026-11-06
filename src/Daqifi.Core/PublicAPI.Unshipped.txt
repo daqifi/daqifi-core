@@ -1,4 +1,10 @@
 #nullable enable
+Daqifi.Core.Device.ChannelPopulationTimeoutException
+Daqifi.Core.Device.ChannelPopulationTimeoutException.ChannelPopulationTimeoutException(string! message, string? deviceIdentity = null, int? streamInterface = null, System.Collections.Generic.IReadOnlyList<string!>? rawDeviceResponse = null, System.Exception? innerException = null) -> void
+Daqifi.Core.Device.ChannelPopulationTimeoutException.DeviceIdentity.get -> string?
+Daqifi.Core.Device.ChannelPopulationTimeoutException.IsDeviceResponding.get -> bool
+Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void
@@ -30,6 +36,7 @@ Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.get -> System.TimeSpan
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.set -> void
 override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
+static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetDeviceIdentity.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(object obj) -> bool
