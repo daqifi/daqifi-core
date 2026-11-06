@@ -21,14 +21,18 @@ public class LanChipInfoProviderExtensionsTests
         BuildDate = "Mar 30 2022"
     };
 
+    private static readonly TimeSpan FastRetryDelay = TimeSpan.FromMilliseconds(5);
+
     private static LanChipInfoRetryOptions FastOptions(
         int maxAttempts = 3,
-        bool kickLanApply = true) => new()
+        bool kickLanApply = true,
+        IProgress<LanChipInfoProbeProgress>? progress = null) => new()
         {
             MaxAttempts = maxAttempts,
-            RetryDelay = TimeSpan.FromMilliseconds(5),
+            RetryDelay = FastRetryDelay,
             TotalTimeout = TimeSpan.FromSeconds(30),
             KickLanApplyOnNotInitialized = kickLanApply,
+            Progress = progress,
         };
 
     [Fact]
@@ -116,6 +120,7 @@ public class LanChipInfoProviderExtensionsTests
         Assert.False(result.Succeeded);
         Assert.True(result.WasLanNotInitialized);
         Assert.Equal(1, device.LanApplySentCount);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
     }
 
     [Fact]
@@ -133,6 +138,7 @@ public class LanChipInfoProviderExtensionsTests
 
         Assert.False(result.Succeeded);
         Assert.False(result.WasLanNotInitialized);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
     }
 
     [Fact]
@@ -228,10 +234,14 @@ public class LanChipInfoProviderExtensionsTests
         await cts.CancelAsync();
         var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+        var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => device.GetLanChipInfoWithRetryAsync(FastOptions(), cancellationToken: cts.Token));
 
+        // The token the probe surfaces is the linked one, so identity is not the assertion —
+        // what matters is that it reports cancellation, and that nothing was queried.
+        Assert.True(ex.CancellationToken.IsCancellationRequested);
         Assert.Equal(0, device.GetLanChipInfoCallCount);
+        Assert.Equal(0, device.LanApplySentCount);
     }
 
     [Fact]
@@ -410,8 +420,283 @@ public class LanChipInfoProviderExtensionsTests
     {
         ILanChipInfoProvider? provider = null;
 
-        await Assert.ThrowsAsync<ArgumentNullException>(
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(
             () => provider!.GetLanChipInfoWithRetryAsync());
+
+        Assert.Equal("provider", ex.ParamName);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WithTheRecordDefaultAttemptCount_QueriesExactlyThatManyTimes()
+    {
+        // Pins the retry budget's attempt count to the record's own default rather than to a
+        // literal, so a change to the shipped default cannot slip past this file. The delay and
+        // the ceiling are overridden to keep the test fast; the attempt count is not.
+        var defaultAttempts = new LanChipInfoRetryOptions().MaxAttempts;
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
+        var options = new LanChipInfoRetryOptions
+        {
+            RetryDelay = TimeSpan.FromMilliseconds(5),
+            TotalTimeout = TimeSpan.FromSeconds(30),
+        };
+
+        var result = await device.GetLanChipInfoWithRetryAsync(options);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(3, defaultAttempts);
+        Assert.Equal(defaultAttempts, device.GetLanChipInfoCallCount);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTheFirstAttemptSucceeds_ReportsNothing()
+    {
+        // A probe that reads the module straight away never showed the user a wait, so there is
+        // nothing to say about it. A single "attempt 1 of 3" here would make every healthy device
+        // flash a "retrying" status line.
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(progress.Reports);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenItSucceedsOnALaterAttempt_ReportsEachFailedAttemptInOrder()
+    {
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice(
+            new InvalidOperationException("transient"),
+            new InvalidOperationException("transient"),
+            SampleChipInfo);
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(
+            [
+                new LanChipInfoProbeProgress(1, 3, false, FastRetryDelay),
+                new LanChipInfoProbeProgress(2, 3, false, FastRetryDelay),
+            ],
+            progress.Reports);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenEveryAttemptFails_ReportsEveryOneAndStillReturnsUnavailable()
+    {
+        // The last report carries TimeSpan.Zero: no retry follows it. That is how a caller tells
+        // "retrying" from "that was the last try" without counting attempts itself.
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("still broken"));
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.ChipInfo);
+        Assert.False(result.WasLanNotInitialized);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(
+            [
+                new LanChipInfoProbeProgress(1, 3, false, FastRetryDelay),
+                new LanChipInfoProbeProgress(2, 3, false, FastRetryDelay),
+                new LanChipInfoProbeProgress(3, 3, false, TimeSpan.Zero),
+            ],
+            progress.Reports);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenOnlyOneAttemptSawTheNotInitializedState_ReportsItOnThatAttemptAlone()
+    {
+        // The flag on a report describes the attempt being reported, not the worst thing seen so
+        // far — a status line that said "WiFi still starting up" would otherwise keep saying it
+        // after the module started failing for an unrelated reason.
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice(
+            new LanNotInitializedException("**ERROR: -200, \"Execution error\""),
+            new InvalidOperationException("transport went away"),
+            SampleChipInfo);
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(
+            [
+                new LanChipInfoProbeProgress(1, 3, true, FastRetryDelay),
+                new LanChipInfoProbeProgress(2, 3, false, FastRetryDelay),
+            ],
+            progress.Reports);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenAnAttemptAnswersNull_ReportsItLikeAnyOtherFailure()
+    {
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice((object?)null, SampleChipInfo);
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(
+            [new LanChipInfoProbeProgress(1, 3, false, FastRetryDelay)],
+            progress.Reports);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WithNoProgressSink_StillSpendsTheSameBudget()
+    {
+        // The seam is additive: the sink defaults to null, and a caller that sets nothing gets the
+        // behaviour that shipped. Every other fact in this file calls the probe without one.
+        Assert.Null(new LanChipInfoRetryOptions().Progress);
+
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("still broken"));
+        var options = new LanChipInfoRetryOptions
+        {
+            RetryDelay = FastRetryDelay,
+            TotalTimeout = TimeSpan.FromSeconds(30),
+        };
+
+        var result = await device.GetLanChipInfoWithRetryAsync(options);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTheProgressHandlerThrows_StillReadsTheModule()
+    {
+        // A consumer's status handler must not be able to discard a chip-info read the probe was
+        // one attempt away from making. Reporting is best effort.
+        var progress = new RecordingProgress(_ => throw new InvalidOperationException("handler blew up"));
+        var device = new ScriptedLanChipInfoDevice(
+            new InvalidOperationException("transient"),
+            new InvalidOperationException("transient"),
+            SampleChipInfo);
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("19.7.7", result.ChipInfo!.FwVersion);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(2, progress.Reports.Count);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTheProgressHandlerThrowsAndEveryAttemptFails_ReportsUnavailableAsBefore()
+    {
+        // The other half: a throwing handler must not turn an absorbed failure into an exception
+        // out of a method documented to return "unavailable" instead.
+        var progress = new RecordingProgress(_ => throw new InvalidOperationException("handler blew up"));
+        var device = new ScriptedLanChipInfoDevice(
+            new LanNotInitializedException("**ERROR: -200, \"Execution error\""));
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.False(result.Succeeded);
+        Assert.True(result.WasLanNotInitialized);
+        Assert.Equal(3, device.GetLanChipInfoCallCount);
+        Assert.Equal(3, progress.Reports.Count);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTheProgressHandlerThrowsOperationCanceled_DoesNotEndTheProbe()
+    {
+        // Cancellation belongs to the caller's token. A handler that throws this particular
+        // exception — e.g. by checking a token of its own — must not look like one.
+        var progress = new RecordingProgress(_ => throw new OperationCanceledException("not the caller"));
+        var device = new ScriptedLanChipInfoDevice(
+            new InvalidOperationException("transient"),
+            SampleChipInfo);
+
+        var result = await device.GetLanChipInfoWithRetryAsync(FastOptions(progress: progress));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(2, device.GetLanChipInfoCallCount);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenCallerCancelsBeforeTheFirstAttempt_ReportsNothing()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice(SampleChipInfo);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => device.GetLanChipInfoWithRetryAsync(
+                FastOptions(progress: progress),
+                cancellationToken: cts.Token));
+
+        Assert.Empty(progress.Reports);
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTheTotalTimeoutCutsTheProbeShort_ReportsStayOrderedAndBounded()
+    {
+        // The wall-clock branches end the probe rather than falling through to a report, so how
+        // many arrive depends on where the budget expired. What must hold regardless: the attempt
+        // numbers are 1, 2, 3, ... with no gaps and no duplicates, and never more of them than
+        // attempts were made.
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("slow and broken"));
+        var options = new LanChipInfoRetryOptions
+        {
+            MaxAttempts = 50,
+            RetryDelay = TimeSpan.FromMilliseconds(20),
+            TotalTimeout = TimeSpan.FromMilliseconds(120),
+            Progress = progress,
+        };
+
+        var result = await device.GetLanChipInfoWithRetryAsync(options);
+
+        Assert.False(result.Succeeded);
+        Assert.True(
+            progress.Reports.Count <= device.GetLanChipInfoCallCount,
+            $"Got {progress.Reports.Count} reports for {device.GetLanChipInfoCallCount} attempts.");
+        Assert.Equal(
+            Enumerable.Range(1, progress.Reports.Count),
+            progress.Reports.Select(report => report.Attempt));
+        Assert.All(progress.Reports, report => Assert.Equal(50, report.MaxAttempts));
+    }
+
+    [Fact]
+    public async Task GetLanChipInfoWithRetryAsync_WhenTheBudgetIsASingleAttempt_ReportsItWithNoRetryDelay()
+    {
+        var progress = new RecordingProgress();
+        var device = new ScriptedLanChipInfoDevice(new InvalidOperationException("broken"));
+
+        var result = await device.GetLanChipInfoWithRetryAsync(
+            FastOptions(maxAttempts: 1, progress: progress));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(
+            [new LanChipInfoProbeProgress(1, 1, false, TimeSpan.Zero)],
+            progress.Reports);
+    }
+
+    /// <summary>
+    /// Records every report in arrival order, and can throw from the handler afterwards to stand
+    /// in for a consumer whose status code is broken.
+    /// </summary>
+    /// <remarks>
+    /// A direct <see cref="IProgress{T}"/> rather than <see cref="Progress{T}"/>: the BCL class
+    /// posts to a synchronization context, which would both reorder the assertions and hide a
+    /// throwing handler behind its own marshalling. This one reports on the probe's own thread,
+    /// which is the strict case.
+    /// </remarks>
+    private sealed class RecordingProgress(Action<LanChipInfoProbeProgress>? onReport = null)
+        : IProgress<LanChipInfoProbeProgress>
+    {
+        private readonly List<LanChipInfoProbeProgress> _reports = [];
+
+        public IReadOnlyList<LanChipInfoProbeProgress> Reports => _reports;
+
+        public void Report(LanChipInfoProbeProgress value)
+        {
+            // Recorded before the handler runs, so a throwing handler still shows what it saw.
+            _reports.Add(value);
+            onReport?.Invoke(value);
+        }
     }
 
     /// <summary>

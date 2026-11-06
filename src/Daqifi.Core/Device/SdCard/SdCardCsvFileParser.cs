@@ -17,17 +17,38 @@ namespace Daqifi.Core.Device.SdCard;
 ///   <item><description>Up to three <c>#</c>-prefixed comment lines containing device metadata
 ///   (device name, serial number, and timestamp tick rate).</description></item>
 ///   <item><description>A column header row: <c>ain0_ts,ain0_val,ain1_ts,ain1_val,...,dio_ts,dio_val</c></description></item>
-///   <item><description>Data rows with interleaved per-channel timestamp/value pairs.
-///   Analog values are raw ADC counts that require scaling.</description></item>
+///   <item><description>Data rows with interleaved per-channel timestamp/value pairs.</description></item>
 /// </list>
 /// </para>
 /// <para>
+/// An analog value is not always a raw ADC count. Firmware writes volts with a decimal point,
+/// and writes raw ADC counts and millivolts as whole numbers. The parser therefore reads the
+/// volts case from the file itself and leaves those values alone, and takes
+/// <see cref="SdCardParseOptions.IntegerValueUnits"/> for the whole-number case. Every sample
+/// reports the unit that was applied in
+/// <see cref="SdCardLogEntry.SourceAnalogValueUnit"/>. See
+/// <see cref="SdCardAnalogValueUnitRule"/> for the rule and why it is read from the file.
+/// </para>
+/// <para>
+/// A row that mixes the two forms states no single unit, so enumerating
+/// <see cref="SdCardLogSession.Samples"/> throws
+/// <see cref="System.IO.InvalidDataException"/> at that row instead of guessing.
+/// </para>
+/// <para>
+/// A non-finite reading — firmware's <c>printf("%f")</c> writes <c>nan</c>, <c>inf</c> or
+/// <c>-inf</c> for one — is reported as the NaN or infinity it is, rather than dropped or
+/// turned into a zero, and it states no unit, so it neither decides a row's unit nor refuses
+/// the row. A data row the parser cannot read at all is skipped so the rest of the file still
+/// imports, and counted in <see cref="SdCardParseProgress.RowsSkipped"/> so that the loss is
+/// visible to a caller watching <see cref="SdCardParseOptions.Progress"/>.
+/// </para>
+/// <para>
 /// The header names only the channels the recording had enabled, and it names them by number,
-/// so a file of channel 7 alone reads <c>ain7_ts,ain7_val</c>. Each column is therefore scaled
-/// with the calibration, port range, and internal scale of the channel its own header names,
-/// not of the channel sitting at its position. A column header that states no channel number
-/// fails the parse with an <see cref="InvalidDataException"/>, because scaling it by position
-/// would report a wrong voltage and say nothing about it.
+/// so a file of channel 7 alone reads <c>ain7_ts,ain7_val</c>. Each column that holds a raw ADC
+/// code is therefore scaled with the calibration, port range, and internal scale of the channel
+/// its own header names, not of the channel sitting at its position. A column header that states
+/// no channel number fails the parse with an <see cref="InvalidDataException"/>, because scaling
+/// it by position would report a wrong voltage and say nothing about it.
 /// </para>
 /// </summary>
 public sealed class SdCardCsvFileParser
@@ -168,6 +189,7 @@ public sealed class SdCardCsvFileParser
             // be enumerated more than once must not shift its timestamps between reads when the
             // file name carries no date.
             fileCreatedDate ?? DateTime.UtcNow,
+            options.IntegerValueUnits,
             options.Progress,
             ct);
 
@@ -421,6 +443,7 @@ public sealed class SdCardCsvFileParser
         SdCardDeviceConfiguration config,
         CsvColumnLayout columnLayout,
         DateTime baseTime,
+        SdCardIntegerValueUnits? integerValueUnits,
         IProgress<SdCardParseProgress>? progress,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -431,6 +454,7 @@ public sealed class SdCardCsvFileParser
         var bytesRead = 0L;
         var totalBytes = totalBytesProvider();
         var skipped = 0;
+        var rowsSkipped = 0;
 
         await foreach (var entry in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
@@ -454,18 +478,38 @@ public sealed class SdCardCsvFileParser
             var parsed = TryParseCsvDataRow(line, columnLayout);
             if (parsed == null)
             {
-                // Skip malformed lines
+                // Skip the row so the rest of the file still imports, but count it: these are
+                // readings the caller never receives, and a silent drop costs a user data
+                // without telling them (closes #884).
+                rowsSkipped++;
                 continue;
             }
 
-            var (rowTimestamp, rawAnalogValues, digitalData, perChannelTimestamps) = parsed.Value;
+            var (rowTimestamp, rawAnalogValues, digitalData, perChannelTimestamps, finiteValueCount, decimalFormCount) = parsed.Value;
 
-            // Scale raw ADC values with each column's own channel calibration, named by the
-            // header rather than implied by the column's position (closes #849).
-            var analogValues = SdCardAnalogScaling.ScaleRawAnalogValues(
-                rawAnalogValues,
-                config,
-                columnLayout.AnalogChannelIndices);
+            // Read the row's unit from the file, then convert for that unit. A value the device
+            // already calibrated — volts or millivolts — must not go through the ADC-code
+            // conversion as well (closes #848). Only the values that state a unit are counted:
+            // a non-finite reading states none, so it cannot make a volts row look mixed
+            // (closes #883).
+            var valueUnit = SdCardAnalogValueUnitRule.ResolveRowUnit(
+                finiteValueCount,
+                decimalFormCount,
+                integerValueUnits,
+                line);
+
+            // Only a raw ADC code needs that conversion, and the conversion uses each column's
+            // own channel calibration, named by the header rather than implied by the column's
+            // position (#849).
+            var analogValues = valueUnit switch
+            {
+                SdCardAnalogValueUnit.Volts => rawAnalogValues,
+                SdCardAnalogValueUnit.Millivolts => SdCardAnalogValueUnitRule.MillivoltsToVolts(rawAnalogValues),
+                _ => SdCardAnalogScaling.ScaleRawAnalogValues(
+                    rawAnalogValues,
+                    config,
+                    columnLayout.AnalogChannelIndices)
+            };
 
             // Reconstruct absolute timestamp using first channel timestamp
             var hasDeviceTimestamp = timestampReconstructor.HasDeviceClock;
@@ -475,26 +519,110 @@ public sealed class SdCardCsvFileParser
 
             yield return new SdCardLogEntry(absoluteTime, analogValues, digitalData, perChannelTimestamps)
             {
-                HasDeviceTimestamp = hasDeviceTimestamp
+                HasDeviceTimestamp = hasDeviceTimestamp,
+                SourceAnalogValueUnit = valueUnit
             };
 
             // Report progress every 100 lines for efficiency
             if (linesProcessed % 100 == 0 && progress != null)
             {
-                progress.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
+                progress.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
+                {
+                    RowsSkipped = rowsSkipped
+                });
             }
         }
 
-        // Final progress report
-        progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed));
+        // Final progress report. This one always goes out, so a caller that watches progress
+        // learns the file's whole skipped-row count even when the file is shorter than the
+        // reporting interval.
+        progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
+        {
+            RowsSkipped = rowsSkipped
+        });
+    }
+
+    /// <summary>
+    /// Parses one analog value token, accepting both spellings of a non-finite reading.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Firmware writes a non-finite reading with <c>printf("%f")</c>, which produces C's
+    /// <c>nan</c>, <c>inf</c> and <c>-inf</c>. <see cref="double.TryParse(string?, NumberStyles, IFormatProvider?, out double)"/>
+    /// takes <c>nan</c> and <c>Infinity</c> but not <c>inf</c>, so a row holding one used to
+    /// fail the parse and be dropped whole — the reading, the other channels' readings on that
+    /// row, and its timestamp, with nothing said about it (closes #884).
+    /// </para>
+    /// <para>
+    /// So <c>inf</c> is accepted here the way <c>nan</c> already was, with an optional sign and
+    /// without regard to case. The value is reported as the infinity it is, which is what tells
+    /// a caller the channel saturated rather than read zero.
+    /// </para>
+    /// </remarks>
+    /// <param name="token">One value token, as the file wrote it.</param>
+    /// <param name="value">The parsed value.</param>
+    /// <returns><c>true</c> when the token is a value this parser understands.</returns>
+    private static bool TryParseAnalogValue(string token, out double value)
+    {
+        if (double.TryParse(token, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        return TryParseCInfinity(token, out value);
+    }
+
+    /// <summary>
+    /// Parses C's <c>inf</c> spelling of an infinity: the word <c>inf</c> or <c>infinity</c>,
+    /// in any case, optionally signed, with the surrounding whitespace
+    /// <see cref="NumberStyles.Float"/> would itself have allowed.
+    /// </summary>
+    /// <param name="token">One value token, as the file wrote it.</param>
+    /// <param name="value">
+    /// <see cref="double.PositiveInfinity"/> or <see cref="double.NegativeInfinity"/> on
+    /// success; <c>0</c> otherwise.
+    /// </param>
+    /// <returns><c>true</c> when the token is C's spelling of an infinity.</returns>
+    private static bool TryParseCInfinity(string token, out double value)
+    {
+        value = 0;
+
+        var text = token.AsSpan().Trim();
+        if (text.IsEmpty)
+        {
+            return false;
+        }
+
+        var negative = false;
+        if (text[0] is '+' or '-')
+        {
+            negative = text[0] == '-';
+            text = text[1..];
+        }
+
+        if (!text.Equals("inf", StringComparison.OrdinalIgnoreCase) &&
+            !text.Equals("infinity", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        value = negative ? double.NegativeInfinity : double.PositiveInfinity;
+        return true;
     }
 
     /// <summary>
     /// Parses a firmware CSV data row with interleaved per-channel timestamp/value pairs.
     /// Separates analog channel pairs from the digital I/O pair based on the column layout.
     /// Format: ain0_ts,ain0_val,...,dio_ts,dio_val
+    /// <para>
+    /// Also counts how many analog values the row wrote with a decimal point or an exponent.
+    /// That count is what says whether the row holds volts, and it has to be taken here,
+    /// from the text, because <c>245</c> and <c>245.0</c> parse to the same <c>double</c>
+    /// while meaning different units. Non-finite readings are left out of both counts, since
+    /// they state no unit at all — see <see cref="SdCardAnalogValueUnitRule"/>.
+    /// </para>
     /// </summary>
-    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, uint digitalData, IReadOnlyList<uint> perChannelTimestamps)?
+    private static (uint rowTimestamp, IReadOnlyList<double> analogValues, uint digitalData, IReadOnlyList<uint> perChannelTimestamps, int finiteValueCount, int decimalFormCount)?
         TryParseCsvDataRow(string line, CsvColumnLayout layout)
     {
         try
@@ -513,6 +641,8 @@ public sealed class SdCardCsvFileParser
 
             var analogValues = new List<double>(analogPairCount);
             var perChannelTimestamps = new List<uint>(analogPairCount);
+            var finiteValueCount = 0;
+            var decimalFormCount = 0;
 
             // Parse analog channel pairs
             for (var ch = 0; ch < analogPairCount; ch++)
@@ -525,13 +655,27 @@ public sealed class SdCardCsvFileParser
                     return null;
                 }
 
-                if (!double.TryParse(valCol, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var val))
+                if (!TryParseAnalogValue(valCol, out var val))
                 {
                     return null;
                 }
 
                 perChannelTimestamps.Add(ts);
                 analogValues.Add(val);
+
+                // A NaN or an infinity is not written in either unit form, so it is evidence
+                // for neither and is kept out of both counts.
+                if (SdCardAnalogValueUnitRule.IsUnitlessValue(val))
+                {
+                    continue;
+                }
+
+                finiteValueCount++;
+
+                if (SdCardAnalogValueUnitRule.IsDecimalForm(valCol))
+                {
+                    decimalFormCount++;
+                }
             }
 
             // Parse digital I/O pair if present (last pair)
@@ -559,7 +703,7 @@ public sealed class SdCardCsvFileParser
                 return null;
             }
 
-            return (rowTimestamp, analogValues, digitalData, perChannelTimestamps);
+            return (rowTimestamp, analogValues, digitalData, perChannelTimestamps, finiteValueCount, decimalFormCount);
         }
         catch
         {

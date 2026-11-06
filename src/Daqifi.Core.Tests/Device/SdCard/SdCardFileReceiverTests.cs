@@ -336,6 +336,137 @@ public class SdCardFileReceiverTests
     }
 
     [Fact]
+    public async Task ReceiveAsync_ListedEmptyFileRepliesWithoutAMarkerThenGoesQuiet_CompletesEmpty()
+    {
+        // #888: the bench device answered a 0-byte log with reply framing and no terminator, and
+        // the receiver waited out the whole inactivity window and reported a transfer stall that
+        // told the user to power-cycle healthy hardware. Nothing was outstanding — the listing had
+        // already said the file holds no bytes — so the right answer is an empty download, and the
+        // framing is not file content and must not reach the caller's stream.
+        var replyFraming = Encoding.ASCII.GetBytes("SYSTem:STORage:SD:GET \"empty.bin\"\r\nDAQIFI> ");
+        using var sourceStream = new ChunkedMemoryStream(replyFraming, 4096);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "empty.bin", listedFileSizeBytes: 0);
+
+        Assert.Equal(0, bytesReceived);
+        Assert.Empty(destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ListedEmptyFileGoesQuietOnASocket_CompletesWithoutWaitingOutTheIdleWindow()
+    {
+        // The socket case of #888: a quiet socket surfaces nothing at all (no zero-length read),
+        // so the inactivity window is the only thing that ends the read — and for a file with no
+        // content outstanding it must end it as a completion, inside the short quiet window rather
+        // than after the full 20-second one.
+        var replyFraming = Encoding.ASCII.GetBytes("DAQIFI> ");
+        using var sourceStream = new ThrottledStream(replyFraming, replyFraming.Length, TimeSpan.Zero);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream,
+            zeroLengthReadMeansClosed: true,
+            idleTimeout: TimeSpan.FromSeconds(20));
+
+        var startedAt = System.Diagnostics.Stopwatch.StartNew();
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "empty.bin", listedFileSizeBytes: 0);
+        startedAt.Stop();
+
+        Assert.Equal(0, bytesReceived);
+        Assert.Empty(destinationStream.ToArray());
+        Assert.True(
+            startedAt.Elapsed < TimeSpan.FromSeconds(10),
+            $"A listed-empty transfer waited {startedAt.Elapsed} — it must not spend the inactivity window.");
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ListedEmptyFileNeverAnswers_StillCompletesEmptyRatherThanStalling()
+    {
+        // A device that says nothing at all owes nothing either, so even first-contact silence is
+        // a completed empty download rather than a stall. The wait for the FIRST byte is
+        // deliberately left at the caller's inactivity window: cutting that short could conclude
+        // the transfer while the reply was still in flight.
+        using var sourceStream = new NeverEndingStream();
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream,
+            zeroLengthReadMeansClosed: true,
+            idleTimeout: TimeSpan.FromMilliseconds(500));
+
+        var bytesReceived = await receiver.ReceiveAsync(
+            destinationStream, "empty.bin", listedFileSizeBytes: 0);
+
+        Assert.Equal(0, bytesReceived);
+        Assert.Empty(destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ZeroByteFileWithNoListedSize_ReportsAnEmptyTransferNotAStall()
+    {
+        // With no listing to consult, a marker and no content is still ambiguous — a wedged SD
+        // subsystem looks exactly like a 0-byte file (#264) — so the conservative empty-transfer
+        // classification stands and SdCardOperations' retry covers it. What it must NOT be is a
+        // transfer stall: the device answered promptly and the transport is healthy (#888).
+        using var sourceStream = new ChunkedMemoryStream(EofMarker, 4096);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(
+            sourceStream,
+            zeroLengthReadMeansClosed: true,
+            idleTimeout: TimeSpan.FromSeconds(20));
+
+        var ex = await Assert.ThrowsAsync<SdCardEmptyTransferException>(
+            () => receiver.ReceiveAsync(destinationStream, "unknown.bin", listedFileSizeBytes: null));
+
+        Assert.Null(ex.ListedSizeInBytes);
+        Assert.IsNotType<SdCardTransferStalledException>(ex);
+        Assert.Empty(destinationStream.ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ListedNonEmptyFileGoesQuietPartWayThrough_StillStalls()
+    {
+        // The watchdog is unchanged where it earns its keep: content IS outstanding here, so the
+        // device going quiet really did abandon the transfer part-way through.
+        var partialContent = Encoding.ASCII.GetBytes("the first half of a log");
+        using var sourceStream = new ChunkedMemoryStream(partialContent, 4096);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destinationStream, "half.bin", listedFileSizeBytes: 4096));
+
+        Assert.Equal(SdCardTransferStallReason.NoDataReceived, ex.Reason);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ListedEmptyFileDeliversMoreThanReplyFramingThenGoesQuiet_StillStalls()
+    {
+        // Past the reply-framing limit the listing is plainly stale and a real transfer is under way,
+        // so the held bytes are released to the caller and the transfer behaves like any other —
+        // including stalling when the device goes quiet before the terminator.
+        var content = new byte[SdCardFileReceiver.ListedEmptyFileReplyFramingLimitBytes + 4096];
+        for (var i = 0; i < content.Length; i++)
+        {
+            content[i] = (byte)(i % 251);
+        }
+
+        using var sourceStream = new ChunkedMemoryStream(content, 16384);
+        using var destinationStream = new MemoryStream();
+        var receiver = new SdCardFileReceiver(sourceStream);
+
+        var ex = await Assert.ThrowsAsync<SdCardTransferStalledException>(
+            () => receiver.ReceiveAsync(destinationStream, "stale-empty.bin", listedFileSizeBytes: 0));
+
+        Assert.Equal(SdCardTransferStallReason.NoDataReceived, ex.Reason);
+        Assert.True(
+            destinationStream.Length > SdCardFileReceiver.ListedEmptyFileReplyFramingLimitBytes,
+            "Content past the reply-framing limit must reach the destination rather than stay held.");
+    }
+
+    [Fact]
     public async Task ReceiveAsync_ScpiErrorLineInsteadOfFile_ThrowsSdCardTruncatedTransferException()
     {
         // The exact shape the bench Nq1 emits for a file its SD buffer can no longer serve: a

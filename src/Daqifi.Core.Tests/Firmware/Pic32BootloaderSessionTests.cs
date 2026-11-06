@@ -45,7 +45,16 @@ public class Pic32BootloaderSessionTests
         Array.Empty<byte[]>(),
         // It found records, but none of them carry a byte to program.
         new byte[][] { [] },
-        new byte[][] { [], [] }
+        new byte[][] { [], [] },
+        // An end-of-file record on its own. It is 5 bytes long and programs none of them, which
+        // is what made this image pass a guard that summed record lengths (#838).
+        new byte[][] { [0x00, 0x00, 0x00, 0x01, 0xFF] },
+        // An extended-linear-address record and an end-of-file record: 12 record bytes, no data
+        // byte. This is what a real image parses to once every data record is filtered out.
+        new byte[][] { [0x02, 0x00, 0x00, 0x04, 0x1D, 0x00, 0xDD], [0x00, 0x00, 0x00, 0x01, 0xFF] },
+        // A data record whose byte count is zero. The record type says data; the record carries
+        // none.
+        new byte[][] { [0x00, 0x00, 0x00, 0x00, 0x00], [0x00, 0x00, 0x00, 0x01, 0xFF] }
     };
 
     [Theory]

@@ -28,19 +28,12 @@ namespace Daqifi.Core.Device.SdCard;
 internal sealed class SdCardOperations
 {
     /// <summary>
-    /// The delay in milliseconds to wait after switching between LAN and SD card interfaces.
-    /// The SD card and LAN share the SPI bus, so a settle period is needed for the device
-    /// firmware to complete the interface switch before sending further commands.
-    /// </summary>
-    private const int SD_INTERFACE_SETTLE_DELAY_MS = 100;
-
-    /// <summary>
     /// Spacing between the SCPI commands that start an SD logging session. Was an unnamed
     /// <c>100</c> repeated six times; named because these are now driven by
     /// <see cref="ISdCardOperationHost.TimeProvider"/> (issue #637). The duration is unchanged,
     /// and it is deliberately its own constant rather than a reuse of
-    /// <see cref="SD_INTERFACE_SETTLE_DELAY_MS"/>: that one is the SPI-bus interface switch
-    /// settling, this one is command spacing, and they happen to agree today.
+    /// <see cref="ISdCardOperationHost.SdInterfaceSettleDelay"/>: that one is the SPI-bus
+    /// interface switch settling, this one is command spacing, and they happen to agree today.
     /// </summary>
     private static readonly TimeSpan SdLogStartCommandSpacing = TimeSpan.FromMilliseconds(100);
 
@@ -107,6 +100,18 @@ internal sealed class SdCardOperations
     /// reach a collaborator that was built during the device's own construction.
     /// </remarks>
     private TimeProvider Clock => _host.TimeProvider;
+
+    /// <summary>
+    /// How long to wait after switching the shared SPI bus between the LAN and the SD card.
+    /// The SD card and LAN share that bus, so the firmware needs a settle period to complete
+    /// the interface switch before it will answer further commands.
+    /// </summary>
+    /// <remarks>
+    /// Read through the host on each access, for the same reason <see cref="Clock"/> and the two
+    /// SD timeouts are: the device owns it, and a test that shortens it must reach a collaborator
+    /// that was built during the device's own construction.
+    /// </remarks>
+    private TimeSpan SdInterfaceSettleDelay => _host.SdInterfaceSettleDelay;
 
     /// <inheritdoc cref="ISdCardOperations.IsLoggingToSdCard" />
     internal bool IsLoggingToSdCard => _isLoggingToSdCard;
@@ -280,7 +285,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(SdInterfaceSettleDelay, Clock, cancellationToken).ConfigureAwait(false);
                 }
 
                 // The SPI bus switch and its settle wait run as the exchange's prepare phase, and
@@ -323,7 +328,36 @@ internal sealed class SdCardOperations
                 throw new SdCardListIncompleteException(lines);
             }
 
-            ThrowIfSdCardListError(listing);
+            try
+            {
+                ThrowIfSdCardListError(listing);
+            }
+            catch (SdCardDirectoryNotFoundException)
+            {
+                // A log directory that is not on the card is an empty card, and that is
+                // what this method reports: no files. A new card has no log directory
+                // until the first capture writes one, so the old exception made the
+                // normal state of a new card look like a fault, and a caller had to
+                // catch to learn there was nothing to list (closes #730).
+                //
+                // Here rather than in ThrowIfSdCardListError, because the helper has a
+                // second caller: DeleteSdCardFileAsync relists in the delete's own
+                // exchange, and there the missing directory leaves "is the file I named
+                // gone?" unanswered. That caller still needs the exception, so the
+                // helper keeps throwing for both and the read path decides for itself.
+                //
+                // Catching the helper's own answer rather than testing the lines first:
+                // the helper already ranks the conditions, so a reply that says both "no
+                // SD card" and "no directory" still raises SdCardNotPresentException. A
+                // separate pre-check would have to repeat that order to stay correct.
+                //
+                // The return is immediate. The device's end-of-listing marker below reads
+                // FAILED on this reply, which is right -- the walk could not open the
+                // directory -- but there is no directory to walk, so it has nothing left
+                // to tell us.
+                _sdCardFiles = Array.Empty<SdCardFileInfo>();
+                return _sdCardFiles;
+            }
 
             // The device's own end-of-listing marker (firmware #794), when it sends
             // one. FAILED means the walk could not open the directory at all, so an
@@ -374,7 +408,7 @@ internal sealed class SdCardOperations
 
         // Querying the card too soon after the switch makes the device answer -200
         // (Execution error), so this wait is not optional.
-        await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(SdInterfaceSettleDelay, Clock, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -597,7 +631,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(SdInterfaceSettleDelay, Clock, cancellationToken).ConfigureAwait(false);
 
                     lines = await _host.ExecuteTextCommandAsync(
                         () => _host.Send(ScpiMessageProducer.GetSdSpace),
@@ -927,7 +961,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(SdInterfaceSettleDelay, Clock, cancellationToken).ConfigureAwait(false);
 
                     lines = await _host.ExecuteTextCommandAsync(
                         () =>
@@ -987,7 +1021,7 @@ internal sealed class SdCardOperations
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(SdInterfaceSettleDelay, Clock, cancellationToken).ConfigureAwait(false);
 
                     lines = await _host.ExecuteTextCommandAsync(
                         () =>
@@ -1268,7 +1302,7 @@ internal sealed class SdCardOperations
 
                     // Let the interface switch settle before the card is asked for anything —
                     // the same wait the LIST/DELETE/space exchanges take for the same reason.
-                    await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, ct).ConfigureAwait(false);
+                    await Task.Delay(SdInterfaceSettleDelay, Clock, ct).ConfigureAwait(false);
 
                     // Send the SCPI command to request the file
                     _host.Send(ScpiMessageProducer.GetSdFile(fileName));
@@ -1323,7 +1357,7 @@ internal sealed class SdCardOperations
                         catch (SdCardEmptyTransferException) when (attempt < SD_LIST_MAX_RETRIES)
                         {
                             attempt++;
-                            await Task.Delay(TimeSpan.FromMilliseconds(SD_INTERFACE_SETTLE_DELAY_MS), Clock, ct).ConfigureAwait(false);
+                            await Task.Delay(SdInterfaceSettleDelay, Clock, ct).ConfigureAwait(false);
                             _host.Send(ScpiMessageProducer.GetSdFile(fileName));
                         }
                     }
