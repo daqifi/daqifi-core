@@ -3594,7 +3594,10 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     /// <param name="timeout">Maximum time to wait before failing.</param>
     /// <param name="cancellationToken">A cancellation token to observe.</param>
     /// <returns>A task that completes once channels are populated.</returns>
-    /// <exception cref="TimeoutException">Thrown when no channels are populated within <paramref name="timeout"/>.</exception>
+    /// <exception cref="ChannelPopulationTimeoutException">
+    /// Thrown when no channels are populated within <paramref name="timeout"/>. It derives from
+    /// <see cref="TimeoutException"/> and carries what the device said when asked why.
+    /// </exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is canceled.</exception>
     private async Task WaitForChannelsPopulatedAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -3679,14 +3682,170 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 return;
             }
 
-            throw new TimeoutException(
-                $"Device '{Name}' did not report its channel configuration within {timeout.TotalSeconds:0.#}s. "
-                + "The device may be unresponsive or still initializing.");
+            throw await BuildChannelPopulationTimeoutAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             ChannelsPopulated -= OnChannelsPopulated;
         }
+    }
+
+    /// <summary>
+    /// Asks the device why the channel-population wait came up empty, and builds the exception
+    /// from the answers rather than from a guess.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This runs only on the failure path, so a connect that works pays nothing for it. By the
+    /// time it runs the caller has already waited out the whole timeout, so two more text
+    /// queries are cheap, and they are asked on the connection that is already open.
+    /// </para>
+    /// <para>
+    /// The old message named two causes — unresponsive, or still starting — and on the bench
+    /// neither was the usual one. Reading it cost a real bench session a dead-device diagnosis,
+    /// a bootloader check and a power cycle before the true cause was found (issue #911).
+    /// </para>
+    /// <para>
+    /// The device turns out to have three states here, not two, and the measurements are in the
+    /// PR. It can answer in text, which says plainly that it is responding. It can send nothing
+    /// at all, which is the one case the old wording was right about. Or it can flood the
+    /// connection with data that is not readable as text — 2500 lines of it in one bench run —
+    /// while answering no text query. That device is emphatically not unresponsive, and saying
+    /// so is the difference between looking at the stream format and looking for a dead board.
+    /// </para>
+    /// </remarks>
+    private async Task<ChannelPopulationTimeoutException> BuildChannelPopulationTimeoutAsync(
+        TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var prefix = $"Device '{Name}' did not report its channel configuration within {timeout.TotalSeconds:0.#}s. ";
+        var keptLines = new List<string>();
+
+        var (identity, identityLineCount) = await AskOneQuestionAsync(
+            ScpiMessageProducer.GetDeviceIdentity, "*IDN?", keptLines, cancellationToken).ConfigureAwait(false);
+
+        if (identity == null && identityLineCount == 0)
+        {
+            // Nothing came back at all, so the original wording is the accurate one.
+            return new ChannelPopulationTimeoutException(
+                prefix + "The device may be unresponsive or still initializing.",
+                rawDeviceResponse: keptLines);
+        }
+
+        // Something is there, so the second question is worth asking even when the first was not
+        // answered: the value is the whole explanation when it is not this connection.
+        var (interfaceReply, _) = await AskOneQuestionAsync(
+            ScpiMessageProducer.GetStreamInterface, "STReam:INTerface", keptLines, cancellationToken).ConfigureAwait(false);
+
+        int? streamInterface = int.TryParse(interfaceReply, out var parsed) ? parsed : null;
+
+        var message = prefix + (identity != null
+            ? $"The device is responding — it answered *IDN? with '{identity}' — but sent no status this "
+              + "connection could read."
+            : $"The device is sending data — {identityLineCount} line(s) of it arrived — but none of it "
+              + "could be read as a reply, and it did not answer *IDN? in text mode. The device is not "
+              + "silent; what it is sending cannot be read here.");
+
+        if (streamInterface != null)
+        {
+            // Stated, not interpreted. Which interface counts as the wrong one depends on how
+            // the caller connected, and the number is what a reader needs either way.
+            message += $" It reports stream interface {streamInterface}, which is where it sends its "
+                + "output (0 = USB, 1 = WiFi, 2 = SD card).";
+        }
+
+        return new ChannelPopulationTimeoutException(
+            message,
+            deviceIdentity: identity,
+            streamInterface: streamInterface,
+            unreadableResponseLines: identity == null ? identityLineCount : 0,
+            rawDeviceResponse: keptLines);
+    }
+
+    /// <summary>
+    /// How many plain-text lines <see cref="BuildChannelPopulationTimeoutAsync"/> keeps for the
+    /// exception.
+    /// </summary>
+    /// <remarks>
+    /// A device flooding the connection produced 2500 lines in one bench run. An exception is
+    /// not the place to carry those, and the lines worth reading are few.
+    /// </remarks>
+    private const int ChannelPopulationTimeoutKeptLineLimit = 20;
+
+    /// <summary>
+    /// Sends one text query and returns its reply, or <c>null</c> when the device did not answer
+    /// it, together with how many lines came back in all. Never throws: this runs while an
+    /// exception is being built, and a failure to diagnose must not replace the failure being
+    /// reported.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The reply is the last line that is not blank, is not the device echoing the query back,
+    /// and is plain text. A device that has not had <c>SYSTem:ECHO -1</c> applied echoes every
+    /// command, and by this point in initialization echo is off — but a device that was reset
+    /// mid-session has it on again, and the echo must not be mistaken for an answer.
+    /// </para>
+    /// <para>
+    /// The plain-text rule is not caution, it is measured. This exchange pauses the protobuf
+    /// consumer, so bytes of a protobuf frame that were already in flight are read as lines of
+    /// this reply, and on the bench thousands of them were. One landed after the <c>*IDN?</c>
+    /// answer and was reported as the device's identity. A frame is full of bytes outside
+    /// printable ASCII, and an answer to either of these two queries is not, so the rule
+    /// separates them — and the line count that comes back with the reply is what tells a
+    /// flooding device from a silent one.
+    /// </para>
+    /// </remarks>
+    private async Task<(string? Reply, int LineCount)> AskOneQuestionAsync(
+        IOutboundMessage<string> query,
+        string echoMarker,
+        List<string> keptLines,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var lines = await ExecuteTextCommandAsync(
+                () => Send(query),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            var readable = lines
+                .Select(l => l.Trim())
+                .Where(l => l.Length > 0 && IsPlainText(l))
+                .ToList();
+
+            foreach (var line in readable)
+            {
+                if (keptLines.Count >= ChannelPopulationTimeoutKeptLineLimit)
+                {
+                    break;
+                }
+
+                keptLines.Add(line);
+            }
+
+            var reply = readable.LastOrDefault(l => !l.Contains(echoMarker, StringComparison.Ordinal));
+            return (reply, lines.Count);
+        }
+        catch (Exception ex)
+        {
+            SafeLog(() => _logger.LogDebug(ex, "[InitializeAsync] Could not ask the device '{Query}' after the channel-population wait expired.", query.Data));
+            return (null, 0);
+        }
+    }
+
+    /// <summary>
+    /// Returns true when every character of <paramref name="line"/> is printable ASCII, which a
+    /// SCPI text reply is and a fragment of a protobuf frame is not.
+    /// </summary>
+    private static bool IsPlainText(string line)
+    {
+        foreach (var c in line)
+        {
+            if (c < ' ' || c > '~')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
