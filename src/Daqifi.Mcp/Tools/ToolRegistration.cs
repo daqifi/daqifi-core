@@ -25,6 +25,24 @@ internal static class ToolRegistration
     internal static IMcpServerBuilder WithDaqifiTools(this IMcpServerBuilder builder) =>
         builder.WithToolsFromAssembly(typeof(DaqifiTools).Assembly, SerializerOptions);
 
+    /// <summary>
+    /// Registers every MCP resource in this assembly — the published board specifications a user
+    /// can attach to a session.
+    /// </summary>
+    /// <remarks>
+    /// No serializer options to pass: these resources return JSON they serialized themselves, so
+    /// that the resource and <c>get_hardware_info</c> spell the same field the same way.
+    /// </remarks>
+    internal static IMcpServerBuilder WithDaqifiResources(this IMcpServerBuilder builder) =>
+        builder.WithResourcesFromAssembly(typeof(DaqifiTools).Assembly);
+
+    /// <summary>
+    /// Registers every MCP prompt in this assembly — the ready-made measurement jobs a client
+    /// offers as starting points.
+    /// </summary>
+    internal static IMcpServerBuilder WithDaqifiPrompts(this IMcpServerBuilder builder) =>
+        builder.WithPromptsFromAssembly(typeof(DaqifiTools).Assembly, SerializerOptions);
+
     private static JsonSerializerOptions CreateSerializerOptions()
     {
         var options = new JsonSerializerOptions(McpJsonUtilities.DefaultOptions)
