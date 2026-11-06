@@ -60,7 +60,64 @@ public sealed record LanChipInfoRetryOptions
     /// <see cref="IStreamingDevice"/> — there is nothing to send the command through otherwise.
     /// </remarks>
     public bool KickLanApplyOnNotInitialized { get; init; } = true;
+
+    /// <summary>
+    /// Gets an optional sink that receives one <see cref="LanChipInfoProbeProgress"/> for every
+    /// attempt that does not produce chip info, so a caller can show that the probe is retrying
+    /// rather than stalled. <see langword="null"/> — the default — reports nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The probe can occupy roughly ten seconds with the defaults (<see cref="MaxAttempts"/>
+    /// attempts, <see cref="RetryDelay"/> apart, on top of the device's own per-query timeout),
+    /// and the module it waits on is legitimately unready for seconds at a time (#144, #203).
+    /// Without this, the only per-attempt signal is <see cref="Microsoft.Extensions.Logging.ILogger"/>
+    /// debug output — a diagnostic channel, not one a UI should drive a status line from (#745).
+    /// </para>
+    /// <para>
+    /// The sink lives here rather than as a parameter on
+    /// <see cref="LanChipInfoProviderExtensions.GetLanChipInfoWithRetryAsync"/> because the
+    /// method's signature shipped in v1.8.0 and ADR 0002 promises source compatibility: a new
+    /// parameter before <c>cancellationToken</c> breaks every caller that passes the token
+    /// positionally, which is how Core's own WiFi status check calls it. This mirrors
+    /// <see cref="Daqifi.Core.Device.SdCard.SdCardParseOptions.Progress"/>.
+    /// </para>
+    /// <para>
+    /// Reporting is best-effort: an exception from the sink is swallowed and the probe carries on.
+    /// A handler cannot fail an operation whose whole contract is that failures come back as a
+    /// result.
+    /// </para>
+    /// </remarks>
+    public IProgress<LanChipInfoProbeProgress>? Progress { get; init; }
 }
+
+/// <summary>
+/// One attempt of a bounded chip-info probe that did not produce chip info, reported to
+/// <see cref="LanChipInfoRetryOptions.Progress"/> so a caller can render "retrying".
+/// </summary>
+/// <param name="Attempt">The 1-based number of the attempt that just failed.</param>
+/// <param name="MaxAttempts">
+/// The total number of attempts the probe is allowed, after the normalization
+/// <see cref="LanChipInfoRetryOptions.MaxAttempts"/> documents. Equal to
+/// <paramref name="Attempt"/> on the last one.
+/// </param>
+/// <param name="WasLanNotInitialized">
+/// Whether <i>this</i> attempt failed with <see cref="LanNotInitializedException"/> — the device
+/// reporting its WINC state machine has not reached INITIALIZED (SCPI <c>-200</c>). False for a
+/// null answer or any other failure, so it describes the attempt being reported rather than the
+/// worst one seen so far.
+/// </param>
+/// <param name="RetryDelay">
+/// The pause that follows before the next attempt, after the normalization
+/// <see cref="LanChipInfoRetryOptions.RetryDelay"/> documents.
+/// <see cref="TimeSpan.Zero"/> on the last attempt, because no retry follows it — which is also
+/// how a caller tells "retrying" from "that was the last try".
+/// </param>
+public readonly record struct LanChipInfoProbeProgress(
+    int Attempt,
+    int MaxAttempts,
+    bool WasLanNotInitialized,
+    TimeSpan RetryDelay);
 
 /// <summary>
 /// The outcome of a bounded chip-info probe: what was read, and — when nothing was — whether the
@@ -110,9 +167,16 @@ public static class LanChipInfoProviderExtensions
     /// normalized to their documented meaning (see <see cref="LanChipInfoRetryOptions"/>) rather
     /// than thrown back at the caller from partway through the loop.
     /// </para>
+    /// <para>
+    /// Because the probe can occupy roughly ten seconds, <see cref="LanChipInfoRetryOptions.Progress"/>
+    /// reports each attempt that does not produce chip info, so a caller can show that it is
+    /// retrying rather than stalled (#745). A probe that reads the module on its first attempt
+    /// reports nothing. An attempt the wall-clock budget cuts short is not reported either: it ends
+    /// the probe, and the returned result is what describes it.
+    /// </para>
     /// </remarks>
     /// <param name="provider">The device to query. When it is also an <see cref="IStreamingDevice"/>, it is what the <c>LAN:APPLY</c> kick is sent through.</param>
-    /// <param name="options">The retry budget; <see langword="null"/> uses <see cref="LanChipInfoRetryOptions"/>'s defaults.</param>
+    /// <param name="options">The retry budget and the optional per-attempt progress sink; <see langword="null"/> uses <see cref="LanChipInfoRetryOptions"/>'s defaults, which report nothing.</param>
     /// <param name="logger">Optional logger for per-attempt diagnostics.</param>
     /// <param name="cancellationToken">Cancels the probe. Unlike the internal budget, this surfaces as <see cref="OperationCanceledException"/>.</param>
     /// <returns>What was read, and how the probe ended if nothing was.</returns>
@@ -240,6 +304,20 @@ public static class LanChipInfoProviderExtensions
                     maxAttempts);
             }
 
+            // Every failure branch above converges here: the attempt produced no chip info and the
+            // probe is still running normally. One report per such attempt, in order, which is the
+            // span a caller needs to render "retrying". The total-timeout branches above return
+            // instead of falling through, so they report nothing — they end the probe, and the
+            // result they return is what describes that.
+            ReportAttemptFailed(
+                effectiveOptions.Progress,
+                log,
+                new LanChipInfoProbeProgress(
+                    attempt,
+                    maxAttempts,
+                    lastFailureWasLanNotInitialized,
+                    attempt < maxAttempts ? retryDelay : TimeSpan.Zero));
+
             if (attempt < maxAttempts)
             {
                 try
@@ -263,6 +341,42 @@ public static class LanChipInfoProviderExtensions
             maxAttempts,
             lastFailureWasLanNotInitialized);
         return new LanChipInfoProbeResult(null, lastFailureWasLanNotInitialized);
+    }
+
+    /// <summary>
+    /// Hands one failed attempt to the caller's progress sink without letting the sink affect the
+    /// probe.
+    /// </summary>
+    /// <remarks>
+    /// Every exception is swallowed, <see cref="OperationCanceledException"/> included. A consumer
+    /// of <see cref="LanChipInfoRetryOptions.Progress"/> is drawing a status line; it must not be
+    /// able to fail an operation whose documented contract is that failures come back as an
+    /// unavailable result, and it must not discard a chip-info read the remaining attempts may
+    /// still make. The caller's own <see cref="CancellationToken"/> remains the only thing that
+    /// stops the loop, and the next iteration observes it.
+    /// </remarks>
+    private static void ReportAttemptFailed(
+        IProgress<LanChipInfoProbeProgress>? progress,
+        ILogger log,
+        LanChipInfoProbeProgress report)
+    {
+        if (progress is null)
+        {
+            return;
+        }
+
+        try
+        {
+            progress.Report(report);
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(
+                ex,
+                "A LAN chip-info progress handler threw on attempt {Attempt}/{Max}; ignoring it and continuing the probe.",
+                report.Attempt,
+                report.MaxAttempts);
+        }
     }
 
     /// <summary>

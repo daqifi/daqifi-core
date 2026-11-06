@@ -4913,23 +4913,62 @@ public class FirmwareUpdateServiceTests
         // The documented contract: only callback reentrancy is rejected. A concurrent
         // call from a SEPARATE execution context must serialize on the shared lock and
         // then proceed — it must not throw InvalidOperationException.
-        var releaseFirst = new TaskCompletionSource();
-        var firstCallHoldsLock = new TaskCompletionSource();
+        //
+        // Both facts are read off the code's own structure, not off a clock (issue #803).
+        //
+        // "The second call was not rejected" is observable the instant
+        // CheckBootloaderHealthAsync returns its task. RunBootloaderDiagnosticAsync checks
+        // disposal, the target-path argument and the _isInsideOperation reentrancy flag
+        // synchronously, all before its first await — so a rejected call hands back an
+        // already-faulted task. The first await is _operationLock.WaitAsync, and a
+        // SemaphoreSlim with no count left never completes that synchronously. An
+        // incomplete task therefore means the call passed the guard and is queued on the
+        // lock, which is exactly the fact asserted, with no window to wait out.
+        //
+        // "The two calls did not interleave" is read off the recorded order of the HID
+        // writes. Each health check writes once, so a second write logged before the first
+        // call's write returned would be an interleave.
+        //
+        // The previous version waited out a 250 ms Task.Delay to let the second call "settle"
+        // on the lock. That delay ran inside a real production budget: the first call is
+        // parked in its version request, which Pic32FirmwareUpdater runs under
+        // ExecuteWithStateTimeoutAsync for the Connecting state, and CreateFastOptions sets
+        // ConnectingTimeout to 2 s. The 250 ms sleep plus thread-pool dispatch latency on a
+        // loaded Windows net9 runner spent that whole 2 s budget, so the first call timed out
+        // and `await first` threw instead of returning the version. Nothing is waited out now,
+        // so the budget is no longer part of the test.
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstCallHoldsLock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var hidTransport = new FakeHidTransport();
         hidTransport.EnqueueRead([0x01, 0x10]);
         hidTransport.EnqueueRead([0x01, 0x10]);
 
-        var isFirstWrite = true;
+        // Write order, under a lock because an interleave is the failure this records:
+        // unsynchronized bookkeeping would itself be a data race in the case being detected.
+        var writeOrder = new List<string>();
+        var writeOrderLock = new object();
+        void RecordWrite(string label)
+        {
+            lock (writeOrderLock)
+            {
+                writeOrder.Add(label);
+            }
+        }
+
+        var firstWriteClaimed = 0;
         hidTransport.WriteHook = async (_, _) =>
         {
-            if (!isFirstWrite)
+            if (Interlocked.Exchange(ref firstWriteClaimed, 1) != 0)
             {
+                RecordWrite("second-write");
                 return;
             }
-            isFirstWrite = false;
+
+            RecordWrite("first-write-entered");
             firstCallHoldsLock.TrySetResult();
             await releaseFirst.Task;
+            RecordWrite("first-write-returned");
         };
 
         var enumerator = new FakeHidDeviceEnumerator([
@@ -4944,17 +4983,30 @@ public class FirmwareUpdateServiceTests
 
         var second = service.CheckBootloaderHealthAsync();
 
-        // The second call must be queued behind the first, not rejected.
-        await Task.WhenAny(second, Task.Delay(250));
+        // The guard runs synchronously, so a rejected second call is already faulted here.
         Assert.False(
             second.IsCompleted,
-            "Second diagnostic should still be waiting on the operation lock while the first holds it.");
+            "Second diagnostic completed before the first released the operation lock — "
+            + "the reentrancy guard rejected a call from a separate context.");
 
         releaseFirst.SetResult();
 
         Assert.Equal("1.0", await first);
         Assert.Equal("1.0", await second);
         Assert.Equal(FirmwareUpdateState.Idle, service.CurrentState);
+
+        // Both calls reached the wire, and the second one did so only after the first was
+        // done with it. Awaiting both above is what makes this non-vacuous: a second call
+        // that never ran would leave "second-write" out of the list.
+        List<string> recorded;
+        lock (writeOrderLock)
+        {
+            recorded = [.. writeOrder];
+        }
+
+        Assert.Equal(
+            ["first-write-entered", "first-write-returned", "second-write"],
+            recorded);
     }
 
     [Fact]

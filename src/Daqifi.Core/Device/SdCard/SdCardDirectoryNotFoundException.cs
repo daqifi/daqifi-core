@@ -12,9 +12,18 @@ namespace Daqifi.Core.Device.SdCard;
 /// This is a normal state, not a fault. A freshly formatted card has no log
 /// directory until the first capture writes one, so a client that renders every
 /// filesystem error the same way shows the user a scary message for "you have
-/// not logged anything yet". Callers that want that distinction catch this
-/// type; callers that do not still catch
-/// <see cref="SdCardFilesystemException"/> and behave exactly as before.
+/// not logged anything yet".
+/// </para>
+/// <para>
+/// A file listing therefore does not raise this at all:
+/// <see cref="ISdCardOperations.GetSdCardFilesAsync"/> answers a missing
+/// directory with an empty list, because "nothing is on the card" is the true
+/// answer to what it was asked (#730). The condition is still reported by
+/// <see cref="ISdCardOperations.DeleteSdCardFileAsync"/>, whose question is
+/// different: it confirms the delete from a listing in the same exchange, and a
+/// directory that is gone leaves that unconfirmed. Callers that do not want the
+/// distinction still catch <see cref="SdCardFilesystemException"/> and behave
+/// exactly as before.
 /// </para>
 /// <para>
 /// Detected from the numeric code in the firmware's

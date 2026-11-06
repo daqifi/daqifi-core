@@ -3,6 +3,7 @@ using Daqifi.Core.Communication.Messages;
 using Daqifi.Core.Communication.Producers;
 using Daqifi.Core.Communication.Transport;
 using Daqifi.Core.Device;
+using Daqifi.Core.Tests.TestSupport;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Reflection;
@@ -1075,7 +1076,7 @@ public class DaqifiDeviceOperationSerializationTests
         // A competitor that fires once the replay is under way. Started before the flush and
         // gated, so it carries none of the flushing flow's context.
         using var replayStarted = new ManualResetEventSlim(false);
-        transport.OnWriteStarted = () => replayStarted.Set();
+        transport.OnWriteStarted = _ => replayStarted.Set();
 
         // The wait's result is captured and asserted, not discarded. If the replay never starts,
         // the competitor must not send at all — otherwise "B came last" would be satisfied by a
@@ -1129,13 +1130,19 @@ public class DaqifiDeviceOperationSerializationTests
         //
         // The backlog here is deliberately larger than the per-flush bound, so the probe lands in
         // the stretch that runs after the bound is hit.
-        using var transport = new GatedWriteTransport(writeDelay: TimeSpan.FromMilliseconds(10));
+        //
+        // No per-write delay: the replay is held still by the handshake below, so the window the
+        // probe needs no longer has to be made wide by sleeping in every write. It used to be
+        // 10 ms a write, which cost 640 ms of real sleeping before the per-flush bound was even
+        // reached and left the wait for that point competing with CI scheduling.
+        using var transport = new GatedWriteTransport();
         using var device = new DaqifiDevice("Backlog Device", transport);
         device.Connect();
         transport.ReleaseWrites();
 
         const int backlog = 120;
-        const int probeAfterWrites = 80; // comfortably past the 64-message per-flush bound
+        const int pinAtBacklogWrite = 80; // comfortably past the 64-message per-flush bound
+        const string probeTag = "probe";
 
         var entered = new TaskCompletionSource();
         var release = new TaskCompletionSource();
@@ -1156,34 +1163,60 @@ public class DaqifiDeviceOperationSerializationTests
             }
         });
 
+        // The replay parks inside backlog write 80 and stays there until the probe's Send() has
+        // returned. That handshake, not a clock, is what holds the window open: while the replay
+        // is parked it still holds the device's direct-write gate and writes 81..120 are still in
+        // the backlog, so the probe's Send() provably arrives in the state the test is about.
+        //
+        // The payload picks the write, because the queued producer writes this stream too and a
+        // plain counter would drift with its traffic.
         using var deepIntoFlush = new ManualResetEventSlim(false);
-        var writes = 0;
-        transport.OnWriteStarted = () =>
+        var probeReturned = new TaskCompletionSource();
+        var backlogWrites = 0;
+        var pinReached = 0;
+        var pinnedNow = 0;
+        transport.OnWriteStarted = payload =>
         {
-            if (Interlocked.Increment(ref writes) >= probeAfterWrites)
-            {
-                deepIntoFlush.Set();
-            }
-        };
-
-        var probeElapsed = TimeSpan.MaxValue;
-        var probeRan = false;
-        var probe = new Thread(() =>
-        {
-            // DeadlockBudget, not PhaseBoundaryWait: write 80 is past the per-flush bound, so the
-            // background drain makes it, and that drain is a Task.Run that has to be handed a
-            // thread-pool thread first. A busy test process can hold its pool for seconds, and 5 s
-            // lost that race on CI. Still shorter than the join below.
-            probeRan = deepIntoFlush.Wait(DeadlockBudget);
-            if (!probeRan)
+            if (!payload.StartsWith('m') || Interlocked.Increment(ref backlogWrites) != pinAtBacklogWrite)
             {
                 return;
             }
 
-            var sw = Stopwatch.StartNew();
-            device.Send(new TaggedBinaryMessage("probe"));
-            sw.Stop();
-            probeElapsed = sw.Elapsed;
+            Volatile.Write(ref pinReached, 1);
+            Volatile.Write(ref pinnedNow, 1);
+            deepIntoFlush.Set();
+
+            // Bounded only so a regression fails as itself instead of hanging the job, and
+            // deliberately shorter than the join below so the probe always gets to finish.
+            probeReturned.Task.Wait(DeadlockBudget);
+            Volatile.Write(ref pinnedNow, 0);
+        };
+
+        var sentWhilePinned = false;
+        var probeRan = false;
+        var probe = new Thread(() =>
+        {
+            try
+            {
+                // A hang-breaker, not the measurement: reaching write 80 needs the background
+                // drain, and that drain is a Task.Run waiting for a thread-pool thread.
+                probeRan = deepIntoFlush.Wait(DeadlockBudget);
+                if (!probeRan)
+                {
+                    return;
+                }
+
+                device.Send(new TaggedBinaryMessage(probeTag));
+
+                // Read before the replay is let go. The replay resumes only on probeReturned, so
+                // a Send() that parked sees the pin still in place, and a Send() that waited on
+                // the replay's write can only have got through once the pin expired.
+                sentWhilePinned = Volatile.Read(ref pinnedNow) == 1;
+            }
+            finally
+            {
+                probeReturned.TrySetResult();
+            }
         })
         {
             IsBackground = true,
@@ -1195,9 +1228,17 @@ public class DaqifiDeviceOperationSerializationTests
         Assert.True(probe.Join(TimeSpan.FromSeconds(30)), "The probing sender never finished.");
 
         Assert.True(probeRan, "The flush never reached the probe point, so nothing was measured.");
+        Assert.True(Volatile.Read(ref pinReached) == 1, "The replay never parked at the probe point.");
         Assert.True(
-            probeElapsed < TimeSpan.FromMilliseconds(150),
-            $"Send() blocked for {probeElapsed.TotalMilliseconds:0}ms during the flush; it must never wait on replay I/O.");
+            sentWhilePinned,
+            "Send() returned only after the parked replay was let go, so it waited on replay I/O.");
+
+        // Not vacuous: the probe's message really was parked and really went out afterwards, so
+        // the immediate return above is deferral working rather than the send being dropped.
+        WaitUntil.That(
+            () => transport.Writes.Contains(probeTag),
+            "the parked probe message to reach the transport once the backlog drained",
+            DeadlockBudget);
 
         device.Disconnect();
     }
@@ -1332,8 +1373,16 @@ public class DaqifiDeviceOperationSerializationTests
 
         public GatedWriteStream(TimeSpan? writeDelay = null) => _writeDelay = writeDelay ?? TimeSpan.Zero;
 
-        /// <summary>Invoked on the writing thread each time a write begins.</summary>
-        public Action? OnWriteStarted { get; set; }
+        /// <summary>
+        /// Invoked on the writing thread each time a write begins, with the payload that write is
+        /// about to put on the stream.
+        /// </summary>
+        /// <remarks>
+        /// The payload is part of the signal on purpose. The queued producer writes this same
+        /// stream on its own thread, so a test that has to recognise one specific replayed
+        /// message cannot do it from a bare write counter: producer traffic would move the count.
+        /// </remarks>
+        public Action<string>? OnWriteStarted { get; set; }
 
         public IReadOnlyList<string> Writes
         {
@@ -1377,8 +1426,10 @@ public class DaqifiDeviceOperationSerializationTests
 
         public override void Write(byte[] buffer, int offset, int count)
         {
+            var payload = Encoding.UTF8.GetString(buffer, offset, count);
+
             _writeStarted.Set();
-            OnWriteStarted?.Invoke();
+            OnWriteStarted?.Invoke(payload);
 
             _released.Wait(TimeSpan.FromSeconds(10));
 
@@ -1389,7 +1440,7 @@ public class DaqifiDeviceOperationSerializationTests
 
             lock (_gate)
             {
-                _writes.Add(Encoding.UTF8.GetString(buffer, offset, count));
+                _writes.Add(payload);
             }
         }
 
@@ -1415,7 +1466,7 @@ public class DaqifiDeviceOperationSerializationTests
 
         public IReadOnlyList<string> Writes => _stream.Writes;
 
-        public Action? OnWriteStarted
+        public Action<string>? OnWriteStarted
         {
             get => _stream.OnWriteStarted;
             set => _stream.OnWriteStarted = value;

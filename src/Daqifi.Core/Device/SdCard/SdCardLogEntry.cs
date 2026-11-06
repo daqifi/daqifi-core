@@ -27,4 +27,25 @@ public sealed record SdCardLogEntry(
     /// consumers compiled before this property was added.
     /// </remarks>
     public bool HasDeviceTimestamp { get; init; } = true;
+
+    /// <summary>
+    /// The unit the log file held <see cref="AnalogValues"/> in, and therefore which conversion
+    /// produced them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="SdCardAnalogValueUnit.RawAdcCodes"/> means the file held ADC codes and
+    /// <see cref="AnalogValues"/> is the converted voltage — or the codes themselves when the
+    /// parse had no device configuration to convert them with.
+    /// <see cref="SdCardAnalogValueUnit.Volts"/> and
+    /// <see cref="SdCardAnalogValueUnit.Millivolts"/> mean the device had already applied its
+    /// calibration, so no ADC conversion was applied.
+    /// </para>
+    /// <para>
+    /// Declared as an <c>init</c> property (not a primary-constructor parameter) so the
+    /// record's generated constructor and <see cref="Deconstruct"/> signatures stay
+    /// binary-compatible with consumers compiled before this property was added.
+    /// </para>
+    /// </remarks>
+    public SdCardAnalogValueUnit SourceAnalogValueUnit { get; init; } = SdCardAnalogValueUnit.RawAdcCodes;
 }
