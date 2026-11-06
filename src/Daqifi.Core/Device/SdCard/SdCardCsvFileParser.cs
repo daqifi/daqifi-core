@@ -43,6 +43,16 @@ namespace Daqifi.Core.Device.SdCard;
 /// visible to a caller watching <see cref="SdCardParseOptions.Progress"/>.
 /// </para>
 /// <para>
+/// A data row must carry exactly as many fields as the column header does. A log that is stopped
+/// rather than closed can end part-way through a row, and such a row used to pass as a sample
+/// with fewer values — exported as a row of empty cells, which a reader that reads an empty cell
+/// as zero sees as every remaining channel dropping to zero for one sample (issue #905). The last
+/// row of a file is dropped as the truncated tail and reported in
+/// <see cref="SdCardParseProgress.TruncatedFinalRow"/>, which is what tells a clean end from a
+/// cut one; a mismatched row anywhere else is a parse problem and is counted in
+/// <see cref="SdCardParseProgress.RowsSkipped"/> with the other rows the parser cannot read.
+/// </para>
+/// <para>
 /// The header names only the channels the recording had enabled, and it names them by number,
 /// so a file of channel 7 alone reads <c>ain7_ts,ain7_val</c>. Each column that holds a raw ADC
 /// code is therefore scaled with the calibration, port range, and internal scale of the channel
@@ -455,6 +465,18 @@ public sealed class SdCardCsvFileParser
         var totalBytes = totalBytesProvider();
         var skipped = 0;
         var rowsSkipped = 0;
+        var truncatedFinalRow = false;
+
+        // The header's own column count, or 0 when the file states no column header and there is
+        // nothing to match a row against. Every pair is a timestamp and a value, including the
+        // digital pair.
+        var expectedColumnCount =
+            (columnLayout.AnalogPairCount + (columnLayout.HasDigitalPair ? 1 : 0)) * 2;
+
+        // A row whose field count did not match, held back until the next row says what it was. A
+        // held row at the end of the file is the truncated tail; a held row with another row after
+        // it was short in the middle of the file, which is a parse problem instead.
+        var heldMismatch = false;
 
         await foreach (var entry in openLines(ct).WithCancellation(ct).ConfigureAwait(false))
         {
@@ -474,6 +496,23 @@ public sealed class SdCardCsvFileParser
 
             var line = entry.Text;
             linesProcessed++;
+
+            // Another row arrived, so the held one was not the file's last: it was a short row in
+            // the middle, which is a parse problem like any other row the parser cannot read.
+            if (heldMismatch)
+            {
+                heldMismatch = false;
+                rowsSkipped++;
+            }
+
+            if (expectedColumnCount > 0 && CountFields(line) != expectedColumnCount)
+            {
+                // Hold it rather than yield it. Nothing here can tell yet whether this is the
+                // truncated tail of a stopped recording or a short row mid-file, and the two are
+                // counted differently.
+                heldMismatch = true;
+                continue;
+            }
 
             var parsed = TryParseCsvDataRow(line, columnLayout);
             if (parsed == null)
@@ -528,9 +567,17 @@ public sealed class SdCardCsvFileParser
             {
                 progress.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
                 {
-                    RowsSkipped = rowsSkipped
+                    RowsSkipped = rowsSkipped,
+                    TruncatedFinalRow = truncatedFinalRow
                 });
             }
+        }
+
+        // Nothing followed the held row, so it was the file's last: the truncated tail of a
+        // recording that was stopped rather than closed.
+        if (heldMismatch)
+        {
+            truncatedFinalRow = true;
         }
 
         // Final progress report. This one always goes out, so a caller that watches progress
@@ -538,8 +585,31 @@ public sealed class SdCardCsvFileParser
         // reporting interval.
         progress?.Report(new SdCardParseProgress(bytesRead, totalBytes, linesProcessed)
         {
-            RowsSkipped = rowsSkipped
+            RowsSkipped = rowsSkipped,
+            TruncatedFinalRow = truncatedFinalRow
         });
+    }
+
+    /// <summary>
+    /// Counts a line's comma-separated fields the way the row parser splits it, without
+    /// allocating the split. One more than the number of commas, so a line with a trailing comma
+    /// counts the empty field after it — which is a field the header has no column for, and that
+    /// is the point.
+    /// </summary>
+    /// <param name="line">One line of the file, as the reader hands it over.</param>
+    /// <returns>The number of fields the line holds.</returns>
+    private static int CountFields(string line)
+    {
+        var fields = 1;
+        foreach (var c in line)
+        {
+            if (c == ',')
+            {
+                fields++;
+            }
+        }
+
+        return fields;
     }
 
     /// <summary>
