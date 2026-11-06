@@ -802,7 +802,7 @@ public class DaqifiDeviceInitializeTests
             }
         }
 
-        protected override Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
+        protected override async Task<IReadOnlyList<string>> ExecuteTextCommandAsync(
             Action setupAction,
             int responseTimeoutMs = 1000,
             int completionTimeoutMs = 250,
@@ -813,11 +813,45 @@ public class DaqifiDeviceInitializeTests
         {
             LastResponseTimeoutMs = responseTimeoutMs;
             LastCompletionTimeoutMs = completionTimeoutMs;
-            return RunTextExchangeAsync(
+
+            var before = DirectSentMessages.Count;
+            var lines = await RunTextExchangeAsync(
                 _ => { setupAction(); return Task.CompletedTask; },
                 cancellationToken,
                 prepareAsync,
-                finalizeAsync);
+                finalizeAsync).ConfigureAwait(false);
+
+            // The two questions asked only after a channel-population timeout (#911) come
+            // through this overload, one query per exchange. Everything else is passed on
+            // untouched.
+            var sent = DirectSentMessages.Skip(before).Select(m => m.Data).ToList();
+            var identityQuery = sent.FirstOrDefault(d => d.Contains("*IDN?"));
+            var interfaceQuery = sent.FirstOrDefault(d => d.Contains("STReam:INTerface?"));
+            if (identityQuery == null && interfaceQuery == null)
+            {
+                return lines;
+            }
+
+            DiagnosticQueryCount++;
+            if (DiagnosticQueriesThrow)
+            {
+                throw new InvalidOperationException("no transport");
+            }
+
+            var query = identityQuery ?? interfaceQuery!;
+            var answer = identityQuery != null ? IdentityReply : StreamInterfaceReply;
+            var replyLines = new List<string>();
+            if (EchoesQueries)
+            {
+                replyLines.Add(query);
+            }
+
+            if (answer != null)
+            {
+                replyLines.Add(answer);
+            }
+
+            return replyLines;
         }
 
         // The init SCPI setup sequence uses the async overload so its settle delays do not
@@ -850,37 +884,7 @@ public class DaqifiDeviceInitializeTests
                 }
 
                 // Run the setup action so that Send() calls inside it are captured
-                var before = DirectSentMessages.Count;
                 await setupActionAsync(cancellationToken).ConfigureAwait(false);
-                var sentThisCall = DirectSentMessages.Skip(before).Select(m => m.Data).ToList();
-
-                // The two questions asked only after a channel-population timeout (#911).
-                var identityQuery = sentThisCall.FirstOrDefault(d => d.Contains("*IDN?"));
-                var interfaceQuery = sentThisCall.FirstOrDefault(d => d.Contains("STReam:INTerface?"));
-                if (identityQuery != null || interfaceQuery != null)
-                {
-                    DiagnosticQueryCount++;
-                    if (DiagnosticQueriesThrow)
-                    {
-                        throw new InvalidOperationException("no transport");
-                    }
-
-                    var query = identityQuery ?? interfaceQuery!;
-                    var answer = identityQuery != null ? IdentityReply : StreamInterfaceReply;
-                    var replyLines = new List<string>();
-                    if (EchoesQueries)
-                    {
-                        replyLines.Add(query);
-                    }
-
-                    if (answer != null)
-                    {
-                        replyLines.Add(answer);
-                    }
-
-                    return replyLines;
-                }
-
                 TextCommandAttemptCount++;
 
                 if (_failFirstAttempt && TextCommandAttemptCount == 1)
