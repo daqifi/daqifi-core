@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Daqifi.Core.Channel;
+using Daqifi.Core.Device.Capabilities;
 using Daqifi.Core.Communication.Producers;
 using static Daqifi.Core.Internal.DiagnosticGuard;
 
@@ -61,11 +62,44 @@ internal sealed class StreamingSessionController
                 throw new ArgumentOutOfRangeException(
                     nameof(StreamingFrequency),
                     value,
-                    $"Streaming frequency must be between 1 and {maxSamplingRate} Hz (the device's maximum sampling rate).");
+                    DescribeRejectedFrequency(value, maxSamplingRate));
             }
 
             _streamingFrequency = value;
         }
+    }
+
+    /// <summary>
+    /// The message for a rate the setter refuses, quoting the limit that the value actually
+    /// broke rather than a figure that happens to be at hand.
+    /// </summary>
+    /// <remarks>
+    /// Issue #899: a rejected <c>0</c> used to be reported as "must be between 1 and 22000 Hz
+    /// (the device's maximum sampling rate)" while the live cap was 5713 Hz — two numbers, one
+    /// of them irrelevant to the value given and the other not the one that governs a start. A
+    /// value below 1 is refused by the lower bound alone, so the ceiling has no bearing on it;
+    /// a value above the ceiling is refused by the ceiling, and the message adds the cap the
+    /// enabled channels impose because that is the figure a caller choosing a rate needs next.
+    /// </remarks>
+    private string DescribeRejectedFrequency(int value, int maxSamplingRate)
+    {
+        if (value < 1)
+        {
+            return "Streaming frequency must be at least 1 Hz.";
+        }
+
+        var message =
+            $"Streaming frequency must be at most {maxSamplingRate} Hz, the device's absolute sampling-rate ceiling.";
+
+        // A cap of 0 means nothing is enabled, so there is no sustainable rate to quote; a cap
+        // equal to the ceiling means the device has said nothing that narrows it. Neither adds
+        // anything the caller can act on.
+        var capHz = _host.MaximumStreamingFrequencyHz;
+        return capHz > 0 && capHz < maxSamplingRate
+            ? message
+              + $" The channels enabled right now sustain at most {capHz} Hz, which is what"
+              + " starting a stream lowers the rate to."
+            : message;
     }
 
     /// <inheritdoc cref="DaqifiStreamingDevice.StartStreaming"/>
@@ -75,10 +109,63 @@ internal sealed class StreamingSessionController
 
         if (IsStreaming) return;
 
+        ApplyRateCap();
+
         BeginStreamingSession();
 
         IsStreaming = true;
         _host.Send(ScpiMessageProducer.StartStreaming(StreamingFrequency));
+    }
+
+    /// <summary>
+    /// Lowers the live rate to what the channel set about to stream can sustain, when it does
+    /// not already fit.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the one place the cap cannot be forgotten, which is why it is here and not left
+    /// to the caller (issue #899). The rate the setter validates against is the board's
+    /// absolute ceiling — 22000 Hz on an NQ1, reachable with almost nothing enabled — so a rate
+    /// that is perfectly legal to <i>set</i> can still be more than the enabled channels
+    /// sustain. Since firmware v3.5.0 the device does not degrade gracefully there: it answers
+    /// the start with SCPI <c>-222</c> and streams nothing, leaving a caller watching a session
+    /// that reports itself as running and never delivers a sample. Measured on an NQ1 running
+    /// firmware 3.8.0 with two analog channels enabled: 6924 Hz gave 69,198 samples in 5 s,
+    /// 10000 Hz gave none.
+    /// </para>
+    /// <para>
+    /// Lowering rather than throwing is deliberate. The rate is an upper bound a caller asks
+    /// for, not a contract the device ever promised to honour, and it is readable afterwards
+    /// through <see cref="StreamingFrequency"/> — so a caller who cares can check what it got,
+    /// while one who does not still gets data. Throwing would turn every ordinary
+    /// "set a high rate, then enable channels" sequence into an exception every caller has to
+    /// handle, to arrive at the same rate this picks for them.
+    /// </para>
+    /// <para>
+    /// The adjusted value is assigned to the backing field rather than through the validating
+    /// <see cref="StreamingFrequency"/> setter, for the reason
+    /// <see cref="TrackSessionCommand"/> spells out: that setter re-reads
+    /// <see cref="DeviceCapabilities.MaxSamplingRate"/>, and a cap already bounded by one read
+    /// of it must not be able to fail against another. A cap of <c>0</c> — nothing enabled —
+    /// leaves the rate alone; see <see cref="SampleRateCap.Enforce"/>.
+    /// </para>
+    /// </remarks>
+    private void ApplyRateCap()
+    {
+        var (newRateHz, adjustedFromHz) =
+            SampleRateCap.Enforce(_streamingFrequency, _host.MaximumStreamingFrequencyHz);
+
+        if (!adjustedFromHz.HasValue)
+        {
+            return;
+        }
+
+        _streamingFrequency = newRateHz;
+
+        SafeTrace(
+            $"[{nameof(StartStreaming)}] Lowered the streaming frequency from {adjustedFromHz.Value} Hz "
+            + $"to {newRateHz} Hz, the most the enabled channel set can sustain. The device would have "
+            + "refused the higher rate and streamed nothing.");
     }
 
     /// <summary>

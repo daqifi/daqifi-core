@@ -22,8 +22,24 @@ public static class SdCardLogSessionExtensions
     /// be the device that recorded it — a log that identifies itself is the better witness. A log
     /// that states zero analog ports is taken at its word rather than widened from the fallback,
     /// which is what <see cref="SdCardParseOptions.ConfigurationOverride"/> is for. With no
-    /// configuration on either side the serial becomes <c>"unknown"</c> and the analog width
-    /// becomes zero, which exports the digital column alone rather than inventing a width.
+    /// configuration on either side the serial becomes <c>"unknown"</c>.
+    /// </para>
+    /// <para>
+    /// <b>The analog width comes from the data when nothing states it.</b> "This device has no
+    /// analog channels" and "the file did not say" are different facts, and only the first one
+    /// means zero columns. A protobuf log carries no configuration block at all, so taking its
+    /// width as zero exported the digital column alone and discarded the sixteen readings every
+    /// entry carried — a successful export that lost the data (issue #902). So
+    /// <see cref="SdCardLogSession.ObservedAnalogValueCount"/>, the width of the entries
+    /// themselves, is used whenever it is wider than what is stated. A log recorded on a device
+    /// with no analog channels carries no analog values, so the width is zero there too and the
+    /// digital column is still exported on its own.
+    /// </para>
+    /// <para>
+    /// A width that is still zero while entries carry values — a log whose first values lie
+    /// beyond <see cref="SdCardParseOptions.ConfigurationScanMessageLimit"/> — is reported by
+    /// <see cref="SdCardLogSampleSource.DroppedAnalogColumns"/> as the export runs, so a caller
+    /// is never left to infer the loss from the file.
     /// </para>
     /// <para>
     /// A configuration reporting a negative analog port count — only reachable from a corrupt
@@ -78,7 +94,14 @@ public static class SdCardLogSessionExtensions
         // carries an empty serial field shadow the connected device's real one, and the caller
         // would get "unknown" in every channel key with a perfectly good serial in hand.
         var serial = Stated(config?.DeviceSerialNumber) ?? Stated(fallbackConfiguration?.DeviceSerialNumber);
-        var analogCount = config?.AnalogPortCount ?? fallbackConfiguration?.AnalogPortCount ?? 0;
+
+        // What the log states, or failing that the fallback device. A log that states a count —
+        // zero included — is not widened from the fallback, so the log's own word is read first.
+        var statedCount = Math.Max(0, config?.AnalogPortCount ?? fallbackConfiguration?.AnalogPortCount ?? 0);
+
+        // What the entries carry overrules a stated width that is narrower, because an entry
+        // with values and no column to hold them loses readings whichever side is wrong (#902).
+        var analogCount = Math.Max(statedCount, session.ObservedAnalogValueCount);
 
         // What the parse did to the values, which is what the file has to say. A resolution is
         // what SdCardAnalogScaling needs to convert a log's values; without one it returns them
@@ -93,7 +116,7 @@ public static class SdCardLogSessionExtensions
         return new SdCardLogSampleSource(
             session.Samples,
             serial,
-            Math.Max(0, analogCount),
+            analogCount,
             deviceName)
         {
             ValueUnit = valueUnit

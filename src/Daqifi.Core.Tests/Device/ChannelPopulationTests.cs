@@ -2,6 +2,10 @@ using Daqifi.Core.Channel;
 using Daqifi.Core.Device;
 using Xunit;
 
+// IDigitalChannel.OutputValue is obsolete (#901); these tests keep covering it until it
+// is removed in a major version.
+#pragma warning disable CS0618
+
 namespace Daqifi.Core.Tests.Device;
 
 /// <summary>

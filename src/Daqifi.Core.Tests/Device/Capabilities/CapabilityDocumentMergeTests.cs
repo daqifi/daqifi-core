@@ -26,8 +26,9 @@ public class CapabilityDocumentMergeTests
     [Fact]
     public void MergeInto_RealNyquist1Document_AgreesWithTheBoardTable()
     {
-        // The bench check the issue asks for, pinned as a regression test: for a board the static
-        // table already describes, the device's own answer must not contradict it.
+        // The board table is the floor under the live document, so for a board it describes the
+        // device's own answer must not contradict it — in any field the document states. A table
+        // that drifts from the hardware fails here (#904).
         var boardDerived = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
         var merged = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
 
@@ -37,21 +38,22 @@ public class CapabilityDocumentMergeTests
         Assert.Equal(boardDerived.HasWiFi, merged.HasWiFi);
         Assert.Equal(boardDerived.HasUsb, merged.HasUsb);
         Assert.Equal(boardDerived.SupportsStreaming, merged.SupportsStreaming);
+        Assert.Equal(boardDerived.AnalogInputChannels, merged.AnalogInputChannels);
+        Assert.Equal(boardDerived.AnalogOutputChannels, merged.AnalogOutputChannels);
+        Assert.Equal(boardDerived.DigitalChannels, merged.DigitalChannels);
+        Assert.Equal(boardDerived.MaxSamplingRate, merged.MaxSamplingRate);
     }
 
     [Fact]
-    public void MergeInto_RealNyquist1Document_FillsChannelCountsAndRaisesTheRateCeiling()
+    public void MergeInto_RealNyquist1Document_FillsChannelCountsAndTheRateCeilingOnABlankInstance()
     {
-        var capabilities = DeviceCapabilities.FromDeviceType(DeviceType.Nyquist1);
+        var capabilities = new DeviceCapabilities();
 
         BenchDocument().MergeInto(capabilities);
 
         Assert.Equal(16, capabilities.AnalogInputChannels);
         Assert.Equal(0, capabilities.AnalogOutputChannels);
         Assert.Equal(16, capabilities.DigitalChannels);
-
-        // The one field where the device disagrees with the table, and the reason this reader
-        // exists: the hardcoded 1000 Hz predates firmware v3.5.0 removing the muxed scan-rate cap.
         Assert.Equal(22000, capabilities.MaxSamplingRate);
     }
 
@@ -85,7 +87,7 @@ public class CapabilityDocumentMergeTests
         Assert.Equal(8, capabilities.AnalogInputChannels);
         Assert.Equal(2, capabilities.AnalogOutputChannels);
         Assert.Equal(16, capabilities.DigitalChannels);
-        Assert.Equal(1000, capabilities.MaxSamplingRate);
+        Assert.Equal(16000, capabilities.MaxSamplingRate);
     }
 
     [Fact]
@@ -101,7 +103,7 @@ public class CapabilityDocumentMergeTests
         Assert.True(capabilities.HasWiFi);
         Assert.True(capabilities.HasUsb);
         Assert.Equal(16, capabilities.AnalogInputChannels);
-        Assert.Equal(1000, capabilities.MaxSamplingRate);
+        Assert.Equal(22000, capabilities.MaxSamplingRate);
     }
 
     [Fact]
@@ -131,7 +133,7 @@ public class CapabilityDocumentMergeTests
         Parse("{\"schema_version\":2,\"streaming\":{\"sample_rate_range_hz\":{\"min\":1,\"max\":0}}}")
             .MergeInto(capabilities);
 
-        Assert.Equal(1000, capabilities.MaxSamplingRate);
+        Assert.Equal(22000, capabilities.MaxSamplingRate);
     }
 
     [Fact]
