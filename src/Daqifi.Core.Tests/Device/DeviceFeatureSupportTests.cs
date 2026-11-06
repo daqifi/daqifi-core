@@ -78,6 +78,25 @@ public class DeviceFeatureSupportTests
     }
 
     [Fact]
+    public void Supports_SdListingEndMarker_OnMarkerCapableFirmwareWithAnUnknownBoard_IsSupported()
+    {
+        // This gate carries HardwareRequirement.SdCard like its SD siblings, and that is only
+        // safe because EvaluateSupport short-circuits DeviceType.Unknown to "supported" — ADR
+        // 0001's reading that Unknown means "not yet known", not "a different board". The
+        // combination is reachable: DeviceMetadata.UpdateFromProtobuf rebuilds Capabilities only
+        // when the status message carried a part number, so a device reporting firmware 3.8.0
+        // with an absent or unrecognized part number sits at Unknown with HasSdCard false.
+        //
+        // Pinned because this gate reads the other way round from the rest of the table: if the
+        // short-circuit were ever removed, every other feature would merely become unavailable,
+        // while this one would silently fall back to the pre-#794 reading and #887's confidently
+        // empty card would come back on exactly that device.
+        var device = DeviceOn(DeviceType.Unknown, "3.8.0", new DeviceCapabilities());
+
+        Assert.True(device.Supports(DeviceFeature.SdListingEndMarker));
+    }
+
+    [Fact]
     public void RequirementTable_SdStorageQuery_ReportsTheSupportedFloorNotTheIntroducingVersion()
     {
         // SYSTem:STORage:SD:SPACe? shipped in v3.4.6b1, but the floor is what daqifi-core
