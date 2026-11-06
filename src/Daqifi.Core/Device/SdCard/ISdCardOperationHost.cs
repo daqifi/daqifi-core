@@ -49,6 +49,18 @@ internal interface ISdCardOperationHost : IDeviceOperationHost
     TimeSpan SdCardTransferIdleTimeout { get; }
 
     /// <summary>
+    /// Settle period for a switch of the shared SPI bus between the LAN and the SD card, read
+    /// through the device so a subclass's override of it still applies.
+    /// </summary>
+    /// <remarks>
+    /// A test double shortens it to <see cref="TimeSpan.Zero"/> so a test that only cares which
+    /// commands went out does not pay two real settle periods per operation. What the delay is
+    /// for — that the firmware gets a pause before the next command — is behavior of the
+    /// collaborator, and is asserted on the stepped clock rather than by waiting.
+    /// </remarks>
+    TimeSpan SdInterfaceSettleDelay { get; }
+
+    /// <summary>
     /// The clock the SD operations measure their budgets and settle delays on (issue #637).
     /// </summary>
     /// <remarks>
