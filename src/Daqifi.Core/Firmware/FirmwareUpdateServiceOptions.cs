@@ -90,11 +90,13 @@ public sealed class FirmwareUpdateServiceOptions
     /// what is left of <see cref="PreparingDeviceTimeout"/> must raise that budget too. Set to
     /// <see cref="TimeSpan.Zero"/> to skip the wait (e.g. unit tests).
     /// <para>
-    /// Failure recovery spends the same wait once more, and only when an update fails or is
-    /// canceled while this window is still open: the queued transition has to land before the
-    /// recovery <c>LAN:APPLY</c> goes out, or that apply enters the bridge instead of leaving it.
-    /// So a host that lengthens this option also lengthens the worst-case recovery by the same
-    /// amount.
+    /// Failure recovery spends the same wait once more whenever an update fails or is canceled
+    /// before the bridge is up: the queued transition has to land before the recovery
+    /// <c>LAN:APPLY</c> goes out, or the firmware's apply gate rejects that command (-200) and the
+    /// bridge exit silently does nothing. Recovery from the requested-but-not-applied state pays
+    /// it too, because the firmware clears its update request only on the way out of the bridge,
+    /// so recovery completes the entry and then leaves. So a host that lengthens this option also
+    /// lengthens the worst-case recovery by the same amount.
     /// </para>
     /// </summary>
     public TimeSpan PostLanBridgeEntryDelay { get; set; } = TimeSpan.FromSeconds(2);
@@ -147,7 +149,12 @@ public sealed class FirmwareUpdateServiceOptions
     /// before the <see cref="WincBootPromptResponseDelay"/> wait. Intended for the host to open a
     /// raw serial port and send the bridge-activation commands (LAN:FWUpdate / LAN:APPLY) that
     /// trigger the device's bridge-mode state machine immediately before the tool starts
-    /// programming. Kept injectable so the raw-serial specifics stay in the host while Core owns
+    /// programming. No longer required to get into the bridge at all: prep now sends the
+    /// <c>LAN:APPLY</c> that enters it (#853), so a callback that re-sends the pair bounces an
+    /// already-up bridge — the firmware's REINIT tears the bridge down and the preserved request
+    /// flag brings it straight back, which is what
+    /// <see cref="WincBootPromptResponseDelay"/> then waits out. Leave it unset unless the board
+    /// genuinely needs that bounce at the prompt. Kept injectable so the raw-serial specifics stay in the host while Core owns
     /// the flash lifecycle, prompt detection, and response timing. Exceptions thrown by the
     /// callback are logged and swallowed — they must not abort the flash.
     /// </summary>
