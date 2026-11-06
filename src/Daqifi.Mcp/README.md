@@ -43,7 +43,7 @@ The server speaks MCP over **stdio**, so the client launches it as a subprocess.
 | `list_sd_files` | List the log files on the SD card, with size and creation date. |
 | `get_sd_storage` | Free/used/total space on the SD card. |
 | `download_sd_file` | Fetch a log file to this machine and (by default) parse it into a CSV. |
-| `delete_sd_file` | Delete a file from the SD card. Destructive; blocked by `--read-only`. |
+| `delete_sd_file` | Delete a file from the SD card. A name the card does not list is refused, not reported as deleted. Destructive; blocked by `--read-only`. |
 
 > **Two ways to get data, for two different jobs.** `read_channel_values` and `capture_samples`
 > stream live to the agent — good for spot checks and short captures, bounded by a duration and a

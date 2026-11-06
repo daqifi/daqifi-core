@@ -126,6 +126,29 @@ public class SdCardAgentGuardTests
         Assert.Contains("not a valid SD file name", deleteEx.Message);
     }
 
+    // The card is a flat list — the firmware has no notion of a directory — so a name with a
+    // separator in it is a caller that assumed one, and saying that is more use than the listing
+    // pre-flight's "there is no file named 'logs/old.bin'" (#919).
+    [Theory]
+    [InlineData("logs/old.bin")]
+    [InlineData("/log.bin")]
+    [InlineData("logs\\old.bin")]
+    [InlineData("..\\..\\etc\\passwd")]
+    public async Task FileNamesWithAPathSeparator_AreRefusedAndSayWhy(string fileName)
+    {
+        var deleteEx = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().DeleteSdFileAsync("serial:NOPE", fileName, CancellationToken.None));
+
+        Assert.Contains("not a valid SD file name", deleteEx.Message);
+        Assert.Contains("no folders", deleteEx.Message);
+        // Before the device is looked up at all: there is no name here worth connecting for.
+        Assert.DoesNotContain("connect_device", deleteEx.Message);
+
+        var downloadEx = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewAgent().DownloadSdFileAsync("serial:NOPE", fileName, exportCsv: true, CancellationToken.None));
+        Assert.Contains("not a valid SD file name", downloadEx.Message);
+    }
+
     [Fact]
     public async Task OrdinaryFileNames_AreNotCaughtByTheCharacterCheck()
     {
@@ -268,7 +291,8 @@ public class SdCardFileNameResolutionTests
     {
         var sd = new FakeSdCard { Cached = [File("log_a.bin"), File("log_b.bin")] };
 
-        var resolved = await DaqifiAgent.ResolveFileNameAsync(sd, "log_b.bin", CancellationToken.None);
+        var resolved = await DaqifiAgent.ResolveFileNameAsync(
+            sd, "log_b.bin", listingIsAuthoritative: false, CancellationToken.None);
 
         Assert.Equal("log_b.bin", resolved);
         Assert.Equal(0, sd.ListCalls);
@@ -281,7 +305,8 @@ public class SdCardFileNameResolutionTests
     {
         var sd = new FakeSdCard { Cached = [File("old.bin")], Fresh = [File("old.bin"), File("just_recorded.bin")] };
 
-        var resolved = await DaqifiAgent.ResolveFileNameAsync(sd, "just_recorded.bin", CancellationToken.None);
+        var resolved = await DaqifiAgent.ResolveFileNameAsync(
+            sd, "just_recorded.bin", listingIsAuthoritative: false, CancellationToken.None);
 
         Assert.Equal("just_recorded.bin", resolved);
         Assert.Equal(1, sd.ListCalls);
@@ -293,7 +318,8 @@ public class SdCardFileNameResolutionTests
         var sd = new FakeSdCard { Fresh = [File("log_a.bin"), File("log_b.bin")] };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => DaqifiAgent.ResolveFileNameAsync(sd, "typo.bin", CancellationToken.None));
+            () => DaqifiAgent.ResolveFileNameAsync(
+                sd, "typo.bin", listingIsAuthoritative: false, CancellationToken.None));
 
         Assert.Contains("no file named 'typo.bin'", ex.Message);
         Assert.Contains("log_a.bin", ex.Message);
@@ -304,7 +330,8 @@ public class SdCardFileNameResolutionTests
     public async Task EmptyCard_SaysSo()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => DaqifiAgent.ResolveFileNameAsync(new FakeSdCard(), "anything.bin", CancellationToken.None));
+            () => DaqifiAgent.ResolveFileNameAsync(
+                new FakeSdCard(), "anything.bin", listingIsAuthoritative: false, CancellationToken.None));
 
         Assert.Contains("card is empty", ex.Message);
     }
@@ -316,7 +343,8 @@ public class SdCardFileNameResolutionTests
     {
         var sd = new FakeSdCard { Cached = [File("LOG_A.BIN")] };
 
-        Assert.Equal("LOG_A.BIN", await DaqifiAgent.ResolveFileNameAsync(sd, "log_a.bin", CancellationToken.None));
+        Assert.Equal("LOG_A.BIN", await DaqifiAgent.ResolveFileNameAsync(
+            sd, "log_a.bin", listingIsAuthoritative: false, CancellationToken.None));
     }
 
     // The listing is a courtesy. If it cannot be taken, the download itself has to be the thing
@@ -326,7 +354,24 @@ public class SdCardFileNameResolutionTests
     {
         var sd = new FakeSdCard { ListThrows = new SdCardOperationException("busy", []) };
 
-        Assert.Equal("log_a.bin", await DaqifiAgent.ResolveFileNameAsync(sd, "log_a.bin", CancellationToken.None));
+        Assert.Equal("log_a.bin", await DaqifiAgent.ResolveFileNameAsync(
+            sd, "log_a.bin", listingIsAuthoritative: false, CancellationToken.None));
+    }
+
+    // The delete has no such later step. The firmware deletes an absent name without complaint, so
+    // a listing that cannot be read leaves nothing that could ever notice — the call has to fail
+    // rather than wave an unverifiable delete through (#919).
+    [Fact]
+    public async Task ListingFailure_FailsTheCall_WhenTheListingIsAuthoritative()
+    {
+        var failure = new SdCardOperationException("busy", []);
+        var sd = new FakeSdCard { ListThrows = failure };
+
+        var ex = await Assert.ThrowsAsync<SdCardOperationException>(
+            () => DaqifiAgent.ResolveFileNameAsync(
+                sd, "log_a.bin", listingIsAuthoritative: true, CancellationToken.None));
+
+        Assert.Same(failure, ex);
     }
 
     [Fact]
@@ -335,7 +380,8 @@ public class SdCardFileNameResolutionTests
         var sd = new FakeSdCard { ListThrows = new OperationCanceledException() };
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => DaqifiAgent.ResolveFileNameAsync(sd, "log_a.bin", CancellationToken.None));
+            () => DaqifiAgent.ResolveFileNameAsync(
+                sd, "log_a.bin", listingIsAuthoritative: false, CancellationToken.None));
     }
 
     private sealed class FakeSdCard : ISdCardOperations
