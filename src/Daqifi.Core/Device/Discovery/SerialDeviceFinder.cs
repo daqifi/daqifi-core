@@ -36,7 +36,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// needs will report nothing, exactly as it would have before.
 /// </para>
 /// </remarks>
-public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
+public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter, IPartialResultReporter
 {
     #region Constants
 
@@ -297,9 +297,20 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
     /// </summary>
     private readonly BusyPortLedger _busyPorts = new();
 
+    /// <summary>
+    /// 1 when the most recent pass gave up before probing every port it enumerated. Written on
+    /// the thread running <see cref="DiscoverAsync(CancellationToken)"/> and read by the caller
+    /// afterwards, so it is accessed through <see cref="Volatile"/> rather than plainly.
+    /// </summary>
+    private int _lastPassWasPartial;
+
     /// <inheritdoc />
     IReadOnlyCollection<BusyPort> IBusyPortReporter.TakeBusyPortsFromLastPass()
         => _busyPorts.TakePortsFromLastPass();
+
+    /// <inheritdoc />
+    bool IPartialResultReporter.TakeResultsWerePartialFromLastPass()
+        => Interlocked.Exchange(ref _lastPassWasPartial, 0) == 1;
 
     /// <summary>
     /// Discovers devices asynchronously with a cancellation token.
@@ -317,6 +328,11 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
         {
             // Describes this pass alone; a port freed since the last one must not stay "busy".
             _busyPorts.BeginPass();
+
+            // Same scope as the ledger above: this pass's own completeness, not the last one's.
+            // Reset even if the caller never took the previous value, so a pass that was cut
+            // short cannot vouch for the pass after it.
+            Volatile.Write(ref _lastPassWasPartial, 0);
 
             var discoveredDevices = new List<IDeviceInfo>();
             // Pre-filter by USB VID/PID where the platform supports it
@@ -384,6 +400,13 @@ public class SerialDeviceFinder : DeviceFinderBase, IBusyPortReporter
                     .Where(t => t.Status == TaskStatus.RanToCompletion)
                     .Select(t => t.Result)
                     .ToArray();
+
+                // The list below is now the probes that finished, not the ports that exist. A
+                // caller that reads absence from it as "the device went away" would drop every
+                // device on a port this pass never reached, so say plainly that it is partial
+                // (IPartialResultReporter). Set only here: this is the one path on which the
+                // pass stops before working through everything it enumerated.
+                Volatile.Write(ref _lastPassWasPartial, 1);
             }
 
             // Events already fired per-probe above; this loop only aggregates the

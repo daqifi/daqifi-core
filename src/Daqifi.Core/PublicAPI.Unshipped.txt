@@ -1,3 +1,33 @@
 #nullable enable
+Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
+Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.Completed = 0 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.Failed = 2 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassOutcome.TimedOut = 1 -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassReport
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Deconstruct(out Daqifi.Core.Device.Discovery.DiscoveryPassOutcome Outcome, out int DevicesSeen, out int NewDevices, out int MetadataUpdates, out int LostDevices, out int LiveDeviceCount, out System.TimeSpan NextPassDelay) -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DevicesSeen.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DevicesSeen.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DiscoveryPassReport() -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.DiscoveryPassReport(Daqifi.Core.Device.Discovery.DiscoveryPassOutcome Outcome, int DevicesSeen, int NewDevices, int MetadataUpdates, int LostDevices, int LiveDeviceCount, System.TimeSpan NextPassDelay) -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(Daqifi.Core.Device.Discovery.DiscoveryPassReport other) -> bool
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LiveDeviceCount.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LiveDeviceCount.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LostDevices.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.LostDevices.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.MetadataUpdates.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.MetadataUpdates.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NewDevices.get -> int
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NewDevices.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.get -> System.TimeSpan
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.init -> void
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.get -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
+Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.init -> void
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.get -> int
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
+override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
+static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
+static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
+~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(object obj) -> bool
+~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.ToString() -> string
