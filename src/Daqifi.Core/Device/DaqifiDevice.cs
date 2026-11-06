@@ -3272,8 +3272,9 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
 
                     // Everything below writes global stream state. A secondary "observe"
                     // session must not touch it — StopStreamData ends another session's
-                    // acquisition outright (#385), and the power-state and stream-format
-                    // commands reconfigure the same single acquisition it is running.
+                    // acquisition outright (#385), the power-state and stream-format commands
+                    // reconfigure the same single acquisition it is running, and the derived
+                    // hook re-routes where that acquisition is sent.
                     //
                     // The terminator below is skipped with them, deliberately. Reading the
                     // error queue pops the entry it returns, so an observe session that asked
@@ -3298,8 +3299,18 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                     token.ThrowIfCancellationRequested();
 
                     Send(ScpiMessageProducer.SetProtobufStreamFormat);
+                    await Task.Delay(TimeSpan.FromMilliseconds(InitScpiSettleDelayMs), _timeProvider, token).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
 
-                    // None of the four commands above answers unless something goes wrong, so
+                    // Whatever else a derived class needs set before the device is asked to
+                    // describe itself. The streaming device routes the stream to USB here, and
+                    // that has to happen before the status request rather than after it: the
+                    // firmware keeps the stream interface a previous WiFi session left behind,
+                    // so a USB connect that asks for status first never receives the reply
+                    // (#897).
+                    OnSendingInitializationCommands();
+
+                    // None of the commands above answers unless something goes wrong, so
                     // the exchange had nothing to complete on and sat out its whole 1000ms
                     // response timeout on every connect (issue #667 item 2). Asking the error
                     // queue gives it a reply to finish on: the wait loop flips to its 250ms
@@ -3307,7 +3318,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                     // trick the SD directory listing already uses for the same reason (#396).
                     //
                     // The settle delay before it is not optional. It is what makes the reply
-                    // mean something: the firmware has to have acted on SetProtobufStreamFormat
+                    // mean something: the firmware has to have acted on the last command sent
                     // and queued any complaint about it before we ask, or a command that failed
                     // would be reported as "0, No error" and the retry below would never run.
                     await Task.Delay(TimeSpan.FromMilliseconds(InitScpiSettleDelayMs), _timeProvider, token).ConfigureAwait(false);
@@ -3426,6 +3437,34 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     protected virtual Task OnDeviceInitializingAsync(
         bool preserveActiveStream,
         CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// Sends any further SCPI commands that belong with the ones <see cref="InitializeAsync"/>
+    /// uses to put the device into a known state. The base implementation sends nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is called from inside the setup block's own text exchange, after echo off, stop
+    /// streaming, power on and the protobuf stream format, and before the
+    /// <c>SYSTem:ERRor?</c> terminator. An override's commands therefore reach the device
+    /// before it is asked to describe itself, are covered by the same error check as the rest
+    /// of the block, and cost no extra round trip.
+    /// </para>
+    /// <para>
+    /// It is not called at all when <see cref="PreserveActiveStream"/> was set for this
+    /// initialization. Everything in this part of the block writes global stream state, which a
+    /// session already using the device must keep (#385), so an override does not have to check
+    /// for itself.
+    /// </para>
+    /// <para>
+    /// The exchange is already in text mode with the protobuf consumer paused, so an override
+    /// may only <see cref="Send{T}"/>. It must not start another text exchange and must not
+    /// block.
+    /// </para>
+    /// </remarks>
+    protected virtual void OnSendingInitializationCommands()
+    {
+    }
 
     /// <summary>
     /// Runs the capability-document read during initialization, absorbing any failure.

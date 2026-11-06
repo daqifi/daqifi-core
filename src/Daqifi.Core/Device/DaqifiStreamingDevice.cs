@@ -28,12 +28,6 @@ namespace Daqifi.Core.Device;
 public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSampleSource, INetworkConfigurable, ISdCardOperations, ILanChipInfoProvider, IDeviceDiagnostics, IDeviceOperationHost, ISdCardOperationHost, IStreamingSessionHost
 {
     /// <summary>
-    /// Response window allowed for the USB stream-interface command sent during
-    /// <see cref="OnDeviceInitializingAsync"/>.
-    /// </summary>
-    private const int UsbStreamInterfaceResponseTimeoutMs = 500;
-
-    /// <summary>
     /// Raised when a stream frame was withheld from consumers because the device should not have
     /// sent it — a malformed leading frame, or one latched from the previous session.
     /// </summary>
@@ -219,46 +213,30 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     }
 
     /// <summary>
-    /// For USB/serial connections, sets the streaming interface to USB so data is routed to the
-    /// serial consumer rather than to a previously-configured WiFi destination. Runs as part of
-    /// <see cref="DaqifiDevice.InitializeAsync"/> after the standard SCPI sequence.
+    /// Routes the stream to USB, as part of the commands <see cref="DaqifiDevice.InitializeAsync"/>
+    /// uses to put the device into a known state.
     /// </summary>
     /// <remarks>
-    /// Whether to route at all, and how hard to retry a transient rejection, is
-    /// <see cref="UsbStreamInterfaceInitializer"/>'s decision; this hook supplies the effect —
-    /// the actual command send — and the connection facts the decision needs.
-    ///
-    /// The send goes through <c>DaqifiDevice.ExecuteTextCommandAsync</c> so the command is sent
-    /// in text mode (protobuf consumer temporarily stopped) and any SCPI error response is
-    /// captured rather than garbling the protobuf stream.
-    ///
-    /// This runs inside the base <see cref="DaqifiDevice.InitializeAsync"/> exception handling
-    /// (before the device is marked initialized/ready), so a cancellation or SCPI error here
-    /// leaves the device in a consistent state and re-initializable, rather than falsely Ready.
+    /// <para>
+    /// The firmware keeps the stream interface it was last given, across sessions. A device a
+    /// WiFi session left on <c>SYSTem:STReam:INTerface 1</c> still sends everything over WiFi,
+    /// so a USB connect receives nothing — not even the status reply the connect waits for. The
+    /// command therefore has to go out with the rest of the setup block, before the device is
+    /// asked to describe itself, or the connect times out before the routing is ever repaired
+    /// (#897).
+    /// </para>
+    /// <para>
+    /// The command writes global stream state, so the base class does not call this at all for
+    /// an observing initialization (#385). A connection that is not USB has nothing to route.
+    /// </para>
     /// </remarks>
-    /// <param name="preserveActiveStream">
-    /// When <c>true</c>, this initialization must leave a stream another session is already
-    /// running untouched, so the routing command is not sent at all.
-    /// </param>
-    /// <param name="cancellationToken">A cancellation token to observe while initializing.</param>
-    /// <returns>A task representing the asynchronous initialization operation.</returns>
-    /// <exception cref="ScpiInitializationErrorException">
-    /// Thrown when the device returns a SCPI error while setting the stream interface to USB
-    /// that persists after an internal retry. A common trigger is the firmware rejecting the
-    /// command because it still has the interface set from a prior WiFi-streaming session,
-    /// within the tight response window right after connect.
-    /// </exception>
-    protected override Task OnDeviceInitializingAsync(
-        bool preserveActiveStream,
-        CancellationToken cancellationToken) =>
-        UsbStreamInterfaceInitializer.RouteStreamToUsbAsync(
-            IsUsbConnection,
-            preserveActiveStream,
-            ct => ExecuteTextCommandAsync(
-                () => Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb)),
-                responseTimeoutMs: UsbStreamInterfaceResponseTimeoutMs,
-                cancellationToken: ct),
-            cancellationToken);
+    protected override void OnSendingInitializationCommands()
+    {
+        if (IsUsbConnection)
+        {
+            Send(ScpiMessageProducer.SetStreamInterface(StreamInterface.Usb));
+        }
+    }
 
     /// <summary>
     /// Starts streaming data from the device at the configured frequency.
