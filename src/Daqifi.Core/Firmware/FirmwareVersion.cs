@@ -14,8 +14,10 @@ namespace Daqifi.Core.Firmware;
 /// have the same hash code, and they collapse to a single entry in a
 /// <see cref="System.Collections.Generic.HashSet{T}"/>, a dictionary key or
 /// <c>Distinct()</c>. A label the type does not recognize carries no rank of its own, so two
-/// unrecognized labels with the same number are equal too. <see cref="PreLabel"/> and
-/// <see cref="ToString"/> still report the raw text the device sent.
+/// unrecognized labels with the same number are equal too. <see cref="PreLabel"/> still
+/// reports the raw label text the device sent, and so does <see cref="ToString"/>, which
+/// normalizes only the leading <c>v</c> and the separator before the label: <c>3.8.0-rc1</c>
+/// prints as <c>3.8.0rc1</c>.
 /// </remarks>
 public readonly record struct FirmwareVersion(
     int Major,
@@ -24,11 +26,16 @@ public readonly record struct FirmwareVersion(
     string? PreLabel,
     int PreNumber) : IComparable<FirmwareVersion>
 {
+    // The shapes that reach here come from two places: a GitHub release tag, and whatever a
+    // device reports in DeviceFwRev. Both use a fourth numeric part for a build number
+    // ("3.8.0.1"), and both separate a pre-release label with a hyphen ("3.8.0-rc1") as often as
+    // they run it straight on ("3.8.0rc1"). Every shape that parses is one fewer device in the
+    // unknown state, where callers must fail closed.
     private static readonly Regex VersionRegex = new(
         """
         (?ix)^\s* v?\s*
-                  (?<maj>\d+) (?:\.(?<min>\d+))? (?:\.(?<pat>\d+))?
-                  (?<suffix> [A-Za-z]+ \d* )?
+                  (?<maj>\d+) (?:\.(?<min>\d+))? (?:\.(?<pat>\d+))? (?:\.(?<rev>\d+))?
+                  (?: [-._]? (?<label> [A-Za-z]+ ) [-._]? (?<prenum> \d+ )? )?
                   \s*$
         """,
         RegexOptions.Compiled);
@@ -38,6 +45,17 @@ public readonly record struct FirmwareVersion(
     /// </summary>
     public bool IsPreRelease => !string.IsNullOrEmpty(PreLabel);
 
+    /// <summary>
+    /// The fourth, build-number part of a four-part version ("3.8.0.1" has a revision of 1).
+    /// Zero for the three-part versions the firmware releases use.
+    /// </summary>
+    /// <remarks>
+    /// This is a separate member rather than a fifth positional parameter, because the primary
+    /// constructor and <c>Deconstruct</c> of this record struct are shipped public API and
+    /// adding a parameter to either would break every caller.
+    /// </remarks>
+    public int Revision { get; init; }
+
     /// <inheritdoc />
     public int CompareTo(FirmwareVersion other)
     {
@@ -46,6 +64,8 @@ public readonly record struct FirmwareVersion(
         cmp = Minor.CompareTo(other.Minor);
         if (cmp != 0) return cmp;
         cmp = Patch.CompareTo(other.Patch);
+        if (cmp != 0) return cmp;
+        cmp = Revision.CompareTo(other.Revision);
         if (cmp != 0) return cmp;
 
         var thisRank = GetPrecedenceRank(PreLabel);
@@ -71,10 +91,11 @@ public readonly record struct FirmwareVersion(
     /// </summary>
     /// <returns>A hash code consistent with <see cref="Equals(FirmwareVersion)"/>.</returns>
     public override int GetHashCode() =>
-        HashCode.Combine(Major, Minor, Patch, GetPrecedenceRank(PreLabel), PreNumber);
+        HashCode.Combine(Major, Minor, Patch, Revision, GetPrecedenceRank(PreLabel), PreNumber);
 
     /// <summary>
-    /// Attempts to parse a version string (e.g. "v3.2.0", "3.2.0b2", "v1.0.0rc1").
+    /// Attempts to parse a version string (e.g. "v3.2.0", "3.2.0b2", "v1.0.0rc1",
+    /// "3.8.0-rc1", "3.8.0.1").
     /// </summary>
     public static bool TryParse(string? input, out FirmwareVersion version)
     {
@@ -92,30 +113,24 @@ public readonly record struct FirmwareVersion(
         // rejects the whole version rather than silently truncating to 0.
         if (!TryParseComponent(m.Groups["maj"].Value, out var major)
             || !TryParseComponent(m.Groups["min"].Value, out var minor)
-            || !TryParseComponent(m.Groups["pat"].Value, out var patch))
+            || !TryParseComponent(m.Groups["pat"].Value, out var patch)
+            || !TryParseComponent(m.Groups["rev"].Value, out var revision))
         {
             return false;
         }
 
-        var suffix = m.Groups["suffix"].Success ? m.Groups["suffix"].Value : null;
-        string? label = null;
-        var preNum = 0;
-        if (!string.IsNullOrEmpty(suffix))
-        {
-            var i = suffix.TakeWhile(char.IsLetter).Count();
-            label = suffix[..i];
-            var numPart = suffix[i..];
-            _ = int.TryParse(numPart, out preNum);
-        }
+        var label = m.Groups["label"].Success ? m.Groups["label"].Value : null;
+        _ = int.TryParse(
+            m.Groups["prenum"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var preNum);
 
-        version = new FirmwareVersion(major, minor, patch, label, preNum);
+        version = new FirmwareVersion(major, minor, patch, label, preNum) { Revision = revision };
         return true;
     }
 
     /// <summary>
-    /// Parses one numeric version component. An empty value (an absent optional minor/patch group)
-    /// yields 0; a non-empty value must fit <see cref="int"/> — one that overflows makes the whole
-    /// version unparseable (returns false) rather than silently truncating to 0.
+    /// Parses one numeric version component. An empty value (an absent optional minor, patch or
+    /// revision group) yields 0; a non-empty value must fit <see cref="int"/> — one that overflows
+    /// makes the whole version unparseable (returns false) rather than silently truncating to 0.
     /// </summary>
     private static bool TryParseComponent(string value, out int result)
     {
@@ -142,6 +157,7 @@ public readonly record struct FirmwareVersion(
     public override string ToString()
     {
         var core = $"{Major}.{Minor}.{Patch}";
+        if (Revision != 0) core += "." + Revision.ToString(CultureInfo.InvariantCulture);
         if (!IsPreRelease) return core;
         return core + PreLabel + (PreNumber > 0 ? PreNumber.ToString(CultureInfo.InvariantCulture) : string.Empty);
     }
