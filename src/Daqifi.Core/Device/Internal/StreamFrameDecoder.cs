@@ -134,6 +134,11 @@ internal sealed class StreamFrameDecoder
     private long _decodeFailureCount;
 
     /// <summary>
+    /// Backing counter for <see cref="ReceivedStreamFrameCount"/>.
+    /// </summary>
+    private long _receivedStreamFrameCount;
+
+    /// <summary>
     /// The <see cref="IDeviceOperationHost.ChannelStateVersion"/> the two cached views below
     /// were built from, or -1 before the first build. Any other value means they are stale.
     /// </summary>
@@ -168,6 +173,21 @@ internal sealed class StreamFrameDecoder
 
     /// <inheritdoc cref="DaqifiStreamingDevice.DecodeFailureCount"/>
     internal long DecodeFailureCount => Interlocked.Read(ref _decodeFailureCount);
+
+    /// <summary>
+    /// Every stream frame this session has seen arrive, counted before any screening — so it
+    /// answers one question only: has the device sent anything at all since the session began?
+    /// </summary>
+    /// <remarks>
+    /// Deliberately counted ahead of the gate and the warmup guard, which the other two
+    /// counters sit behind. A session that is refused by the firmware and a session whose every
+    /// frame is discarded both end with zero decoded samples, but only the first leaves this at
+    /// zero — and that is what
+    /// <see cref="DaqifiStreamingDevice.StartStreamingAsync"/> needs to know before it reads the
+    /// device's error queue, because reading it while frames are flowing would take the stream's
+    /// own consumer off the wire.
+    /// </remarks>
+    internal long ReceivedStreamFrameCount => Interlocked.Read(ref _receivedStreamFrameCount);
 
     /// <summary>
     /// Resets everything that is scoped to one streaming session, so the frames that follow are
@@ -218,6 +238,7 @@ internal sealed class StreamFrameDecoder
             streamingFrequencyHz,
             validateFirstFramesWithoutReference: DeviceLatchesFramesAcrossSessions());
         Interlocked.Exchange(ref _discardedStreamFrameCount, 0);
+        Interlocked.Exchange(ref _receivedStreamFrameCount, 0);
     }
 
     /// <summary>
@@ -238,6 +259,8 @@ internal sealed class StreamFrameDecoder
     /// <param name="message">The streaming message from the device.</param>
     internal void ProcessFrame(DaqifiOutMessage message)
     {
+        Interlocked.Increment(ref _receivedStreamFrameCount);
+
         if (_host.IsStreaming && _frameGate.IsValidating && _frameGate.IsLeftoverFromPreviousSession(message))
         {
             RaiseStreamFrameDiscarded(

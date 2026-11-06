@@ -166,13 +166,27 @@ public static class SampleRateCap
     /// cap its current channel set allows, when the live rate no longer fits under it.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The case this exists for: a rate set while one channel was enabled stays live after fifteen
     /// more are enabled, is echoed back as if it were still valid, and is not even re-settable —
     /// re-requesting the same value now fails (#447).
+    /// </para>
+    /// <para>
+    /// Nothing needs to call this any more: <see cref="IStreamingDevice.StartStreaming"/> applies
+    /// the cap itself (#899), which is the moment that actually matters.
+    /// </para>
     /// </remarks>
     /// <param name="device">The device whose live rate should be re-validated.</param>
-    /// <returns>The rate that was live before the adjustment, or <c>null</c> when none was needed.</returns>
+    /// <returns>
+    /// The rate that was live <i>before</i> the adjustment — the value being replaced, not the
+    /// value replacing it. The new rate is <see cref="IStreamingDevice.StreamingFrequency"/> once
+    /// this returns. <c>null</c> when no adjustment was needed, which is the only way to tell
+    /// "nothing changed" from "the rate used to be this".
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="device"/> is <c>null</c>.</exception>
+    [Obsolete("Starting a stream applies the cap itself, so this call is no longer needed. "
+              + "Read IStreamingDevice.MaximumStreamingFrequencyHz to see the limit. This member "
+              + "will be removed in a future major version.")]
     public static int? EnforceOn(IStreamingDevice device)
     {
         ArgumentNullException.ThrowIfNull(device);

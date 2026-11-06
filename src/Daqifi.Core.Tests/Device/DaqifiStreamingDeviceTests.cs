@@ -37,18 +37,33 @@ public class DaqifiStreamingDeviceTests
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
     [InlineData(1001)] // MaxSamplingRate + 1
     [InlineData(50000)]
-    public void StreamingFrequency_OutOfRange_ThrowsArgumentOutOfRangeException(int frequency)
+    public void StreamingFrequency_AboveTheCeiling_ThrowsAndQuotesTheCeiling(int frequency)
     {
         // Arrange
         var device = new DaqifiStreamingDevice("TestDevice");
 
         // Act & Assert
         var exception = Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = frequency);
-        Assert.Contains("1000", exception.Message); // valid range surfaced from DeviceCapabilities.MaxSamplingRate
+        Assert.Contains("1000", exception.Message); // the ceiling, surfaced from DeviceCapabilities.MaxSamplingRate
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void StreamingFrequency_BelowOne_ThrowsAndQuotesOnlyTheLowerBound(int frequency)
+    {
+        // #899: a value under 1 is refused by the lower bound, so the message quotes that and
+        // nothing else. It used to report "must be between 1 and <ceiling> Hz (the device's
+        // maximum sampling rate)", which named a ceiling the value never approached — and named
+        // it as if it were the limit a stream is held to, which it is not.
+        var device = new DaqifiStreamingDevice("TestDevice");
+
+        var exception = Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = frequency);
+
+        Assert.Contains("at least 1 Hz", exception.Message);
+        Assert.DoesNotContain("1000", exception.Message);
     }
 
     [Fact]
@@ -92,7 +107,7 @@ public class DaqifiStreamingDeviceTests
         Assert.Equal(1, device.StreamingFrequency);
 
         var ex = Assert.Throws<System.ArgumentOutOfRangeException>(() => device.StreamingFrequency = 2);
-        Assert.Contains("1 and 1", ex.Message); // range reported with the sanitized max, not "1..0"
+        Assert.Contains("at most 1 Hz", ex.Message); // the sanitized ceiling, not an impossible "1..0"
     }
 
     [Fact]
