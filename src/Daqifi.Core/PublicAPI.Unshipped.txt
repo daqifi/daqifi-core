@@ -49,11 +49,19 @@ Daqifi.Core.Firmware.FirmwareUpdateStatus.UpToDate = 2 -> Daqifi.Core.Firmware.F
 Daqifi.Core.Firmware.FirmwareUpdateStatus.UpdateAvailable = 3 -> Daqifi.Core.Firmware.FirmwareUpdateStatus
 Daqifi.Core.Firmware.FirmwareVersion.Revision.get -> int
 Daqifi.Core.Firmware.FirmwareVersion.Revision.init -> void
+Daqifi.Core.Logging.Export.ISampleSource.ValueUnit.get -> string?
+Daqifi.Core.Logging.Export.LiveSampleSource.ValueUnit.get -> string?
+Daqifi.Core.Logging.Export.SampleValueUnits
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.ValueUnit.get -> string?
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.ValueUnit.init -> void
+const Daqifi.Core.Logging.Export.SampleValueUnits.Unscaled = "unscaled" -> string!
+const Daqifi.Core.Logging.Export.SampleValueUnits.Volts = "V" -> string!
 override Daqifi.Core.Device.DaqifiStreamingDevice.OnSendingInitializationCommands() -> void
 override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
 static Daqifi.Core.Communication.Producers.ScpiMessageProducer.GetDeviceIdentity.get -> Daqifi.Core.Communication.Messages.IOutboundMessage<string!>!
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
+static Daqifi.Core.Device.SdCard.SdCardParseOptions.ForDevice(Daqifi.Core.Device.DaqifiDevice! device) -> Daqifi.Core.Device.SdCard.SdCardParseOptions!
 virtual Daqifi.Core.Device.DaqifiDevice.OnSendingInitializationCommands() -> void
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(object obj) -> bool
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.ToString() -> string

@@ -78,8 +78,11 @@ public class SdCardProtobufLogExportTests
 
         var lines = writer.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
-        Assert.StartsWith("Time,Daqifi:unknown:AI0,", lines[0], StringComparison.Ordinal);
-        Assert.EndsWith(",Daqifi:unknown:AI15,Daqifi:unknown:DIO", lines[0], StringComparison.Ordinal);
+        // Each analog column names its unit; this log carries no calibration, so the values are
+        // as the file held them and the header says so (#903). The digital column holds a port
+        // value, which has no unit.
+        Assert.StartsWith("Time,Daqifi:unknown:AI0 (unscaled),", lines[0], StringComparison.Ordinal);
+        Assert.EndsWith(",Daqifi:unknown:AI15 (unscaled),Daqifi:unknown:DIO", lines[0], StringComparison.Ordinal);
 
         // 1 header + 1 digital-only entry + 4 entries carrying values.
         Assert.Equal(6, lines.Length);

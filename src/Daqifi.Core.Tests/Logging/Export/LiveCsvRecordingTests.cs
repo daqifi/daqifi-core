@@ -158,8 +158,11 @@ public class LiveCsvRecordingTests
         await recording.WaitAsync(Timeout);
 
         var header = Lines(writer)[0];
+
+        // Each analog column names its unit, so a live recording and an SD-card export of the
+        // same channel can be told apart in the files themselves (#903).
         Assert.Equal(
-            $"Time,{Key(device, channels[0])},{Key(device, channels[2])}",
+            $"Time,{Key(device, channels[0])} (V),{Key(device, channels[2])} (V)",
             header);
     }
 
@@ -403,7 +406,7 @@ public class LiveCsvRecordingTests
         var result = await recording.WaitAsync(Timeout);
 
         var lines = Lines(writer);
-        Assert.Equal($"Time,{Key(device, channels[0])},{Key(device, channels[1])}", lines[0]);
+        Assert.Equal($"Time,{Key(device, channels[0])} (V),{Key(device, channels[1])} (V)", lines[0]);
         Assert.Equal(20L, result.RowCount);
         Assert.Equal(40L, result.SampleCount); // two channels per frame, one line per frame
         Assert.Equal(lines.Length - 1, (int)result.RowCount);

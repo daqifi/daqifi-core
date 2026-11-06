@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Daqifi.Core.Channel;
 
 namespace Daqifi.Core.Logging.Export;
 
@@ -94,7 +95,7 @@ public class CsvExporter
 
         var channelKeys = channels.Select(c => c.Key).ToList();
 
-        await WriteHeaderAsync(writer, channelKeys, options).ConfigureAwait(false);
+        await WriteHeaderAsync(writer, HeaderLabels(channels, source.ValueUnit), options).ConfigureAwait(false);
 
         var totalSamples = progress != null
             ? await source.GetSampleCountAsync(cancellationToken).ConfigureAwait(false)
@@ -104,6 +105,31 @@ public class CsvExporter
             await ExportAveragedAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken).ConfigureAwait(false);
         else
             await ExportAllSamplesAsync(source, writer, options, channelKeys, totalSamples, progress, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The header text for each column: the channel's key, and the source's unit after it for an
+    /// analog column when the source states one.
+    /// </summary>
+    /// <remarks>
+    /// A header, not a key. <see cref="SampleRow.ChannelKey"/> still matches
+    /// <see cref="ChannelDescriptor.Key"/> exactly, so labelling a column cannot move a value
+    /// into the wrong one. Only analog columns are labelled: a digital column holds a port value,
+    /// which has no unit.
+    /// </remarks>
+    private static List<string> HeaderLabels(
+        IReadOnlyList<ChannelDescriptor> channels,
+        string? valueUnit)
+    {
+        var labels = new List<string>(channels.Count);
+        foreach (var channel in channels)
+        {
+            labels.Add(string.IsNullOrWhiteSpace(valueUnit) || channel.ChannelType != ChannelType.Analog
+                ? channel.Key
+                : $"{channel.Key} ({valueUnit})");
+        }
+
+        return labels;
     }
 
     private static async Task WriteHeaderAsync(TextWriter writer, List<string> channelKeys, CsvExportOptions options)

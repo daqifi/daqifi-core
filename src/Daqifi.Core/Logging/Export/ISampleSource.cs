@@ -28,6 +28,30 @@ public interface ISampleSource
     IReadOnlyList<ChannelDescriptor> GetChannels();
 
     /// <summary>
+    /// The unit the analog values of <see cref="StreamSamples"/> are in, named in the exported
+    /// column headers. <see langword="null"/> states no unit and writes the headers unchanged.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same samples left Core in two different units depending on the path — volts from a
+    /// live recording, raw ADC counts from an SD-card log — and neither file said which, so a
+    /// user plotting one against the other saw a difference of about a thousand times with
+    /// nothing in the data to explain it (issue #903). A number with no unit is the defect; an
+    /// unscaled number that says so is only inconvenient.
+    /// </para>
+    /// <para>
+    /// This is the unit of the analog columns only. A digital column carries a port value, which
+    /// has no unit, so it is never labelled.
+    /// </para>
+    /// <para>
+    /// It has a default of <see langword="null"/> so that a source written before this existed
+    /// still compiles, and because a source that does not know its unit must say nothing rather
+    /// than guess.
+    /// </para>
+    /// </remarks>
+    string? ValueUnit => null;
+
+    /// <summary>
     /// Returns the total number of sample rows, used for progress reporting.
     /// May return 0 if the count is unavailable.
     /// </summary>
