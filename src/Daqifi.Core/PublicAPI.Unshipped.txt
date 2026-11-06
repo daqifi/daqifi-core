@@ -25,6 +25,8 @@ Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.get -> System.Tim
 Daqifi.Core.Device.Discovery.DiscoveryPassReport.NextPassDelay.init -> void
 Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.get -> Daqifi.Core.Device.Discovery.DiscoveryPassOutcome
 Daqifi.Core.Device.Discovery.DiscoveryPassReport.Outcome.init -> void
+Daqifi.Core.Device.SdCard.SdCardLogSession.ObservedAnalogValueCount.get -> int
+Daqifi.Core.Device.SdCard.SdCardLogSession.ObservedAnalogValueCount.init -> void
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.get -> int
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.get -> System.TimeSpan
