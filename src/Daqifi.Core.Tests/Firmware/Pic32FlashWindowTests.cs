@@ -123,6 +123,39 @@ public class Pic32FlashWindowTests
     }
 
     [Fact]
+    public void ParseHexFile_WithAReleaseShapedImage_IsAccepted()
+    {
+        // The shape every real release image has, checked against the published .hex files for
+        // 3.5.0, 3.7.2 and 3.8.0: a 408-byte reset vector at 0x1D000000, then the bulk from
+        // 0x1D000480 up. None of the three carries a byte above 0x1D0B8A07, in boot flash, below
+        // application flash, or in the protected range - two of them predate the #909 erase
+        // change and the release gate that now forbids it, and they are clean anyway. So the
+        // window check costs a real update nothing.
+        var lines = new List<string> { ExtendedAddressLine(0x1D00) };
+        for (ushort offset = 0; offset < 408; offset += 8)
+        {
+            lines.Add(DataLine(offset, Bytes(8)));
+        }
+
+        lines.Add(DataLine(0x0480, Bytes(16)));
+        lines.Add(ExtendedAddressLine(0x1D0B));
+        lines.Add(DataLine(0x8A00, Bytes(8)));
+        lines.Add(EndOfFileLine);
+
+        var records = _protocol.ParseHexFile([.. lines]);
+
+        Assert.Equal(lines.Count, records.Count);
+
+        // The reset vector coalesces into one region, and the two later records into their own.
+        var regions = _protocol.ComputeCrcRegions([.. lines]);
+        Assert.Equal(3, regions.Count);
+        Assert.Equal(0x9D000000u, regions[0].Address);
+        Assert.Equal(408u, regions[0].Length);
+        Assert.Equal(0x9D000480u, regions[1].Address);
+        Assert.Equal(0x9D0B8A00u, regions[2].Address);
+    }
+
+    [Fact]
     public void ParseHexFile_WithARecordEndingOnTheLastByteOfThePanel_IsAccepted()
     {
         // 0x1D0FFFF8..0x1D0FFFFF is the last word-aligned 8 bytes of the lower panel. The same
@@ -148,10 +181,12 @@ public class Pic32FlashWindowTests
     public void ParseHexFile_WithRecordsInTheProtectedRange_DropsThemRatherThanRefusingTheImage()
     {
         // The default protected range starts at 0x1D1E0000, which is above the writable window, so
-        // the order of the two checks decides whether a normal image still flashes. A real
-        // firmware image carries calibration records there, the parser drops them, and the
-        // bootloader deliberately does not erase them. Checking the window first would turn every
-        // such image into a refusal.
+        // the order of the two checks decides what happens to an image carrying records there:
+        // dropped, as this library already shipped and as the bootloader's deliberate refusal to
+        // erase that flash implies, or refused outright. The three release images checked while
+        // writing this (3.5.0, 3.7.2, 3.8.0) carry nothing above 0x1D0B8A07, so this order is
+        // about honouring the shipped contract and the custom-range constructor, not about
+        // rescuing an image anyone has actually seen.
         var lines = new[]
         {
             ExtendedAddressLine(0x1D00),

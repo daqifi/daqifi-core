@@ -87,9 +87,9 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
     public List<byte[]> ParseHexFile(string[] hexFileLines)
     {
         // Protected-range records are dropped by the parser first, then what is left has to lie
-        // inside the flash the bootloader erases and programs. That order is the point: a normal
-        // image carries calibration records in the protected range, which the bootloader
-        // deliberately does not erase, and those are dropped rather than held against the image.
+        // inside the flash the bootloader erases and programs. That order is the point: the
+        // default protected range sits above the window, so an image carrying records there keeps
+        // having them dropped, as this library already shipped, instead of being refused.
         var records = _hexParser.ParseRecords(hexFileLines);
         Pic32ApplicationFlash.EnsureEveryRecordIsInsideTheWritableWindow(records);
 

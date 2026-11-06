@@ -48,28 +48,37 @@ internal static class Pic32ApplicationFlash
     internal const uint Kseg0Mask = 0x80000000;
 
     /// <summary>
-    /// First physical address the bootloader erases and programs. The firmware's
-    /// <c>APP_FLASH_BASE_ADDRESS</c> (<c>0x9D000000</c>) without its KSEG0 mask.
+    /// The firmware's <c>APP_FLASH_BASE_ADDRESS</c>, verbatim: <c>system_config.h</c> line 240
+    /// defines it as <c>(0x9D000000)</c>. Every other bound here is derived from this and
+    /// <see cref="LowerPanelSize"/>, the same way the header derives its own.
     /// </summary>
-    internal const uint PhysicalStart = 0x1D000000;
+    internal const uint Kseg0Start = 0x9D000000;
 
     /// <summary>
-    /// Size of the lower program-flash panel, the firmware's <c>APP_FLASH_LOWER_PANEL_SIZE</c>.
+    /// The firmware's <c>APP_FLASH_LOWER_PANEL_SIZE</c>, verbatim: <c>system_config.h</c> line 274
+    /// defines it as <c>(0x100000)</c>.
     /// </summary>
     internal const uint LowerPanelSize = 0x100000;
 
     /// <summary>
-    /// Last physical address the bootloader erases and programs: the firmware's
-    /// <c>APP_FLASH_END_ADDRESS</c> without its KSEG0 mask. The upper panel from
-    /// <c>0x1D100000</c> up is deliberately left alone, so nothing may be placed there.
+    /// The firmware's <c>APP_FLASH_END_ADDRESS</c>, derived as the header derives it:
+    /// <c>APP_FLASH_BASE_ADDRESS + APP_FLASH_LOWER_PANEL_SIZE - 1</c> (<c>system_config.h</c>
+    /// line 276). The upper panel above it is deliberately left unerased, so nothing may be
+    /// placed there.
     /// </summary>
-    internal const uint PhysicalEnd = PhysicalStart + LowerPanelSize - 1;
+    internal const uint Kseg0End = Kseg0Start + LowerPanelSize - 1;
 
-    /// <summary>KSEG0 form of <see cref="PhysicalStart"/>, the firmware's <c>APP_FLASH_BASE_ADDRESS</c>.</summary>
-    internal const uint Kseg0Start = PhysicalStart | Kseg0Mask;
+    /// <summary>
+    /// First physical address the bootloader erases and programs: <see cref="Kseg0Start"/> with
+    /// its KSEG0 mask taken off, which is the form an Intel HEX record carries.
+    /// </summary>
+    internal const uint PhysicalStart = Kseg0Start & ~Kseg0Mask;
 
-    /// <summary>KSEG0 form of <see cref="PhysicalEnd"/>, the firmware's <c>APP_FLASH_END_ADDRESS</c>.</summary>
-    internal const uint Kseg0End = PhysicalEnd | Kseg0Mask;
+    /// <summary>
+    /// Last physical address the bootloader erases and programs: <see cref="Kseg0End"/> with its
+    /// KSEG0 mask taken off.
+    /// </summary>
+    internal const uint PhysicalEnd = Kseg0End & ~Kseg0Mask;
 
     /// <summary>Intel HEX record type for a data record.</summary>
     private const byte IntelHexDataRecordType = 0x00;
@@ -106,9 +115,10 @@ internal static class Pic32ApplicationFlash
     /// </summary>
     /// <param name="records">
     /// The records the HEX image parsed to, <em>after</em> protected-range records have been
-    /// dropped. That order matters: a normal image carries calibration records at
-    /// <c>0x1D1E0000</c>, which the parser drops and the bootloader deliberately does not erase, so
-    /// checking the window first would refuse an image that is perfectly fine.
+    /// dropped. That order matters, because the default protected range sits above this window: an
+    /// image carrying records at <c>0x1D1E0000</c> has them dropped, which is the behaviour this
+    /// library already shipped and which matches the bootloader deliberately not erasing that
+    /// flash. Checking the window first would turn that drop into a refusal.
     /// </param>
     /// <exception cref="InvalidDataException">
     /// Thrown when a data record puts a byte outside <see cref="PhysicalStart"/>..<see cref="PhysicalEnd"/>,
