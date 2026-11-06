@@ -1,10 +1,11 @@
 #nullable enable
 Daqifi.Core.Device.ChannelPopulationTimeoutException
-Daqifi.Core.Device.ChannelPopulationTimeoutException.ChannelPopulationTimeoutException(string! message, string? deviceIdentity = null, int? streamInterface = null, System.Collections.Generic.IReadOnlyList<string!>? rawDeviceResponse = null, System.Exception? innerException = null) -> void
+Daqifi.Core.Device.ChannelPopulationTimeoutException.ChannelPopulationTimeoutException(string! message, string? deviceIdentity = null, int? streamInterface = null, int unreadableResponseLines = 0, System.Collections.Generic.IReadOnlyList<string!>? rawDeviceResponse = null, System.Exception? innerException = null) -> void
 Daqifi.Core.Device.ChannelPopulationTimeoutException.DeviceIdentity.get -> string?
 Daqifi.Core.Device.ChannelPopulationTimeoutException.IsDeviceResponding.get -> bool
 Daqifi.Core.Device.ChannelPopulationTimeoutException.RawDeviceResponse.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Daqifi.Core.Device.ChannelPopulationTimeoutException.StreamInterface.get -> int?
+Daqifi.Core.Device.ChannelPopulationTimeoutException.UnreadableResponseLines.get -> int
 Daqifi.Core.Device.DeviceFeature.SdListingEndMarker = 4 -> Daqifi.Core.Device.DeviceFeature
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.get -> System.IProgress<Daqifi.Core.Device.Discovery.DiscoveryPassReport>?
 Daqifi.Core.Device.Discovery.ContinuousDiscoveryOptions.Progress.set -> void

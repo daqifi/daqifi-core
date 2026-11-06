@@ -45,7 +45,20 @@ public class ChannelPopulationTimeoutException : TimeoutException
     public bool IsDeviceResponding => DeviceIdentity != null;
 
     /// <summary>
-    /// Gets the raw lines the two questions returned, for diagnostics.
+    /// Gets how many lines arrived in answer to <c>*IDN?</c> when none of them could be read as
+    /// a reply, and 0 otherwise.
+    /// </summary>
+    /// <remarks>
+    /// A value above 0 says the device is sending something that this connection cannot read as
+    /// text — a protobuf frame, most often. Such a device is not unresponsive, and what to look
+    /// at is its stream format or its routing, not whether it is alive.
+    /// </remarks>
+    public int UnreadableResponseLines { get; }
+
+    /// <summary>
+    /// Gets the plain-text lines the two questions returned, for diagnostics. Lines that are not
+    /// readable as text are left out, and the list is capped: a flooding device produced 2500 of
+    /// them on the bench.
     /// </summary>
     public IReadOnlyList<string> RawDeviceResponse { get; }
 
@@ -56,12 +69,14 @@ public class ChannelPopulationTimeoutException : TimeoutException
         string message,
         string? deviceIdentity = null,
         int? streamInterface = null,
+        int unreadableResponseLines = 0,
         IReadOnlyList<string>? rawDeviceResponse = null,
         Exception? innerException = null)
         : base(message, innerException)
     {
         DeviceIdentity = deviceIdentity;
         StreamInterface = streamInterface;
+        UnreadableResponseLines = unreadableResponseLines;
         RawDeviceResponse = rawDeviceResponse ?? Array.Empty<string>();
     }
 }

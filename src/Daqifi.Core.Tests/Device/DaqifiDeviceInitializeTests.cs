@@ -583,6 +583,8 @@ public class DaqifiDeviceInitializeTests
         Assert.False(ex.IsDeviceResponding);
         Assert.Null(ex.DeviceIdentity);
         Assert.Null(ex.StreamInterface);
+        Assert.Equal(0, ex.UnreadableResponseLines);
+        // Asked once. A device that returns nothing has already said what it had to say.
         Assert.Equal(1, device.DiagnosticQueryCount);
     }
 
@@ -604,6 +606,75 @@ public class DaqifiDeviceInitializeTests
 
         Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
         Assert.Equal(0, ex.StreamInterface);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenAProtobufFrameArrivesWithTheAnswer_DoesNotReportItAsTheIdentity()
+    {
+        // Measured on the bench. The diagnostic exchange pauses the protobuf consumer, so bytes
+        // of a status frame already in flight are read as lines of the reply. One landed after
+        // the *IDN? answer and was reported as the device's identity, which made the new message
+        // less readable than the old one.
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false)
+        {
+            IdentityReply = "DAQiFi,Nq1,7E2815916200E898,01-02",
+            TrailingProtobufNoise = "\u0001\u0012\u0000DAQiFi-95AC\u0000\u00ffNq1\u0000",
+            StreamInterfaceReply = "1"
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.Equal(1, ex.StreamInterface);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheDeviceFloodsUnreadableData_SaysItIsSendingNotSilent()
+    {
+        // Measured on the bench: 4 of 5 forced timeouts had the device send about 2500 lines of
+        // protobuf and answer no text query at all. That device is not unresponsive, and saying
+        // it is sends the reader looking for a dead board instead of at the stream format.
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false)
+        {
+            TrailingProtobufNoise = "\u0001\u0012\u0000\u00ffNq1\u0000",
+            StreamInterfaceReply = "1"
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Contains("The device is sending data", ex.Message);
+        Assert.Contains("The device is not silent", ex.Message);
+        Assert.DoesNotContain("may be unresponsive", ex.Message);
+        Assert.Equal(1, ex.UnreadableResponseLines);
+        Assert.False(ex.IsDeviceResponding);
+
+        // Worth asking the second question of a device that is plainly alive.
+        Assert.Equal(1, ex.StreamInterface);
+        Assert.Equal(2, device.DiagnosticQueryCount);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheDeviceFloodsUnreadableData_DoesNotCarryItAllOnTheException()
+    {
+        // An exception is not the place for 2500 lines of binary.
+        var device = new TestableDaqifiDevice("TestDevice", populateChannelsOnDeviceInfo: false)
+        {
+            IdentityReply = "DAQiFi,Nq1,7E2815916200E898,01-02",
+            NoiseLineCount = 2500,
+            TrailingProtobufNoise = "\u0001\u0012\u0000\u00ffNq1\u0000"
+        };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ChannelPopulationTimeoutException>(
+            () => device.InitializeAsync(TimeSpan.FromMilliseconds(150)));
+
+        Assert.Equal("DAQiFi,Nq1,7E2815916200E898,01-02", ex.DeviceIdentity);
+        Assert.True(ex.RawDeviceResponse.Count <= 20, $"kept {ex.RawDeviceResponse.Count} lines");
+        Assert.All(ex.RawDeviceResponse, l => Assert.All(l, c => Assert.InRange(c, ' ', '~')));
     }
 
     [Fact]
@@ -737,6 +808,18 @@ public class DaqifiDeviceInitializeTests
         public bool EchoesQueries { get; set; }
 
         /// <summary>
+        /// A line of a protobuf status frame that arrives after the answer, the way bytes
+        /// already in flight do when the exchange pauses the protobuf consumer.
+        /// </summary>
+        public string? TrailingProtobufNoise { get; set; }
+
+        /// <summary>
+        /// How many times <see cref="TrailingProtobufNoise"/> is repeated, for a device that is
+        /// flooding the connection rather than dribbling into it.
+        /// </summary>
+        public int NoiseLineCount { get; set; } = 1;
+
+        /// <summary>
         /// When true, the two questions asked after a channel-population timeout throw instead
         /// of answering.
         /// </summary>
@@ -849,6 +932,14 @@ public class DaqifiDeviceInitializeTests
             if (answer != null)
             {
                 replyLines.Add(answer);
+            }
+
+            if (TrailingProtobufNoise != null)
+            {
+                for (var i = 0; i < NoiseLineCount; i++)
+                {
+                    replyLines.Add(TrailingProtobufNoise);
+                }
             }
 
             return replyLines;
