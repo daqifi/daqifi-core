@@ -29,8 +29,16 @@ Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.get -> int
 Daqifi.Core.Device.SdCard.SdCardParseProgress.RowsSkipped.init -> void
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.get -> System.TimeSpan
 Daqifi.Core.Firmware.FirmwareUpdateServiceOptions.PostLanBridgeEntryDelay.set -> void
+Daqifi.Core.Logging.Export.ISampleSource.ValueUnit.get -> string?
+Daqifi.Core.Logging.Export.LiveSampleSource.ValueUnit.get -> string?
+Daqifi.Core.Logging.Export.SampleValueUnits
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.ValueUnit.get -> string?
+Daqifi.Core.Logging.Export.SdCardLogSampleSource.ValueUnit.init -> void
+const Daqifi.Core.Logging.Export.SampleValueUnits.Unscaled = "unscaled" -> string!
+const Daqifi.Core.Logging.Export.SampleValueUnits.Volts = "V" -> string!
 override Daqifi.Core.Device.Discovery.DiscoveryPassReport.GetHashCode() -> int
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator !=(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
 static Daqifi.Core.Device.Discovery.DiscoveryPassReport.operator ==(Daqifi.Core.Device.Discovery.DiscoveryPassReport left, Daqifi.Core.Device.Discovery.DiscoveryPassReport right) -> bool
+static Daqifi.Core.Device.SdCard.SdCardParseOptions.ForDevice(Daqifi.Core.Device.DaqifiDevice! device) -> Daqifi.Core.Device.SdCard.SdCardParseOptions!
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.Equals(object obj) -> bool
 ~override Daqifi.Core.Device.Discovery.DiscoveryPassReport.ToString() -> string

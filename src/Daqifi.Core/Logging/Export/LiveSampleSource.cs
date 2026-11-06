@@ -154,6 +154,17 @@ public sealed class LiveSampleSource : ISampleSource
     /// </remarks>
     public long NonMonotonicSampleCount { get; private set; }
 
+    /// <summary>
+    /// The unit a live analog sample is in: volts. The device applies its own calibration before
+    /// it streams, so a <see cref="LiveSample"/> needs no conversion here.
+    /// </summary>
+    /// <remarks>
+    /// Stated so that a live recording and an SD-card export of the same channel can be told
+    /// apart in the files themselves. They used to be written in different units with nothing in
+    /// either file to say which (issue #903).
+    /// </remarks>
+    public string? ValueUnit => SampleValueUnits.Volts;
+
     /// <inheritdoc />
     public IReadOnlyList<ChannelDescriptor> GetChannels() => _channels;
 
