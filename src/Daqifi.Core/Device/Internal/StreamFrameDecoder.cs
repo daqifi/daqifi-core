@@ -674,14 +674,16 @@ internal sealed class StreamFrameDecoder
     }
 
     /// <summary>
-    /// Unpacks a frame's digital byte(s) into per-channel high/low samples for the enabled
-    /// digital input channels. The firmware streams the whole DIO port as a raw pin-state
+    /// Unpacks a frame's digital byte(s) into per-channel high/low samples for every enabled
+    /// digital channel. The firmware streams the whole DIO port as a raw pin-state
     /// snapshot (the wire-level DIO enable is global, not per pin), so a channel's bit
     /// position is its channel number — bit <c>n</c> lives at byte <c>n / 8</c>, bit
     /// <c>n % 8</c> (LSB first) — independent of which channels the client has enabled.
-    /// Output-direction channels are not sampled (their state is client-driven via
-    /// <see cref="IStreamingDevice.SetDioValue"/>). Channels whose number lies beyond the
-    /// payload get no sample rather than a bogus "low" reading.
+    /// Direction is not consulted. The firmware reads the pin back, not the direction
+    /// register, so the bit is the pin's true state for a driven output exactly as it is for
+    /// an input — measured on an Nq1 (fw 3.8.0) with all 16 pins driven to 0xAAAA (#901).
+    /// Channels whose number lies beyond the payload get no sample rather than a bogus "low"
+    /// reading.
     /// </summary>
     private static void DecodeDigital(
         DaqifiOutMessage message,
@@ -695,12 +697,6 @@ internal sealed class StreamFrameDecoder
         foreach (var channel in channels)
         {
             if (!channel.IsEnabled || channel.Type != ChannelType.Digital)
-            {
-                continue;
-            }
-
-            // Only input-direction channels carry a meaningful streamed reading.
-            if (channel.Direction != ChannelDirection.Input)
             {
                 continue;
             }
