@@ -80,11 +80,12 @@ internal static class Pic32BootloaderImageContent
                 var address = unchecked(baseAddress + (uint)((record[1] << 8) | record[2]));
                 // APP_ProgramHexRecord advances in words and ignores writes outside application
                 // flash. Data in a linker section at address zero is not firmware to restore
-                // after the erase. Mirror its address test, including the KSEG0 conversion.
+                // after the erase. Mirror its address test, including the KSEG0 conversion, and
+                // from the same constants the window check uses (#854) so the two cannot drift.
                 for (var offset = 0; offset < record[0]; offset += 4)
                 {
-                    var target = unchecked(address + (uint)offset) | 0x80000000u;
-                    if (target >= 0x9D000000u && target <= 0x9D1FFFFFu)
+                    var target = unchecked(address + (uint)offset) | Pic32ApplicationFlash.Kseg0Mask;
+                    if (target >= Pic32ApplicationFlash.Kseg0Start && target <= Pic32ApplicationFlash.Kseg0End)
                     {
                         dataBytes += Math.Min(4, record[0] - offset);
                     }
