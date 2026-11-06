@@ -188,6 +188,10 @@ public class SdCardOperationsCollaboratorTests
                 "send:" + DisableSd,
                 "send:" + EnableLan,
                 "exchange:end",
+                // Outside the exchange, and read-only: whether this firmware emits an
+                // end-of-listing marker decides how much the reply can be trusted, not what
+                // was sent (#887).
+                "supports:" + DeviceFeature.SdListingEndMarker,
             },
             host.Calls);
     }
@@ -1711,6 +1715,14 @@ public class SdCardOperationsCollaboratorTests
         /// <summary>The one feature <see cref="EnsureSupported"/> refuses; null means everything is supported.</summary>
         public DeviceFeature? UnsupportedFeature { get; set; }
 
+        /// <summary>
+        /// Features <see cref="Supports"/> answers yes to. Empty by default, which is what a
+        /// real device reports for every version-gated feature until it has told us its
+        /// firmware version — so a test that does not care about a gate gets the pre-gate
+        /// behaviour rather than silently opting in to the newest one.
+        /// </summary>
+        public HashSet<DeviceFeature> SupportedFeatures { get; } = new();
+
         public List<LowSdSpaceWarningEventArgs> LowSpaceWarnings { get; } = new();
 
         /// <summary>The response timeout each exchange asked for, in order.</summary>
@@ -1757,6 +1769,12 @@ public class SdCardOperationsCollaboratorTests
             }
 
             Record("send:" + message.Data);
+        }
+
+        public bool Supports(DeviceFeature feature)
+        {
+            Record("supports:" + feature);
+            return UnsupportedFeature != feature && SupportedFeatures.Contains(feature);
         }
 
         public void EnsureSupported(DeviceFeature feature)

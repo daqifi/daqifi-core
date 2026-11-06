@@ -44,6 +44,23 @@ internal sealed class SdCardOperations
     private const int SD_LIST_MAX_RETRIES = 1;
 
     /// <summary>
+    /// Firmware status text for a missing card. Not SCPI-shaped, so
+    /// <see cref="ScpiResponseClassifier.IsErrorResponseLine"/> is what classifies it and this
+    /// is the substring both <see cref="ThrowIfSdCardListError"/> and
+    /// <see cref="ExplainsItsOwnMissingEndMarker"/> look for — single-sourced so the two cannot
+    /// disagree about which replies already account for themselves.
+    /// </summary>
+    private const string NoSdCardMarker = "No SD Card Detected";
+
+    /// <summary>
+    /// Firmware status text for a directory the walk could not open. Single-sourced for the
+    /// same reason as <see cref="NoSdCardMarker"/>; note the line carries a bracketed
+    /// <c>[Error:n]</c> prefix rather than an <c>ERROR</c> token, so the SCPI classifiers do
+    /// not match it and the substring is the only handle on it.
+    /// </summary>
+    private const string DirectoryOpenFailureMarker = "Failed to open directory";
+
+    /// <summary>
     /// Inactivity window that ends the SD listing text exchange, in milliseconds.
     /// </summary>
     /// <remarks>
@@ -238,8 +255,19 @@ internal sealed class SdCardOperations
     /// <see cref="SdCardFileListParser.GetListingStatus"/> treats an unrecognized word as
     /// incomplete — throw <see cref="SdCardListIncompleteException"/> for the same reason a
     /// missing terminator does: the list must not be cached as the answer to whether a file is
-    /// on the card. No marker at all is the pre-#794 firmware and is not an error; the
-    /// terminator already showed the exchange completed.
+    /// on the card.
+    /// </para>
+    /// <para>
+    /// No marker at all is read against <see cref="DeviceFeature.SdListingEndMarker"/>. Below
+    /// firmware v3.8.0 the device never emits one, so its absence says nothing and is not an
+    /// error — the terminator already showed the exchange completed. At v3.8.0 and above the
+    /// device does emit one, in the same reply and ahead of the terminator, so a reply that
+    /// closed without a marker is a walk that never reached its own end: the listing path
+    /// retries it once and then raises <see cref="SdCardListIncompleteException"/> rather than
+    /// hand back the entries it did get as the card's contents. A reply that explains its own
+    /// missing marker — no card, an unreadable directory, any firmware status text — keeps its
+    /// more specific answer from <see cref="ThrowIfSdCardListError"/> instead, and is not
+    /// retried (closes #887).
     /// </para>
     /// </remarks>
     internal async Task<IReadOnlyList<SdCardFileInfo>> GetSdCardFilesAsync(CancellationToken cancellationToken = default)
@@ -275,6 +303,11 @@ internal sealed class SdCardOperations
             IReadOnlyList<string> lines = Array.Empty<string>();
             IReadOnlyList<string> listing = Array.Empty<string>();
             var isComplete = false;
+            var listingStatus = SdCardListingStatus.Unterminated;
+
+            // Evaluated once per attempt and carried out of the loop, so the firmware gate is
+            // consulted exactly as often as the device is asked.
+            var isMissingRequiredEndMarker = false;
 
             // Attempt 0 plus SD_LIST_MAX_RETRIES retries. A SCPI error here is often a transient
             // timing issue, and an unterminated response can be a one-off stall, so both are
@@ -316,8 +349,17 @@ internal sealed class SdCardOperations
                     finalizeAsync: RestoreLanInterfaceAsync).ConfigureAwait(false);
 
                 isComplete = TrySplitAtSdListTerminator(lines, out listing);
+                listingStatus = SdCardFileListParser.GetListingStatus(listing);
+                isMissingRequiredEndMarker =
+                    IsUnexplainedMissingListingEndMarker(listing, listingStatus);
 
-                if (isComplete && !ScpiResponseClassifier.ContainsScpiError(listing))
+                // An unexplained missing marker is retried for the same reason a SCPI error is:
+                // on firmware that emits one it means the directory walk did not finish, and a
+                // walk cut short by the shared SPI bus being briefly unavailable is exactly the
+                // transient this loop exists for.
+                if (isComplete
+                    && !ScpiResponseClassifier.ContainsScpiError(listing)
+                    && !isMissingRequiredEndMarker)
                 {
                     break;
                 }
@@ -363,10 +405,7 @@ internal sealed class SdCardOperations
             // one. FAILED means the walk could not open the directory at all, so an
             // empty result would report "there is nothing there" for what was really
             // "I could not look" -- the exact confusion the terminator above exists
-            // to prevent, one level deeper. Unterminated is the pre-#794 firmware and
-            // is not an error: the reply framing already told us the exchange
-            // completed, we simply learn nothing more from the device.
-            var listingStatus = SdCardFileListParser.GetListingStatus(listing);
+            // to prevent, one level deeper.
             if (listingStatus == SdCardListingStatus.Failed
                 || listingStatus == SdCardListingStatus.Incomplete)
             {
@@ -376,6 +415,17 @@ internal sealed class SdCardOperations
                 // A device-truncated listing and a transport-truncated one are
                 // the same class of wrong answer, so they raise the same
                 // exception -- a client that handles one already handles this.
+                throw new SdCardListIncompleteException(lines);
+            }
+
+            // No marker at all, on firmware that emits one, and nothing in the reply to
+            // explain why. The transport terminator proves the device answered, so the
+            // marker's absence is not a lost reply -- it is a walk that never reached its
+            // own end, and the entries in hand (often none) are not the card's contents.
+            // Reporting them as the answer is how a card holding five files was rendered
+            // as "SD card OK, 0 files" with nothing raising a problem (closes #887).
+            if (isMissingRequiredEndMarker)
+            {
                 throw new SdCardListIncompleteException(lines);
             }
 
@@ -569,6 +619,65 @@ internal sealed class SdCardOperations
 
         listingLines = listing;
         return true;
+    }
+
+    /// <summary>
+    /// True when a listing carries no end-of-listing marker on firmware that emits one, and
+    /// nothing else in the reply accounts for its absence — the shape that
+    /// <see cref="GetSdCardFilesAsync"/> must not report as the card's contents (closes #887).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three conditions, each load-bearing. <see cref="SdCardListingStatus.Unterminated"/> is
+    /// the only status the device cannot have told us anything with. The
+    /// <see cref="DeviceFeature.SdListingEndMarker"/> gate is what makes that silence mean
+    /// something: below firmware v3.8.0 a listing simply stops, so every reply on those
+    /// versions is unterminated and an empty card would otherwise start throwing. And a reply
+    /// that already explains itself — <c>Error !! No SD Card Detected</c>, a filesystem error,
+    /// any other firmware status text — is left to <see cref="ThrowIfSdCardListError"/>, which
+    /// has a more specific answer than "incomplete" and reaches it without a retry.
+    /// </para>
+    /// <para>
+    /// Read through <see cref="IDeviceOperationHost.Supports"/> on each call rather than cached,
+    /// for the reason ADR 0001 gives: the firmware version arrives with the device's metadata
+    /// and a collaborator built during construction would have cached the answer from before it
+    /// did.
+    /// </para>
+    /// </remarks>
+    /// <param name="listing">The listing lines, already split from the transport terminator.</param>
+    /// <param name="status">The listing's status per <see cref="SdCardFileListParser.GetListingStatus"/>.</param>
+    private bool IsUnexplainedMissingListingEndMarker(
+        IReadOnlyList<string> listing,
+        SdCardListingStatus status)
+    {
+        if (status != SdCardListingStatus.Unterminated)
+        {
+            return false;
+        }
+
+        if (!_host.Supports(DeviceFeature.SdListingEndMarker))
+        {
+            return false;
+        }
+
+        return !ExplainsItsOwnMissingEndMarker(listing);
+    }
+
+    /// <summary>
+    /// True when a reply already says why it carries no end-of-listing marker, so
+    /// <see cref="ThrowIfSdCardListError"/> has a more specific answer than "incomplete" and
+    /// reaches it without a retry. Covers every condition that helper ranks: the two
+    /// firmware status texts, which are not SCPI-shaped and so have to be matched by substring
+    /// (<see cref="DirectoryOpenFailureMarker"/> is prefixed <c>[Error:n]</c> and matches no
+    /// classifier at all), and any SCPI error or other <c>Error !!</c> status line.
+    /// </summary>
+    private static bool ExplainsItsOwnMissingEndMarker(IReadOnlyList<string> lines)
+    {
+        return lines.Any(line =>
+            !string.IsNullOrWhiteSpace(line)
+            && (ScpiResponseClassifier.IsErrorResponseLine(line)
+                || line.IndexOf(NoSdCardMarker, StringComparison.OrdinalIgnoreCase) >= 0
+                || line.IndexOf(DirectoryOpenFailureMarker, StringComparison.OrdinalIgnoreCase) >= 0));
     }
 
     /// <summary>
@@ -1747,13 +1856,13 @@ internal sealed class SdCardOperations
         // content/error checks. They're plain text (not SCPI-shaped), so a
         // simple "is there any content line?" check would otherwise miss them
         // and pass garbage to the parser.
-        if (lines.Any(l => l.IndexOf("No SD Card Detected", StringComparison.OrdinalIgnoreCase) >= 0))
+        if (lines.Any(l => l.IndexOf(NoSdCardMarker, StringComparison.OrdinalIgnoreCase) >= 0))
         {
             throw new SdCardNotPresentException(lines, lastScpiError);
         }
 
         var filesystemErrorLine = lines.FirstOrDefault(l =>
-            l.IndexOf("Failed to open directory", StringComparison.OrdinalIgnoreCase) >= 0);
+            l.IndexOf(DirectoryOpenFailureMarker, StringComparison.OrdinalIgnoreCase) >= 0);
         if (filesystemErrorLine != null)
         {
             var trimmed = filesystemErrorLine.Trim();

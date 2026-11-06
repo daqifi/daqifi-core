@@ -123,6 +123,14 @@ internal interface IDeviceOperationHost
         Func<Stream, CancellationToken, Task> rawAction,
         CancellationToken cancellationToken = default);
 
+    /// <inheritdoc cref="DaqifiDevice.Supports"/>
+    /// <remarks>
+    /// The non-throwing half of the pair below, for a collaborator that branches on a feature
+    /// rather than refusing without it. Both resolve through the device's one evaluation path,
+    /// so they cannot disagree about whether a feature is available (ADR 0001).
+    /// </remarks>
+    bool Supports(DeviceFeature feature);
+
     /// <inheritdoc cref="DaqifiDevice.EnsureSupported"/>
     void EnsureSupported(DeviceFeature feature);
 

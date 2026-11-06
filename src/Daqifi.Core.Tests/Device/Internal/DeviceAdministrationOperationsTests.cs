@@ -622,6 +622,7 @@ public class DeviceAdministrationOperationsTests
         public Task ExecuteRawCaptureAsync(
             Func<Stream, CancellationToken, Task> rawAction,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public bool Supports(DeviceFeature feature) => throw new NotSupportedException();
         public void EnsureSupported(DeviceFeature feature) => throw new NotSupportedException();
         public FeatureNotSupportedException CreateFeatureNotSupportedException(DeviceFeature feature)
             => throw new NotSupportedException();
