@@ -25,4 +25,30 @@ public sealed record SdCardParseProgress(long BytesRead, long TotalBytes, int Me
     /// </para>
     /// </remarks>
     public int RowsSkipped { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the file's last data row did not match the header's column
+    /// count, and was therefore dropped as the truncated tail of a recording.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A log that is stopped rather than closed can end part-way through a row: the device writes
+    /// rows as it goes, so a stop command, a power loss, or a card pulled out leaves whatever had
+    /// been written. That row used to pass as a sample with fewer values, and the export wrote it
+    /// as a row with empty cells — which a reader that treats an empty cell as zero sees as every
+    /// remaining channel dropping to zero for one sample (issue #905).
+    /// </para>
+    /// <para>
+    /// A truncated tail is normal, not exceptional, so the row is dropped rather than thrown
+    /// over. This is what tells a clean end from a cut one, which is the same distinction the
+    /// live path draws between a recording that ran its duration and one that was cancelled.
+    /// </para>
+    /// <para>
+    /// Only the last row. A short row in the middle of a file is a parse problem rather than a
+    /// truncated tail, and is counted in <see cref="RowsSkipped"/> with the other rows the parser
+    /// could not read. Reported by the CSV path; the final progress report of an enumeration
+    /// carries the answer for the whole file.
+    /// </para>
+    /// </remarks>
+    public bool TruncatedFinalRow { get; init; }
 }
