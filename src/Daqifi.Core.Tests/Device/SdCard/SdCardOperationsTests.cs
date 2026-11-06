@@ -259,6 +259,9 @@ public class SdCardOperationsTests
         // await Task.Delay(..., ct), so cancelling while the operation is
         // suspended in the delay must propagate as OperationCanceledException.
         var device = new TestableSdCardStreamingDevice("TestDevice");
+        // This test cancels while the operation is suspended in the settle wait, so it needs
+        // a real window to suspend in rather than the double's default of none.
+        device.SettleDelay = TestableSdCardStreamingDevice.RealSettleDelay;
         device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
         device.Connect();
 
@@ -284,6 +287,9 @@ public class SdCardOperationsTests
         // to happen anyway — which is why it is a phase the exchange owns and runs from its own
         // try/finally, rather than a step tacked on to the end of a successful exchange (#407).
         var device = new TestableSdCardStreamingDevice("TestDevice");
+        // This test cancels while the operation is suspended in the settle wait, so it needs
+        // a real window to suspend in rather than the double's default of none.
+        device.SettleDelay = TestableSdCardStreamingDevice.RealSettleDelay;
         device.CannedTextResponse = new List<string> { "Daqifi/test.bin" };
         device.Connect();
 
@@ -303,6 +309,9 @@ public class SdCardOperationsTests
     {
         // Regression for #221 — symmetric with GetSdCardFilesAsync above.
         var device = new TestableSdCardStreamingDevice("TestDevice");
+        // This test cancels while the operation is suspended in the settle wait, so it needs
+        // a real window to suspend in rather than the double's default of none.
+        device.SettleDelay = TestableSdCardStreamingDevice.RealSettleDelay;
         device.CannedTextResponse = new List<string> { "Daqifi/other.bin" };
         device.Connect();
 
@@ -2984,6 +2993,8 @@ public class SdCardOperationsTests
     /// </summary>
     private class RetryableSdCardStreamingDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
         public Queue<List<string>> ResponseSequence { get; } = new();
         public int ExecuteTextCommandCallCount { get; private set; }
@@ -3120,6 +3131,28 @@ public class SdCardOperationsTests
     /// </summary>
     private class TestableSdCardStreamingDevice : DaqifiStreamingDevice
     {
+        /// <summary>
+        /// No SPI-bus settle wait by default. Every SD operation pays that period twice —
+        /// switching the bus to the card and switching it back — and almost nothing in this class
+        /// asserts it; the settle behavior itself is covered by
+        /// <c>SdCardOperationsCollaboratorTests</c>, on a stepped clock. Paying it on all 158
+        /// tests only made the suite slower.
+        /// </summary>
+        /// <remarks>
+        /// Settable because the three cancellation tests below are the exception: they cancel
+        /// while the operation is suspended <em>in</em> this wait, so they need a real window to
+        /// land in and set <see cref="SettleDelay"/> back to production's value.
+        /// </remarks>
+        internal override TimeSpan SdInterfaceSettleDelay => SettleDelay;
+
+        /// <summary>
+        /// The settle period this double reports. <see cref="TimeSpan.Zero"/> unless a test needs
+        /// the operation to actually suspend in the settle wait.
+        /// </summary>
+        public TimeSpan SettleDelay { get; set; } = TimeSpan.Zero;
+
+        /// <summary>Production's settle period, for the tests that must suspend inside it.</summary>
+        public static readonly TimeSpan RealSettleDelay = TimeSpan.FromMilliseconds(100);
         private int _executeTextCommandCallCount;
 
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
@@ -3253,6 +3286,8 @@ public class SdCardOperationsTests
     /// </summary>
     private class TestableDownloadDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
 
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
@@ -3416,6 +3451,8 @@ public class SdCardOperationsTests
     /// </summary>
     private class TestableRetryDownloadDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         private readonly MultiAttemptSdFileStream _stream;
         private int _getCommandCount;
         private int _executeTextCommandCallCount;
@@ -3549,6 +3586,8 @@ public class SdCardOperationsTests
     /// </summary>
     private sealed class ParkedDownloadDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         private readonly TaskCompletionSource _asyncPark = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly ManualResetEventSlim _syncPark = new(false);
         private readonly ParkMode _mode;
@@ -3633,6 +3672,8 @@ public class SdCardOperationsTests
     /// </summary>
     private sealed class SlowDownloadDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         private readonly SlowChunkStream _stream;
         private readonly TimeSpan _budget;
 
@@ -3729,6 +3770,8 @@ public class SdCardOperationsTests
     /// </summary>
     private class TestableNonUsbStreamingDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         public TestableNonUsbStreamingDevice(string name, IPAddress? ipAddress = null)
             : base(name, ipAddress)
         {
@@ -3749,6 +3792,8 @@ public class SdCardOperationsTests
     /// </summary>
     private class TestableNonUsbSdCardStreamingDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         private static readonly byte[] EofMarker = Encoding.ASCII.GetBytes("__END_OF_FILE__");
 
         public List<IOutboundMessage<string>> SentMessages { get; } = new();
@@ -3836,6 +3881,8 @@ public class SdCardOperationsTests
     /// </summary>
     private sealed class ChunkedWifiDownloadDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         private readonly byte[] _fileData;
         private readonly int _chunkSize;
 
@@ -3867,6 +3914,8 @@ public class SdCardOperationsTests
     /// </summary>
     private sealed class SilentWifiDownloadDevice : DaqifiStreamingDevice
     {
+        /// <inheritdoc cref="TestableSdCardStreamingDevice.SdInterfaceSettleDelay"/>
+        internal override TimeSpan SdInterfaceSettleDelay => TimeSpan.Zero;
         public SilentWifiDownloadDevice(string name)
             : base(name)
         {

@@ -1696,6 +1696,13 @@ public class SdCardOperationsCollaboratorTests
         public TimeSpan SdCardTransferIdleTimeout { get; set; } = TimeSpan.FromSeconds(20);
 
         /// <summary>
+        /// The SPI-bus settle period the SD operations wait out. Kept at production's 100ms here,
+        /// unlike the device-level doubles that zero it: these tests own the settle behavior and
+        /// step <see cref="TimeProvider"/> through it rather than spending it.
+        /// </summary>
+        public TimeSpan SdInterfaceSettleDelay { get; set; } = TimeSpan.FromMilliseconds(100);
+
+        /// <summary>
         /// The clock the SD operations read (issue #637). Settable so a test can hand them a
         /// <c>FakeTimeProvider</c> and step one of the budgets above forward rather than spend it.
         /// </summary>

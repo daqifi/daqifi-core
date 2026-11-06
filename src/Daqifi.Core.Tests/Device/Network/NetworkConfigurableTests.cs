@@ -14,6 +14,19 @@ namespace Daqifi.Core.Tests.Device.Network;
 
 public class NetworkConfigurableTests
 {
+    /// <summary>
+    /// Has <paramref name="device"/> cancel <paramref name="cts"/> the instant LAN:APPLY is sent,
+    /// so a test's call to <c>UpdateNetworkConfigurationAsync</c> skips the real
+    /// <see cref="Task.Delay(int, CancellationToken)">2-second module-restart wait</see> instead
+    /// of paying it. The collaborator already treats a token that goes canceled during that wait
+    /// as "the device has already committed" and completes normally rather than throwing — pinned
+    /// by <see cref="UpdateNetworkConfigurationAsync_CanceledDuringRestartWait_CompletesAndUpdatesLocalState"/>
+    /// — so this changes nothing about what a test using it observes, only how long it takes.
+    /// The same trick is used at the seam level in <c>NetworkConfigurationOperationsTests</c>.
+    /// </summary>
+    private static void SkipRestartWait(TestableDaqifiStreamingDevice device, CancellationTokenSource cts)
+        => device.CancelOnApply = cts;
+
     [Fact]
     public void NetworkConfiguration_InitializedOnConstruction()
     {
@@ -60,6 +73,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -68,7 +84,7 @@ public class NetworkConfigurableTests
             "TestPassword");
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -86,6 +102,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.SelfHosted,
@@ -94,7 +113,7 @@ public class NetworkConfigurableTests
             "");
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -111,6 +130,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         device.StartStreaming();
         device.SentMessages.Clear();
@@ -122,7 +144,7 @@ public class NetworkConfigurableTests
             "TestPassword");
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         var firstCommand = device.SentMessages.First().Data;
@@ -135,6 +157,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -143,7 +168,7 @@ public class NetworkConfigurableTests
             "UpdatedPassword");
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         Assert.Equal(WifiMode.ExistingNetwork, device.NetworkConfiguration.Mode);
@@ -157,6 +182,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -168,7 +196,7 @@ public class NetworkConfigurableTests
             IPAddress.Parse("10.0.0.1"));
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -195,6 +223,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -203,7 +234,7 @@ public class NetworkConfigurableTests
             "Pass");
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -218,6 +249,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -229,7 +263,7 @@ public class NetworkConfigurableTests
             gateway: null);
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -248,6 +282,12 @@ public class NetworkConfigurableTests
         var originalStaticIP = IPAddress.Parse("10.0.0.5");
         var originalSubnet = IPAddress.Parse("255.255.255.0");
         var originalGateway = IPAddress.Parse("10.0.0.1");
+
+        // Skip the 2-second module-restart wait; this test asserts the cached static IP fields,
+        // not timing. A source per call, because each call leaves its own canceled and the next
+        // call's entry check would throw on a reused one.
+        using var firstCts = new CancellationTokenSource();
+        SkipRestartWait(device, firstCts);
         await device.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
             WifiMode.ExistingNetwork,
             WifiSecurityType.WpaPskPhrase,
@@ -255,15 +295,17 @@ public class NetworkConfigurableTests
             "Pass",
             originalStaticIP,
             originalSubnet,
-            originalGateway));
+            originalGateway), firstCts.Token);
 
         // Act — second call only changes WiFi settings; static IP fields are
         // null which means "leave unchanged". The cache must not be cleared.
+        using var secondCts = new CancellationTokenSource();
+        SkipRestartWait(device, secondCts);
         await device.UpdateNetworkConfigurationAsync(new NetworkConfiguration(
             WifiMode.ExistingNetwork,
             WifiSecurityType.WpaPskPhrase,
             "OtherNet",
-            "OtherPass"));
+            "OtherPass"), secondCts.Token);
 
         // Assert
         Assert.Equal(originalStaticIP, device.NetworkConfiguration.StaticIP);
@@ -276,6 +318,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var staticIP = IPAddress.Parse("10.0.0.5");
         var subnet = IPAddress.Parse("255.255.255.0");
@@ -290,7 +335,7 @@ public class NetworkConfigurableTests
             gateway);
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         Assert.Equal(staticIP, device.NetworkConfiguration.StaticIP);
@@ -303,6 +348,9 @@ public class NetworkConfigurableTests
     {
         // Arrange
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.SelfHosted,
@@ -311,7 +359,7 @@ public class NetworkConfigurableTests
             "TestPassword");
 
         // Act
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         // Assert
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
@@ -328,6 +376,9 @@ public class NetworkConfigurableTests
         // even over a non-USB (WiFi/TCP) control transport — it owns the LAN state and must NOT
         // rely on the transport-aware PrepareLanInterface (which leaves LAN alone over WiFi).
         var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.SelfHosted,
@@ -335,7 +386,7 @@ public class NetworkConfigurableTests
             "TestNetwork",
             "TestPassword");
 
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         Assert.Contains("SYSTem:COMMunicate:LAN:ENAbled 1", sentCommands); // EnableNetworkLan (unconditional)
@@ -350,6 +401,9 @@ public class NetworkConfigurableTests
         // applied-but-not-persisted (new config live now, gone on the next power cycle). The
         // firmware persists the *staged* settings, so saving first is both valid and durable.
         var device = new TestableDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -357,7 +411,7 @@ public class NetworkConfigurableTests
             "TestNetwork",
             "TestPassword");
 
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var saveIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:SAVE");
@@ -378,6 +432,9 @@ public class NetworkConfigurableTests
         // connection by design — that is inherent to leaving the current network — so the config
         // must already be in NVM before it fires.
         var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -385,7 +442,7 @@ public class NetworkConfigurableTests
             "OtherHotspot",
             "OtherPassword");
 
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var saveIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:SAVE");
@@ -405,6 +462,9 @@ public class NetworkConfigurableTests
         // restart and can be silently dropped over a WiFi/TCP transport. Guards against a future
         // change appending a trailing command to the sequence.
         var device = new TestableNonUsbDaqifiStreamingDevice("TestDevice");
+        // Skip the 2-second module-restart wait; this test asserts commands, not timing.
+        using var cts = new CancellationTokenSource();
+        SkipRestartWait(device, cts);
         device.Connect();
         var config = new NetworkConfiguration(
             WifiMode.ExistingNetwork,
@@ -412,7 +472,7 @@ public class NetworkConfigurableTests
             "TestNetwork",
             "TestPassword");
 
-        await device.UpdateNetworkConfigurationAsync(config);
+        await device.UpdateNetworkConfigurationAsync(config, cts.Token);
 
         var sentCommands = device.SentMessages.Select(m => m.Data).ToList();
         var applyIndex = sentCommands.IndexOf("SYSTem:COMMunicate:LAN:APPLY");
@@ -746,6 +806,12 @@ public class NetworkConfigurableTests
         }
 
         /// <summary>
+        /// Canceled the instant LAN:APPLY goes out, when a test has set it through
+        /// <see cref="SkipRestartWait"/>. Not owned or disposed here — the test owns the source.
+        /// </summary>
+        public CancellationTokenSource? CancelOnApply { get; set; }
+
+        /// <summary>
         /// Reports a USB connection so the interface-prep tests assert the USB sequence
         /// (LAN disabled to free the shared SPI bus, then restored). The WiFi sequence — where
         /// the LAN is left enabled — is covered by <see cref="PrepareSdInterface_OverWifi_LeavesLanEnabled"/>
@@ -760,28 +826,22 @@ public class NetworkConfigurableTests
             if (message is IOutboundMessage<string> stringMessage)
             {
                 SentMessages.Add(stringMessage);
+                if (stringMessage.Data == ScpiMessageProducer.ApplyNetworkLan.Data)
+                {
+                    CancelOnApply?.Cancel();
+                }
             }
         }
     }
 
     /// <summary>Non-USB (WiFi/TCP) variant for the transport-aware interface-prep tests.</summary>
-    private class TestableNonUsbDaqifiStreamingDevice : DaqifiStreamingDevice
+    private sealed class TestableNonUsbDaqifiStreamingDevice : TestableDaqifiStreamingDevice
     {
-        public List<IOutboundMessage<string>> SentMessages { get; } = new();
-
         public TestableNonUsbDaqifiStreamingDevice(string name, IPAddress? ipAddress = null)
             : base(name, ipAddress)
         {
         }
 
         public override bool IsUsbConnection => false;
-
-        public override void Send<T>(IOutboundMessage<T> message)
-        {
-            if (message is IOutboundMessage<string> stringMessage)
-            {
-                SentMessages.Add(stringMessage);
-            }
-        }
     }
 }

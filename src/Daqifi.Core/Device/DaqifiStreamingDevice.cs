@@ -1019,6 +1019,17 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     /// <remarks>Virtual only as a test seam — a 20-second window is not unit-testable.</remarks>
     internal virtual TimeSpan SdCardTransferIdleTimeout => SdCardFileReceiver.DefaultIdleTimeout;
 
+    /// <summary>
+    /// How long to wait after switching the shared SPI bus between the LAN and the SD card, so
+    /// the firmware can finish the switch before the next command arrives.
+    /// </summary>
+    /// <remarks>
+    /// Virtual as a test seam: an SD operation pays this twice (switch to the card, switch
+    /// back), so a suite that exercises the command sequences pays it on every test while
+    /// asserting nothing about it. A test double sets it to <see cref="TimeSpan.Zero"/>.
+    /// </remarks>
+    internal virtual TimeSpan SdInterfaceSettleDelay => TimeSpan.FromMilliseconds(100);
+
     #endregion
 
     #region ILanChipInfoProvider
@@ -1133,6 +1144,8 @@ public class DaqifiStreamingDevice : DaqifiDevice, IStreamingDevice, ILiveSample
     TimeSpan ISdCardOperationHost.SdCardDownloadTimeout => SdCardDownloadTimeout;
 
     TimeSpan ISdCardOperationHost.SdCardTransferIdleTimeout => SdCardTransferIdleTimeout;
+
+    TimeSpan ISdCardOperationHost.SdInterfaceSettleDelay => SdInterfaceSettleDelay;
 
     /// <inheritdoc />
     TimeProvider ISdCardOperationHost.TimeProvider => Clock;
