@@ -1216,6 +1216,84 @@ public class ContinuousDeviceFinderTests
     }
 
     [Fact]
+    public async Task Start_WhenTheFinderAlwaysRunsToTheDeadline_StillLosesADeviceThatWentAway()
+    {
+        // The regression guard for inferring partialness from the pass deadline. WiFiDeviceFinder
+        // passes Timeout.InfiniteTimeSpan to its own discovery, so its receive loops run until the
+        // caller's token fires and then return a COMPLETE list; MDnsDeviceFinder documents the
+        // same ("no natural end"). Under ContinuousDeviceFinder that token IS the pass timeout, so
+        // the deadline elapses on every healthy pass.
+        //
+        // Reading that as "the results may be partial" suppressed miss counting on every pass, and
+        // DeviceLost stopped firing entirely for every WiFi and mDNS device: a device powered off
+        // or taken off the network stayed in the live set forever.
+        var stays = Wifi("AA:BB:CC:DD:EE:01");
+        var leaves = Wifi("AA:BB:CC:DD:EE:02");
+        var progress = new RecordingPassProgress();
+        var inner = new ScriptedPassFinder(
+            ScriptedPassFinder.ListensUntilTheDeadline(stays, leaves),
+            ScriptedPassFinder.ListensUntilTheDeadline(stays));
+
+        using var finder = NewReportingFinder(inner, progress);
+        var lost = new List<IDeviceInfo>();
+        var errors = new List<Exception>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+        finder.ScanError += (_, e) => errors.Add(e.Exception);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => progress.Count >= 2,
+            () => $"only {progress.Count} passes were reported",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Empty(errors);
+        Assert.Contains(lost, d => ReferenceEquals(d, leaves));
+        Assert.Equal([stays], finder.Devices);
+
+        Assert.Equal(
+            [
+                // Both passes used the whole pass budget, and both are Completed: the finder
+                // never said its answer was partial, so the answer is a census.
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 2, newDevices: 2, liveDeviceCount: 2),
+                Report(DiscoveryPassOutcome.Completed, devicesSeen: 1, lostDevices: 1, liveDeviceCount: 1),
+            ],
+            progress.Snapshot().Take(2));
+    }
+
+    [Fact]
+    public async Task Start_WhenTheFinderCannotReportPartialResults_StillLosesADeviceThatWentAway()
+    {
+        // The same shape through a finder that does not implement IPartialResultReporter at all —
+        // a plain IDeviceFinder, which is what a consumer writes and what WiFiDeviceFinder was
+        // before this seam existed. It also runs to the deadline, so the absence of the seam must
+        // read as "complete": treating "the finder cannot tell me" as "assume partial" would
+        // disable DeviceLost for every such finder.
+        var stays = Wifi("AA:BB:CC:DD:EE:01");
+        var leaves = Wifi("AA:BB:CC:DD:EE:02");
+        var inner = new DeadlineAnsweringFinder([stays, leaves], [stays]);
+
+        using var finder = new ContinuousDeviceFinder(inner, new ContinuousDiscoveryOptions
+        {
+            MissThreshold = 1,
+            Interval = ReportInterval,
+            PassTimeout = ReportPassTimeout
+        });
+
+        var lost = new List<IDeviceInfo>();
+        finder.DeviceLost += (_, e) => lost.Add(e.DeviceInfo);
+
+        finder.Start();
+        await WaitUntil.ThatAsync(
+            () => lost.Count >= 1,
+            () => "the device that went away was never reported lost",
+            WaitTimeout);
+        await finder.StopAsync();
+
+        Assert.Contains(lost, d => ReferenceEquals(d, leaves));
+    }
+
+    [Fact]
     public async Task Start_WhenOnlyMetadataChanged_ReportsTheUpdateAndStillRaisesNoEvent()
     {
         // The report is additive, not a replacement: the metadata refresh is still silent on the
@@ -1569,18 +1647,32 @@ public class ContinuousDeviceFinderTests
     /// device and raises DeviceLost — in the gap between the test's last assertion and the stop
     /// taking effect, which makes an otherwise deterministic assertion depend on the clock.
     /// </remarks>
-    private sealed class ScriptedPassFinder : IDeviceFinder
-    {
-        private readonly Queue<Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>> _steps;
-        private Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>? _lastStep;
-        private int _passesStarted;
+    /// <summary>
+    /// One scripted pass: what it answers, and whether that answer is a census of the system or
+    /// only the part the pass reached. <see cref="ScriptedPassFinder"/> reports the latter through
+    /// <c>IPartialResultReporter</c>, which is how a real finder tells
+    /// <see cref="ContinuousDeviceFinder"/> that absence from its list proves nothing.
+    /// </summary>
+    private sealed record PassStep(
+        Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> Run,
+        bool ResultsArePartial = false);
 
-        public ScriptedPassFinder(params Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>[] steps)
+    private sealed class ScriptedPassFinder : IDeviceFinder, IPartialResultReporter
+    {
+        private readonly Queue<PassStep> _steps;
+        private PassStep? _lastStep;
+        private int _passesStarted;
+        private int _lastPassWasPartial;
+
+        public ScriptedPassFinder(params PassStep[] steps)
         {
-            _steps = new Queue<Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>>>(steps);
+            _steps = new Queue<PassStep>(steps);
         }
 
         public int PassesStarted => Volatile.Read(ref _passesStarted);
+
+        public bool TakeResultsWerePartialFromLastPass()
+            => Interlocked.Exchange(ref _lastPassWasPartial, 0) == 1;
 
 #pragma warning disable CS0067 // Events are part of the interface but unused by this fake.
         public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
@@ -1588,19 +1680,31 @@ public class ContinuousDeviceFinderTests
 #pragma warning restore CS0067
 
         /// <summary>A pass that answers with exactly these devices.</summary>
-        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> Finds(params IDeviceInfo[] devices)
-            => _ => Task.FromResult<IEnumerable<IDeviceInfo>>(devices);
+        public static PassStep Finds(params IDeviceInfo[] devices)
+            => new(_ => Task.FromResult<IEnumerable<IDeviceInfo>>(devices));
 
         /// <summary>
         /// A pass that never answers on its own and throws when the pass timeout cancels it,
         /// which is what a finder that honours cancellation does.
         /// </summary>
-        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> TimesOut()
-            => async token =>
+        public static PassStep TimesOut()
+            => new(async token =>
             {
                 await Task.Delay(Timeout.Infinite, token);
                 return Array.Empty<IDeviceInfo>();
-            };
+            });
+
+        /// <summary>
+        /// A pass that listens until the pass token fires and then answers with everything it
+        /// heard — a COMPLETE answer that always uses the whole pass budget. That is what
+        /// <c>WiFiDeviceFinder</c> and <c>MDnsDeviceFinder</c> do: their
+        /// <c>DiscoverAsync(CancellationToken)</c> has no natural end, so the pass deadline is
+        /// what ends it, and the list it returns is still a census. A pass of this shape must be
+        /// reported <see cref="DiscoveryPassOutcome.Completed"/> and must still age devices out,
+        /// which is why the deadline alone can never stand in for partialness.
+        /// </summary>
+        public static PassStep ListensUntilTheDeadline(params IDeviceInfo[] heard)
+            => new(WaitForCancellationThen(heard));
 
         /// <summary>
         /// A pass that never answers on its own and, when the pass timeout cancels it, returns
@@ -1609,8 +1713,15 @@ public class ContinuousDeviceFinderTests
         /// cancellation and returns the port probes that already finished, so a timed-out pass
         /// arrives as a short list of real devices rather than as an exception.
         /// </summary>
-        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> TimesOutReturning(
-            params IDeviceInfo[] collectedSoFar)
+        public static PassStep TimesOutReturning(params IDeviceInfo[] collectedSoFar)
+            => new(WaitForCancellationThen(collectedSoFar), ResultsArePartial: true);
+
+        /// <summary>A pass that fails.</summary>
+        public static PassStep Throws(Exception error)
+            => new(_ => throw error);
+
+        private static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> WaitForCancellationThen(
+            IDeviceInfo[] answer)
             => async token =>
             {
                 var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1619,18 +1730,14 @@ public class ContinuousDeviceFinderTests
                     await cancelled.Task.ConfigureAwait(false);
                 }
 
-                return collectedSoFar;
+                return answer;
             };
-
-        /// <summary>A pass that fails.</summary>
-        public static Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> Throws(Exception error)
-            => _ => throw error;
 
         public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _passesStarted);
 
-            Func<CancellationToken, Task<IEnumerable<IDeviceInfo>>> step;
+            PassStep step;
             lock (_steps)
             {
                 if (_steps.Count > 0)
@@ -1641,7 +1748,56 @@ public class ContinuousDeviceFinderTests
                 step = _lastStep ?? Finds();
             }
 
-            return step(cancellationToken);
+            Volatile.Write(ref _lastPassWasPartial, step.ResultsArePartial ? 1 : 0);
+            return step.Run(cancellationToken);
+        }
+
+        public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)
+            => DiscoverAsync(CancellationToken.None);
+    }
+
+    /// <summary>
+    /// A plain <see cref="IDeviceFinder"/> — no <c>IPartialResultReporter</c> — whose pass listens
+    /// until the pass token fires and then answers with the COMPLETE set for that pass. This is
+    /// <c>WiFiDeviceFinder</c>'s and <c>MDnsDeviceFinder</c>'s shape: discovery with no natural
+    /// end, ended by the caller's token, returning a census rather than a fragment. Every pass
+    /// therefore ends with the pass deadline elapsed while still being complete.
+    /// </summary>
+    private sealed class DeadlineAnsweringFinder : IDeviceFinder
+    {
+        private readonly Queue<IReadOnlyList<IDeviceInfo>> _passes;
+        private IReadOnlyList<IDeviceInfo> _lastPass = Array.Empty<IDeviceInfo>();
+
+        public DeadlineAnsweringFinder(params IReadOnlyList<IDeviceInfo>[] passes)
+        {
+            _passes = new Queue<IReadOnlyList<IDeviceInfo>>(passes);
+        }
+
+#pragma warning disable CS0067 // Events are part of the interface but unused by this fake.
+        public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
+        public event EventHandler? DiscoveryCompleted;
+#pragma warning restore CS0067
+
+        public async Task<IEnumerable<IDeviceInfo>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<IDeviceInfo> answer;
+            lock (_passes)
+            {
+                if (_passes.Count > 0)
+                {
+                    _lastPass = _passes.Dequeue();
+                }
+
+                answer = _lastPass;
+            }
+
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
+            {
+                await cancelled.Task.ConfigureAwait(false);
+            }
+
+            return answer;
         }
 
         public Task<IEnumerable<IDeviceInfo>> DiscoverAsync(TimeSpan timeout)

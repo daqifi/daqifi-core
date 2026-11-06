@@ -581,6 +581,7 @@ public class ContinuousDeviceFinder : IDisposable
         {
             IReadOnlyCollection<IDeviceInfo>? results = null;
             var outcome = DiscoveryPassOutcome.Completed;
+            var answeredNothing = false;
             var changes = default(DiscoveryPassChanges);
 
             using (var passCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
@@ -602,29 +603,43 @@ public class ContinuousDeviceFinder : IDisposable
                     {
                         break;
                     }
+
+                    // The pass ran out of time and the finder answered by throwing, so there is
+                    // no list at all. Nothing is reconciled, and the pass is degraded.
+                    answeredNothing = true;
                 }
                 catch (Exception ex)
                 {
                     outcome = DiscoveryPassOutcome.Failed;
                     SafeScanError(ex);
                 }
-
-                // The pass spent its whole budget, whether the finder answered with an exception
-                // or handed back the part it had collected. Either way what it returned is
-                // incomplete, which is the "degraded" case a consumer has to be able to see.
-                // A pass that also raised an exception keeps Failed: that is the more specific
-                // thing to say about it, and the exception itself went to ScanError.
-                if (outcome == DiscoveryPassOutcome.Completed &&
-                    passCts.IsCancellationRequested &&
-                    !cancellationToken.IsCancellationRequested)
-                {
-                    outcome = DiscoveryPassOutcome.TimedOut;
-                }
             }
 
             if (cancellationToken.IsCancellationRequested)
             {
                 break;
+            }
+
+            // Whether the list is a census or only the part of the system the pass reached is
+            // the FINDER's to report, never something to infer from the pass deadline having
+            // elapsed. WiFiDeviceFinder and MDnsDeviceFinder have no natural end: their
+            // DiscoverAsync(CancellationToken) listens until the caller's token fires and then
+            // returns a COMPLETE answer, so for them the deadline elapses on every healthy pass.
+            // Reading that as "incomplete" marked every pass partial, and a pass that is always
+            // partial can never age a device out — DeviceLost stopped firing altogether for
+            // every WiFi and mDNS device.
+            //
+            // Taken unconditionally, and exactly once per pass: the flag is single-use like the
+            // busy-port report, so a pass that skipped reconciliation must still drain it rather
+            // than leave it to be answered by the next pass.
+            var resultsWerePartial = answeredNothing
+                || ((_finder as IPartialResultReporter)?.TakeResultsWerePartialFromLastPass() ?? false);
+
+            // A pass that raised an exception keeps Failed: that is the more specific thing to
+            // say about it, and the exception itself went to ScanError.
+            if (outcome == DiscoveryPassOutcome.Completed && resultsWerePartial)
+            {
+                outcome = DiscoveryPassOutcome.TimedOut;
             }
 
             // Backstop: Reconcile guards individual subscriber callbacks, but a custom
@@ -636,10 +651,10 @@ public class ContinuousDeviceFinder : IDisposable
                     changes = Reconcile(
                         results,
                         (_finder as IBusyPortReporter)?.TakeBusyPortsFromLastPass(),
-                        // A pass that did not end as Completed answered with whatever it had
-                        // collected when its time ran out, which is not the whole system. Its
-                        // list is evidence about the devices in it and about nothing else.
-                        resultsMayBePartial: outcome != DiscoveryPassOutcome.Completed);
+                        // A truncated pass answered with whatever it had collected when its time
+                        // ran out, which is not the whole system. Its list is evidence about the
+                        // devices in it and about nothing else.
+                        resultsMayBePartial: resultsWerePartial);
                 }
                 catch (Exception ex)
                 {
@@ -671,16 +686,6 @@ public class ContinuousDeviceFinder : IDisposable
     }
 
     /// <summary>
-    /// Hands one pass report to the caller's sink without letting the sink affect the scan loop.
-    /// </summary>
-    /// <remarks>
-    /// A faulty report handler is routed to <see cref="ScanError"/>, which is where this class
-    /// already sends a faulty <see cref="DeviceDiscovered"/> or <see cref="DeviceLost"/> handler,
-    /// and <see cref="SafeScanError"/> swallows a faulty <see cref="ScanError"/> handler in turn.
-    /// So a consumer drawing a status line can neither stop discovery nor lose the devices the
-    /// pass found; the events for them were raised before this runs.
-    /// </remarks>
-    /// <summary>
     /// The number of devices in the live set, without copying it the way
     /// <see cref="Devices"/> does.
     /// </summary>
@@ -695,6 +700,16 @@ public class ContinuousDeviceFinder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Hands one pass report to the caller's sink without letting the sink affect the scan loop.
+    /// </summary>
+    /// <remarks>
+    /// A faulty report handler is routed to <see cref="ScanError"/>, which is where this class
+    /// already sends a faulty <see cref="DeviceDiscovered"/> or <see cref="DeviceLost"/> handler,
+    /// and <see cref="SafeScanError"/> swallows a faulty <see cref="ScanError"/> handler in turn.
+    /// So a consumer drawing a status line can neither stop discovery nor lose the devices the
+    /// pass found; the events for them were raised before this runs.
+    /// </remarks>
     private void ReportPass(DiscoveryPassOutcome outcome, DiscoveryPassChanges changes)
     {
         var progress = _progress;

@@ -24,7 +24,7 @@ namespace Daqifi.Core.Device.Discovery;
 /// to one. A single transport finder throwing (e.g. WiFi discovery with no network) is logged and
 /// skipped so the other transports still return results.
 /// </remarks>
-public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter, IDisposable
+public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter, IPartialResultReporter, IDisposable
 {
     private readonly IReadOnlyList<IDeviceFinder> _finders;
     private readonly Func<IDeviceInfo, string>? _identitySelector;
@@ -118,6 +118,30 @@ public sealed class AllTransportsDeviceFinder : IDeviceFinder, IBusyPortReporter
         }
 
         return taken;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Forwarded for the same reason the busy-port report above is: <see cref="ContinuousDeviceFinder"/>
+    /// asks only the finder it directly wraps, and the documented shape is to wrap this class.
+    /// A composite that swallowed the signal would leave continuous discovery believing a
+    /// truncated serial sweep was a full census of every transport, which is what drops a device
+    /// the sweep never reached.
+    ///
+    /// The merged list is partial if ANY constituent's is: a device missing from it may be one
+    /// that constituent never got to. EVERY reporter is drained on every call, because taking is
+    /// single-use -- short-circuiting on the first true would leave a stale flag behind to be
+    /// answered on a later pass that was actually complete.
+    /// </remarks>
+    bool IPartialResultReporter.TakeResultsWerePartialFromLastPass()
+    {
+        var partial = false;
+        foreach (var reporter in _finders.OfType<IPartialResultReporter>())
+        {
+            partial |= reporter.TakeResultsWerePartialFromLastPass();
+        }
+
+        return partial;
     }
 
     /// <inheritdoc />
