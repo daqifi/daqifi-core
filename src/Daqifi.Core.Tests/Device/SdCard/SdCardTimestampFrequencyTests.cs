@@ -109,6 +109,15 @@ public class SdCardTimestampFrequencyTests
         Assert.Equal(expectedSource, source);
     }
 
+    [Fact]
+    public void FallbackTimestampFrequency_DefaultsToTheRateShippedFirmwareReports()
+    {
+        // It was 50 MHz, a figure no shipped Nyquist reports. A log that stated no clock was
+        // therefore converted as though its 42 MHz ticks were 50 MHz, which made every timestamp
+        // in the exported file about 19% fast (#902).
+        Assert.Equal(42_000_000u, new SdCardParseOptions().FallbackTimestampFrequency);
+    }
+
     #endregion
 
     #region Parser reports which frequency it used
