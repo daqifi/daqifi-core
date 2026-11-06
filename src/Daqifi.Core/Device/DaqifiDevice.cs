@@ -546,20 +546,6 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
     private Action<DaqifiOutMessage>? _statusRefreshWaiter;
 
     /// <summary>
-    /// Maximum number of retry attempts for the <see cref="InitializeAsync"/> SCPI setup
-    /// sequence when the device returns a transient SCPI error (e.g. -200 "Execution error").
-    /// A common trigger is the firmware rejecting a command tied to a persisted prior-session
-    /// state (e.g. stream interface) within the tight response window right after connect.
-    /// </summary>
-    private const int InitScpiErrorMaxRetries = 1;
-
-    /// <summary>
-    /// Delay in milliseconds before retrying the <see cref="InitializeAsync"/> SCPI setup
-    /// sequence after a transient SCPI error.
-    /// </summary>
-    private const int InitScpiErrorRetryDelayMs = 150;
-
-    /// <summary>
     /// Delay in milliseconds between the stream-state commands of the <see cref="InitializeAsync"/>
     /// SCPI setup sequence, giving the firmware time to act on each one before the next arrives.
     /// </summary>
@@ -2390,20 +2376,26 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 () => Send(ScpiMessageProducer.GetSystemError),
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            var reply = lines.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l))?.Trim();
+            // The last line of the <code>,"<message>" shape, rather than the first non-blank
+            // line. On a device that still has echo on, the first line is the echo of the query
+            // itself, and on one that is still sending stream data the lines before the reply
+            // can be anything at all. Taking the first of them counted the echo as a queued
+            // entry and asked again, so a caller that drains before SYSTem:ECHO -1 — which
+            // InitializeAsync does — could spin to maxIterations against a healthy device.
+            // This is the same way the initialization sequence reads the same reply.
+            var reply = lines.LastOrDefault(ScpiResponseClassifier.IsSystemErrorReplyLine)?.Trim();
             if (reply == null)
             {
-                // Empty reply means timeout or unresponsive device, not a
-                // queued error — terminate rather than spin to maxIterations.
-                SafeLog(() => _logger.LogDebug("[DrainErrorQueueAsync] Empty reply on iteration {Iteration}; terminating after {PoppedCount} popped entries.", i, popped.Count));
+                // No reply of that shape at all means a timeout, an unresponsive device, or
+                // noise — not a queued error. Terminate rather than spin to maxIterations.
+                SafeLog(() => _logger.LogDebug("[DrainErrorQueueAsync] No error-queue reply on iteration {Iteration}; terminating after {PoppedCount} popped entries.", i, popped.Count));
                 return popped;
             }
 
-            // SCPI error replies are formatted as <code>,"<message>". Code 0
-            // (or +0) indicates an empty queue; anything else is a real
-            // error to capture. Parse the numeric prefix rather than
-            // substring-matching "No error" so a hypothetical error message
-            // containing that phrase can't be mistaken for the terminator.
+            // Code 0 (or +0) indicates an empty queue; anything else is a real error to
+            // capture. Parse the numeric prefix rather than substring-matching "No error" so a
+            // hypothetical error message containing that phrase can't be mistaken for the
+            // terminator.
             if (ScpiResponseClassifier.TryParseSystemErrorReplyCode(reply, out var code) && code == 0)
             {
                 return popped;
@@ -3218,39 +3210,43 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 AttachInboundMessages(_messageConsumer);
             }
 
-            // Snapshot into a local, once. Every retry attempt and the derived-class hook
-            // further down are then handed the same decision explicitly, so it cannot be
+            // Snapshot into a local, once. The setup block and the derived-class hook further
+            // down are then handed the same decision explicitly, so it cannot be
             // changed out from under an initialization already in flight — neither by a caller
             // mutating the property nor by a second concurrent InitializeAsync on this same
             // instance. The decision belongs to this operation, so it lives on the stack rather
             // than in a field.
             var preserveActiveStream = PreserveActiveStream;
 
+            // Empty the device's error queue before the setup block runs.
+            //
+            // The device keeps SCPI errors in a queue that survives a disconnect, and the
+            // block below ends with one SYSTem:ERRor? whose answer it treats as the verdict on
+            // the commands it just sent. One query pops one entry, so a device carrying old
+            // entries answered that query with somebody else's error and failed the connect —
+            // two stale entries were enough, and a dead stream (#899) leaves one behind on its
+            // own (#898). Popping them all first is what makes the verdict mean what it says.
+            //
+            // An observing session skips the drain for the same reason it skips the terminator:
+            // the entries belong to the session actually driving the device.
+            if (!preserveActiveStream)
+            {
+                await DrainErrorQueueAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
             // Send the text-mode SCPI setup commands via ExecuteTextCommandAsync so that
             // any -200 execution error response is captured rather than silently discarded
             // by the protobuf consumer.  The protobuf consumer is stopped for the duration
             // of this call and restarted afterward, leaving the device in protobuf mode
             // and ready to receive the SYSInfoPB? response.
-            //
-            // A SCPI error here is often transient — e.g. the firmware rejecting a command
-            // tied to a persisted prior-session state within the tight response window right
-            // after connect — so retry the whole sequence with a settle delay before treating
-            // it as a hard failure (mirrors the retry already used for SD card operations).
-            IReadOnlyList<string> initLines = Array.Empty<string>();
-            string? errorLine = null;
-            for (var attempt = 0; attempt <= InitScpiErrorMaxRetries; attempt++)
+            IReadOnlyList<string> initLines;
+
+            // The short circuit is scoped to this one exchange, not to InitializeAsync as a
+            // whole: the capability-document read and everything after it stay on their
+            // completion windows. EnableTerminatorShortCircuit explains why this is the one
+            // exchange that may finish early on its terminator (issue #667 item 4).
+            using (EnableTerminatorShortCircuit())
             {
-                if (attempt > 0)
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(InitScpiErrorRetryDelayMs), _timeProvider, cancellationToken).ConfigureAwait(false);
-                }
-
-                // Scoped to this exchange alone, not to InitializeAsync as a whole: the
-                // capability-document read and everything after it stay on their completion
-                // windows. EnableTerminatorShortCircuit explains why this is the one exchange
-                // that may finish early on its terminator (issue #667 item 4).
-                using var terminatorShortCircuit = EnableTerminatorShortCircuit();
-
                 // The async setup overload, so the settle delays between commands are awaited
                 // rather than blocking the thread-pool thread in Thread.Sleep for 300ms
                 // (issue #667, #485 success criterion 3). Awaiting also makes them
@@ -3309,7 +3305,7 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                     // The settle delay before it is not optional. It is what makes the reply
                     // mean something: the firmware has to have acted on SetProtobufStreamFormat
                     // and queued any complaint about it before we ask, or a command that failed
-                    // would be reported as "0, No error" and the retry below would never run.
+                    // would be reported as "0, No error" and the check below would never see it.
                     await Task.Delay(TimeSpan.FromMilliseconds(InitScpiSettleDelayMs), _timeProvider, token).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
 
@@ -3318,31 +3314,27 @@ public class DaqifiDevice : IDevice, IDisposable, IAsyncDisposable, ITextExchang
                 responseTimeoutMs: 1000,
                 completionTimeoutMs: InitScpiCompletionTimeoutMs,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                // Shared with DaqifiStreamingDevice's SCPI error detection so both sites
-                // recognize the same set of delimiter-separated error formats — a bare
-                // "**ERROR"-prefix check would miss "ERROR: ..." and space/tab-delimited
-                // variants like "ERROR -200,..." or "ERROR\t-200,...".
-                //
-                // Falling back to the error-queue reply is what keeps the terminator above
-                // from being a question whose answer is thrown away. The two forms are
-                // genuinely different shapes: a volunteered error carries an ERROR token
-                // ("**ERROR: -200,..."), while the query answers with a bare code
-                // ("-200,\"Execution error\""), which IsScpiErrorLine does not — and should
-                // not — match. Checking both means a failed setup command is now caught
-                // whether the device volunteered it or only recorded it, where before only
-                // the volunteered form was ever seen.
-                errorLine = initLines.FirstOrDefault(ScpiResponseClassifier.IsScpiErrorLine)
-                            ?? initLines.LastOrDefault(IsFailedSystemErrorReply);
-                if (errorLine == null)
-                {
-                    break;
-                }
             }
 
-            // Surface any SCPI error that survived the retry so callers know the device
+            // Shared with DaqifiStreamingDevice's SCPI error detection so both sites
+            // recognize the same set of delimiter-separated error formats — a bare
+            // "**ERROR"-prefix check would miss "ERROR: ..." and space/tab-delimited
+            // variants like "ERROR -200,..." or "ERROR\t-200,...".
+            //
+            // Falling back to the error-queue reply is what keeps the terminator above from
+            // being a question whose answer is thrown away. The two forms are genuinely
+            // different shapes: a volunteered error carries an ERROR token
+            // ("**ERROR: -200,..."), while the query answers with a bare code
+            // ("-200,\"Execution error\""), which IsScpiErrorLine does not — and should
+            // not — match. Checking both means a failed setup command is caught whether the
+            // device volunteered it or only recorded it.
+            //
+            // The queue was emptied before the block started, so the recorded form can only be
+            // about the commands the block itself sent. Surface it so callers know the device
             // is not in the expected state, via a typed exception so it can be classified
             // without matching on the message.
+            var errorLine = initLines.FirstOrDefault(ScpiResponseClassifier.IsScpiErrorLine)
+                            ?? initLines.LastOrDefault(IsFailedSystemErrorReply);
             if (errorLine != null)
             {
                 var trimmedErrorLine = errorLine.Trim();

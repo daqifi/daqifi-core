@@ -169,9 +169,9 @@ public class DaqifiDeviceInitializeTests
     }
 
     [Fact]
-    public async Task InitializeAsync_WhenDeviceReturnsScpiError_ThrowsTypedExceptionAfterRetry()
+    public async Task InitializeAsync_WhenDeviceReturnsScpiError_ThrowsTypedException()
     {
-        // Arrange — device returns a -200 error line on every attempt (persistent, not transient)
+        // Arrange — the device answers the setup block with a -200 error line.
         var device = new TestableDaqifiDevice("TestDevice",
             textCommandResponse: new[] { "**ERROR: -200, \"Execution error\"\r\n" });
         device.Connect();
@@ -183,8 +183,9 @@ public class DaqifiDeviceInitializeTests
         Assert.Contains("-200", ex.Message);
         Assert.Equal("**ERROR: -200, \"Execution error\"", ex.LastScpiError);
         Assert.Equal(DeviceState.Error, device.State);
-        // One initial attempt plus one retry.
-        Assert.Equal(2, device.TextCommandAttemptCount);
+        // The block is sent once. The retry it used to carry existed to get past a stale queue
+        // entry, and the queue is now emptied before the block runs (#898).
+        Assert.Equal(1, device.TextCommandAttemptCount);
     }
 
     [Theory]
@@ -207,23 +208,6 @@ public class DaqifiDeviceInitializeTests
         Assert.Equal(DeviceState.Error, device.State);
     }
 
-    [Fact]
-    public async Task InitializeAsync_WhenDeviceReturnsTransientScpiError_RetriesAndSucceeds()
-    {
-        // Arrange — the first attempt returns a SCPI error, the retry succeeds, simulating
-        // the narrow timing race described in issue #310.
-        var device = new TestableDaqifiDevice("TestDevice",
-            textCommandResponse: Array.Empty<string>(),
-            failFirstAttempt: true);
-        device.Connect();
-
-        // Act
-        await device.InitializeAsync();
-
-        // Assert
-        Assert.Equal(DeviceState.Ready, device.State);
-        Assert.Equal(2, device.TextCommandAttemptCount);
-    }
 
     [Fact]
     public async Task InitializeAsync_EndsTheSetupSequenceWithTheErrorQueueQuery()
@@ -239,7 +223,8 @@ public class DaqifiDeviceInitializeTests
         await device.InitializeAsync();
 
         var sentData = device.DirectSentMessages.Select(m => m.Data).ToList();
-        var terminatorIndex = sentData.FindIndex(d => d.Contains("SYSTem:ERRor?"));
+        // The last one: the drain that now runs before the block reads the queue too (#898).
+        var terminatorIndex = sentData.FindLastIndex(d => d.Contains("SYSTem:ERRor?"));
         var lastSetupIndex = sentData.FindIndex(d => d.Contains("SYSTem:STReam:FORmat 0"));
 
         Assert.True(terminatorIndex >= 0, "The init sequence must query the error queue.");
@@ -267,7 +252,7 @@ public class DaqifiDeviceInitializeTests
     [Theory]
     [InlineData("-200,\"Execution error\"\r\n")]
     [InlineData("-113,\"Undefined header\"\r\n")]
-    public async Task InitializeAsync_WhenErrorQueueReportsAFailure_ThrowsTypedExceptionAfterRetry(
+    public async Task InitializeAsync_WhenErrorQueueReportsAFailure_ThrowsTypedException(
         string errorReply)
     {
         // The error-queue reply carries a bare code with no ERROR token, so IsScpiErrorLine
@@ -282,7 +267,75 @@ public class DaqifiDeviceInitializeTests
 
         Assert.Equal(errorReply.Trim(), ex.LastScpiError);
         Assert.Equal(DeviceState.Error, device.State);
-        Assert.Equal(2, device.TextCommandAttemptCount);
+        Assert.Equal(1, device.TextCommandAttemptCount);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task InitializeAsync_WhenTheErrorQueueHoldsStaleEntries_StillConnects(int staleEntries)
+    {
+        // Issue #898. The entries are left over from an earlier session: the device keeps its
+        // error queue across a disconnect. The setup block's SYSTem:ERRor? pops one entry, so
+        // before the fix a device carrying two or more of them answered that query with
+        // somebody else's error and every connect failed. Measured on the bench: 1 entry
+        // connected, 2, 3 and 4 each threw.
+        var device = new TestableDaqifiDevice("TestDevice");
+        for (var i = 0; i < staleEntries; i++)
+        {
+            device.StaleErrorQueue.Enqueue($"-113,\"Undefined header\"");
+        }
+        device.Connect();
+
+        await device.InitializeAsync();
+
+        Assert.Equal(DeviceState.Ready, device.State);
+        Assert.Equal(4, device.Channels.Count);
+        Assert.Empty(device.StaleErrorQueue);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_EmptiesTheErrorQueueBeforeTheSetupBlock()
+    {
+        // The order is the whole fix: the queue has to be empty before the block sends the
+        // commands its terminator reports on, or the terminator can answer for something else.
+        var device = new TestableDaqifiDevice("TestDevice");
+        device.StaleErrorQueue.Enqueue("-113,\"Undefined header\"");
+        device.StaleErrorQueue.Enqueue("-101,\"Invalid character\"");
+        device.Connect();
+
+        await device.InitializeAsync();
+
+        var sent = device.DirectSentMessages.Select(m => m.Data).ToList();
+        var firstErrorQuery = sent.FindIndex(d => d.Contains("SYSTem:ERRor?"));
+        var echoOff = sent.FindIndex(d => d.Contains("SYSTem:ECHO"));
+
+        Assert.True(firstErrorQuery >= 0, "Initialization must read the error queue.");
+        Assert.True(
+            firstErrorQuery < echoOff,
+            "The queue must be emptied before the setup block starts.");
+
+        // Two stale entries, then the "no error" that ends the drain, then the block's own
+        // terminator: four reads in all.
+        Assert.Equal(4, sent.Count(d => d.Contains("SYSTem:ERRor?")));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheQueueNeverReportsNoError_StopsReadingIt()
+    {
+        // A device that answers the drain with something that is not an error-queue reply at
+        // all — an echo of the query on a device that still has echo on, or stream data still
+        // arriving — must not be asked again and again. It is not a queued entry, so the drain
+        // stops and the connect carries on.
+        var device = new TestableDaqifiDevice("TestDevice") { ErrorQueueReplyIsGarbage = true };
+        device.Connect();
+
+        await device.InitializeAsync();
+
+        Assert.Equal(DeviceState.Ready, device.State);
+        Assert.Equal(1, device.DrainErrorQueryCount);
     }
 
     [Fact]
@@ -557,7 +610,6 @@ public class DaqifiDeviceInitializeTests
     private class TestableDaqifiDevice : DaqifiDevice
     {
         private readonly IReadOnlyList<string> _textCommandResponse;
-        private readonly bool _failFirstAttempt;
 
         /// <summary>
         /// All messages sent via direct Send() calls.
@@ -573,6 +625,25 @@ public class DaqifiDeviceInitializeTests
         /// Number of times the init SCPI setup sequence's ExecuteTextCommandAsync was invoked.
         /// </summary>
         public int TextCommandAttemptCount { get; private set; }
+
+        /// <summary>
+        /// Entries the device's error queue already held before this session, in the order
+        /// <c>SYSTem:ERRor?</c> pops them. The real device keeps them across a disconnect,
+        /// which is what made every connect fail before #898.
+        /// </summary>
+        public Queue<string> StaleErrorQueue { get; } = new();
+
+        /// <summary>
+        /// Number of <c>SYSTem:ERRor?</c> queries the drain sent, i.e. not counting the setup
+        /// block's own terminator.
+        /// </summary>
+        public int DrainErrorQueryCount { get; private set; }
+
+        /// <summary>
+        /// When true, the error queue answers with a line that is not an error-queue reply at
+        /// all — what a device with echo still on, or one still sending stream data, looks like.
+        /// </summary>
+        public bool ErrorQueueReplyIsGarbage { get; set; }
 
         /// <summary>
         /// The response and completion timeouts the last text exchange asked for. The init
@@ -618,13 +689,11 @@ public class DaqifiDeviceInitializeTests
             string name,
             IPAddress? ipAddress = null,
             IReadOnlyList<string>? textCommandResponse = null,
-            bool populateChannelsOnDeviceInfo = true,
-            bool failFirstAttempt = false)
+            bool populateChannelsOnDeviceInfo = true)
             : base(name, ipAddress)
         {
             _textCommandResponse = textCommandResponse ?? Array.Empty<string>();
             PopulateChannelsOnDeviceInfo = populateChannelsOnDeviceInfo;
-            _failFirstAttempt = failFirstAttempt;
         }
 
         public override void Send<T>(IOutboundMessage<T> message)
@@ -716,12 +785,40 @@ public class DaqifiDeviceInitializeTests
                 }
 
                 // Run the setup action so that Send() calls inside it are captured
+                var before = DirectSentMessages.Count;
                 await setupActionAsync(cancellationToken).ConfigureAwait(false);
-                TextCommandAttemptCount++;
+                var sentThisCall = DirectSentMessages.Skip(before).Select(m => m.Data).ToList();
 
-                if (_failFirstAttempt && TextCommandAttemptCount == 1)
+                // Echo-off is the first thing the setup block sends, and nothing else sends it,
+                // so it tells the two kinds of exchange apart: the block itself, and the
+                // error-queue drain that now runs before it (#898).
+                if (sentThisCall.Any(d => d.Contains("SYSTem:ECHO")))
                 {
-                    return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
+                    TextCommandAttemptCount++;
+                    if (_textCommandResponse.Count > 0)
+                    {
+                        return _textCommandResponse;
+                    }
+                }
+                else if (sentThisCall.Any(d => d.Contains("SYSTem:ERRor?")))
+                {
+                    DrainErrorQueryCount++;
+                    if (ErrorQueueReplyIsGarbage)
+                    {
+                        return new[] { "SYSTem:ERRor?\r\n" };
+                    }
+                }
+
+                // Answer any SYSTem:ERRor? the way the device does: pop the oldest entry, or
+                // report an empty queue.
+                if (sentThisCall.Any(d => d.Contains("SYSTem:ERRor?")))
+                {
+                    return new[]
+                    {
+                        StaleErrorQueue.Count > 0
+                            ? StaleErrorQueue.Dequeue()
+                            : "0,\"No error\""
+                    };
                 }
 
                 return _textCommandResponse;
