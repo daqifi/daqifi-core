@@ -522,7 +522,9 @@ public class DaqifiDeviceInitializeTests
 
         var sent = device.SentData.ToList();
         var routeIndex = sent.FindIndex(d => d.Contains("SYSTem:STReam:INTerface 0"));
-        var terminatorIndex = sent.FindIndex(d => d.Contains("SYSTem:ERRor?"));
+        // The last one, so the test still means this if initialization ever reads the error
+        // queue before the block as well.
+        var terminatorIndex = sent.FindLastIndex(d => d.Contains("SYSTem:ERRor?"));
 
         Assert.True(routeIndex >= 0, "Initialization must route the stream to USB.");
         Assert.True(terminatorIndex >= 0, "The setup block must query the error queue.");
