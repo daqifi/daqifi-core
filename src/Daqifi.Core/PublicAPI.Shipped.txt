@@ -2342,7 +2342,6 @@ override Daqifi.Core.Device.ChannelAcquisitionStatistics.Equals(object? obj) -> 
 override Daqifi.Core.Device.ChannelAcquisitionStatistics.GetHashCode() -> int
 override Daqifi.Core.Device.ChannelAcquisitionStatistics.ToString() -> string!
 override Daqifi.Core.Device.DaqifiStreamingDevice.CaptureSessionSnapshot() -> void
-override Daqifi.Core.Device.DaqifiStreamingDevice.OnDeviceInitializingAsync(bool preserveActiveStream, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 override Daqifi.Core.Device.DaqifiStreamingDevice.OnStreamMessageReceived(DaqifiOutMessage! message) -> void
 override Daqifi.Core.Device.DaqifiStreamingDevice.RestoreSessionSnapshotAsync(Daqifi.Core.Device.ReconnectOptions! options, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
 override Daqifi.Core.Device.DaqifiStreamingDevice.Send<T>(Daqifi.Core.Communication.Messages.IOutboundMessage<T>! message) -> void

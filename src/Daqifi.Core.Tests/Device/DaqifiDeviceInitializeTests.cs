@@ -113,7 +113,6 @@ public class DaqifiDeviceInitializeTests
 
         // Assert
         Assert.DoesNotContain(device.SentData, d => d.Contains("SYSTem:STReam:INTerface"));
-        Assert.Equal(0, device.UsbStepAttemptCount);
         Assert.Equal(DeviceState.Ready, device.State);
         Assert.Equal(4, device.Channels.Count);
     }
@@ -136,7 +135,6 @@ public class DaqifiDeviceInitializeTests
         // Assert
         Assert.False(device.PreserveActiveStream); // the mutation really did land
         Assert.DoesNotContain(device.SentData, d => d.Contains("SYSTem:STReam:INTerface"));
-        Assert.Equal(0, device.UsbStepAttemptCount);
         Assert.Equal(DeviceState.Ready, device.State);
     }
 
@@ -668,48 +666,82 @@ public class DaqifiDeviceInitializeTests
     }
 
     [Fact]
-    public async Task InitializeAsync_StreamingUsb_WhenUsbStepReturnsScpiError_SetsErrorNotReady()
+    public async Task InitializeAsync_StreamingUsb_RoutesTheStreamToUsbBeforeAskingForStatus()
     {
-        // Arrange — the USB SetStreamInterface step fails on every attempt (persistent, not
-        // transient) after base init populated channels
-        var device = new TestableStreamingDevice("TestDevice", UsbStepBehavior.ScpiError);
+        // Issue #897. The firmware keeps the stream interface across sessions, so a device a
+        // WiFi session left on SYSTem:STReam:INTerface 1 sends its status reply over WiFi. The
+        // routing command therefore has to reach the device before SYSInfoPB?, or the connect
+        // waits 8s for a reply that went somewhere else.
+        var device = new TestableStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act & Assert — failure in the override must not leave the device falsely Ready,
-        // and surfaces as the typed exception rather than a bare InvalidOperationException
-        var ex = await Assert.ThrowsAsync<ScpiInitializationErrorException>(() => device.InitializeAsync());
-        Assert.Equal(DeviceState.Error, device.State);
-        Assert.Equal(2, device.UsbStepAttemptCount);
-        Assert.NotNull(ex.LastScpiError);
-    }
-
-    [Fact]
-    public async Task InitializeAsync_StreamingUsb_WhenUsbStepReturnsTransientScpiError_RetriesAndSucceeds()
-    {
-        // Arrange — the USB SetStreamInterface step fails once, then succeeds on retry,
-        // simulating the narrow timing race described in issue #310.
-        var device = new TestableStreamingDevice("TestDevice", UsbStepBehavior.ScpiErrorThenSucceed);
-        device.Connect();
-
-        // Act
         await device.InitializeAsync();
 
-        // Assert
-        Assert.Equal(DeviceState.Ready, device.State);
-        Assert.Equal(2, device.UsbStepAttemptCount);
+        var sent = device.SentData.ToList();
+        var routeIndex = sent.FindIndex(d => d.Contains("SYSTem:STReam:INTerface 0"));
+        var statusIndex = sent.FindIndex(d => d.Contains("SYSInfoPB"));
+
+        Assert.True(routeIndex >= 0, "Initialization must route the stream to USB.");
+        Assert.True(
+            routeIndex < statusIndex,
+            "The stream must be routed to USB before the device is asked for its status.");
     }
 
     [Fact]
-    public async Task InitializeAsync_StreamingUsb_WhenCancelledDuringUsbStep_RevertsToConnected()
+    public async Task InitializeAsync_StreamingUsb_RoutesTheStreamInsideTheSetupBlock()
     {
-        // Arrange — cancellation hits the USB step after base init reached the channel wait
-        var device = new TestableStreamingDevice("TestDevice", UsbStepBehavior.Cancel);
+        // The routing command belongs with the other commands that put the device into a known
+        // state, which means before the setup block's SYSTem:ERRor? terminator. That placement
+        // is what gives it the block's own error check, and what let its separate exchange,
+        // retry loop and exception path be deleted (#897).
+        var device = new TestableStreamingDevice("TestDevice");
         device.Connect();
 
-        // Act & Assert — cancellation in the override is not a fault; state reverts, not Error,
-        // and not the falsely-Ready state the old override could leave behind.
-        await Assert.ThrowsAsync<OperationCanceledException>(() => device.InitializeAsync());
-        Assert.Equal(DeviceState.Connected, device.State);
+        await device.InitializeAsync();
+
+        var sent = device.SentData.ToList();
+        var routeIndex = sent.FindIndex(d => d.Contains("SYSTem:STReam:INTerface 0"));
+        // The last one, so the test still means this if initialization ever reads the error
+        // queue before the block as well.
+        var terminatorIndex = sent.FindLastIndex(d => d.Contains("SYSTem:ERRor?"));
+
+        Assert.True(routeIndex >= 0, "Initialization must route the stream to USB.");
+        Assert.True(terminatorIndex >= 0, "The setup block must query the error queue.");
+        Assert.True(
+            routeIndex < terminatorIndex,
+            "The routing command must precede the terminator that reports on the setup block.");
+    }
+
+    [Fact]
+    public async Task InitializeAsync_StreamingUsb_WhenAPriorWifiSessionLeftTheStreamOnWifi_StillConnects()
+    {
+        // Issue #897, reproduced: this device answers SYSInfoPB? only once its stream interface
+        // points at USB, which is what the firmware does. Before the fix the connect asked for
+        // status first, so the wait timed out and the step that would have repaired the routing
+        // never ran — 0 of 3 USB connects succeeded on the bench.
+        var device = new TestableStreamingDevice("TestDevice") { StreamInterfaceIsWifi = true };
+        device.Connect();
+
+        await device.InitializeAsync(TimeSpan.FromMilliseconds(500));
+
+        Assert.Equal(DeviceState.Ready, device.State);
+        Assert.Equal(4, device.Channels.Count);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_StreamingUsb_WhenRoutingIsRejected_SetsErrorNotReady()
+    {
+        // The routing command is now judged by the setup block's own error check, so a device
+        // that rejects it still fails the initialization — with the same typed exception, and
+        // without the separate retry the command used to carry.
+        var device = new TestableStreamingDevice("TestDevice") { RejectStreamInterfaceCommand = true };
+        device.Connect();
+
+        var ex = await Assert.ThrowsAsync<ScpiInitializationErrorException>(
+            () => device.InitializeAsync());
+
+        Assert.Equal(DeviceState.Error, device.State);
+        Assert.NotNull(ex.LastScpiError);
     }
 
     [Fact]
@@ -1232,18 +1264,6 @@ public class DaqifiDeviceInitializeTests
         }
     }
 
-    /// <summary>
-    /// Outcome of the streaming device's USB SetStreamInterface step, used to exercise the
-    /// failure paths of the OnDeviceInitializingAsync hook.
-    /// </summary>
-    private enum UsbStepBehavior
-    {
-        Succeed,
-        ScpiError,
-        ScpiErrorThenSucceed,
-        Cancel
-    }
-
     [Theory]
     [InlineData(true)]  // observing: the hook returns immediately, no awaitable work
     [InlineData(false)] // take-control: the hook does send SCPI
@@ -1499,20 +1519,26 @@ public class DaqifiDeviceInitializeTests
 
     /// <summary>
     /// A testable DaqifiStreamingDevice (always USB) whose base init populates channels on
-    /// GetDeviceInfo and whose USB stream-interface step can be made to succeed, return a SCPI
-    /// error, or be canceled.
+    /// GetDeviceInfo, and which can model the firmware's persisted stream interface and a
+    /// rejection of the routing command.
     /// </summary>
     private class TestableStreamingDevice : DaqifiStreamingDevice
     {
-        private readonly UsbStepBehavior _usbStepBehavior;
         private readonly List<string> _sent = new();
 
         public IReadOnlyList<string> SentData => _sent;
 
         /// <summary>
-        /// Number of times the USB SetStreamInterface step's ExecuteTextCommandAsync was invoked.
+        /// When true, the device starts out routing its stream to WiFi, the way the firmware
+        /// does after a WiFi session, and answers SYSInfoPB? only once it has been routed back
+        /// to USB (#897).
         /// </summary>
-        public int UsbStepAttemptCount { get; private set; }
+        public bool StreamInterfaceIsWifi { get; set; }
+
+        /// <summary>
+        /// When true, the device answers the routing command with a SCPI error.
+        /// </summary>
+        public bool RejectStreamInterfaceCommand { get; set; }
 
         /// <summary>
         /// Invoked once, from inside the first text exchange of initialization — i.e. after
@@ -1525,21 +1551,33 @@ public class DaqifiDeviceInitializeTests
 
         public override bool IsUsbConnection => true;
 
-        public TestableStreamingDevice(string name, UsbStepBehavior usbStepBehavior = UsbStepBehavior.Succeed)
+        public TestableStreamingDevice(string name)
             : base(name, (IPAddress?)null)
         {
-            _usbStepBehavior = usbStepBehavior;
         }
 
         public override void Send<T>(IOutboundMessage<T> message)
         {
-            if (message is IOutboundMessage<string> stringMessage)
+            if (message is not IOutboundMessage<string> stringMessage)
             {
-                _sent.Add(stringMessage.Data);
-                if (stringMessage.Data.Contains("SYSInfoPB"))
-                {
-                    OnStatusMessageReceived(HealthyStatus());
-                }
+                return;
+            }
+
+            _sent.Add(stringMessage.Data);
+
+            if (stringMessage.Data.Contains("SYSTem:STReam:INTerface 0"))
+            {
+                StreamInterfaceIsWifi = false;
+            }
+
+            // The status reply goes to whichever interface the firmware is routing to, so a
+            // device still set to WiFi sends nothing back over USB. That is the whole of #897.
+            if (stringMessage.Data.Contains("SYSInfoPB") && !StreamInterfaceIsWifi)
+            {
+                // Through OnStatusMessageReceived, not PopulateChannelsFromStatus: the status
+                // has to pass the identity check #923 added, so this double answers the way a
+                // real device does rather than around the gate the connect now applies.
+                OnStatusMessageReceived(HealthyStatus());
             }
         }
 
@@ -1594,25 +1632,11 @@ public class DaqifiDeviceInitializeTests
                 var before = _sent.Count;
                 await setupActionAsync(cancellationToken).ConfigureAwait(false);
                 var sentThisCall = _sent.Skip(before).ToList();
-                var isUsbStep = sentThisCall.Any(d => d.Contains("STReam:INTerface"));
 
-                if (isUsbStep)
+                if (RejectStreamInterfaceCommand &&
+                    sentThisCall.Any(d => d.Contains("STReam:INTerface")))
                 {
-                    UsbStepAttemptCount++;
-
-                    switch (_usbStepBehavior)
-                    {
-                        case UsbStepBehavior.ScpiError:
-                            return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
-                        case UsbStepBehavior.ScpiErrorThenSucceed:
-                            if (UsbStepAttemptCount == 1)
-                            {
-                                return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
-                            }
-                            break;
-                        case UsbStepBehavior.Cancel:
-                            throw new OperationCanceledException();
-                    }
+                    return new[] { "**ERROR: -200, \"Execution error\"\r\n" };
                 }
 
                 return Array.Empty<string>();
