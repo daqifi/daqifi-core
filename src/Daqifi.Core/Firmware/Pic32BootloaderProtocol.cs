@@ -7,23 +7,7 @@ namespace Daqifi.Core.Firmware;
 /// </summary>
 public class Pic32BootloaderProtocol : IBootloaderProtocol
 {
-    // PIC32 KSEG0 mask (PA_TO_KVA0): the bootloader programs records at
-    // PA_TO_KVA0(physicalAddress) and READ_CRC reads at KVA0_TO_KVA1(address),
-    // so the address we hand to READ_CRC must be the KSEG0 form of the HEX
-    // record's physical address (physical | 0x80000000).
-    private const uint Kseg0Mask = 0x80000000;
     private const byte DataRecordType = 0x00;
-
-    // Application flash partition the bootloader will actually program
-    // (APP_FLASH_BASE_ADDRESS..APP_FLASH_END_ADDRESS in the firmware: 2 MB at
-    // KSEG0 0x9D000000, i.e. physical 0x1D000000..0x1D1FFFFF). The bootloader
-    // silently skips records outside this window — real firmware HEX files carry
-    // linker-emitted data at e.g. physical 0x00000000 that is never flashed — so
-    // those records must be excluded from CRC regions, mirroring exactly what is
-    // programmed. Otherwise verification would compare against flash the device
-    // never wrote and fail every time.
-    private const uint AppFlashPhysicalStart = 0x1D000000;
-    private const uint AppFlashPhysicalEnd = 0x1D1FFFFF;
 
     private readonly IntelHexParser _hexParser;
 
@@ -102,7 +86,17 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
     /// <inheritdoc />
     public List<byte[]> ParseHexFile(string[] hexFileLines)
     {
-        return _hexParser.ParseHexRecords(hexFileLines);
+        // Protected-range records are dropped by the parser first, then what is left has to lie
+        // inside the flash the bootloader erases and programs. That order is the point: the
+        // default protected range sits above the window, so an image carrying records there keeps
+        // having them dropped, as this library already shipped, instead of being refused.
+        var records = _hexParser.ParseRecords(hexFileLines);
+        Pic32ApplicationFlash.EnsureEveryRecordIsInsideTheWritableWindow(records);
+
+        // HexFileRecord.Data is the raw record the parser decoded, which is exactly what
+        // ParseHexRecords returns, so this projection changes nothing about the records
+        // themselves — it only lets the window check above see their addresses.
+        return records.ConvertAll(record => record.Data);
     }
 
     /// <inheritdoc />
@@ -112,24 +106,20 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
         // regardless of file order. The device computes its flash CRC over the
         // address-ordered bytes in a region, so this matches what READ_CRC will
         // return. Protected-range records are already excluded by ParseRecords,
-        // exactly as they are excluded from programming.
-        var dataRecords = _hexParser.ParseRecords(hexFileLines)
+        // exactly as they are excluded from programming, and the window check
+        // below runs on what is left.
+        var records = _hexParser.ParseRecords(hexFileLines);
+
+        // Out-of-window data is refused, not quietly left out of the regions. Dropping it here
+        // would hand back a CRC over a subset of the image and let the flow erase the board and
+        // program an incomplete one. See Pic32ApplicationFlash.
+        Pic32ApplicationFlash.EnsureEveryRecordIsInsideTheWritableWindow(records);
+
+        var dataRecords = records
             .Where(r => r.RecordType == DataRecordType
                         && r.Data.Length > 0
                         && r.Data[0] > 0
-                        && r.Data.Length >= r.Data[0] + 5
-                        // The record's FULL byte span must lie within the
-                        // app-flash window. The bootloader filters per byte
-                        // (APP_ProgramHexRecord checks ProgAddress against
-                        // APP_FLASH_BASE/END for each write), so a record whose
-                        // span crosses the window boundary would have its
-                        // out-of-window bytes skipped by the device but still
-                        // CRC'd by the host — a guaranteed mismatch. Require the
-                        // whole span to be in range (overflow-safe form: the
-                        // byte count must fit in the bytes remaining to the end).
-                        && r.Address >= AppFlashPhysicalStart
-                        && r.Address <= AppFlashPhysicalEnd
-                        && (uint)r.Data[0] <= AppFlashPhysicalEnd - r.Address + 1)
+                        && r.Data.Length >= r.Data[0] + 5)
             .OrderBy(r => r.Address)
             .ToList();
 
@@ -175,6 +165,6 @@ public class Pic32BootloaderProtocol : IBootloaderProtocol
     {
         var bytes = data.ToArray();
         var crc = new Crc16(bytes).Crc;
-        return new FlashCrcRegion(physicalStart | Kseg0Mask, (uint)bytes.Length, crc);
+        return new FlashCrcRegion(physicalStart | Pic32ApplicationFlash.Kseg0Mask, (uint)bytes.Length, crc);
     }
 }

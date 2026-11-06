@@ -1,3 +1,4 @@
+using System.IO;
 using Daqifi.Core.Firmware;
 
 namespace Daqifi.Core.Tests.Firmware;
@@ -177,48 +178,51 @@ public class Pic32BootloaderProtocolTests
     }
 
     [Fact]
-    public void ComputeCrcRegions_ExcludesRecordsOutsideAppFlashRange()
+    public void ComputeCrcRegions_WithRecordsOutsideAppFlashRange_RefusesTheImage()
     {
-        // Real firmware HEX files carry linker-emitted data outside the app-flash
-        // partition (e.g. at physical 0x00000000). The bootloader never programs
-        // those records, so including them would compare against flash the device
-        // never wrote and fail verification. They must be excluded.
+        // A HEX file carrying linker-emitted data outside the writable flash window (e.g. at
+        // physical 0x00000000) is not an image this library will flash: the bootloader never
+        // programs those records, so the device would be left holding an incomplete image after
+        // its application flash had already been erased. This used to leave the record out of the
+        // regions and carry on (#854).
         var lines = new[]
         {
-            ":020000040000FA",                  // base 0x00000000 (outside app flash)
-            ":080000000001020304050607DC",      // 8 bytes @ 0x00000000 — excluded
-            ":020000041D00DD",                  // base 0x1D000000 (app flash)
-            ":080000000001020304050607DC",      // 8 bytes @ 0x1D000000 — kept
+            ":020000040000FA",                  // base 0x00000000 (outside the writable window)
+            ":080000000001020304050607DC",      // 8 bytes @ 0x00000000 — refused
+            ":020000041D00DD",                  // base 0x1D000000 (writable)
+            ":080000000001020304050607DC",      // 8 bytes @ 0x1D000000
             ":00000001FF"
         };
 
-        var regions = _protocol.ComputeCrcRegions(lines);
+        var error = Assert.Throws<InvalidDataException>(() => _protocol.ComputeCrcRegions(lines));
 
-        var region = Assert.Single(regions);
-        Assert.Equal(0x9D000000u, region.Address);
-        Assert.Equal(8u, region.Length);
+        Assert.Contains(
+            Pic32FlashWindowTests.RefusalFragment,
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("0x00000000", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ComputeCrcRegions_ExcludesRecordSpanningPastAppFlashEnd()
+    public void ComputeCrcRegions_WithARecordSpanningPastTheWritableWindow_RefusesTheImage()
     {
-        // A record whose start is in-window but whose byte span crosses the
-        // app-flash end (0x1D1FFFFF). The bootloader programs per byte and skips
-        // the out-of-window tail, so CRC'ing the whole record would mismatch.
-        // A custom protected range (elsewhere) keeps the protected-range filter
-        // out of the way, isolating the app-flash-span check.
+        // A record whose start is in-window but whose byte span crosses the end of the lower
+        // program-flash panel (0x1D0FFFFF). The bootloader decides per word, so its tail would be
+        // dropped or refused while the host counted the whole record as programmed. A custom
+        // protected range (elsewhere) keeps the protected-range filter out of the way, isolating
+        // the window check.
         var protocol = new Pic32BootloaderProtocol(0x00010000, 0x00020000);
         var lines = new[]
         {
-            ":020000041D1FBE",                            // base 0x1D1F0000
-            // 16 bytes @ 0x1D1FFFF8 -> spans 0x1D1FFFF8..0x1D200007 (past 0x1D1FFFFF)
+            ":020000041D0FCE",                            // base 0x1D0F0000
+            // 16 bytes @ 0x1D0FFFF8 -> spans 0x1D0FFFF8..0x1D100007 (past 0x1D0FFFFF)
             ":10FFF800000102030405060708090A0B0C0D0E0F81",
             ":00000001FF"
         };
 
-        var regions = protocol.ComputeCrcRegions(lines);
+        var error = Assert.Throws<InvalidDataException>(() => protocol.ComputeCrcRegions(lines));
 
-        Assert.Empty(regions);
+        Assert.Contains("0x1D0FFFF8-0x1D100007", error.Message, StringComparison.Ordinal);
     }
 
     private static byte[] FrameReadCrcResponse(ushort flashCrc) =>

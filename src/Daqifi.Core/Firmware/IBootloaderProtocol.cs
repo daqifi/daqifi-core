@@ -86,13 +86,27 @@ public interface IBootloaderProtocol
     /// bytes (records in the protected memory range are excluded, matching what
     /// is actually written to flash).
     /// </returns>
+    /// <exception cref="System.IO.InvalidDataException">
+    /// Thrown when a line is malformed or has an invalid checksum, or when a data record places a
+    /// byte outside the flash the bootloader erases and programs - see
+    /// <see cref="ParseHexFile" />.
+    /// </exception>
     IReadOnlyList<FlashCrcRegion> ComputeCrcRegions(string[] hexFileLines);
 
     /// <summary>
     /// Parses an Intel HEX file into raw hex record byte arrays, filtering out
-    /// records in the protected memory range.
+    /// records in the protected memory range, and refuses an image that places a byte outside
+    /// the flash the bootloader erases and programs.
     /// </summary>
     /// <param name="hexFileLines">The lines from the HEX file.</param>
     /// <returns>A list of byte arrays, each representing one hex record.</returns>
+    /// <exception cref="System.IO.InvalidDataException">
+    /// Thrown when a line is malformed or has an invalid checksum, or when a data record that
+    /// survived the protected-range filter places a byte outside the writable flash window. The
+    /// PIC32 bootloader erases and programs only the lower program-flash panel, so a record
+    /// above it, or in boot flash, would be dropped or refused by the device and the image left
+    /// incomplete on a board whose application flash had already been erased. The refusal happens
+    /// before any device command is sent.
+    /// </exception>
     List<byte[]> ParseHexFile(string[] hexFileLines);
 }

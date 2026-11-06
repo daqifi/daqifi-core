@@ -44,34 +44,54 @@ public class Pic32BootloaderEmptyImageTests
     /// ends with the end-of-file record too, so every row but the first two is a file a build or
     /// a packaging step can plausibly produce.
     /// </summary>
-    public static TheoryData<string, string[]> ImagesWithNothingToProgram => new()
+    public static TheoryData<string, string[], string> ImagesWithNothingToProgram => new()
     {
-        { "an empty file", [] },
-        { "blank lines only", ["", "   ", ""] },
-        { "an end-of-file record only", [":00000001FF"] },
-        { "data only below application flash", [":010000007F80", ":00000001FF"] },
-        { "data only in the boot flash", [":020000041FC01B", ":010000007F80", ":00000001FF"] },
+        { "an empty file", [], NothingToProgram },
+        { "blank lines only", ["", "   ", ""], NothingToProgram },
+        { "an end-of-file record only", [":00000001FF"], NothingToProgram },
+        // These two carry a data record, so since #854 they are refused one step earlier, for
+        // placing a byte where the bootloader will not write it, rather than for programming
+        // nothing. Either way no command reaches the device, which is what this table is for.
+        { "data only below application flash", [":010000007F80", ":00000001FF"], OutsideTheWindow },
         {
-            "an extended-linear-address record and an end-of-file record",
-            [":020000041D00DD", ":00000001FF"]
+            "data only in the boot flash",
+            [":020000041FC01B", ":010000007F80", ":00000001FF"],
+            OutsideTheWindow
         },
         {
+            "an extended-linear-address record and an end-of-file record",
+            [":020000041D00DD", ":00000001FF"],
+            NothingToProgram
+        },
+        {
+            // A byte count of zero places no byte anywhere, so the window check has no address to
+            // judge it on and this is still the guard that refuses it.
             "a data record with a byte count of zero, and an end-of-file record",
-            [":0000000000", ":00000001FF"]
+            [":0000000000", ":00000001FF"],
+            NothingToProgram
         },
         {
             "every data record inside the protected calibration range",
             // The parser drops a type-00 record at 0x1D1E0000..0x1D200000, so what reaches the
-            // bootloader session is the address record and the end-of-file record.
-            [":020000041D1EBF", ":10000000000102030405060708090A0B0C0D0E0F78", ":00000001FF"]
+            // bootloader session is the address record and the end-of-file record. Dropped, not
+            // refused: the window check runs on what the protected-range filter leaves (#854).
+            [":020000041D1EBF", ":10000000000102030405060708090A0B0C0D0E0F78", ":00000001FF"],
+            NothingToProgram
         }
     };
+
+    /// <summary>The message fragment the #838 empty-image guard carries.</summary>
+    private const string NothingToProgram = "did not contain any writable records";
+
+    /// <summary>The message fragment the #854 flash-window guard carries.</summary>
+    private const string OutsideTheWindow = Pic32FlashWindowTests.RefusalFragment;
 
     [Theory]
     [MemberData(nameof(ImagesWithNothingToProgram))]
     public async Task UpdateFirmwareAsync_WithAnImageThatProgramsNothing_SendsNoEraseAtAll(
         string shape,
-        string[] hexLines)
+        string[] hexLines,
+        string expectedMessageFragment)
     {
         var hidTransport = new FakeHidTransport();
 
@@ -91,7 +111,7 @@ public class Pic32BootloaderEmptyImageTests
             var error = await Assert.ThrowsAsync<InvalidDataException>(
                 () => service.UpdateFirmwareAsync(device, hexPath));
 
-            Assert.Contains("did not contain any writable records", error.Message, StringComparison.Ordinal);
+            Assert.Contains(expectedMessageFragment, error.Message, StringComparison.Ordinal);
         }
         finally
         {
